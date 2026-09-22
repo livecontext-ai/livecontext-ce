@@ -42,12 +42,34 @@ public class AgentModelsController {
     @GetMapping("/api/internal/agent/models")
     public ResponseEntity<Map<String, Object>> getAvailableModels(
             @RequestParam(value = "category", required = false) String category,
+            @RequestParam(value = com.apimarketplace.agent.client.AgentClient.PUBLIC_READ_PARAM, defaultValue = "false") boolean publicRead,
+            @RequestParam(value = com.apimarketplace.agent.client.AgentClient.HIDE_BRIDGES_PARAM, defaultValue = "false") boolean hideBridges,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId) {
         validateCategory(category);
-        if (tenantId == null || tenantId.isBlank()) {
-            return ResponseEntity.ok(modelCatalogService.getPublicModelsForCategory(category));
+        if (publicRead) {
+            // The caller DECLARED itself a public read; it is never inferred here. A missing
+            // X-User-ID does not mean "public": OrgContextHeaderForwarder can only copy that
+            // header off a bound servlet request, so every internal call made from a scheduler, a
+            // trigger or any @Async hop arrives without it too. Trimming on that signal would have
+            // made ModelCatalogEnricher - whose provider.enum NodeParamsValidator enforces at
+            // WRITE time - see a different catalogue depending on which thread asked, so a
+            // classify node on a bridge would save from a request and fail from a schedule.
+            //
+            // Every other consumer of this shape therefore gets it whole: the enricher,
+            // SmartDefaultsEngine, ChatDispatchService, and the admin panel that creates the
+            // execution links, which would otherwise lose the very providers those links point at.
+            return ResponseEntity.ok(modelCatalogService.hideBridgeProviders(
+                    modelCatalogService.getPublicModelsForCategory(category)));
         }
-        return ResponseEntity.ok(modelCatalogService.getModelsForCategory(category, tenantId));
+        Map<String, Object> catalog = modelCatalogService.getModelsForCategory(category, tenantId);
+        if (hideBridges) {
+            // A SIGNED-IN caller who is not a platform admin. Declared by the caller for the
+            // same reason publicRead is: this endpoint also serves schedulers and @Async hops
+            // that carry no role header, and inferring "not an admin" from a missing header
+            // would strip the bridges from the enricher and the execution-link panel too.
+            catalog = modelCatalogService.hideBridgeProviders(catalog);
+        }
+        return ResponseEntity.ok(catalog);
     }
 
     /**

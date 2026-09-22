@@ -1,7 +1,8 @@
 {
   "name": "agent-bridge",
   "version": "1.0.0",
-  "license": "AGPL-3.0-only",
+  "license": "SEE LICENSE IN LICENSE",
+  "private": true,
   "type": "module",
   "description": "Bridge server: routes conversation LLM execution to Claude Code CLI with MCP tools",
   "main": "server.mjs",

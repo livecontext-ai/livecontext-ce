@@ -6,9 +6,16 @@ interface LogoAnimateProps {
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'xxl';
   className?: string;
   alwaysPulse?: boolean;
+  /** Hide the mark from assistive tech. Use it wherever the brand NAME is already text
+   *  beside the logo: announcing both makes the link read "Logo LiveContext".
+   *
+   *  NOT for `AppSidebar`, whose brand word collapses to `w-0 overflow-hidden` when the
+   *  sidebar is: there the mark becomes the link's only content, and hiding it would leave
+   *  the link with no accessible name at all. Same-looking markup, opposite answer. */
+  decorative?: boolean;
 }
 
-const LogoAnimate = React.memo<LogoAnimateProps>(({ size = 'md', className = '', alwaysPulse = false }) => {
+const LogoAnimate = React.memo<LogoAnimateProps>(({ size = 'md', className = '', alwaysPulse = false, decorative = false }) => {
   const [isHovered, setIsHovered] = useState(false);
   const id = useId();
   const { theme } = useThemeSafely();
@@ -66,8 +73,9 @@ const LogoAnimate = React.memo<LogoAnimateProps>(({ size = 'md', className = '',
         // En JSX: camelCase conseille
         shapeRendering="geometricPrecision"
         vectorEffect="non-scaling-stroke"
-        role="img"
-        aria-label="Logo"
+        {...(decorative
+          ? { 'aria-hidden': true as const }
+          : { role: 'img' as const, 'aria-label': 'Logo' })}
         className="transition-all duration-300 ease-in-out"
         // pas de filter CSS ici (ça pixellise aux petites tailles)
       >

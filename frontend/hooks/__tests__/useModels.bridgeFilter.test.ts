@@ -1,4 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// The visibility rule reads the ROLE only; the edition is not an input any more (hiding the
+// bridges from cloud admins too is what made the CLI models vanish for the platform's own
+// operators). The mutable holder stays so the tests can state, per case, that flipping the
+// edition changes nothing: a reintroduced `!IS_MANAGED_CLOUD` term would show up here.
+const edition = { IS_MANAGED_CLOUD: false };
+// IS_CE as well: this mock REPLACES the module, and `smart-providers` (pulled in through
+// useModels) reads IS_CE off it at module scope, so omitting it fails the whole suite at
+// import time rather than in an assertion.
+vi.mock('@/lib/edition', () => ({
+  get IS_MANAGED_CLOUD() {
+    return edition.IS_MANAGED_CLOUD;
+  },
+  IS_CE: false,
+}));
 import {
   isBridgeModel,
   filterVisibleModels,
@@ -46,6 +61,12 @@ describe('isBridgeModel', () => {
 });
 
 describe('filterVisibleModels', () => {
+  // Self-hosted by default: the pre-existing cases were written against it, and a value leaked
+  // from a neighbouring test would silently change which rule they exercise.
+  beforeEach(() => {
+    edition.IS_MANAGED_CLOUD = false;
+  });
+
   const base = {
     models: [
       model('openai', 'gpt-5.4', 'cloud'),
@@ -67,7 +88,36 @@ describe('filterVisibleModels', () => {
   };
 
   it('returns the catalog unchanged for an admin', () => {
+    edition.IS_MANAGED_CLOUD = false;
     expect(filterVisibleModels(base, true)).toBe(base);
+  });
+
+  it('an ADMIN keeps the bridges in BOTH deployments - on cloud they operate the shared CLI', () => {
+    // The regression this pins: hiding the bridges from cloud admins too made the CLI models
+    // vanish from every picker in production for the accounts that administer them. The backend
+    // admits an admin's save to the access policy (admin-only by default) and still gates the
+    // dispatch, so showing them here offers nothing a user can reach.
+    for (const managed of [false, true]) {
+      edition.IS_MANAGED_CLOUD = managed;
+      expect(filterVisibleModels(base, true), `IS_MANAGED_CLOUD=${managed}`).toBe(base);
+    }
+  });
+
+  it('self-hosted: an ADMIN keeps the bridges - the CLI there belongs to the install', () => {
+    edition.IS_MANAGED_CLOUD = false;
+
+    expect(filterVisibleModels(base, true)).toBe(base);
+  });
+
+  it('a non-admin loses the bridges in BOTH deployments', () => {
+    for (const managed of [false, true]) {
+      edition.IS_MANAGED_CLOUD = managed;
+
+      // Named per iteration: without it a failure says only "expected [...] to equal [...]" and
+      // not which edition regressed, which is the one thing this loop exists to distinguish.
+      expect(filterVisibleModels(base, false).providers.map(p => p.name), `IS_MANAGED_CLOUD=${managed}`)
+        .toEqual(['openai', 'anthropic']);
+    }
   });
 
   it('removes bridge models and empty bridge providers for a non-admin', () => {

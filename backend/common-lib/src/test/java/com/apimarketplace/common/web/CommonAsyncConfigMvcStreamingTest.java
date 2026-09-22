@@ -13,12 +13,15 @@ import org.springframework.boot.test.context.runner.ReactiveWebApplicationContex
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.StandardEnvironment;
+import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import java.lang.reflect.Field;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -96,6 +99,29 @@ class CommonAsyncConfigMvcStreamingTest {
 
             assertThat(readField(configurer, "taskExecutor")).isSameAs(streamingExecutor);
         });
+    }
+
+    @Test
+    @DisplayName("the configured async request timeout survives this library's configurer")
+    void asyncRequestTimeoutSurvivesTheStreamingConfigurer() {
+        // storage-service, agent-service and the CE monolith each set
+        // spring.mvc.async.request-timeout because the container default of 30s truncates
+        // a StreamingResponseBody mid-transfer. Each of those is pinned by a test that
+        // reads its own YAML, and all three would stay green if THIS configurer ever
+        // called setDefaultTimeout: it is @Order(LOWEST_PRECEDENCE), so it runs after
+        // Boot's property-driven one and would win. That is the gap this closes.
+        servletRunner
+                .withPropertyValues("spring.mvc.async.request-timeout=600000")
+                .run(context -> {
+                    List<WebMvcConfigurer> configurers =
+                            context.getBeanProvider(WebMvcConfigurer.class).orderedStream().toList();
+                    AsyncSupportConfigurer configurer = new AsyncSupportConfigurer();
+                    configurers.forEach(c -> c.configureAsyncSupport(configurer));
+
+                    assertThat(readField(configurer, "timeout"))
+                            .as("the property must be what is left installed after every configurer has run")
+                            .isEqualTo(600_000L);
+                });
     }
 
     @Test
@@ -213,6 +239,41 @@ class CommonAsyncConfigMvcStreamingTest {
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean(EXECUTOR, ThreadPoolTaskExecutor.class).getCorePoolSize())
                             .isGreaterThanOrEqualTo(1);
+                });
+    }
+
+    @Test
+    @DisplayName("the deployment's ENV VAR spellings bind to this pool, not just the dotted property names")
+    void deploymentEnvironmentVariableNamesBind() {
+        // The only place these sizes are ever set in production is a Helm env map, as
+        // LIVECONTEXT_WEB_ASYNC_CORE_SIZE / _MAX_SIZE / _QUEUE_CAPACITY. Every other test here
+        // uses the dotted form, which cannot catch a wrong env-var name: such a name renders
+        // perfectly, deploys perfectly, binds nothing, and silently leaves the pool at its
+        // default while the operator believes it was raised. Relaxed binding of the
+        // SCREAMING_SNAKE form only happens for a property source named systemEnvironment,
+        // hence SystemEnvironmentPropertySource rather than withPropertyValues.
+        //
+        // What counts as "wrong" is narrower than it looks, and worth knowing before anyone
+        // rewrites these strings: the binder compares names with separators removed, so
+        // LIVECONTEXT_WEB_ASYNC_CORESIZE binds to core-size just as well (verified). The names
+        // that break are the ones that change a PREFIX segment, e.g. LIVECONTEXT_WEBASYNC_*
+        // (-> livecontext.webasync.*), which is what this test was proved against.
+        servletRunner
+                .withInitializer(context -> context.getEnvironment().getPropertySources().addFirst(
+                        new SystemEnvironmentPropertySource(
+                                StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
+                                Map.<String, Object>of(
+                                        "LIVECONTEXT_WEB_ASYNC_CORE_SIZE", "64",
+                                        "LIVECONTEXT_WEB_ASYNC_MAX_SIZE", "64",
+                                        "LIVECONTEXT_WEB_ASYNC_QUEUE_CAPACITY", "24"))))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    ThreadPoolTaskExecutor executor = context.getBean(EXECUTOR, ThreadPoolTaskExecutor.class);
+                    assertThat(executor.getCorePoolSize()).isEqualTo(64);
+                    assertThat(executor.getMaxPoolSize()).isEqualTo(64);
+                    // Queue capacity has no getter; an empty bounded queue's remaining capacity is it.
+                    assertThat(executor.getThreadPoolExecutor().getQueue().remainingCapacity())
+                            .isEqualTo(24);
                 });
     }
 

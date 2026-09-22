@@ -16,6 +16,10 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +43,11 @@ class AgentModelsControllerTest {
     @BeforeEach
     void setUp() {
         controller = new AgentModelsController(service);
+        // The real method mutates the catalog in place and hands back the SAME map, so the
+        // pass-through stub keeps every isSameAs() assertion below meaning what it meant before
+        // the filter existed. Lenient: the flat route and the rejected-category route never reach it.
+        lenient().when(service.hideBridgeProviders(any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test
@@ -47,7 +56,7 @@ class AgentModelsControllerTest {
         Map<String, Object> nested = Map.of("providers", List.of());
         when(service.getModelsForCategory(null, "tenant-1")).thenReturn(nested);
 
-        ResponseEntity<Map<String, Object>> response = controller.getAvailableModels(null, "tenant-1");
+        ResponseEntity<Map<String, Object>> response = controller.getAvailableModels(null, false, false, "tenant-1");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isSameAs(nested);
@@ -59,7 +68,7 @@ class AgentModelsControllerTest {
         Map<String, Object> nested = Map.of("providers", List.of(Map.of("name", "openai")));
         when(service.getPublicModelsForCategory(null)).thenReturn(nested);
 
-        ResponseEntity<Map<String, Object>> response = controller.getAvailableModels(null, null);
+        ResponseEntity<Map<String, Object>> response = controller.getAvailableModels(null, true, false, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isSameAs(nested);
@@ -73,19 +82,78 @@ class AgentModelsControllerTest {
         when(service.getModelsForCategory("browser_agent", "tenant-1")).thenReturn(nested);
 
         ResponseEntity<Map<String, Object>> response =
-                controller.getAvailableModels("browser_agent", "tenant-1");
+                controller.getAvailableModels("browser_agent", false, false, "tenant-1");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isSameAs(nested);
     }
 
     @Test
+    @DisplayName("ONLY the anonymous nested shape is bridge-filtered")
+    void onlyTheAnonymousShapeIsFiltered() {
+        // Deliberately UNEQUAL: Mockito matches a verify() argument by equals, so two catalogs
+        // that are both Map.of("providers", List.of()) would each satisfy either verification and
+        // the pair below could not tell the branches apart.
+        Map<String, Object> withTenant = Map.of("providers", List.of(Map.of("name", "anthropic")));
+        Map<String, Object> anonymous = Map.of("providers", List.of(Map.of("name", "openai")));
+        when(service.getModelsForCategory(null, "tenant-1")).thenReturn(withTenant);
+        when(service.getPublicModelsForCategory(null)).thenReturn(anonymous);
+
+        controller.getAvailableModels(null, false, false, "tenant-1");
+        controller.getAvailableModels(null, true, false, null);
+
+        // The anonymous branch is the production leak: this endpoint is re-served publicly as
+        // /api/v3/chat/models and was advertising claude-code and codex, plus the bridge host's
+        // LAN address, to callers with no token.
+        verify(service).hideBridgeProviders(anonymous);
+        // The authenticated branch must NOT be filtered, and this is the assertion that keeps the
+        // change from breaking three things that read the same shape: ModelCatalogEnricher (which
+        // rewrites the provider.enum NodeParamsValidator enforces at WRITE time), the default
+        // resolution in SmartDefaultsEngine / ChatDispatchService, and the cloud-only admin panel
+        // that creates the execution links - which would otherwise lose the very providers those
+        // links exist to point at.
+        verify(service, never()).hideBridgeProviders(withTenant);
+    }
+
+    @Test
+    @DisplayName("an AUTHENTICATED read is bridge-filtered when the caller asks, and only then")
+    void authenticatedReadIsFilteredOnDemand() {
+        // The signed-in non-admin case. Until this existed the bridges travelled to every
+        // signed-in user and only a React hook kept them off the screen, so any picker that
+        // forgot the hook named the operator's CLI subscription to an end user.
+        Map<String, Object> withTenant = Map.of("providers", List.of(Map.of("name", "anthropic")));
+        when(service.getModelsForCategory(null, "tenant-1")).thenReturn(withTenant);
+
+        controller.getAvailableModels(null, false, true, "tenant-1");
+
+        verify(service).hideBridgeProviders(withTenant);
+        // NOT the public branch: that one also widens the catalogue to providers with no key,
+        // and a signed-in user must lose the bridges without gaining those.
+        verify(service, never()).getPublicModelsForCategory(null);
+    }
+
+    @Test
+    @DisplayName("the flat catalog is NOT bridge-filtered - it feeds validation, not a picker")
+    void flatCatalogIsNotFiltered() {
+        when(service.listAvailableModels(null, "tenant-1")).thenReturn(List.of());
+
+        controller.getAvailableModelsFlat(null, "tenant-1");
+
+        // This is the non-regression that protects what is already running. The flat shape backs
+        // model VALIDATION and the prompt-injected catalog, and the platform routes billed pairs
+        // onto a CLI through agent.model_execution_links. Filter a bridge out here and every agent
+        // already bound to one becomes "model not available" on its next save, while the links
+        // keep dispatching to a provider the catalog now denies knowing.
+        verify(service, never()).hideBridgeProviders(any());
+    }
+
+    @Test
     @DisplayName("/models?category=invalid is rejected before reaching the service (V156 shape CHECK)")
     void nestedEndpointRejectsInvalidCategory() {
-        assertThatThrownBy(() -> controller.getAvailableModels("With Space", "tenant-1"))
+        assertThatThrownBy(() -> controller.getAvailableModels("With Space", false, false, "tenant-1"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Invalid category key");
-        assertThatThrownBy(() -> controller.getAvailableModels("CHAT", "tenant-1"))
+        assertThatThrownBy(() -> controller.getAvailableModels("CHAT", false, false, "tenant-1"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

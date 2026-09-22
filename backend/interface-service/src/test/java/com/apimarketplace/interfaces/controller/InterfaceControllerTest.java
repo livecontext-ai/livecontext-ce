@@ -242,12 +242,13 @@ class InterfaceControllerTest {
             when(interfaceService.listInterfacesPaged(eq(TENANT), eq("html"), isNull(), isNull(),
                     isNull(), isNull(), eq(0), eq(25), isNull(), isNull(),
                     // No folder view asked for: the list behaves exactly as it did before folders.
-                    isNull(), eq(false)))
+                    isNull(), eq(false), eq("web_search")))
                     .thenReturn(new InterfaceService.InterfacePage(List.of(entity), 1, 0, 25, java.util.Map.of()));
 
             mockMvc.perform(get("/api/interfaces/paged")
                             .header("X-User-ID", TENANT)
                             .param("type", "html")
+                            .param("excludeType", "web_search")
                             .param("includeTemplates", "false"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.items", hasSize(1)))

@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 import com.apimarketplace.orchestrator.domain.file.FileRef;
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
 import com.apimarketplace.orchestrator.services.file.FileStorageService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -71,6 +72,8 @@ public class ConvertToFileNode extends BaseNode {
             // Resolve the input value expression
             Object inputValue = resolveExpression(
                 convertToFileConfig != null ? convertToFileConfig.value() : null, context);
+            // From THIS evaluation - the one whose result is written to the file.
+            inputData = reportResolvedValue(inputData, inputValue);
 
             // Resolve the data from step outputs
             List<Map<String, Object>> data = resolveData(inputValue, context);
@@ -387,18 +390,47 @@ public class ConvertToFileNode extends BaseNode {
         return expression;
     }
 
+    /**
+     * The node's configuration, as the node itself reads it.
+     *
+     * <p>It used to re-resolve two of these for display only, and both answers were wrong.
+     * {@code filename} was reported RESOLVED while {@link #execute} names the file from the
+     * configured string - so the panel showed a name no file ever carried. And {@code value}
+     * is the DATA being written (the rows of a CSV): re-resolving it ran the expression a
+     * second time and {@code resolveTemplateString} coerced the result to a String, so a
+     * 500-row dataset was reported as one flattened line and copied onto the step row of
+     * every item. The resolved value is filled in by {@link #reportResolvedValue} once the
+     * work has produced it, from that evaluation and bounded.
+     */
     private Map<String, Object> buildInputDataMap(ExecutionContext context) {
         Map<String, Object> inputData = new LinkedHashMap<>();
         if (convertToFileConfig != null) {
             inputData.put("format", convertToFileConfig.format());
-            inputData.put("filename", resolveTemplateString(convertToFileConfig.filename(), context));
+            inputData.put("filename", convertToFileConfig.filename());
             inputData.put("delimiter", convertToFileConfig.delimiter());
             inputData.put("includeHeaders", convertToFileConfig.includeHeaders());
             if (convertToFileConfig.value() != null) {
-                inputData.put("value", resolveTemplateString(convertToFileConfig.value(), context));
+                inputData.put("value", ReportedParams.value(convertToFileConfig.value()));
             }
         }
-        return inputData;
+        return ReportedParams.forReport(inputData);
+    }
+
+    /**
+     * Replaces the configured {@code value} with what the node's own evaluation produced.
+     *
+     * <p>Returns a map through the gate AGAIN, and that is the point: this runs after
+     * {@code buildInputDataMap} already gated one, so a value re-put here would have skipped
+     * the map budget entirely - the entry could come back after the {@code paramsTruncated}
+     * marker had already been written for it. The per-value bound held; the per-map one did
+     * not.
+     */
+    private Map<String, Object> reportResolvedValue(Map<String, Object> inputData, Object resolvedValue) {
+        if (convertToFileConfig == null || convertToFileConfig.value() == null) {
+            return inputData;
+        }
+        inputData.put("value", ReportedParams.valueFrom(convertToFileConfig.value(), resolvedValue));
+        return ReportedParams.forReport(inputData);
     }
 
     // Getters

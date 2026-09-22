@@ -47,7 +47,18 @@ public class ForkNode extends BaseNode {
 
         // Build resolved_params snapshot for inspector visibility
         Map<String, Object> resolvedParams = new LinkedHashMap<>();
-        resolvedParams.put("forkOutputs", branches.size());
+        // One key per branch ID, carrying where that branch goes. The count alone
+        // could not tell a reader which branch is which.
+        //
+        // Keyed on the ID rather than the label because ForkNodeWirer synthesises the
+        // label as "Branch N" from the port: the author's own label never reaches the
+        // node, so keying on it would invent a name the plan does not have.
+        for (ForkBranch branch : branches) {
+            String target = branch.nodes() != null && !branch.nodes().isEmpty()
+                ? branch.nodes().get(0).getNodeId()
+                : "(not wired)";
+            resolvedParams.put(branch.id(), target);
+        }
 
         // Build output with branch information
         Map<String, Object> output = new HashMap<>();

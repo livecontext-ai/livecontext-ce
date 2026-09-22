@@ -39,6 +39,7 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import PublishResourceModal from '@/components/marketplace/PublishResourceModal';
 import { DataSourceCard } from '@/components/data-table/DataSourceCard';
 import { track } from '@/lib/analytics/analytics';
+import { useResourceRowsDeleted } from '@/lib/resources/resourceDeleted';
 
 interface DataSourceTableProps {
   className?: string;
@@ -207,6 +208,11 @@ export default function DataSourceTable({
 
   // The hook reloads through this ref, so it can be created before the fetch it triggers.
   reloadRef.current = fetchDataSources;
+
+  // A table deleted anywhere else (its side-panel tab, the edit modal, a chat card)
+  // drops out of this list at once, then the page is refetched so the total and the
+  // page fill come from the server rather than from what was on screen.
+  useResourceRowsDeleted('datasource', dataSources, setDataSources, fetchDataSources);
 
   // 🇫🇷 Démarrer l'ajout inline de datasource
   const startAddingDataSourceInline = () => {

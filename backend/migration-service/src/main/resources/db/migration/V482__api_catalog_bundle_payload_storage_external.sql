@@ -1,0 +1,21 @@
+-- Pin the storage strategy the sliced bundle download depends on.
+--
+-- Serving GET /api/catalog/public/bundles/latest reads payload_gz in 256 KB
+-- slices with substring(), which is only cheap while the value is TOASTed but
+-- NOT compressed: a compressed value has to be decompressed from its start for
+-- every slice, turning ~96 sequential reads into quadratic work. Nothing in the
+-- code can see that difference, and nothing in the test suite can either - it
+-- would surface as a slow endpoint in production and nowhere else.
+--
+-- Today the column is EXTENDED, so Postgres attempts pglz on every write and
+-- gives up because the value is already gzip. That is a property of the DATA,
+-- not of the schema: it holds only for as long as the payload stays
+-- incompressible. EXTERNAL makes it a property of the COLUMN - out-of-line,
+-- never compressed - so the assumption is guaranteed rather than observed, and
+-- the futile compression pass over ~24 MB is skipped on every bundle build.
+--
+-- Metadata-only and instant: SET STORAGE rewrites nothing and applies to values
+-- written from here on. Existing rows keep their current representation, which
+-- is already uncompressed, and bundles are rebuilt regularly in any case.
+ALTER TABLE catalog.api_catalog_bundles
+    ALTER COLUMN payload_gz SET STORAGE EXTERNAL;

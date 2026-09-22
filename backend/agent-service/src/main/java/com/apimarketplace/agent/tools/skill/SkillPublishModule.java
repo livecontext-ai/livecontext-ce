@@ -52,6 +52,14 @@ public class SkillPublishModule implements ToolModule {
     public Optional<ToolExecutionResult> execute(String action, Map<String, Object> parameters,
                                                   String tenantId, ToolExecutionContext context) {
         if (!canHandle(action)) return Optional.empty();
+
+        // Skills have NO grant axis, so the access mode is the ONLY gate on this family:
+        // an ungated write action here is unreachable by any configuration. Both actions
+        // this module handles (publish, unpublish) are writes.
+        var accessDenied = com.apimarketplace.agent.config.ToolAccessControl.checkWriteAccess(
+                context != null ? context.credentials() : null, "skill", action);
+        if (accessDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
+
         return Optional.of(switch (action) {
             case "publish" -> executePublish(parameters, tenantId, context);
             case "unpublish" -> executeUnpublish(parameters, tenantId, context);

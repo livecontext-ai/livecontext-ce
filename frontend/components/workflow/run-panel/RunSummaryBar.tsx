@@ -21,6 +21,8 @@ export interface RunSummaryRunInfo {
 
 export interface RunSummaryBarProps {
   currentRunInfo: RunSummaryRunInfo;
+  /** Hide the status chip when the caller knows the run summary could not be loaded. */
+  showStatus?: boolean;
   /** Pinned (production) version of the workflow, null if unpinned. */
   pinnedVersion?: number | null;
   /**
@@ -51,6 +53,8 @@ export interface RunSummaryBarProps {
   onVersionClick?: () => void;
   /** Rendered at the far left, before the chips (e.g. a back arrow). */
   leading?: ReactNode;
+  /** Rendered after the identity chips, before run lifecycle actions. */
+  trailing?: ReactNode;
   /**
    * Type scale. `compact` is the canvas pill, which must stay exactly as it was
    * (it shares the top of the canvas with the nodes). `panel` matches the run
@@ -81,6 +85,7 @@ export interface RunSummaryBarProps {
  */
 export function RunSummaryBar({
   currentRunInfo,
+  showStatus = true,
   pinnedVersion,
   epochCount = 0,
   selectedEpoch = null,
@@ -90,6 +95,7 @@ export function RunSummaryBar({
   onReactivate,
   onVersionClick,
   leading,
+  trailing,
   size = 'compact',
   actionPending = null,
   actionFailed = false,
@@ -103,7 +109,9 @@ export function RunSummaryBar({
     [t, locale],
   );
 
-  const displayStatus = getRunDisplayStatus(currentRunInfo.status, currentRunInfo.metadata as any);
+  // RunSummaryRunInfo intentionally allows a missing status while a surface is
+  // still loading the run. Keep the shared bar renderable during that gap.
+  const displayStatus = getRunDisplayStatus(currentRunInfo.status || 'PENDING', currentRunInfo.metadata);
   // One switch for the whole bar so the chips, their icons and the separators
   // scale together instead of drifting apart.
   const isPanel = size === 'panel';
@@ -154,12 +162,14 @@ export function RunSummaryBar({
             {/* Status badge. The testid is the stable handle for it: the shape is a
                 styling detail (it used to be the only `div.rounded-full` on the
                 canvas, which is what e2e keyed on), the identity is not. */}
-            <div
-              data-testid="run-status-badge"
-              className={`flex items-center gap-1 px-2 py-0.5 ${canvasChromeChipRadiusClass} ${textCls} font-medium whitespace-nowrap flex-shrink-0 ${getStatusClasses(displayStatus)}`}
-            >
-              {getRunStatusLabel(displayStatus, (k) => t(k))}
-            </div>
+            {showStatus && (
+              <div
+                data-testid="run-status-badge"
+                className={`flex items-center gap-1 px-2 py-0.5 ${canvasChromeChipRadiusClass} ${textCls} font-medium whitespace-nowrap flex-shrink-0 ${getStatusClasses(displayStatus)}`}
+              >
+                {getRunStatusLabel(displayStatus, (k) => t(k))}
+              </div>
+            )}
 
             {/* No version to show, but the history still has to be reachable: the chip
                 IS the canvas entry point, so a run whose version is unknown (older row,
@@ -235,7 +245,10 @@ export function RunSummaryBar({
             {currentRunInfo.startedAt && (
               <span className="flex items-center gap-0.5 flex-shrink-0">
                 <span className={`${textCls} text-gray-400 dark:text-gray-500`}>·</span>
-                <span className={`${textCls} text-gray-500 dark:text-gray-400 whitespace-nowrap`}>
+                <span
+                  data-run-started-at={currentRunInfo.startedAt}
+                  className={`${textCls} text-gray-500 dark:text-gray-400 whitespace-nowrap`}
+                >
                   {formatRel(currentRunInfo.startedAt)}
                 </span>
               </span>
@@ -279,6 +292,8 @@ export function RunSummaryBar({
             </button>
           )}
         </div>
+
+        {trailing}
 
         {/* Stop / Cancel / Reactivate button - FAR RIGHT, never scrolled away:
             the one destructive control of the bar must sit in a fixed place, and

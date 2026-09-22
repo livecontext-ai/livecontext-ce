@@ -63,7 +63,9 @@ class MonolithFileControllerSignedTest {
     @Test
     @DisplayName("Valid signed URL streams the bytes with Cache-Control: private and the resolved Content-Type")
     void validSignedUrlStreams() throws Exception {
-        long exp = Instant.now().getEpochSecond() + 900;
+        // 4h of link life left (the real default TTL of both minting sites), so the 900s
+        // ceiling is what caps the freshness lifetime here, not the remaining life.
+        long exp = Instant.now().getEpochSecond() + 4 * 3600;
         String sig = signer.sign(KEY, exp, "inline");
         byte[] bytes = "mp4-bytes".getBytes();
         when(fileStorageService.openStream(KEY))
@@ -79,6 +81,30 @@ class MonolithFileControllerSignedTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         response.getBody().writeTo(out);
         assertThat(out.toByteArray()).isEqualTo(bytes);
+    }
+
+    @Test
+    @DisplayName("Near-expiry signed URL caches only for what is left of the link, not the flat 900s")
+    void nearExpiryCachesOnlyForTheRemainingLinkLife() {
+        // Regression, mirrored from the cloud mount: the response used to advertise max-age=900
+        // whatever the link had left, so a browser could re-serve a cached copy - without
+        // re-presenting the signature - for up to 15 minutes AFTER exp. CE mints public links
+        // too (that is why this route exists here), so the same cap must hold.
+        long exp = Instant.now().getEpochSecond() + 60;
+        String sig = signer.sign(KEY, exp, "inline");
+        byte[] bytes = "mp4-bytes".getBytes();
+        when(fileStorageService.openStream(KEY))
+                .thenReturn(Optional.of(new DownloadStream(new ByteArrayInputStream(bytes), bytes.length, "video/mp4")));
+
+        ResponseEntity<StreamingResponseBody> response =
+                controller.proxySignedDownload(KEY, exp, "inline", sig);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String header = response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL);
+        assertThat(header).startsWith("private, max-age=");
+        // Range, not equality: a second may tick between the test's clock read and the controller's.
+        assertThat(Long.parseLong(header.substring("private, max-age=".length())))
+                .isBetween(55L, 60L);
     }
 
     @Test

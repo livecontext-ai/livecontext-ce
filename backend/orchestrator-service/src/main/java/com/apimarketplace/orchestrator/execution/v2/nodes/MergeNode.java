@@ -90,7 +90,9 @@ public class MergeNode extends BaseNode {
         // to the inspector "Resolved parameters" panel.
         Map<String, Object> resolvedParams = new LinkedHashMap<>();
         resolvedParams.put("strategy", strategy.name());
-        resolvedParams.put("sources", sourceNodeIds.size());
+        // The source ids, not their count. A merge that waited on the wrong branch is
+        // the whole reason to open this panel, and "sources: 3" cannot answer it.
+        resolvedParams.put("sources", sourceNodeIds);
 
         try {
             List<String> sources = effectiveSources(context);

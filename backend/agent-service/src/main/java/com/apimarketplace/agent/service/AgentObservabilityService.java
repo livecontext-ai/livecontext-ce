@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.service;
 
+import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.common.storage.service.StorageBreakdownService;
 import com.apimarketplace.common.storage.service.StorageService;
 import com.apimarketplace.agent.domain.AgentExecutionEntity;
@@ -177,7 +178,18 @@ public class AgentObservabilityService {
             // split 50/50. This should no longer happen for classify/guardrail (they now
             // provide real prompt/completion split via AgentLoopService) but is kept as
             // defense-in-depth for unexpected callers.
-            if (promptTok == 0 && completionTok == 0 && request.getTotalTokens() > 0) {
+            //
+            // A caller that reported cache counters is NOT missing its breakdown: a turn
+            // served entirely from cache legitimately has 0 plain input, and 0 completion
+            // if it produced nothing. Splitting that 50/50 would invent plain input AND
+            // bill half of it at the OUTPUT rate, on top of the cache lines that are
+            // already there. Anthropic-shaped counters live outside promptTokens, so the
+            // only honest reading of "prompt 0 with a cache" is "all of it was cached".
+            boolean hasCacheBreakdown = request.getCacheCreationTokens() > 0
+                    || request.getCacheReadTokens() > 0
+                    || request.getCachedTokens() > 0;
+            if (promptTok == 0 && completionTok == 0 && !hasCacheBreakdown
+                    && request.getTotalTokens() > 0) {
                 int total = (int) request.getTotalTokens();
                 promptTok = total / 2;
                 completionTok = total - promptTok; // handles odd numbers
@@ -197,11 +209,14 @@ public class AgentObservabilityService {
                 request.getModel(),
                 promptTok,
                 completionTok,
+                /* imageCount */ null,
                 new com.apimarketplace.common.credit.LlmCacheTokens(
                     (int) request.getCacheCreationTokens(),
                     (int) request.getCacheReadTokens(),
                     (int) request.getCachedTokens(),
-                    (int) request.getReasoningTokens())
+                    (int) request.getReasoningTokens()),
+                // Whose key the turn ran on: an OWN_KEY turn is billed a flat fee, not tokens.
+                request.getKeyRoute()
             );
 
             // Track credits consumed on the agent entity + execution record
@@ -216,24 +231,37 @@ public class AgentObservabilityService {
                     String rejectionReason = String.valueOf(creditResult.getOrDefault("error", "unknown rejection"));
                     creditClient.persistRejection(request.getTenantId(), sourceType, sourceId,
                             request.getProvider(), request.getModel(),
-                            promptTok, completionTok, rejectionReason);
+                            promptTok, completionTok, rejectionReason,
+                            TenantResolver.currentRequestOrganizationId(), request.getKeyRoute());
                 }
                 Object creditsUsedObj = creditResult.get("creditsUsed");
                 if (creditsUsedObj instanceof Number creditsUsedNum) {
                     BigDecimal creditsUsed = BigDecimal.valueOf(creditsUsedNum.doubleValue());
-                    // Capture actual cost for cascade settle, even when == 0 (still flows to
-                    // settle so the reservation is refunded in full).
-                    actualForSettle = creditsUsed;
+                    // What the turn CONSUMED, i.e. what the platform route would have billed.
+                    // On the platform route it equals the debit; on the tenant's own key the
+                    // ledger took a flat fee while this keeps the token-rate value, so the
+                    // execution counter, the agent's "credits used" and the reservation settle
+                    // keep metering consumption and a budget behaves the same on both routes.
+                    // Absent (older auth-service), the debit stands in.
+                    BigDecimal consumption = creditResult.get("consumptionCredits") instanceof Number consumptionNum
+                            ? BigDecimal.valueOf(consumptionNum.doubleValue())
+                            : creditsUsed;
+                    // Capture actual consumption for cascade settle, even when == 0 (still
+                    // flows to settle so the reservation is refunded in full).
+                    actualForSettle = consumption;
                     if (creditsUsed.compareTo(BigDecimal.ZERO) > 0) {
                         // Record to Prometheus (Stage 5.4: tagged by source_type so
-                        // COMPACTION_SUMMARY can be segregated in Grafana panel #10)
+                        // COMPACTION_SUMMARY can be segregated in Grafana panel #10).
+                        // The DEBIT: this series is platform revenue, not consumption.
                         prometheusMetrics.recordCreditsConsumed(
                                 request.getProvider(), request.getModel(),
                                 sourceType, creditsUsed.doubleValue());
+                    }
+                    if (consumption.compareTo(BigDecimal.ZERO) > 0) {
                         // Store on execution record
                         if (executionId != null) {
                             try {
-                                executionRepository.updateCreditsConsumed(executionId, creditsUsed);
+                                executionRepository.updateCreditsConsumed(executionId, consumption);
                             } catch (Exception ex) {
                                 logger.warn("Failed to update credits on execution {}: {}",
                                     executionId, ex.getMessage());
@@ -242,7 +270,7 @@ public class AgentObservabilityService {
                         // Accumulate on agent entity
                         if (request.getAgentEntityId() != null) {
                             try {
-                                agentRepository.incrementCreditsConsumed(request.getAgentEntityId(), creditsUsed);
+                                agentRepository.incrementCreditsConsumed(request.getAgentEntityId(), consumption);
                             } catch (Exception ex) {
                                 logger.warn("Failed to increment credits consumed for agent {}: {}",
                                     request.getAgentEntityId(), ex.getMessage());
@@ -256,7 +284,8 @@ public class AgentObservabilityService {
                 request.getNodeId(), e.getMessage());
             persistToDeadLetter(request.getTenantId(), sourceType, sourceId,
                     request.getProvider(), request.getModel(),
-                    (int) request.getPromptTokens(), (int) request.getCompletionTokens(), e.getMessage());
+                    (int) request.getPromptTokens(), (int) request.getCompletionTokens(), e.getMessage(),
+                    request.getKeyRoute());
         }
 
         // Cascade reservation settle (§4.5 AGENT_BUDGET_HIERARCHY.md). When the SubAgent
@@ -288,6 +317,9 @@ public class AgentObservabilityService {
         // can live-update "Cost of this run" and the workflow budget can gate the
         // next epoch. Only workflow-run agents carry a runId; chat/standalone
         // executions have none and are skipped. Fully best-effort (fire-and-forget).
+        // The figure is the CONSUMPTION (actualForSettle), not the debit: on the
+        // tenant's own key the ledger took a flat fee, but the run budget meters what
+        // the run consumed at the platform rate, like every counter above.
         if (runCostNotifier != null && request.getRunId() != null && !request.getRunId().isBlank()) {
             runCostNotifier.notifyRunCost(
                     request.getRunId(),
@@ -418,6 +450,41 @@ public class AgentObservabilityService {
         };
     }
 
+    /**
+     * The instant an execution began, reconstructed from the instant it was recorded
+     * and the duration its caller measured.
+     *
+     * <p>Every producer sends {@code durationMs} and none of them sends a start
+     * timestamp, so this is the only place a real {@code started_at} can come from.
+     * The contract it guarantees is the one the column pair failed for its whole life:
+     * <b>{@code started_at <= ended_at} always</b>, and
+     * {@code ended_at - started_at == duration_ms} whenever the duration is usable.
+     *
+     * <p>A non-positive or absurd duration yields {@code endedAt} itself rather than a
+     * guess. Zero means "the caller did not measure it" (the DTO's primitive default,
+     * which is also what the 402-at-the-gate rows carry), and a negative or
+     * epoch-crossing value can only come from a broken clock - in both cases a
+     * zero-length window at the end is honest, where subtracting would move the row
+     * into a wrong hour bucket or out of a retention window entirely.
+     */
+    static Instant startedAtFrom(Instant endedAt, long durationMs) {
+        if (durationMs <= 0) {
+            return endedAt;
+        }
+        // Defence in depth: a duration that would walk back past the epoch is a corrupt
+        // measurement, not a long run, and subtracting it would file the row under a
+        // prehistoric date rather than fail. `minusMillis` does NOT throw here - Instant
+        // spans +/-1e9 years, so even Long.MAX_VALUE milliseconds lands on a valid
+        // (year -292,274,998) instant. That is exactly the problem: nothing would stop
+        // it. The SQL half of this contract is the opposite - Postgres raises
+        // `interval out of range` there - so the two guards look alike and exist for
+        // different reasons.
+        if (durationMs > endedAt.toEpochMilli()) {
+            return endedAt;
+        }
+        return endedAt.minusMillis(durationMs);
+    }
+
     private String resolveSourceType(String agentType) {
         if (agentType == null) return "AGENT_EXECUTION";
         return switch (agentType.toLowerCase()) {
@@ -508,6 +575,7 @@ public class AgentObservabilityService {
         // LLM config snapshot
         exec.setProvider(request.getProvider());
         exec.setModel(request.getModel());
+        exec.setKeyRoute(request.getKeyRoute());
         if (request.getTemperature() != null) {
             exec.setTemperature(BigDecimal.valueOf(request.getTemperature()));
         }
@@ -522,7 +590,32 @@ public class AgentObservabilityService {
         exec.setBudgetScope(request.getBudgetScope());
         exec.setErrorMessage(request.getErrorMessage());
         exec.setDurationMs(request.getDurationMs());
-        exec.setEndedAt(Instant.now());
+        // The row is written ONCE, at the end of the execution, so no earlier write
+        // could have stamped a real start. `ended_at` is now, and `started_at` is
+        // derived by walking back the duration the caller measured - the only start
+        // instant this service ever gets to see.
+        //
+        // Deriving it is not a refinement, it is what makes the pair usable at all:
+        // leaving `started_at` unset handed it to @PrePersist, which stamped
+        // `Instant.now()` microseconds AFTER this line, so every row ever written had
+        // `ended_at < started_at` (7,953 of 7,953 in prod on 2026-09-17) - a negative
+        // span on turns that really took minutes. Everything reading the pair (the
+        // fleet dashboard's "started", a duration computed from the two columns, an
+        // hour/day bucket in metrics) was reading persist time.
+        //
+        // `started_at` is NOT NULL and several finders order by it, so it is set on
+        // every path, including the one where the caller reports no duration: there
+        // the honest answer is a zero-length window at `ended_at`, never a stamp that
+        // lands after the end.
+        //
+        // What this does NOT claim: `ended_at` is when THIS pod received the record,
+        // while `durationMs` was measured on the orchestrator or conversation-service
+        // pod that ran the turn. Both absolute instants therefore carry the transport
+        // hop. It is the SPAN between them that becomes exact, and the span is what a
+        // reader of the pair is after.
+        Instant endedAt = Instant.now();
+        exec.setEndedAt(endedAt);
+        exec.setStartedAt(startedAtFrom(endedAt, request.getDurationMs()));
 
         // Token usage (cast long -> int: token counts fit in int range)
         exec.setTotalPromptTokens((int) request.getPromptTokens());
@@ -869,6 +962,10 @@ public class AgentObservabilityService {
      * Converts the chat-specific DTO into the unified AgentObservabilityRequest
      * and delegates to the same recording path used by workflow agents.
      */
+    private static boolean zeroOrNull(Integer counter) {
+        return counter == null || counter == 0;
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordFromChat(String tenantId, String organizationId, ChatAgentObservabilityRequest request) {
         // Convert to unified request via adapter (source is set in the adapter).
@@ -896,15 +993,58 @@ public class AgentObservabilityService {
         // warranted. Without this guard, every throttled cron tick would POST a 0-token
         // consume that produces persistRejection ledger noise for an already-throttled
         // tenant.
-        if (!request.success()
-                && request.totalPromptTokens() == 0
-                && request.totalCompletionTokens() == 0) {
+        //
+        // "No LLM call happened" is NOT the same as "zero tokens", and inferring the
+        // first from the second is what made every stopped bridge chat free: a CLI killed
+        // mid-turn reports no usage at all, so a run that had made several model calls and
+        // a dozen tool calls arrived here looking exactly like a run that never started.
+        // The two are told apart by the WORK the row itself reports: a tool call only
+        // exists because a model asked for it, so a row carrying one had an answer out of
+        // a model whatever its counters say. A row with none is the throttle/402 shape
+        // this guard was written for.
+        //
+        // Iteration count is deliberately NOT part of this test, though it looks like the
+        // same evidence. The loop increments it BEFORE calling the provider and returns it
+        // on failure too, so a provider 5xx on the first iteration of an ordinary chat
+        // carries iterations=1 with nothing spent - and during a provider outage this
+        // branch would fire on runs that genuinely cost nothing, which is the opposite of
+        // what the counter is for.
+        // "No usage" means NO counter carried anything, not just the two headline ones. A
+        // turn served entirely from cache legitimately reports zero prompt and zero
+        // completion with a large cache read, and is billed for that cache a few lines
+        // below - counting it here would log "billing nothing" about a run that is being
+        // billed, and inflate a counter whose whole purpose is to measure the opposite.
+        boolean noUsageReported = request.totalPromptTokens() == 0
+                && request.totalCompletionTokens() == 0
+                && zeroOrNull(request.totalCacheCreationTokens())
+                && zeroOrNull(request.totalCacheReadTokens())
+                && zeroOrNull(request.totalCachedTokens())
+                && zeroOrNull(request.totalReasoningTokens());
+        boolean workObserved = request.totalToolCalls() > 0;
+        if (!request.success() && noUsageReported && !workObserved) {
             logger.info("Skipping consumeCredits for failure-only observability row: executionId={}, agentId={}, stopReason={}",
                     executionId, request.agentEntityId(), request.stopReason());
             // Failure-only chat row (e.g. budget gate) is still an agent run - emit it
             // (no LLM call happened, so zero credits).
             emitAgentRunStoppedAnalytics(unified, executionId, BigDecimal.ZERO);
             return;
+        }
+        if (noUsageReported && workObserved) {
+            // We cannot bill what nobody counted, and inventing a number would be worse
+            // than billing nothing. What we CAN do is refuse to call it normal: this is a
+            // provider that ran and never told us its usage, so it must be visible as
+            // itself - one log line per occurrence and one counter - instead of hiding
+            // inside the failure-only branch above. The billing repair for the known case
+            // is upstream, in the bridge, which recovers a killed CLI's usage from the
+            // CLI's own accounting before its temp home is deleted.
+            //
+            // Not gated on failure: a run that FINISHED, used tools and still reported no
+            // usage is the same unbilled work, and hiding it because it succeeded would
+            // leave the more surprising version of the problem invisible.
+            logger.warn("Billing nothing for a run that did work but reported no usage: executionId={}, provider={}, model={}, stopReason={}, toolCalls={}, iterations={}",
+                    executionId, request.provider(), request.model(), request.stopReason(),
+                    request.totalToolCalls(), request.iterationCount());
+            prometheusMetrics.recordUnreportedUsage(request.provider(), request.model(), request.stopReason());
         }
         BigDecimal chatCreditsConsumed = BigDecimal.ZERO;
         String chatSourceId = executionId != null ? executionId.toString() : request.conversationId();
@@ -918,11 +1058,14 @@ public class AgentObservabilityService {
                 request.model(),
                 request.totalPromptTokens(),
                 request.totalCompletionTokens(),
+                /* imageCount */ null,
                 new com.apimarketplace.common.credit.LlmCacheTokens(
                     request.totalCacheCreationTokens(),
                     request.totalCacheReadTokens(),
                     request.totalCachedTokens(),
-                    request.totalReasoningTokens())
+                    request.totalReasoningTokens()),
+                // Whose key the chat turn ran on: an OWN_KEY turn is billed a flat fee, not tokens.
+                request.keyRoute()
             );
 
             if (creditResult != null) {
@@ -935,16 +1078,23 @@ public class AgentObservabilityService {
                     String rejectionReason = String.valueOf(creditResult.getOrDefault("error", "unknown rejection"));
                     creditClient.persistRejection(tenantId, "CHAT_CONVERSATION", chatSourceId,
                             request.provider(), request.model(),
-                            request.totalPromptTokens(), request.totalCompletionTokens(), rejectionReason);
+                            request.totalPromptTokens(), request.totalCompletionTokens(), rejectionReason,
+                            TenantResolver.currentRequestOrganizationId(), request.keyRoute());
                 }
                 Object creditsUsedObj = creditResult.get("creditsUsed");
                 if (creditsUsedObj instanceof Number creditsUsedNum) {
                     BigDecimal creditsUsed = BigDecimal.valueOf(creditsUsedNum.doubleValue());
-                    chatCreditsConsumed = creditsUsed;
-                    if (creditsUsed.compareTo(BigDecimal.ZERO) > 0) {
+                    // Consumption, not the debit: on the tenant's own key the ledger took a flat
+                    // fee, the counters keep metering what the turn consumed at the platform rate
+                    // (same rule as recordFromRequest above). Absent, the debit stands in.
+                    BigDecimal consumption = creditResult.get("consumptionCredits") instanceof Number consumptionNum
+                            ? BigDecimal.valueOf(consumptionNum.doubleValue())
+                            : creditsUsed;
+                    chatCreditsConsumed = consumption;
+                    if (consumption.compareTo(BigDecimal.ZERO) > 0) {
                         if (executionId != null) {
                             try {
-                                executionRepository.updateCreditsConsumed(executionId, creditsUsed);
+                                executionRepository.updateCreditsConsumed(executionId, consumption);
                             } catch (Exception ex) {
                                 logger.warn("Failed to update credits on execution {}: {}", executionId, ex.getMessage());
                             }
@@ -952,7 +1102,7 @@ public class AgentObservabilityService {
                         if (request.agentEntityId() != null) {
                             try {
                                 agentRepository.incrementCreditsConsumed(
-                                    UUID.fromString(request.agentEntityId()), creditsUsed);
+                                    UUID.fromString(request.agentEntityId()), consumption);
                             } catch (Exception ex) {
                                 logger.warn("Failed to increment credits on agent {}: {}", request.agentEntityId(), ex.getMessage());
                             }
@@ -965,7 +1115,8 @@ public class AgentObservabilityService {
                 executionId, e.getMessage());
             persistToDeadLetter(tenantId, "CHAT_CONVERSATION", chatSourceId,
                     request.provider(), request.model(),
-                    request.totalPromptTokens(), request.totalCompletionTokens(), e.getMessage());
+                    request.totalPromptTokens(), request.totalCompletionTokens(), e.getMessage(),
+                    request.keyRoute());
         }
 
         emitAgentRunStoppedAnalytics(unified, executionId, chatCreditsConsumed);
@@ -1046,12 +1197,15 @@ public class AgentObservabilityService {
      */
     private void persistToDeadLetter(String tenantId, String sourceType, String sourceId,
                                       String provider, String model,
-                                      int promptTokens, int completionTokens, String errorReason) {
+                                      int promptTokens, int completionTokens, String errorReason,
+                                      String keyRoute) {
         try {
             // Delegate to the async path which has built-in dead-letter support.
-            // consumeCreditsAsync retries up to 3 times, then persists to dead-letter.
+            // consumeCreditsAsync retries up to 3 times, then persists to dead-letter. The
+            // route rides along so the retry, and the replay after it, bill the turn the way
+            // the first attempt meant to.
             creditClient.consumeCreditsAsync(tenantId, sourceType, sourceId,
-                    provider, model, promptTokens, completionTokens);
+                    provider, model, promptTokens, completionTokens, keyRoute);
         } catch (Exception e) {
             logger.error("Dead-letter persistence also failed for {}/{}: {}",
                     sourceType, sourceId, e.getMessage());

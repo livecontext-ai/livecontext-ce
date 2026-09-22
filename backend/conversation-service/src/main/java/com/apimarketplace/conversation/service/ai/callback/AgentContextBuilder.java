@@ -804,13 +804,18 @@ public class AgentContextBuilder {
         // Kept raw so AgentModuleResolver stays the only reader of that shape. Dropping it
         // here made the general-chat switch inert: turning generation ON changed nothing.
         Object generation = readOptInGrant(chatConfig, "generation");
+        // Same two shapes, same reason, and the same failure if dropped: the switch renders,
+        // the user turns it on, and nothing happens. Its read/write axis travels beside it,
+        // because a mailbox granted with no stated mode is a mailbox that can SEND.
+        Object mailbox = readOptInGrant(chatConfig, "mailbox");
+        String mailboxAccessMode = chatConfig.get("mailboxAccessMode") instanceof String s ? s : null;
 
         ToolsConfig toolsConfig = null;
         // A granted credit-spending tool is a restriction decision like any other, so it must
         // produce a ToolsConfig: without one the caller falls through to the NO_CONFIG path,
         // which grants neither.
         if (!"all".equals(toolsMode) || Boolean.FALSE.equals(webSearch)
-                || generation != null) {
+                || generation != null || mailbox != null) {
             toolsConfig = new ToolsConfig(toolsMode, List.of(), null, null, null, null, null,
                 webSearch, null, null, null, null, null, null, null,
                 // The 5 per-family grants are "all" because general chat has NO per-family
@@ -821,7 +826,7 @@ public class AgentContextBuilder {
                 // empty allow-lists down to the tools - a chat that merely turned web search
                 // off would silently lose five tool families.
                 GRANT_ALL, GRANT_ALL, GRANT_ALL, GRANT_ALL, GRANT_ALL, null,
-                generation);
+                generation, null, mailbox, mailboxAccessMode);
         }
 
         // Conversation-scope guard overrides - chatConfig.turnLimits.{key}. Null if absent.
@@ -1465,6 +1470,7 @@ public class AgentContextBuilder {
         if (tc.skillAccessMode() != null) credentials.put("__skillAccessMode__", tc.skillAccessMode());
         if (tc.fileAccessMode() != null) credentials.put("__fileAccessMode__", tc.fileAccessMode());
         if (tc.memoryAccessMode() != null) credentials.put("__memoryAccessMode__", tc.memoryAccessMode());
+        if (tc.mailboxAccessMode() != null) credentials.put("__mailboxAccessMode__", tc.mailboxAccessMode());
     }
 
     /**

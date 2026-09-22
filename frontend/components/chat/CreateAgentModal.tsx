@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Image from 'next/image';
 import {
-  Bot, ChevronDown, ChevronRight, Check, Search, X, Loader2, Info, Workflow,
+  Bot, Mail, ChevronDown, ChevronRight, Check, Search, X, Loader2, Info, Workflow,
   Webhook, Copy, Pencil, ArrowRight, ArrowLeft, User, Settings,
   Puzzle, MessageCircle, Code, ExternalLink, Palette, Clock, Globe, Zap, Plus,
   AppWindow, Table, Monitor, FileText, ShieldCheck, Sparkles, Trash2, Brain
@@ -23,10 +23,12 @@ import { useToast } from '@/components/Toast';
 import Toast from '@/components/Toast';
 import { useTranslations } from 'next-intl';
 import { useVisibleModels, getModelsCache, isEmptySelectedModel, toNonBridgeSelectedModel } from '@/hooks/useModels';
+import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
+import { resolveFreeTierPreferredModel } from '@/lib/hooks/usePreferFreeTierModel';
 import { ModelPicker } from '@/components/ai/ModelPicker';
 import { useMcpApis, fetchApiTools, ApiTool } from '@/app/workflows/builder/hooks/useMcpData';
 import { apiClient } from '@/lib/api/api-client';
-import { getAllowedIds, buildToolsConfigPayload, isGenerationEnabled, getGrant, getFileAccessMode, getMemoryAccessMode, GRANT_FAMILIES, type ResourceGrant } from '@/lib/agents/toolsConfigAccess';
+import { getAllowedIds, buildToolsConfigPayload, isGenerationEnabled, getGrant, getFileAccessMode, getMemoryAccessMode, isMailboxEnabled, getMailboxAccessMode, GRANT_FAMILIES, type ResourceGrant } from '@/lib/agents/toolsConfigAccess';
 import { initialTurnLimits, buildChangedTurnLimits } from '@/lib/agents/agentTurnLimits';
 import { initialCompaction, buildChangedCompaction } from '@/lib/agents/agentCompaction';
 import { Switch } from '@/components/ui/switch';
@@ -42,6 +44,7 @@ import { publicationService } from '@/lib/api/orchestrator/publication.service';
 import { storageApi, S3_FILES_FILTER } from '@/lib/api/storage-api';
 import { agentService } from '@/lib/api/orchestrator/agent.service';
 import { scheduleSettingsService } from '@/lib/api/orchestrator/schedule-settings.service';
+import { timezoneOptionsFor } from '@/lib/schedule/timezoneOptions';
 import { computeAncestorIds } from './ancestorDetection';
 import type { AcquiredApplication, WorkflowPublication, DataSource, Interface, Agent } from '@/lib/api/orchestrator/types';
 import { SkillFolderTree } from '@/components/skills/SkillFolderTree';
@@ -74,6 +77,15 @@ const DEFAULT_SKILLS_FALLBACK: Skill[] = DEFAULT_SKILLS.map(ds => ({
 type ToolsMode = 'all' | 'none' | 'custom' | 'off';
 const MAX_TOOLS = 30;
 const TOTAL_STEPS = 3;
+
+/**
+ * How long the default model waits for the account's plan verdict (V494).
+ *
+ * <p>Long enough that a normal balance request wins, short enough that a reader
+ * filling in a name never reaches the model field without one. Past it the form
+ * falls back to the catalogue default, which is what it always used.
+ */
+const PLAN_VERDICT_TIMEOUT_MS = 5000;
 
 // Widget position options
 const WIDGET_POSITIONS = [
@@ -120,13 +132,17 @@ const SCHEDULE_PRESETS = [
   { value: 'custom', label: 'Custom cron expression', cron: '' },
 ];
 
-const TIMEZONE_OPTIONS = [
-  'UTC',
-  'Europe/Paris', 'Europe/London',
-  'America/New_York', 'America/Los_Angeles',
-  'Asia/Tokyo', 'Asia/Shanghai',
-  typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC',
-].filter((v, i, a) => a.indexOf(v) === i);
+/**
+ * Which entry of the frequency dropdown a cron IS, or `custom` when it is none of them.
+ *
+ * <p>One function rather than the same `find(...)?.value || 'custom'` at each place a cron
+ * arrives from outside this modal: restoring an existing agent's schedule, and seeding a
+ * new one from the agenda. They must agree, or the dropdown claims "Every day at 9:00 AM"
+ * over a cron that says something else.
+ */
+function presetForCron(cron: string): string {
+  return SCHEDULE_PRESETS.find(p => p.cron === cron)?.value || 'custom';
+}
 
 // ============== Types ==============
 
@@ -186,6 +202,10 @@ interface AgentData {
     applicationAccessMode?: 'read' | 'write';
     skillAccessMode?: 'read' | 'write';
     memoryAccessMode?: 'read' | 'write';
+    /** Mailbox tool: opt-in (absent or false = off). */
+    mailbox?: boolean;
+    /** Mailbox read/write axis, like fileAccessMode. Absent = full access. */
+    mailboxAccessMode?: 'read' | 'write';
   } | null;
 }
 
@@ -205,11 +225,49 @@ interface WidgetConfig {
 
 interface CreateAgentModalProps {
   onClose: () => void;
-  /** Called after a save. Carries the new agent's id on a CREATE, nothing on an edit. */
-  onAgentCreated: (agentId?: string) => void;
+  /**
+   * Called after a save. Carries the new agent's id on a CREATE, nothing on an edit.
+   *
+   * <p>`result.scheduleSaved` says what happened to the schedule: true when one was written,
+   * false when the write was REFUSED, absent when none was asked for. The schedule is saved
+   * in its own request after the agent, and a failure there is reported here and does not
+   * fail the save, so a caller that announces "scheduled" on this callback alone would say
+   * it over an agent whose schedule does not exist.
+   *
+   * <p>`result.scheduleHasPrompt` says whether that schedule can do anything UNPROMPTED. A
+   * blank instruction is answered at fire time by the agent's assigned inbox and pending
+   * reviews, and a brand-new agent has neither, so a caller that announces "it runs from the
+   * next occurrence" without reading this says it over an agent that will be skipped on
+   * every fire. Present only when a schedule was written.
+   */
+  onAgentCreated: (
+    agentId?: string,
+    result?: { scheduleSaved?: boolean; scheduleHasPrompt?: boolean },
+  ) => void;
   agent?: AgentData;
   /** Step to open on (1=Basic Info, 2=Configuration, 3=Integration). Defaults to 1. */
   initialStep?: number;
+  /**
+   * Open with the schedule already ON and set to this cron, used when the agent is being
+   * created from somewhere that ALREADY asked when it should run (the agenda's empty-slot
+   * dialog). CREATE only: on an edit the schedule is read back from the agent's own row,
+   * and a seed would fight that restore.
+   *
+   * <p>It is deliberately not part of {@link AgentData}: a schedule is a separate resource
+   * behind a separate call, and folding it into the agent shape would suggest the agent
+   * POST carries it.
+   */
+  initialSchedule?: {
+    cron: string;
+    timezone: string;
+    /**
+     * What that cron MEANS, as the platform itself described it (the caller already asked
+     * `validateCron`). Rendered under the raw expression while it is still the seeded one,
+     * so a user who picked "Wednesday at 16:00" on a calendar is not handed
+     * `0 16 * * 3` with nothing to check it against. Absent is fine: the line disappears.
+     */
+    description?: string;
+  };
 }
 
 // ============== Step Indicator Component ==============
@@ -366,6 +424,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
   onAgentCreated,
   agent,
   initialStep,
+  initialSchedule,
 }) => {
   const isEditMode = !!agent?.id;
   const t = useTranslations('modals.createAgent');
@@ -454,6 +513,13 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
   // toggle: an image grant must never widen into a per-second video model, which spends
   // an order of magnitude more per call. Hydrated from toolsConfig.generation on edit.
   const [generationEnabled, setGenerationEnabled] = useState(() => isGenerationEnabled(agent?.toolsConfig));
+  // Mailbox - opt-in (default off): it reads the account's mail and can send from its
+  // address. mailboxAccessMode is the separate read/write axis, defaulting to full access
+  // like every other <x>AccessMode, so turning the tool on does not silently restrict it.
+  const [mailboxEnabled, setMailboxEnabled] = useState<boolean>(() => isMailboxEnabled(agent?.toolsConfig));
+  const [mailboxAccessMode, setMailboxAccessMode] = useState<'read' | 'write'>(
+    () => getMailboxAccessMode(agent?.toolsConfig),
+  );
   // Per-family access GRANT (axis 1): "none" | "all" | "custom". Hydrated from the
   // agent's toolsConfig.<family>Grant on edit (absent ⇒ 'none' - deny by default,
   // matching the backend). 'custom' scopes to the family's selected id list below.
@@ -506,17 +572,26 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
   const [webhookMemory, setWebhookMemory] = useState(false);
   const webhookRestoredRef = React.useRef(false);
 
-  // Step 3: Integration - Schedule
-  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  // Step 3: Integration - Schedule.
+  //
+  // `initialSchedule` is honoured on CREATE only. On an edit the restore effect below
+  // reads the agent's own schedule row and overwrites all four of these, so a seed there
+  // would be a value flashed on screen and then replaced - and if the fetch failed, a
+  // schedule the agent does not have, left switched on, and created by the next save.
+  const seededSchedule = isEditMode ? undefined : initialSchedule;
+  const [scheduleEnabled, setScheduleEnabled] = useState(Boolean(seededSchedule));
   const [scheduleData, setScheduleData] = useState<AgentSchedule | null>(null);
-  const [scheduleCron, setScheduleCron] = useState('0 9 * * *');
+  const [scheduleCron, setScheduleCron] = useState(seededSchedule?.cron || '0 9 * * *');
   const [scheduleTimezone, setScheduleTimezone] = useState(
-    typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC'
+    seededSchedule?.timezone
+      || (typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC')
   );
   const [scheduleMaxExecutions, setScheduleMaxExecutions] = useState<number | null>(null);
   const [schedulePrompt, setSchedulePrompt] = useState('');
   const [scheduleWithMemory, setScheduleWithMemory] = useState(false);
-  const [schedulePreset, setSchedulePreset] = useState('every_day_9am');
+  const [schedulePreset, setSchedulePreset] = useState(
+    seededSchedule ? presetForCron(seededSchedule.cron) : 'every_day_9am',
+  );
   const [scheduleLimitReached, setScheduleLimitReached] = useState(false);
   const [scheduleAdvancedOpen, setScheduleAdvancedOpen] = useState(false);
   const [advancedModeOpen, setAdvancedModeOpen] = useState(false);
@@ -566,7 +641,11 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Fetch providers and models
-  const { providers, defaultModel, defaultProvider, isLoading: modelsLoading } = useVisibleModels();
+  const { models, providers, defaultModel, defaultProvider, isLoading: modelsLoading } = useVisibleModels();
+  // V494: which pot pays for this agent's turns. A Free account's chat and agent
+  // turns are funded by the separate AI allowance, and only on the models a
+  // cloud admin opened to the free tier.
+  const { prefersFreeTierModels, verdictReady } = useMonthlyCreditsCannotPay();
 
   // Fetch MCP APIs
   const {
@@ -781,8 +860,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
             setScheduleMaxExecutions(sched.maxExecutions ?? null);
             setSchedulePrompt(sched.schedulePrompt || '');
             setScheduleWithMemory(sched.withMemory ?? false);
-            const matchingPreset = SCHEDULE_PRESETS.find(p => p.cron === sched.cronExpression);
-            setSchedulePreset(matchingPreset?.value || 'custom');
+            setSchedulePreset(presetForCron(sched.cronExpression));
           }
         }).catch(() => {});
 
@@ -857,17 +935,66 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
     return () => clearTimeout(timer);
   }, [toolsSearchQuery]);
 
+  // V494: a free-tier account creates its agent on a model its allowance covers,
+  // when one exists. The catalogue default is the admin's global #1, which is the
+  // right answer for an account with a wallet and can be a model the Free plan's
+  // AI allowance does not pay for - so a brand-new account would build an agent
+  // that is refused on its first run, which is the moment the allowance is for.
+  // Same resolver as the chat composer and the two side panels, so the four
+  // surfaces cannot drift into four answers.
+  //
+  // Undefined unless the preference actually CHANGES the answer, and that is
+  // deliberate: `defaultProvider` is the catalogue's own pairing, while looking
+  // the default id up in the flattened list can land on another provider serving
+  // the same model (a CLI bridge outranking its cloud twin). So a paid account,
+  // a self-hosted install and a catalogue with nothing opened to the free tier
+  // all keep the exact pair they got before.
+  const freeTierDefault = useMemo(() => {
+    if (!prefersFreeTierModels) return undefined;
+    const catalogueDefault = defaultModel ? models.find(m => m.id === defaultModel) : undefined;
+    const preferred = resolveFreeTierPreferredModel(models, catalogueDefault, prefersFreeTierModels);
+    return preferred && preferred !== catalogueDefault ? preferred : undefined;
+  }, [models, defaultModel, prefersFreeTierModels]);
+
+  // The plan verdict is not guaranteed to arrive: a balance request that exhausts
+  // its retries settles into "not loading, no data" and stays there. Waiting on it
+  // forever would leave both fields blank and save an agent with NO model, while
+  // the picker still displays a fallback - so the reader would be shown a model
+  // that is not the one being stored. Giving up means doing exactly what this
+  // effect did before the verdict existed, which is never worse than before.
+  const [verdictWaitElapsed, setVerdictWaitElapsed] = useState(false);
+  useEffect(() => {
+    if (verdictReady || verdictWaitElapsed) return;
+    const timer = window.setTimeout(() => setVerdictWaitElapsed(true), PLAN_VERDICT_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [verdictReady, verdictWaitElapsed]);
+
   // Set default provider and model
   useEffect(() => {
-    if (!modelsLoading && providers.length > 0) {
-      if (!modelProvider && defaultProvider) {
-        setModelProvider(defaultProvider);
-      }
-      if (!modelName && defaultModel) {
-        setModelName(defaultModel);
-      }
+    if (modelsLoading || providers.length === 0) return;
+    // Wait for the plan verdict before writing. `prefersFreeTierModels` is false
+    // while the balance request is in flight, which is indistinguishable from a
+    // paid account: if the models land first this pins the catalogue default,
+    // and the free-tier answer arriving a tick later finds both fields already
+    // set and never applies. A saved agent keeps that model for good.
+    if (!verdictReady && !verdictWaitElapsed) return;
+
+    // Nothing chosen yet: the create case, and the only one the free-tier
+    // preference speaks to. Provider and id are written TOGETHER, from one
+    // model, so the pair is always coherent.
+    if (!modelProvider && !modelName && freeTierDefault) {
+      setModelProvider(freeTierDefault.provider);
+      setModelName(freeTierDefault.id);
+      return;
     }
-  }, [modelsLoading, providers, defaultProvider, defaultModel, modelProvider, modelName]);
+
+    // Everything else, unchanged: the catalogue's own default pair, each half
+    // filled independently. A legacy agent can carry one field and not the
+    // other (both are optional), and completing it from a model of another
+    // provider would make the pair incoherent.
+    if (!modelProvider && defaultProvider) setModelProvider(defaultProvider);
+    if (!modelName && defaultModel) setModelName(defaultModel);
+  }, [modelsLoading, providers, defaultProvider, defaultModel, freeTierDefault, verdictReady, verdictWaitElapsed, modelProvider, modelName]);
 
   // Note: the previous `isUnrestrictedEdit` shortcut (which pre-selected EVERY
   // resource when the agent had absent keys or mode='all') has been removed.
@@ -1054,6 +1181,14 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
       // recall-only agent to full write access, since the payload builder rebuilds
       // the whole tools_config from this state.
       setMemoryAccessMode(getMemoryAccessMode(tc));
+      // Mailbox: both halves, for the same reason and with more at stake. The lazy
+      // useState initializers only run on mount, and this effect depends on
+      // agent?.toolsConfig, so the prop is expected to change afterwards. Left out, a
+      // later save would emit mailbox:false (revoking a granted mailbox) and
+      // mailboxAccessMode:'write' (turning a read-only mail agent into one that can
+      // send from the account's address), with nobody having touched either switch.
+      setMailboxEnabled(isMailboxEnabled(tc));
+      setMailboxAccessMode(getMailboxAccessMode(tc));
     }
   }, [isEditMode, agent?.toolsConfig]);
 
@@ -1341,6 +1476,25 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
 ></script>`;
   };
 
+  /**
+   * An armed schedule with no instruction runs on DELEGATED work, or on nothing at all.
+   *
+   * <p>`ScheduledTaskPromptBuilder.build` answers a wakeup with the agent's assigned inbox
+   * and pending reviews when it has any, and only falls back to the stored `schedulePrompt`
+   * when it has none. So a blank instruction is a supported setup for an agent that is sent
+   * work, and a dead schedule for every other one: `ScheduleExecutorService` logs "has no
+   * effective prompt ... skipping" and returns, leaving an advancing schedule, a chip on the
+   * calendar and a silent agent.
+   *
+   * <p>Which is why this WARNS and does not refuse. Refusing would block a configuration the
+   * platform supports, and would block it hardest where it is already in use: an existing
+   * agent could not be edited at all until a static prompt was invented for it, and the
+   * obvious escape (switch the schedule off) DELETES a live schedule on an edit. The MCP
+   * `agent` tool accepts a blank prompt too, so refusing here would also put the rule in one
+   * layer of the three this repo asks to agree.
+   */
+  const scheduleHasNoPrompt = scheduleEnabled && schedulePrompt.trim().length === 0;
+
   // Navigation
   const canProceedFromStep = (step: number): boolean => {
     switch (step) {
@@ -1397,6 +1551,8 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
         files: Array.from(selectedFiles),
         webSearch: webSearchEnabled,
         generation: generationEnabled,
+        mailbox: mailboxEnabled,
+        mailboxAccessMode,
         // Axis 1 - per-family grant (none|all|custom). The selected id lists above
         // are only emitted as the scope when the family's grant is 'custom'.
         workflowsGrant,
@@ -1496,7 +1652,12 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
         }
       }
 
-      // Handle schedule
+      // Handle schedule. What happened here is reported back to the caller: the agent is
+      // already saved by this point and a refusal below does not undo it, so "the agent was
+      // created" and "it is scheduled" are two different answers and only one of them is
+      // known before this block runs.
+      let scheduleSaved: boolean | undefined;
+      let scheduleHasPrompt: boolean | undefined;
       if (savedAgent?.id) {
         try {
           if (scheduleEnabled) {
@@ -1507,11 +1668,17 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
               schedulePrompt: schedulePrompt.trim() || '',
               withMemory: scheduleWithMemory,
             });
+            scheduleSaved = true;
+            scheduleHasPrompt = schedulePrompt.trim().length > 0;
           } else if (!scheduleEnabled && scheduleData) {
             await agentService.deleteSchedule(savedAgent.id);
           }
         } catch (scheduleErr) {
           console.error('Error managing agent schedule:', scheduleErr);
+          // Only a schedule the user ASKED for counts as refused here. A failed delete
+          // leaves the old schedule running, which is a different problem and not one the
+          // caller should report as "not scheduled".
+          if (scheduleEnabled) scheduleSaved = false;
           addToast({
             type: 'error',
             title: t('error'),
@@ -1571,7 +1738,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
       }
       // The id only travels on a CREATE: on an edit the agent already sits where it sits,
       // and handing its id to the list would refile it under whatever folder is open.
-      onAgentCreated(isEditMode ? undefined : savedAgent?.id);
+      onAgentCreated(isEditMode ? undefined : savedAgent?.id, { scheduleSaved, scheduleHasPrompt });
       onClose();
     } catch (err) {
       console.error('Error creating agent:', err);
@@ -1881,7 +2048,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                   disabled={modelsLoading}
                   providerLabel={t('modelProviderLabel')}
                   modelLabel={t('modelNameLabel')}
-                  costProfile="agentConversation"
+                  costProfile="chatConversation"
                 />
 
                 {/* Credit Budget */}
@@ -2716,6 +2883,72 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                         </button>
                       </div>
 
+                      {/* Mailbox toggle - opt-in (default off). Persists to toolsConfig.mailbox;
+                          read by AgentModuleResolver.isMailboxEnabled. Opt-in rather than
+                          opt-out, and the comparison that settles it is web search: that one
+                          reads the public web, this one reads the account's mail and can send
+                          from its address, to a person, with no undo. Read-only is a separate
+                          axis (toolsConfig.mailboxAccessMode), so an inbox scanner can be given
+                          the reads without the ability to send. */}
+                      <div>
+                        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                          {tc('mailboxLabel')}
+                          <TooltipProvider delayDuration={0}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs">
+                                <p className="text-xs">{tc('mailboxInfo')}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setMailboxEnabled(!mailboxEnabled)}
+                          className="flex h-auto min-h-[44px] w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Mail className="w-4 h-4 text-theme-secondary" />
+                            <span>{mailboxEnabled ? t('enabled') : t('disabled')}</span>
+                          </div>
+                          <Switch checked={mailboxEnabled} presentational />
+                        </button>
+                      </div>
+
+                      {/* Mailbox read/write axis, shown only once the tool is on: offering a
+                          mode for a capability the agent does not have reads as a setting that
+                          does nothing. */}
+                      {mailboxEnabled && (
+                        <div>
+                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                            {tc('mailboxAccessLabel')}
+                            <TooltipProvider delayDuration={0}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs">
+                                  <p className="text-xs">{tc('mailboxAccessInfo')}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setMailboxAccessMode(mailboxAccessMode === 'write' ? 'read' : 'write')}
+                            className="flex h-auto min-h-[44px] w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Mail className="w-4 h-4 text-theme-secondary" />
+                              <span>{mailboxAccessMode === 'write' ? tc('mailboxAccessWrite') : tc('mailboxAccessRead')}</span>
+                            </div>
+                            <Switch checked={mailboxAccessMode === 'write'} presentational />
+                          </button>
+                        </div>
+                      )}
+
                       {/* Sensitive actions - always on for agent-backed runs (approval gate
                           exempt); surfaced read-only so the behavior is explicit. */}
                       <div>
@@ -3026,6 +3259,15 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                           className="w-full text-sm rounded-lg border border-theme bg-[var(--bg-secondary)] text-theme-primary px-3 py-2 placeholder:text-theme-tertiary resize-none"
                         />
                         <p className="text-xs text-theme-secondary mt-1">{t('scheduleTaskHelp')}</p>
+                        {/* Next to the empty field, where the decision is being made. The
+                            condition it names is real and checkable by the reader: an agent
+                            that is sent tasks runs them on a blank instruction, and one that
+                            is not does nothing at all. */}
+                        {scheduleHasNoPrompt && (
+                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                            {t('scheduleTaskEmptyWarning')}
+                          </p>
+                        )}
                       </div>
 
                       {/* Frequency */}
@@ -3061,6 +3303,13 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                             placeholder="* * * * *"
                             className="w-full font-mono"
                           />
+                          {/* The seed's own description, and ONLY while the expression is
+                              still the one it described. A cron the user has since edited is
+                              a different schedule, and leaving the old sentence under it
+                              would be the panel confidently reading out the wrong one. */}
+                          {seededSchedule?.description && scheduleCron === seededSchedule.cron && (
+                            <p className="text-xs text-theme-secondary mt-1">{seededSchedule.description}</p>
+                          )}
                         </div>
                       )}
 
@@ -3092,7 +3341,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                                 <Select value={scheduleTimezone} onValueChange={setScheduleTimezone}>
                                   <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                                   <SelectContent>
-                                    {TIMEZONE_OPTIONS.map(tz => (
+                                    {timezoneOptionsFor(scheduleTimezone).map(tz => (
                                       <SelectItem key={tz} value={tz}>{tz}</SelectItem>
                                     ))}
                                   </SelectContent>

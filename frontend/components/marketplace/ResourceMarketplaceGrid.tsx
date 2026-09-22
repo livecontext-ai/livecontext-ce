@@ -13,6 +13,7 @@ import AcquirePublicationModal from '@/components/marketplace/AcquirePublication
 import { useMarketplaceInstallStore } from '@/lib/stores/marketplace-install-store';
 import { CeExclusiveBadge } from '@/components/marketplace/CeExclusiveBadge';
 import { isCeExclusiveBlocked } from '@/lib/marketplace/ceExclusive';
+import { useMarketplaceDemoInstall } from '@/lib/marketplace/demoInstallMode';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 
 type ResourceType = 'TABLE' | 'INTERFACE' | 'SKILL' | 'WORKFLOW';
@@ -74,11 +75,16 @@ function PublicationCard({
 
   // Org-aware ownership computed server-side (active workspace owns it); falls back to the
   // publisher-id check only if the backend didn't supply the flag.
-  const isOwn = publication.ownedByMe ?? (!!currentUserId && publication.publisherId === currentUserId);
+  const isOwnReal = publication.ownedByMe ?? (!!currentUserId && publication.publisherId === currentUserId);
+  // Admin demo mode: same rule as the marketplace card, ownership and "already
+  // installed" stop hiding the CTA so an install can be demonstrated.
+  const demoInstall = useMarketplaceDemoInstall();
+  const isOwn = isOwnReal && !demoInstall;
+  const isAcquiredForUi = isAcquired && !demoInstall;
   // Managed cloud cannot install a CE-exclusive resource (a table with a vector
   // column): hide the Install button and show the badge instead of offering a
   // click the backend refuses.
-  const canAcquire = !isOwn && !isAcquired && !isCeExclusiveBlocked(publication);
+  const canAcquire = !isOwn && !isAcquiredForUi && !isCeExclusiveBlocked(publication);
   const isFree = !publication.creditsPerUse || publication.creditsPerUse === 0;
 
   return (
@@ -119,7 +125,7 @@ function PublicationCard({
         </span>
 
         {/* Top-right: installed badge */}
-        {isAcquired || isOwn ? (
+        {isAcquiredForUi || isOwn ? (
           <span className="absolute top-3 right-3 z-20 inline-flex items-center gap-1 h-[22px] px-2 rounded-lg text-[11px] font-medium bg-emerald-500 text-white shadow-sm">
             <CheckCircle className="h-3 w-3" />
             {t('installed')}
@@ -210,14 +216,21 @@ export function ResourceMarketplaceGrid({ type, icon: Icon, title, subtitle, emp
     setLoading(true);
   });
 
+  // Read once for the grid: the CARD reads it separately for its own CTA.
+  const demoInstallActive = useMarketplaceDemoInstall();
+
   const handleAcquire = useCallback((pub: WorkflowPublication) => {
     setAcquireTarget(pub);
   }, []);
 
   const handleAcquireSuccess = useCallback(() => {
     if (!acquireTarget) return;
+    // A demo install acquired nothing, so it must not enter the optimistic set:
+    // that set outlives the toggle, and the card would then claim an install
+    // that never happened. Same guard as the marketplace page's.
+    if (demoInstallActive) return;
     setAcquiredIds((prev) => new Set(prev).add(acquireTarget.id));
-  }, [acquireTarget]);
+  }, [acquireTarget, demoInstallActive]);
 
   return (
     <div className="flex-1 overflow-y-auto min-h-0">
@@ -269,6 +282,7 @@ export function ResourceMarketplaceGrid({ type, icon: Icon, title, subtitle, emp
 
           {acquireTarget && (
             <AcquirePublicationModal
+          demoEligible
               isOpen={!!acquireTarget}
               onClose={() => setAcquireTarget(null)}
               publication={acquireTarget}

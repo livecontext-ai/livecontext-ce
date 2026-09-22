@@ -77,7 +77,20 @@ class WorkflowInspectorServiceTest {
         dto.setName(name);
         dto.setVariant(variant);
         dto.setEnabled(false);
-        dto.setHasClientSecret(true);
+        // The one property that has to hold: hasClientSecret appears only on a row that
+        // really is an OAuth client, because holdsOAuthClient() reads it to keep such a
+        // row listed. This helper used to stamp it on every variant, so a basic_auth row
+        // claimed a complete client_id/secret pair the server never sends and looked
+        // substitutable by the user when it is not. The other three flags are picked to
+        // be plausible rather than authoritative - any of them satisfies isConfigured(),
+        // which is all the non-OAuth cases need. A fixture that needs a specific shape
+        // (a 'primary' row that IS an OAuth client, say) should set the flag itself.
+        switch (variant) {
+            case "oauth2" -> dto.setHasClientSecret(true);
+            case "api_key" -> dto.setHasApiKey(true);
+            case "basic_auth" -> dto.setHasBasicAuth(true);
+            default -> dto.setHasCustomFields(true);
+        }
         return dto;
     }
 
@@ -442,7 +455,7 @@ class WorkflowInspectorServiceTest {
         }
 
         @Test
-        @DisplayName("an ordinary endpoint reports generation=false, which is what the 700+ of them are")
+        @DisplayName("an ordinary endpoint reports generation=false, which is what the 1000+ of them are")
         void shouldReportOrdinaryEndpointAsNotAGeneration() {
             UUID toolId = UUID.randomUUID();
             Map<String, Object> toolRow = new HashMap<>();
@@ -712,6 +725,39 @@ class WorkflowInspectorServiceTest {
             assertEquals(1, result.get().credentials().size());
             assertEquals("basic_auth", result.get().credentials().get(0).authType(),
                 "Only the enabled variant's row should remain");
+        }
+
+        @Test
+        @DisplayName("should keep a disabled oauth2 credential listed so the node inspector still offers BYOK - the twin helper in CredentialTemplateController must not drift from this one")
+        void shouldKeepDisabledOAuth2CredentialForByok() {
+            // The inspector is where a user connects the credential a workflow step needs,
+            // so hiding the integration here is worse than hiding it in settings. Disabling
+            // the shared OAuth app withdraws the platform's client, not the user's: they can
+            // still register their own. Non-OAuth variants keep the old behaviour, which the
+            // sibling test below still asserts.
+            UUID toolId = UUID.randomUUID();
+            Map<String, Object> toolRow = sampleToolRow(toolId, "pipedrive-deals");
+
+            when(credentialClient.listPlatformCredentials()).thenReturn(List.of(
+                disabledDto("pipedrive", "oauth2")
+            ));
+            when(jdbcTemplate.queryForList(contains("api_tools"), eq("pipedrive-deals")))
+                .thenReturn(List.of(toolRow));
+            when(jdbcTemplate.queryForList(contains("api_tool_parameters"), eq(toolId)))
+                .thenReturn(List.of());
+            when(jdbcTemplate.queryForList(contains("tool_responses"), eq(toolId)))
+                .thenReturn(List.of());
+            when(jdbcTemplate.queryForList(contains("tool_credentials"), eq(toolId)))
+                .thenReturn(List.of(
+                    credentialRow("pipedrive", "oauth2", "Pipedrive", "oauth2")
+                ));
+
+            Optional<WorkflowToolDetailDTO> result = service.getToolDetailBySlug("pipedrive-deals");
+
+            assertTrue(result.isPresent());
+            assertEquals(1, result.get().credentials().size(),
+                "the disabled shared app must not remove the integration from the inspector");
+            assertEquals("oauth2", result.get().credentials().get(0).authType());
         }
 
         @Test

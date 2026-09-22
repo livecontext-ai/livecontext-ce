@@ -1061,4 +1061,59 @@ class ConvertToFileNodeTest {
             }
         };
     }
+
+    @Nested
+    @DisplayName("what the Params column says this node ran with")
+    class ReportedConfiguration {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> paramsOf(NodeExecutionResult result) {
+            return (Map<String, Object>) result.output().get("resolved_params");
+        }
+
+        private NodeExecutionResult run(Object resolvedValue) {
+            when(mockTemplateAdapter.resolveTemplates(anyMap(), any(ExecutionContext.class)))
+                .thenReturn(Map.of("__expr__", resolvedValue));
+            Core.ConvertToFileConfig config = new Core.ConvertToFileConfig(
+                "csv", "{{core:extract.output.items}}", "{{trigger:start.name}}", ",", "yes");
+            ConvertToFileNode node = new ConvertToFileNode("core:convert", config);
+            node.setTemplateAdapter(mockTemplateAdapter);
+            return node.execute(context);
+        }
+
+        @Test
+        @DisplayName("`filename` is the string the file is actually named from, not a second resolution of it")
+        void reportsTheFilenameTheNodeUses() {
+            // execute() names the file from the CONFIGURED string. Reporting a resolved one
+            // showed a name no file on disk or in storage ever carried - a value that looks
+            // more helpful than the truth and sends the reader looking for the wrong file.
+            Map<String, Object> params = paramsOf(run(List.of(Map.of("id", "1"))));
+
+            assertEquals("{{trigger:start.name}}", params.get("filename"));
+        }
+
+        @Test
+        @DisplayName("`value` is what the node's own evaluation produced, described when it is a whole dataset")
+        void reportsTheDataItConverted() {
+            // `value` IS the data being written. It was re-resolved for display and coerced
+            // to a String on the way, so a 5 000-row export was reported as one flattened
+            // line and copied onto the step row of every item.
+            List<Map<String, Object>> rows = new java.util.ArrayList<>();
+            for (int i = 0; i < 5_000; i++) {
+                rows.add(Map.of("id", String.valueOf(i), "payload", "x".repeat(200)));
+            }
+
+            Object reported = paramsOf(run(rows)).get("value");
+
+            assertEquals("List(size=5000)", reported);
+        }
+
+        @Test
+        @DisplayName("a small value is still reported as itself: describing everything would empty the panel")
+        void keepsASmallValueVerbatim() {
+            List<Map<String, Object>> rows = List.of(Map.of("id", "1", "name", "Ada"));
+
+            assertEquals(rows, paramsOf(run(rows)).get("value"));
+        }
+    }
 }

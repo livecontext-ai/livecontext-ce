@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import JsonLd from '@/components/seo/JsonLd';
 import { LandingShell } from '@/components/landing/LandingShell';
 import { IS_CE } from '@/lib/edition';
-import { fetchAllPublicPublications } from '@/lib/marketplace/publicPublications';
+import { fetchAllPublicPublications, fetchVerifiedPublisherHandles } from '@/lib/marketplace/publicPublications';
 import { isLinkable } from '@/lib/marketplace/indexability';
 import { listingListItem } from '@/lib/marketplace/listingJsonLd';
 import PublicationCardSsr from './_components/PublicationCardSsr';
@@ -94,6 +94,12 @@ export default async function MarketplaceIndexPage() {
   // the slug backfill and are reachable by UUID only.
   const linkable = publications.filter(isLinkable);
 
+  // One lookup for the whole grid: authors repeat across listings, so this is a
+  // handful of handles even on a page showing the entire catalogue.
+  const verifiedPublishers = await fetchVerifiedPublisherHandles(
+    publications.map((publication) => publication.publisherHandle),
+  );
+
   // ItemList tells search engines this is a listing page and gives it the
   // member URLs, which helps them discover detail pages beyond the sitemap.
   const itemListJsonLd = {
@@ -142,7 +148,14 @@ export default async function MarketplaceIndexPage() {
           // the card gets it, not just the ones whose author remembered.
           <div className="grid grid-cols-1 gap-x-5 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
             {publications.map((publication) => (
-              <PublicationCardSsr key={publication.id} publication={publication} />
+              <PublicationCardSsr
+                key={publication.id}
+                publication={publication}
+                publisherVerified={
+                  !!publication.publisherHandle
+                  && verifiedPublishers.has(publication.publisherHandle.toLowerCase())
+                }
+              />
             ))}
           </div>
         )}

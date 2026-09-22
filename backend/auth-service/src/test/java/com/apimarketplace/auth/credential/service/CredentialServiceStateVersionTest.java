@@ -19,7 +19,7 @@ import static org.mockito.Mockito.when;
  * the opaque version that catalog-service embeds in its agent response-cache
  * key (regression companion of the 2026-06-11 "set as default ignored by the
  * chat agent" bug; the SQL itself is proven in
- * {@code CredentialRepositoryStateVersionIT}).
+ * {@code CredentialRepositoryStateVersionPostgresTest}).
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("CredentialService.getCredentialStateVersion")

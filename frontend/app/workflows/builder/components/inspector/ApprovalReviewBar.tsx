@@ -23,6 +23,7 @@ import clsx from 'clsx';
 import { CheckCircle, XCircle, ChevronLeft, ChevronRight, Maximize2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import type { Node } from 'reactflow';
+import { sortPendingSignals } from '@/lib/workflow/pendingSignals';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import type { PendingSignal } from '@/lib/websocket/ws-types';
 import type { BuilderNodeData } from '../../types';
@@ -50,21 +51,10 @@ interface ApprovalReviewBarProps {
   allNodes?: Node<BuilderNodeData>[];
 }
 
-/** Numeric item index of a signal; non-numeric/missing itemId sorts first (0). */
-function itemIndexOf(signal: PendingSignal): number {
-  const n = Number(signal.itemId ?? 0);
-  return Number.isFinite(n) ? n : 0;
-}
-
-/** Sort pending signals on the (epoch, itemIndex) review axis. */
-export function sortPendingSignals(signals: PendingSignal[]): PendingSignal[] {
-  return [...signals].sort((a, b) => {
-    const ea = a.epoch ?? 0;
-    const eb = b.epoch ?? 0;
-    if (ea !== eb) return ea - eb;
-    return itemIndexOf(a) - itemIndexOf(b);
-  });
-}
+// Re-exported: this file is where callers (and its test) already look for the
+// ordering, but the implementation moved to lib/workflow/pendingSignals so the
+// other three callers can share it without importing this React module.
+export { sortPendingSignals };
 
 /**
  * The signal the bar acts on: the one matching the review target's

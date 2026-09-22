@@ -32,6 +32,16 @@ spring:
         applicationName: storage-service
   
   jpa:
+    # OFF, for the same reason catalog-service, orchestrator-service and
+    # conversation-service run it off, and it matters more here: the spring.mvc.async
+    # deadline set below allows a stream to stay open for minutes, and with
+    # open-in-view=true a query issued OUTSIDE a transaction during rendering would hold
+    # one of the 20 Hikari connections for that whole time.
+    # Verified rather than assumed: the two entity-scanned packages
+    # (com.apimarketplace.storage.domain and com.apimarketplace.common.storage.domain,
+    # see StorageApplication) declare ZERO JPA associations between them, so nothing can
+    # lazy-load during rendering and closing the session earlier breaks nothing.
+    open-in-view: false
     hibernate:
       ddl-auto: validate
     show-sql: false
@@ -54,6 +64,31 @@ spring:
     multipart:
       max-file-size: 50MB
       max-request-size: 50MB
+
+  mvc:
+    async:
+      # GET /api/files/proxy-signed returns a StreamingResponseBody, so the request stays
+      # open for the whole object-store to client transfer, which for a showcase video
+      # legitimately runs past the 30s container default. With no value set that default
+      # applied and Spring aborted the exchange mid-stream on an already-committed
+      # response: the client got a truncated file, and the log got an
+      # AsyncRequestTimeoutException it could do nothing about. Measured over the 3 days
+      # to 2026-09-21: 112 of 4979 proxy-signed requests ran past 30s, 77 past 60s.
+      # catalog-service (900000) and orchestrator-service (300000) already set this for
+      # the same reason; storage-service, the service that exists to stream files, did not.
+      #
+      # 10 minutes, not unlimited, for two reasons. These streams run on the BOUNDED
+      # mvcStreamingTaskExecutor (see CommonAsyncConfig), so a slow client now holds its
+      # slot longer than it used to; a finite ceiling keeps StreamingPoolSaturated
+      # meaningful. And the async timeout is the only backstop for a stream whose task
+      # was rejected during a graceful shutdown, so -1 would turn that into a response
+      # that hangs forever. 600000 ms covers ~60 MB at 100 KB/s, roughly 10x the slowest
+      # transfer observed. A client that disconnects is still detected immediately by the
+      # write failing, independently of this timeout.
+      #
+      # Guarded by FileStreamingPropertiesTest: deleting this property is a silent
+      # regression no other test would catch.
+      request-timeout: 600000
 
 # Public frontend origin for user-facing links. storage-service component-scans
 # com.apimarketplace.common.storage, so PublicFileUrlBuilder is instantiated here - set the
@@ -93,9 +128,31 @@ gateway:
 
 logging:
   level:
-    com.apimarketplace.storage: DEBUG
+    # INFO, not DEBUG. Over a 24h sample on 2026-09-17 the only DEBUG line that
+    # actually appeared was ClientStreamCopier's "client disconnected mid-stream",
+    # which is a visitor closing a tab on a video, not a fault: 59 lines, and this
+    # service logged nothing else at all in that window (0 errors). Nothing is lost
+    # by silencing it that an alert would read: the event is still counted in
+    # storage.streaming.client.disconnects. The counter carries no label, so the object key
+    # in the suppressed line IS lost - the escape hatch below is the answer when a specific
+    # download has to be traced.
+    # The other seven DEBUG statements in this service are routine per-operation traces
+    # (bucket exists, presign issued, upload received). To get them back for an
+    # investigation, set LOGGING_LEVEL_COM_APIMARKETPLACE_STORAGE=DEBUG on the deployment:
+    # it is an env override of this key, so it needs no rebuild and no code change.
+    #
+    # orchestrator-service is ALSO pinned to DEBUG and is deliberately left alone here. It has
+    # 826 .debug() sites against this service's 8, and it emitted ZERO debug lines in the same
+    # 24h window, so it is dormant rather than noisy: the two are not the same problem, and
+    # auditing that blast radius is its own change rather than a rider on this one.
+    com.apimarketplace.storage: INFO
   pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    # Carries the level, the thread and the logger, like orchestrator/conversation/
+    # catalog. The previous "%d - %msg%n" omitted all three, so every line from this
+    # service arrived unclassifiable in the log viewer: an ERROR here was
+    # indistinguishable from a DEBUG.
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{36}] - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{36}] - %msg%n"
   file:
     name: logs/storage-service.log
 

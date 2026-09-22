@@ -83,9 +83,12 @@ describe('a chip in a narrow cell', () => {
       </DndContext>,
     );
     const chip = screen.getByRole('button');
-    const gated = [...chip.querySelectorAll('svg')].every((el) =>
-      (el.getAttribute('class') ?? '').includes('hidden'),
-    );
+    const gated = [...chip.querySelectorAll('svg')].every((el) => {
+      for (let node: Element | null = el; node && node !== chip; node = node.parentElement) {
+        if ((node.getAttribute('class') ?? '').split(/\s+/).includes('hidden')) return true;
+      }
+      return false;
+    });
 
     expect(chip.querySelectorAll('svg').length).toBeGreaterThan(0);
     expect(gated).toBe(true);
@@ -96,10 +99,12 @@ describe('a chip in a narrow cell', () => {
     // the user came for, so it appears at a narrower width than the icon does.
     const chip = renderChip();
     const name = [...chip.querySelectorAll('span')].find((el) => el.textContent === 'Weekly digest')!;
-    const icon = chip.querySelector('svg')!;
+    const iconCarrier = [...chip.querySelectorAll('span')].find((el) =>
+      el.className.includes('@[8rem]:block'),
+    )!;
 
     expect(name.className).toContain('@[6.5rem]:block');
-    expect(icon.getAttribute('class')).toContain('@[8rem]:block');
+    expect(iconCarrier.getAttribute('class')).toContain('@[8rem]:block');
   });
 
   it('says the whole thing to a screen reader and a tooltip whatever it draws', () => {

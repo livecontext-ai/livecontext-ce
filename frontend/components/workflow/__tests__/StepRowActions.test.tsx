@@ -19,15 +19,22 @@ import { render, fireEvent } from '@testing-library/react';
 import type { Node } from 'reactflow';
 import type { BuilderNodeData } from '@/app/workflows/builder/types';
 
-const { setViewingEpoch } = vi.hoisted(() => ({ setViewingEpoch: vi.fn() }));
+const { setViewingEpoch, openWorkflowLogs } = vi.hoisted(() => ({
+  setViewingEpoch: vi.fn(),
+  openWorkflowLogs: vi.fn(),
+}));
 
 vi.mock('@/contexts/WorkflowModeContext', () => ({
-  useWorkflowMode: () => ({ isRunMode: true, setViewingEpoch }),
+  useWorkflowMode: () => ({ isRunMode: true, runId: 'run-1', setViewingEpoch }),
 }));
 vi.mock('@/app/workflows/builder/nodes/nodeClasses', () => ({ findNodeClassById: () => undefined }));
 // Leaf deps of useNodeContextualButtons - kept real, but its imports stubbed so
 // importing it in jsdom is cheap and side-panel calls no-op.
 vi.mock('@/contexts/SidePanelContext', () => ({ useSidePanelSafe: () => null }));
+vi.mock('@/components/workflow/useWorkflowLogsSidePanel', () => ({
+  useWorkflowLogsSidePanel: () => ({ openWorkflowLogs, canOpenWorkflowLogs: true }),
+}));
+vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
 vi.mock('@/components/app/AgentPanelContent', () => ({
   AgentPanelContent: () => null,
   AGENT_CONVERSATION_TAB: 'conversation',
@@ -68,6 +75,7 @@ const mkNode = (id: string, data: Record<string, any> = {}): Node<BuilderNodeDat
 describe('StepRowActions', () => {
   beforeEach(() => {
     setViewingEpoch.mockClear();
+    openWorkflowLogs.mockClear();
   });
 
   it('shows the trigger play on an active run', () => {
@@ -117,11 +125,13 @@ describe('StepRowActions', () => {
     dispatch.mockRestore();
   });
 
-  it('renders nothing for a plain non-trigger node with no side panel', () => {
-    const { container } = render(
+  it('shows logs for a plain non-trigger node without other contextual actions', () => {
+    const { getByRole, queryByTestId } = render(
       <StepRowActions step={{ alias: 'mcp:fetch' }} matchedNode={mkNode('http-request', { kind: 'http_request' })} workflowId="wf-1" isStepByStep={false} isRunActive />,
     );
-    expect(container.firstChild).toBeNull();
+    expect(getByRole('button', { name: 'workflow.logs.openNodeLogs' })).toBeTruthy();
+    expect(queryByTestId('play')).toBeNull();
+    expect(queryByTestId('pin')).toBeNull();
   });
 
   it('does not show a play for a non-trigger node even on an active run', () => {
@@ -130,5 +140,25 @@ describe('StepRowActions', () => {
     );
     expect(queryByTestId('play')).toBeNull();
     expect(queryByTestId('pin')).toBeNull();
+  });
+
+  it('opens the selected node logs for the current run', () => {
+    const { getByRole } = render(
+      <StepRowActions
+        step={{ alias: 'mcp:fetch' }}
+        matchedNode={mkNode('http-request', { kind: 'http_request' })}
+        workflowId="wf-1"
+        isStepByStep={false}
+        isRunActive
+      />,
+    );
+
+    fireEvent.click(getByRole('button', { name: 'workflow.logs.openNodeLogs' }));
+    expect(openWorkflowLogs).toHaveBeenCalledWith({
+      workflowId: 'wf-1',
+      runId: 'run-1',
+      initialStepAlias: 'mcp:fetch',
+      reuseActiveWorkflowTab: true,
+    });
   });
 });

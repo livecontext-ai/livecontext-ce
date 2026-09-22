@@ -219,6 +219,12 @@ public class InternalFileController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("error", "Upload failed: " + e.getMessage()));
         }
+        // A quota refusal is NOT caught here. An advice maps it to 413 for every endpoint at
+        // once, so catching it per method would be three copies of one rule and would still
+        // leave the next upload endpoint to rediscover it. Which advice does it depends on the
+        // deployment: StorageExceptionHandler in microservice mode, and in the CE monolith the
+        // orchestrator's GlobalExceptionHandler, which was already mapping this exception and is
+        // the reason StorageExceptionHandler stays out of that context.
     }
 
     /**

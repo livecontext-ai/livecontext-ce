@@ -330,6 +330,113 @@ class SplitNodeExecutorTest {
         }
     }
 
+    /**
+     * What a split says about the expression it ran on. The Params column is opened by a
+     * reader whose split produced nothing, and until now it answered a different question
+     * on every path: the configured expression here, the resolved value in SplitNode, and
+     * one lone error message on the failure path.
+     */
+    @Nested
+    @DisplayName("what `list` resolved to")
+    class ListResolved {
+
+        @Test
+        @DisplayName("the 0-item path says whether the array was empty - the one path where the resolved value IS the diagnosis")
+        @SuppressWarnings("unchecked")
+        void reportsWhatAnEmptySpawnResolvedTo() {
+            when(templateAdapter.evaluateTemplate(any(), any())).thenReturn(List.of());
+            when(contextManager.createContext(any(), any(), anyInt(), isNull(), any(), anyInt()))
+                .thenReturn(SplitContext.create("core:split1:0", List.of()));
+
+            NodeExecutionResult result = executor.execute(
+                "run1", "core:split1", "{{core:fetch.output.rows}}", 0, null, WORKFLOW_ITEM_INDEX, context);
+
+            Map<String, Object> resolvedParams =
+                (Map<String, Object>) result.output().get("resolved_params");
+            assertThat(resolvedParams)
+                .containsEntry("list", "{{core:fetch.output.rows}}")
+                .containsEntry("listResolved", "List(size=0)")
+                .containsEntry("itemCount", 0);
+        }
+
+        @Test
+        @DisplayName("an empty wrapper object is told apart from an empty array, which the item count alone cannot do")
+        @SuppressWarnings("unchecked")
+        void tellsAnEmptyWrapperApartFromAnEmptyArray() {
+            // Both spawn 0 items. "The upstream node returned no rows" and "the reference
+            // points one level too high" are different bugs with different fixes, and the
+            // reader had nothing to tell them apart with.
+            Map<String, Object> wrapper = Map.of("items", List.of());
+            when(templateAdapter.evaluateTemplate(any(), any())).thenReturn(wrapper);
+            when(contextManager.createContext(any(), any(), anyInt(), isNull(), any(), anyInt()))
+                .thenReturn(SplitContext.create("core:split1:0", List.of()));
+
+            NodeExecutionResult result = executor.execute(
+                "run1", "core:split1", "{{core:fetch.output}}", 0, null, WORKFLOW_ITEM_INDEX, context);
+
+            Map<String, Object> resolvedParams =
+                (Map<String, Object>) result.output().get("resolved_params");
+            assertThat(resolvedParams).containsEntry("listResolved", "Map(keys=[items])");
+            assertThat(resolvedParams).containsEntry("itemCount", 0);
+        }
+
+        @Test
+        @DisplayName("the spawn path reports the same two keys, so two rows of one run answer one question")
+        @SuppressWarnings("unchecked")
+        void reportsWhatASpawnResolvedTo() {
+            when(templateAdapter.evaluateTemplate(any(), any())).thenReturn(List.of("a", "b"));
+            when(contextManager.createContext(any(), any(), anyInt(), isNull(), any(), anyInt()))
+                .thenReturn(SplitContext.create("core:split1:0", List.of("a", "b")));
+
+            NodeExecutionResult result = executor.execute(
+                "run1", "core:split1", "{{items}}", 0, null, WORKFLOW_ITEM_INDEX, context);
+
+            Map<String, Object> resolvedParams =
+                (Map<String, Object>) result.output().get("resolved_params");
+            assertThat(resolvedParams)
+                .containsEntry("list", "{{items}}")
+                .containsEntry("listResolved", "List(size=2)");
+        }
+
+        @Test
+        @DisplayName("a failed split reports its whole configuration, not just the error the Output column already carries")
+        @SuppressWarnings("unchecked")
+        void reportsTheConfigurationOnFailure() {
+            Map<String, Object> singleObject = Map.of("id", 1);
+            when(templateAdapter.evaluateTemplate(any(), any())).thenReturn(singleObject);
+
+            NodeExecutionResult result = executor.execute(
+                "run1", "core:split1", "{{single}}", 7, "stop-on-error", WORKFLOW_ITEM_INDEX, context);
+
+            assertThat(result.status()).isEqualTo(NodeStatus.FAILED);
+            Map<String, Object> resolvedParams =
+                (Map<String, Object>) result.output().get("resolved_params");
+            assertThat(resolvedParams)
+                .containsEntry("list", "{{single}}")
+                .containsEntry("listResolved", "Map(keys=[id])")
+                .containsEntry("maxItems", 7)
+                .containsEntry("splitStrategy", "stop-on-error");
+            assertThat(resolvedParams).containsKey("error");
+            // No item count: the split never got one, and reporting 0 would read as an
+            // empty array rather than as a split that never ran.
+            assertThat(resolvedParams).doesNotContainKey("itemCount");
+        }
+
+        @Test
+        @DisplayName("nothing evaluated, nothing reported: a blank expression leaves the key out rather than inventing a value")
+        @SuppressWarnings("unchecked")
+        void reportsNoResolvedValueWhenNothingWasEvaluated() {
+            NodeExecutionResult result = executor.execute(
+                "run1", "core:split1", "   ", 0, null, WORKFLOW_ITEM_INDEX, context);
+
+            assertThat(result.status()).isEqualTo(NodeStatus.FAILED);
+            Map<String, Object> resolvedParams =
+                (Map<String, Object>) result.output().get("resolved_params");
+            assertThat(resolvedParams).doesNotContainKey("listResolved");
+            assertThat(resolvedParams).containsKey("error");
+        }
+    }
+
     @Nested
     @DisplayName("hasExistingContext()")
     class HasExistingContext {
@@ -389,6 +496,28 @@ class SplitNodeExecutorTest {
             assertThat(result.output().get("spawn_reason")).isEqualTo("empty_list");
             verify(contextManager).createContext(
                 "run1", "core:split1", WORKFLOW_ITEM_INDEX, null, List.of(), EPOCH);
+        }
+
+        @Test
+        @DisplayName("reports the cap it applied, and no expression, because none was evaluated on this path")
+        @SuppressWarnings("unchecked")
+        void reportsTheConfigurationItWasGiven() {
+            // The third producer named in SplitParamsReport's own javadoc: it used to report
+            // nothing at all. It has no expression to report - the items arrive resolved -
+            // so `list` and `listResolved` are absent rather than blank, and the cap that
+            // decided how many items were kept is the one thing it CAN state.
+            when(contextManager.createContext(any(), any(), anyInt(), isNull(), any(), anyInt()))
+                .thenAnswer(inv -> SplitContext.create("core:split1:0", inv.getArgument(4), inv.getArgument(5)));
+
+            NodeExecutionResult result = executor.executeWithItems(
+                "run1", "core:split1", List.of("a", "b", "c", "d"), 2, WORKFLOW_ITEM_INDEX, context);
+
+            Map<String, Object> resolvedParams =
+                (Map<String, Object>) result.output().get("resolved_params");
+            assertThat(resolvedParams)
+                .containsEntry("maxItems", 2)
+                .containsEntry("itemCount", 2)
+                .doesNotContainKeys("list", "listResolved");
         }
 
         @Test

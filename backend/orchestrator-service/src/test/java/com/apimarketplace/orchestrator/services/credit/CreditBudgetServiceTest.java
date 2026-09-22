@@ -19,6 +19,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -588,5 +592,21 @@ class CreditBudgetServiceTest {
             // Next node should fail
             assertThat(budgetService.tryConsumeOne(USER_ID)).isFalse();
         }
+    }
+    @Test
+    @DisplayName("V494: the agent pre-flight gates as AGENT_EXECUTION, the type it will debit as")
+    void agentPreflightNamesItsSourceType() {
+        // The gate scopes the balance BY SOURCE TYPE since V494 - the FREE AI allowance
+        // funds some LLM sources and not others - so a gate that asked as a chat turn
+        // would be answering about a different bucket set than the debit draws from.
+        // AGENT_EXECUTION and CHAT_CONVERSATION happen to agree today; this is what
+        // catches the day they stop.
+        when(creditClient.checkChatBudget(anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString())).thenReturn(true);
+
+        budgetService.preflightAgentBudget(USER_ID, "anthropic", "claude-haiku-4-5", 1000, 500);
+
+        verify(creditClient).checkChatBudget(USER_ID, "anthropic", "claude-haiku-4-5",
+                1000, 500, "AGENT_EXECUTION");
     }
 }

@@ -2,10 +2,13 @@ package com.apimarketplace.catalog.service.generation;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -45,11 +48,40 @@ public final class GenerationRequestBuilder {
      *                     ({@code second}, {@code image}, {@code character}, or
      *                     {@code call}), carried alongside so the number is
      *                     never reported under a unit it was not measured in
+     * @param priceMultiplier what the CHOICES in this call do to its price,
+     *                     from the model's declared modifiers. Always 1 for a
+     *                     model that declares none, which is most of them, and
+     *                     the arithmetic downstream is then unchanged.
+     *                     <p>Kept SEPARATE from {@code quantity} on purpose. A
+     *                     ten second clip is ten seconds whatever it costs, and
+     *                     folding a resolution surcharge into the measurement
+     *                     would have the run report twenty seconds of video
+     *                     that nobody asked for and no player would show.
+     * @param priceFactors one line per modifier that moved the price, so a
+     *                     surface can say WHY rather than only how much
      */
     public record Built(Map<String, Object> params, List<String> errors,
-                        BigDecimal quantity, String quantityUnit) {
+                        BigDecimal quantity, String quantityUnit,
+                        BigDecimal priceMultiplier, List<String> priceFactors) {
+
+        public Built {
+            priceMultiplier = priceMultiplier == null ? BigDecimal.ONE : priceMultiplier;
+            priceFactors = priceFactors == null ? List.of() : List.copyOf(priceFactors);
+        }
+
+        /** The shape every caller spoke before price modifiers existed. */
+        public Built(Map<String, Object> params, List<String> errors,
+                     BigDecimal quantity, String quantityUnit) {
+            this(params, errors, quantity, quantityUnit, BigDecimal.ONE, List.of());
+        }
+
         public boolean ok() {
             return errors.isEmpty();
+        }
+
+        /** True when the choices in this call leave its price exactly at the published rate. */
+        public boolean pricedAtBaseRate() {
+            return priceMultiplier.compareTo(BigDecimal.ONE) == 0;
         }
     }
 
@@ -135,6 +167,46 @@ public final class GenerationRequestBuilder {
             }
         }
 
+        // Slots that only work as a PAIR, and slots that cannot travel together.
+        // Seedance brought in both: its first-and-last-frame mode takes two images
+        // and refuses a call carrying only the closing one, and pinning a frame
+        // cannot be mixed with lending a reference. Checked here, so the reader is
+        // told while it is still free instead of by an invoice - or, for the second
+        // one, by a finished clip that ignored half the files it was given.
+        //
+        // Only for parameters this model actually takes: one it does not is already
+        // reported above, and adding a sentence about how to pair a slot the model
+        // has no place for sends the reader to fix the wrong thing.
+        for (Map.Entry<String, Object> e : given.entrySet()) {
+            if (!supplied(e.getValue()) || !model.accepts(e.getKey())) continue;
+            GenerationSpec.ParamBinding binding = spec.paramMap().get(e.getKey());
+            if (binding == null) continue;
+            for (String companion : binding.requires()) {
+                if (!supplied(given.get(companion))) {
+                    errors.add("'" + e.getKey() + "' only works together with '" + companion
+                            + "' on model '" + model.id() + "': send both, or neither");
+                }
+            }
+            // Read symmetrically, so the pair is refused whichever side declared it
+            // and whichever side the caller happens to be iterating past.
+            //
+            // BOTH halves have to be parameters this model takes. One it does not is
+            // already reported above, and "pick one" about a slot the model has no
+            // place for asks the reader to choose between something they can use and
+            // something they cannot - which is the same mistake as explaining how to
+            // pair a slot that does not exist, one loop lower. Whether it surfaced at
+            // all depended on alphabetical order, since only one direction of each
+            // pair is reported.
+            for (String forbidden : forbiddenWith(spec, e.getKey())) {
+                if (!model.accepts(forbidden)) continue;
+                if (supplied(given.get(forbidden)) && e.getKey().compareTo(forbidden) < 0) {
+                    errors.add("'" + e.getKey() + "' and '" + forbidden + "' cannot be sent in the "
+                            + "same call on model '" + model.id() + "': this provider treats them as "
+                            + "different kinds of request, so pick one");
+                }
+            }
+        }
+
         BigDecimal quantity = measure(spec, model, given, request, errors);
 
         // ONE call produces ONE stored asset: the resolver reads a single
@@ -162,7 +234,16 @@ public final class GenerationRequestBuilder {
                     + "measured at " + quantity.toPlainString() + " would be charged for assets that "
                     + "are never returned. Run the call again to produce another.");
         }
-        return new Built(request, errors, quantity, platformUnitFor(model));
+        // What the CHOICES in this call do to its price, read from the model's
+        // own declared modifiers and from the parameters that have just been
+        // validated against it. Computed here, next to the quantity and from the
+        // same map, because both are facts about the call that only this side
+        // can establish: a factor supplied by a caller is a factor a caller can
+        // send as 1.
+        GenerationSpec.Price price = model.price();
+        BigDecimal multiplier = price == null ? BigDecimal.ONE : price.factorFor(given);
+        List<String> factors = price == null ? List.of() : price.explainFactor(given);
+        return new Built(request, errors, quantity, platformUnitFor(model), multiplier, factors);
     }
 
     /**
@@ -362,6 +443,110 @@ public final class GenerationRequestBuilder {
 
     private static boolean isBlank(Object v) {
         return v == null || String.valueOf(v).trim().isEmpty();
+    }
+
+    /**
+     * Everything one parameter may not travel with, from either side of the pair.
+     *
+     * <p>The descriptor states an exclusion once, on whichever binding its author was
+     * writing. Reading only that side would let the same forbidden pair pass or fail
+     * depending on which half the seed happened to name.
+     */
+    static Set<String> forbiddenWith(GenerationSpec spec, String param) {
+        Set<String> forbidden = new LinkedHashSet<>(
+                spec.paramMap().containsKey(param) ? spec.paramMap().get(param).excludes() : Set.of());
+        spec.paramMap().forEach((other, binding) -> {
+            if (binding.excludes().contains(param)) forbidden.add(other);
+        });
+        return forbidden;
+    }
+
+    /**
+     * True when the caller actually put something in this parameter.
+     *
+     * <p>Not {@link #isBlank}: a file arrives as a map and a multi-file slot as a
+     * list, and both render as non-blank text whatever they hold. An empty list is
+     * how every surface says "no file here" for a slot that takes several, so
+     * reading it as a value present would make a pair look complete when one half
+     * of it is missing.
+     */
+    private static boolean supplied(Object value) {
+        if (value == null) return false;
+        if (value instanceof Collection<?> collection) return !collection.isEmpty();
+        if (value instanceof Map<?, ?> map) return !map.isEmpty();
+        return !String.valueOf(value).trim().isEmpty();
+    }
+
+    /**
+     * Drop everything the caller left empty out of a built request.
+     *
+     * <p>{@link #setByPath} fills the slots below an index with empty objects, so
+     * that a descriptor writing {@code content[2]} still produces a well-formed
+     * body. That is right while one array belongs to one slot, and wrong as soon as
+     * an endpoint gives each of its file slots its own index in a SHARED array:
+     * Seedance's first frame, last frame and reference images all live in
+     * {@code content}, so a caller who attaches only the closing frame leaves an
+     * empty {@code {}} where the opening one would have gone, and the provider
+     * reads an item with no type and no value. The same holds one level up: a slot
+     * that takes several files and got none leaves the array itself empty.
+     *
+     * <p><b>Position carries no meaning in these arrays</b>, which is what makes
+     * closing the gap safe: every provider that addresses one this way labels the
+     * element itself (Seedance's {@code role}, Gemini's part type), so nothing
+     * anyone reads moves. Emptiness is recursive - a container holding only empty
+     * things is empty - and any scalar, however small, is content.
+     */
+    static void pruneEmpty(Map<String, Object> root) {
+        if (root == null) return;
+        removeEmpty(root.values());
+    }
+
+    /** Prune inside a value, then say whether what is left carries nothing. */
+    private static boolean pruneAndTestEmpty(Object value) {
+        if (value == null) return true;
+        if (value instanceof Map<?, ?> map) {
+            removeEmpty(map.values());
+            return map.isEmpty();
+        }
+        if (value instanceof List<?> list) {
+            removeEmpty(list);
+            return list.isEmpty();
+        }
+        return false;
+    }
+
+    /**
+     * Prune each member, then drop the ones that turned out to hold nothing.
+     *
+     * <p>Both halves are attempted even on a collection that refuses to be
+     * modified. Not every container in a built request is the builder's own: a
+     * caller can hand a whole list of files over as {@code List.of(...)}, and it
+     * survives into the request untouched whenever the slot is refused before
+     * conversion. Rewriting one of those is not this method's business - it only
+     * ever removes things nobody put there - so a refusal is left alone rather
+     * than thrown at a caller who did nothing wrong, which is what turned an
+     * over-the-cap refusal into an UnsupportedOperationException.
+     */
+    private static void removeEmpty(Collection<?> members) {
+        boolean anyEmpty = false;
+        for (Object member : members) {
+            if (pruneAndTestEmpty(member)) anyEmpty = true;
+        }
+        if (!anyEmpty) return;
+        try {
+            members.removeIf(GenerationRequestBuilder::isEmpty);
+        } catch (UnsupportedOperationException immutable) {
+            // Somebody else's collection. Everything inside it has still been
+            // pruned where that was possible.
+        }
+    }
+
+    /** Whether a value that has ALREADY been pruned holds anything. */
+    private static boolean isEmpty(Object value) {
+        if (value == null) return true;
+        if (value instanceof Map<?, ?> map) return map.isEmpty();
+        if (value instanceof List<?> list) return list.isEmpty();
+        return false;
     }
 
     private static String accepted(GenerationSpec.Model model) {

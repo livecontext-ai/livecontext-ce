@@ -128,7 +128,7 @@ class CreditConsumptionAuditTest {
                     eq("anthropic"),
                     eq("claude-3-sonnet"),
                     eq(0),
-                    eq(0), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    eq(0), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
 
@@ -160,7 +160,7 @@ class CreditConsumptionAuditTest {
                     eq("claude-3-sonnet"),
                     eq(400),  // 800/2 = 400 prompt
                     eq(400), // 800 - 400 = 400 completion
-            any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+            isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
     }
@@ -182,7 +182,7 @@ class CreditConsumptionAuditTest {
 
             verify(creditClient).consumeCredits(
                     any(), eq("CLASSIFY_EXECUTION"), any(), any(), any(),
-                    eq(250), eq(250), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    eq(250), eq(250), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
 
@@ -195,7 +195,7 @@ class CreditConsumptionAuditTest {
 
             verify(creditClient).consumeCredits(
                     any(), eq("GUARDRAIL_EXECUTION"), any(), any(), any(),
-                    eq(150), eq(150), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    eq(150), eq(150), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
 
@@ -209,7 +209,7 @@ class CreditConsumptionAuditTest {
             // Prompt and completion are non-zero, so no fallback applies
             verify(creditClient).consumeCredits(
                     any(), eq("CLASSIFY_EXECUTION"), any(), any(), any(),
-                    eq(200), eq(100), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    eq(200), eq(100), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
 
@@ -224,7 +224,7 @@ class CreditConsumptionAuditTest {
             // So no fallback: uses real prompt=0, completion=150
             verify(creditClient).consumeCredits(
                     any(), any(), any(), any(), any(),
-                    eq(0), eq(150), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    eq(0), eq(150), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
     }
@@ -241,7 +241,7 @@ class CreditConsumptionAuditTest {
         @DisplayName("creditClient.consumeCredits throws RuntimeException → recordFromRequest returns normally")
         void consumeCreditsThrowsDoesNotBlockObservability() {
             AgentObservabilityRequest req = buildAgentRequest();
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenThrow(new RuntimeException("auth-service down"));
 
             // Should NOT throw - credit failure is caught and logged
@@ -258,7 +258,7 @@ class CreditConsumptionAuditTest {
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
             errorResult.put("error", "402 Insufficient credits");
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenReturn(errorResult);
 
             service.recordFromRequest(req);
@@ -271,7 +271,7 @@ class CreditConsumptionAuditTest {
         @DisplayName("creditClient returns null → no crash, no creditsConsumed tracked")
         void consumeCreditsReturnsNull() {
             AgentObservabilityRequest req = buildAgentRequest();
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenReturn(null);
 
             service.recordFromRequest(req);
@@ -285,7 +285,7 @@ class CreditConsumptionAuditTest {
             AgentObservabilityRequest req = buildAgentRequest();
             Map<String, Object> creditResult = new HashMap<>();
             creditResult.put("creditsUsed", 2.5);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenReturn(creditResult);
             doThrow(new RuntimeException("DB constraint violation"))
                     .when(agentRepository).incrementCreditsConsumed(any(), any());
@@ -300,7 +300,7 @@ class CreditConsumptionAuditTest {
             AgentObservabilityRequest req = buildAgentRequest();
             Map<String, Object> creditResult = new HashMap<>();
             creditResult.put("creditsUsed", 1.0);
-            lenient().when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            lenient().when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenReturn(creditResult);
             lenient().doThrow(new RuntimeException("stale entity"))
                     .when(executionRepository).updateCreditsConsumed(any(), any());
@@ -335,7 +335,7 @@ class CreditConsumptionAuditTest {
                     eq("anthropic"),
                     eq("claude-3-sonnet"),
                     eq(1000),
-                    eq(500), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    eq(500), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
 
@@ -348,7 +348,7 @@ class CreditConsumptionAuditTest {
 
             Map<String, Object> creditResult = new HashMap<>();
             creditResult.put("creditsUsed", 3.0);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenReturn(creditResult);
 
             service.recordFromRequest(req);
@@ -369,7 +369,7 @@ class CreditConsumptionAuditTest {
 
             service.recordFromRequest(req);
 
-            verify(creditClient).consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+            verify(creditClient).consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
     }
 
@@ -440,7 +440,7 @@ class CreditConsumptionAuditTest {
                     eq("anthropic"),
                     eq("claude-3-sonnet"),
                     eq(800),
-                    eq(400), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    eq(400), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
 
@@ -459,7 +459,7 @@ class CreditConsumptionAuditTest {
                     eq("anthropic"),
                     eq("claude-3-sonnet"),
                     eq(0),
-                    eq(0), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    eq(0), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
 
@@ -468,7 +468,7 @@ class CreditConsumptionAuditTest {
         void chatCreditFailureDoesNotBlockObservability() {
             ChatAgentObservabilityRequest chatReq = buildChatRequest(500, 200, 700);
 
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenThrow(new RuntimeException("auth-service unreachable"));
 
             assertThatCode(() -> service.recordFromChat("tenant-42", "org-test", chatReq))
@@ -495,14 +495,14 @@ class CreditConsumptionAuditTest {
 
             service.recordFromRequest(req);
 
-            verify(creditClient).consumeCredits(any(), eq("AGENT_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+            verify(creditClient).consumeCredits(any(), eq("AGENT_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
         @DisplayName("agentType='agent' → AGENT_EXECUTION")
         void agentTypeIsAgent() {
             service.recordFromRequest(buildAgentRequest());
-            verify(creditClient).consumeCredits(any(), eq("AGENT_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+            verify(creditClient).consumeCredits(any(), eq("AGENT_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -510,7 +510,7 @@ class CreditConsumptionAuditTest {
         void classifyTypeIsClassify() {
             AgentObservabilityRequest req = buildRequest("classify", 200, 100, 300);
             service.recordFromRequest(req);
-            verify(creditClient).consumeCredits(any(), eq("CLASSIFY_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+            verify(creditClient).consumeCredits(any(), eq("CLASSIFY_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -518,7 +518,7 @@ class CreditConsumptionAuditTest {
         void guardrailTypeIsGuardrail() {
             AgentObservabilityRequest req = buildRequest("guardrail", 200, 100, 300);
             service.recordFromRequest(req);
-            verify(creditClient).consumeCredits(any(), eq("GUARDRAIL_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+            verify(creditClient).consumeCredits(any(), eq("GUARDRAIL_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -526,7 +526,7 @@ class CreditConsumptionAuditTest {
         void uppercaseClassifyIsClassify() {
             AgentObservabilityRequest req = buildRequest("CLASSIFY", 200, 100, 300);
             service.recordFromRequest(req);
-            verify(creditClient).consumeCredits(any(), eq("CLASSIFY_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+            verify(creditClient).consumeCredits(any(), eq("CLASSIFY_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -534,7 +534,7 @@ class CreditConsumptionAuditTest {
         void unknownTypeDefaultsToAgent() {
             AgentObservabilityRequest req = buildRequest("unknown_type", 200, 100, 300);
             service.recordFromRequest(req);
-            verify(creditClient).consumeCredits(any(), eq("AGENT_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+            verify(creditClient).consumeCredits(any(), eq("AGENT_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
     }
 
@@ -552,7 +552,7 @@ class CreditConsumptionAuditTest {
             AgentObservabilityRequest req = buildAgentRequest();
             Map<String, Object> creditResult = new HashMap<>();
             creditResult.put("creditsUsed", 4.25);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenReturn(creditResult);
 
             // Make save set an ID on the entity so executionId is non-null
@@ -576,7 +576,7 @@ class CreditConsumptionAuditTest {
             AgentObservabilityRequest req = buildAgentRequest();
             Map<String, Object> creditResult = new HashMap<>();
             creditResult.put("creditsUsed", 7.5);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenReturn(creditResult);
 
             service.recordFromRequest(req);
@@ -593,7 +593,7 @@ class CreditConsumptionAuditTest {
             AgentObservabilityRequest req = buildAgentRequest();
             Map<String, Object> creditResult = new HashMap<>();
             creditResult.put("creditsUsed", 0);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenReturn(creditResult);
 
             service.recordFromRequest(req);
@@ -609,7 +609,7 @@ class CreditConsumptionAuditTest {
             Map<String, Object> creditResult = new HashMap<>();
             creditResult.put("success", true);
             // No "creditsUsed" key
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenReturn(creditResult);
 
             service.recordFromRequest(req);
@@ -625,13 +625,13 @@ class CreditConsumptionAuditTest {
             req.setAgentEntityId(null);
             Map<String, Object> creditResult = new HashMap<>();
             creditResult.put("creditsUsed", 2.0);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                     .thenReturn(creditResult);
 
             service.recordFromRequest(req);
 
             // Credits consumed
-            verify(creditClient).consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+            verify(creditClient).consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
             // But not tracked on agent entity
             verify(agentRepository, never()).incrementCreditsConsumed(any(), any());
         }
@@ -665,7 +665,7 @@ class CreditConsumptionAuditTest {
                     eq("anthropic"),
                     eq("claude-3-sonnet"),
                     eq(1000),
-                    eq(500), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    eq(500), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
     }
@@ -687,7 +687,7 @@ class CreditConsumptionAuditTest {
             service.recordFromRequest(req);
 
             verify(creditClient).consumeCredits(
-                    eq("tenant-999"), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    eq("tenant-999"), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
 
@@ -701,7 +701,7 @@ class CreditConsumptionAuditTest {
 
             // consumeCredits is still called - it handles null userId internally
             verify(creditClient).consumeCredits(
-                    isNull(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    isNull(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
     }
@@ -726,7 +726,7 @@ class CreditConsumptionAuditTest {
             verify(creditClient).consumeCredits(
                     any(), any(),
                     eq("agent:test_agent"),
-                    any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
 
@@ -742,7 +742,7 @@ class CreditConsumptionAuditTest {
             verify(creditClient).consumeCredits(
                     any(), any(),
                     eq("agent:test_agent"),
-                    any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                    any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
     }

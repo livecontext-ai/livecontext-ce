@@ -1,5 +1,10 @@
 package com.apimarketplace.agent.service;
 
+
+import org.springframework.beans.factory.annotation.Autowired;
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.agent.security.AgentTokenAtRestBackfill;
+
 import com.apimarketplace.agent.domain.AgentWidgetConfigEntity;
 import com.apimarketplace.agent.repository.AgentWidgetConfigRepository;
 import org.slf4j.Logger;
@@ -26,6 +31,14 @@ public class AgentWidgetConfigService {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final AgentWidgetConfigRepository repository;
+
+    /**
+     * Read-only plaintext fallback for a widget row still stored in clear (pre-2026-09-17) when its hash lookup misses.
+     * Optional so a unit test can build the service without a database; in a Spring context
+     * the component is always present (same package tree).
+     */
+    @Autowired(required = false)
+    private AgentTokenAtRestBackfill tokenBackfill;
 
     public AgentWidgetConfigService(AgentWidgetConfigRepository repository) {
         this.repository = repository;
@@ -131,7 +144,8 @@ public class AgentWidgetConfigService {
         if (token == null || token.isBlank()) {
             return Optional.empty();
         }
-        return repository.findByWidgetToken(token);
+        return TokenAtRest.lookup(token, repository::findByWidgetTokenHash,
+                t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(AgentTokenAtRestBackfill.WIDGET_CONFIGS, t, repository::findLegacyPlaintext));
     }
 
     /**
@@ -141,7 +155,8 @@ public class AgentWidgetConfigService {
         if (token == null || token.isBlank()) {
             return Optional.empty();
         }
-        return repository.findByWidgetTokenAndIsActiveTrue(token);
+        return TokenAtRest.lookup(token, repository::findByWidgetTokenHashAndIsActiveTrue,
+                t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(AgentTokenAtRestBackfill.WIDGET_CONFIGS, t, t2 -> repository.findLegacyPlaintext(t2).filter(e -> Boolean.TRUE.equals(e.getIsActive()))));
     }
 
     /**

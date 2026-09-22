@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { ArrowLeft, History, Loader2, Play, Workflow } from 'lucide-react';
+import { ArrowLeft, ArrowRight, FileText, History, Loader2, Play, Workflow } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { WorkflowRun } from '@/lib/api/orchestrator';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -56,6 +56,8 @@ export interface RunPanelContentProps {
    * to the canvas is off screen. This puts it next to the run identity it belongs to.
    */
   onBackToWorkflow?: () => void;
+  /** Open the logs child view for the run currently shown. */
+  onOpenLogs?: () => void;
 }
 
 /**
@@ -67,15 +69,15 @@ export interface RunPanelContentProps {
  * the canvas pill uses - so the user never loses track of which run the epochs
  * and steps below belong to, and can walk back up with one click.
  */
-export function RunPanelContent({ workflowId, allowHistory = false, viewRequest, surfaceId, onBackToWorkflow }: RunPanelContentProps) {
+export function RunPanelContent({ workflowId, allowHistory = false, viewRequest, surfaceId, onBackToWorkflow, onOpenLogs }: RunPanelContentProps) {
   const t = useTranslations();
   const { runId: contextRunId, setRunId, viewingEpoch, setViewingEpoch } = useWorkflowMode();
 
-  const [data, setData] = useState<RunPanelData>(() => getCachedRunPanelData(workflowId));
+  const [data, setData] = useState<RunPanelData>(() => getCachedRunPanelData(workflowId, surfaceId));
   useEffect(() => {
-    setData(getCachedRunPanelData(workflowId));
-    return subscribeRunPanelData(workflowId, setData);
-  }, [workflowId]);
+    setData(getCachedRunPanelData(workflowId, surfaceId));
+    return subscribeRunPanelData(workflowId, setData, surfaceId);
+  }, [workflowId, surfaceId]);
 
   /**
    * Run the user just picked in the history, until the canvas catches up.
@@ -197,7 +199,7 @@ export function RunPanelContent({ workflowId, allowHistory = false, viewRequest,
   // acts when it is mounted, and the REST call is made when it is not. The panel
   // is reachable from surfaces the canvas is not (and can outlive its unmount),
   // where the event alone was a click that did nothing at all.
-  const { pending: actionPending, failed: actionFailed, perform } = useRunActions(workflowId, runId);
+  const { pending: actionPending, failed: actionFailed, perform } = useRunActions(workflowId, runId, surfaceId);
   /**
    * Same gate the two new surfaces carry, and it belongs here MORE, not less:
    * this bar offers the hard cancel and the reactivate as well as the stop. A
@@ -345,6 +347,18 @@ export function RunPanelContent({ workflowId, allowHistory = false, viewRequest,
               </button>
             )}
           </span>
+        ) : undefined}
+        trailing={onOpenLogs ? (
+          <button
+            type="button"
+            onClick={onOpenLogs}
+            title={t('workflow.logs.openLogs')}
+            aria-label={t('workflow.logs.openLogs')}
+            className="flex h-7 flex-shrink-0 items-center gap-1 rounded-lg px-1.5 text-theme-secondary transition-colors hover:bg-theme-secondary hover:text-theme-primary"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
         ) : undefined}
       />
 

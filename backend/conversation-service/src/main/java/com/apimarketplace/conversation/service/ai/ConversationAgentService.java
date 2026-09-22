@@ -895,6 +895,13 @@ public class ConversationAgentService {
                     if (att.extractedText() != null) {
                         map.put("extractedText", att.extractedText());
                     }
+                    // FileRef so a downstream tool call (e.g. generation's input_image) can
+                    // reference this attachment - see MessageAttachment#fileRef(). Both
+                    // consumers read this same key: AgentRemoteExecutionService.mapToMessageAttachment
+                    // (direct-API path) and the bridge's attachmentPrompt.mjs (CLI path).
+                    if (att.fileRef() != null) {
+                        map.put("fileRef", att.fileRef());
+                    }
                     return map;
                 })
                 .toList();
@@ -1295,7 +1302,9 @@ public class ConversationAgentService {
                     (String) metadata.get("action"),
                     (String) metadata.get("toolCallId"),
                     (String) metadata.get("argsSummary"),
-                    (String) metadata.get("applicationId"));
+                    (String) metadata.get("applicationId"),
+                    metadata.get("subject") instanceof Map<?, ?> subject
+                        ? (Map<String, Object>) subject : null);
             }
         }
 
@@ -1498,7 +1507,7 @@ public class ConversationAgentService {
     private Double fetchCreditBudget(String userId) {
         if (userId == null || userId.isBlank()) return null;
         try {
-            java.math.BigDecimal balance = creditClient.fetchBalance(userId);
+            java.math.BigDecimal balance = creditClient.fetchLlmSpendableBalance(userId);
             return balance != null ? balance.doubleValue() : null;
         } catch (Exception e) {
             log.warn("Failed to fetch credit balance for remote budget, proceeding without: {}", e.getMessage());
@@ -1603,6 +1612,17 @@ public class ConversationAgentService {
                     authorization.put("toolCallId", action.get("tool_call_id"));
                     authorization.put("argsSummary", action.get("args_summary"));
                     authorization.put("applicationId", action.get("application_id"));
+                    // Without this the card comes back after a reload having forgotten WHICH
+                    // workflow it was about, and asks a question nobody can answer.
+                    //
+                    // Omitted rather than written as null when the row has none, so all three
+                    // producers of this event put the same shape on the wire (see
+                    // ApprovalCardPublisher). The frontend type declares `subject?:`, i.e.
+                    // undefined, and tsconfig has strict:false.
+                    Object subject = action.get("subject");
+                    if (subject != null) {
+                        authorization.put("subject", subject);
+                    }
                     event.put("toolAuthorization", authorization);
                 } else if ("user_question".equals(waitingFor)) {
                     // Frontend discriminant: 'askUser'. Non-blocking: the turn has ended.

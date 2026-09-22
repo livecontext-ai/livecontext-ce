@@ -80,8 +80,47 @@ public record ChatAgentObservabilityRequest(
     List<UsageInfoDto> usagePerIteration,
     List<Long> iterationDurations,
     List<String> finishReasonsPerIteration,
-    List<Integer> toolCallsPerIteration
+    List<Integer> toolCallsPerIteration,
+
+    // V506: whose key the execution ran on (OWN_KEY / PLATFORM), read off the execution
+    // response's metrics by conversation-service; null = unpinned.
+    String keyRoute
 ) {
+    /** Pre-V506 shape (no key route = unpinned). */
+    public ChatAgentObservabilityRequest(
+            String agentEntityId, String provider, String model, Double temperature,
+            Integer maxTokens, Integer maxIterations, boolean success, String stopReason,
+            String budgetScope, String errorMessage, long durationMs, int iterationCount,
+            int totalToolCalls, int successfulToolCalls, int failedToolCalls, int messageCount,
+            int totalPromptTokens, int totalCompletionTokens, int totalTokens,
+            Integer totalCacheCreationTokens, Integer totalCacheReadTokens, Integer totalCachedTokens,
+            Integer totalReasoningTokens, String toolSequence, List<String> distinctTools,
+            boolean loopDetected, String loopType, String loopToolName, String systemPrompt,
+            String userPrompt, String conversationId, String source, String taskId, String executionId,
+            List<ToolResultDto> toolResults, List<MessageDto> conversationHistory,
+            List<UsageInfoDto> usagePerIteration, List<Long> iterationDurations,
+            List<String> finishReasonsPerIteration, List<Integer> toolCallsPerIteration) {
+        this(agentEntityId, provider, model, temperature, maxTokens, maxIterations, success, stopReason,
+                budgetScope, errorMessage, durationMs, iterationCount, totalToolCalls, successfulToolCalls,
+                failedToolCalls, messageCount, totalPromptTokens, totalCompletionTokens, totalTokens,
+                totalCacheCreationTokens, totalCacheReadTokens, totalCachedTokens, totalReasoningTokens,
+                toolSequence, distinctTools, loopDetected, loopType, loopToolName, systemPrompt, userPrompt,
+                conversationId, source, taskId, executionId, toolResults, conversationHistory,
+                usagePerIteration, iterationDurations, finishReasonsPerIteration, toolCallsPerIteration,
+                null);
+    }
+
+    /** The same request, pinned to the key route the chat turn ran on. */
+    public ChatAgentObservabilityRequest withKeyRoute(String keyRoute) {
+        return new ChatAgentObservabilityRequest(agentEntityId, provider, model, temperature, maxTokens,
+                maxIterations, success, stopReason, budgetScope, errorMessage, durationMs, iterationCount,
+                totalToolCalls, successfulToolCalls, failedToolCalls, messageCount, totalPromptTokens,
+                totalCompletionTokens, totalTokens, totalCacheCreationTokens, totalCacheReadTokens,
+                totalCachedTokens, totalReasoningTokens, toolSequence, distinctTools, loopDetected, loopType,
+                loopToolName, systemPrompt, userPrompt, conversationId, source, taskId, executionId,
+                toolResults, conversationHistory, usagePerIteration, iterationDurations,
+                finishReasonsPerIteration, toolCallsPerIteration, keyRoute);
+    }
 
     public record ToolResultDto(
         String toolCallId,

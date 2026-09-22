@@ -182,4 +182,114 @@ public class PathNavigator {
 
         return null;
     }
+
+    // ========================================
+    // Diagnostics: WHY a path resolved to null
+    // ========================================
+
+    /**
+     * Mirrors {@link #getVariableValueFromMap} and reports why it would answer null.
+     *
+     * <p>Kept in this class, beside the resolver it mirrors and sharing its
+     * {@code resolveSegment}, because a probe that disagrees with the resolver is a
+     * new lie rather than a fix. {@code PathProbeAgreementTest} pins the two
+     * together: a probe may never report MISSING for a path that resolves to a value.
+     *
+     * @param variablePath the reference as written, e.g. {@code trigger:form.output.task}
+     * @param variables the evaluation context
+     * @return where resolution stopped, or {@link PathProbe#resolved()} when every
+     *         segment exists (the value may still be a real null)
+     */
+    @SuppressWarnings("unchecked")
+    public PathProbe probeVariablePath(String variablePath, Map<String, Object> variables) {
+        if (variablePath == null || variablePath.isEmpty()) {
+            return PathProbe.resolved();
+        }
+        if (variables == null) {
+            return PathProbe.missingRoot(rootSegmentOf(variablePath));
+        }
+
+        if (!variablePath.contains(".")) {
+            return containsBaseKey(variables, variablePath)
+                    ? PathProbe.resolved()
+                    : PathProbe.missingRoot(variablePath);
+        }
+
+        String[] parts = variablePath.split("\\.", 2);
+        String baseKey = parts[0];
+        String path = parts[1];
+
+        if (!containsBaseKey(variables, baseKey)) {
+            return PathProbe.missingRoot(baseKey);
+        }
+
+        Object baseValue = variables.get(baseKey);
+        if (baseValue == null) {
+            baseValue = variables.get(baseKey.toLowerCase(Locale.ROOT));
+        }
+
+        if (!(baseValue instanceof Map)) {
+            // getVariableValueFromMap answers null for any non-Map base with a path left.
+            return PathProbe.missingSegment(baseKey, rootSegmentOf(path));
+        }
+
+        return probeNested((Map<String, Object>) baseValue, path, baseKey);
+    }
+
+    /**
+     * Mirrors {@link #getNestedValueFromMap}, including its implicit hop into an
+     * {@code output} sub-map, and reports the first segment that does not exist.
+     */
+    @SuppressWarnings("unchecked")
+    private PathProbe probeNested(Map<String, Object> map, String path, String prefix) {
+        String[] parts = path.split("\\.", 2);
+        String segment = parts[0];
+
+        Object value = resolveSegment(map, segment);
+        boolean present = containsSegment(map, segment);
+
+        // Same implicit "output" wrapper hop the resolver takes, on the same condition.
+        if (value == null && map.containsKey("output") && map.get("output") instanceof Map) {
+            Map<String, Object> output = (Map<String, Object>) map.get("output");
+            value = resolveSegment(output, segment);
+            present = present || containsSegment(output, segment);
+        }
+
+        if (!present) {
+            return PathProbe.missingSegment(prefix, segment);
+        }
+
+        if (parts.length == 1) {
+            return PathProbe.resolved();
+        }
+
+        if (value instanceof Map) {
+            return probeNested((Map<String, Object>) value, parts[1], prefix + "." + segment);
+        }
+
+        // The resolver answers null here: there is more path but nothing left to walk.
+        return PathProbe.missingSegment(prefix + "." + segment, rootSegmentOf(parts[1]));
+    }
+
+    /** Base-key presence, with the same lowercase fallback the resolver applies. */
+    private boolean containsBaseKey(Map<String, Object> variables, String baseKey) {
+        return variables.containsKey(baseKey)
+                || variables.containsKey(baseKey.toLowerCase(Locale.ROOT));
+    }
+
+    /** Segment presence, honouring the {@code key[N]} form {@code resolveSegment} accepts. */
+    private boolean containsSegment(Map<String, Object> map, String segment) {
+        Matcher m = ARRAY_ACCESS.matcher(segment);
+        if (m.matches()) {
+            Object value = map.get(m.group(1));
+            int index = Integer.parseInt(m.group(2));
+            return value instanceof List<?> list && index >= 0 && index < list.size();
+        }
+        return map.containsKey(segment);
+    }
+
+    private String rootSegmentOf(String path) {
+        int dot = path.indexOf('.');
+        return dot < 0 ? path : path.substring(0, dot);
+    }
 }

@@ -145,7 +145,13 @@ export function useChatPageStateV3(options: UseChatPageStateOptions = {}): ChatP
   const streaming = useStreaming();
 
   // ============== CONVERSATION HISTORY ==============
-  const conversationHistory = useConversationHistory({ autoLoad: true });
+  // The main chat renders the whole thread, so it owns the cross-remount snapshot. No other
+  // view of a conversation may claim it (see UseMessagesOptions.retainAcrossRemount).
+  const conversationHistory = useConversationHistory({
+    autoLoad: true,
+    conversationId: conversationIdFromParams,
+    retainAcrossRemount: true,
+  });
 
   // ============== LOCAL UI STATE ==============
   const [showProfileView, setShowProfileView] = useState(false);

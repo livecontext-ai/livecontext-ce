@@ -1772,7 +1772,29 @@ public class WorkflowBuilderProvider implements ToolsProvider {
         return java.util.List.of("node:" + PLAN_KEY_ALIASES.getOrDefault(value, value));
     }
 
-    private ToolExecutionResult executeAddNode(Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {
+    /**
+     * The type with any node prefix removed, lowercased. Same stripping the dispatch below does,
+     * which happens further down than the policy check needs it.
+     */
+    private static String bareNodeType(String type) {
+        String bare = type == null ? "" : type.toLowerCase().trim();
+        for (String prefix : List.of("trigger:", "core:", "agent:", "mcp:", "table:", "interface:", "note:")) {
+            if (bare.startsWith(prefix)) {
+                return bare.substring(prefix.length());
+            }
+        }
+        return bare;
+    }
+
+    /**
+     * The add_node types that create a TRIGGER. One list, used both to skip schema validation and to
+     * refuse an execution policy: a second copy is how the two came to disagree.
+     */
+    private static final Set<String> TRIGGER_TYPES = Set.of(
+            "webhook", "schedule", "table", "manual", "chat", "form", "workflow", "error", "datasource");
+
+    /** Package-private so the add_node surface is reachable from a test, like delegateModify. */
+    ToolExecutionResult executeAddNode(Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {
         String type = safeString(params.get("type"));
         if (type == null || type.isBlank()) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "Missing required parameter 'type' for action='add_node'.\n" +
@@ -1809,6 +1831,44 @@ public class WorkflowBuilderProvider implements ToolsProvider {
             @SuppressWarnings("unchecked")
             Map<String, Object> paramsMap = (Map<String, Object>) paramsObj;
             paramsMap.forEach((k, v) -> merged.putIfAbsent(k, v));
+        }
+
+        // Lift the execution policy out of the call before anything else reads it. It is not a
+        // parameter of the node's own type: left in the map the schema validator would refuse it
+        // as unknown on a core node, and on an mcp node it would be handed to the provider as a
+        // tool argument, because there every remaining key IS an endpoint argument.
+        Object nodePolicyRequest = NodePolicyApplier.strip(merged);
+        if (nodePolicyRequest != null) {
+            // strip() replaces the nested container with a stripped COPY instead of mutating the
+            // caller's argument map, so this local has to be re-pointed: it is what the schema
+            // validator below reads, and the stale one still carries the policy.
+            Object strippedNested = merged.get("params");
+            if (!(strippedNested instanceof Map)) {
+                strippedNested = merged.get("parameters");
+            }
+            if (strippedNested instanceof Map) {
+                paramsObj = strippedNested;
+            }
+        }
+        String policyError = NodePolicyApplier.validate(nodePolicyRequest);
+        if (policyError == null) {
+            // What the TYPE settles on its own is settled here, before the node exists: a caller
+            // that reads a failure and retries add_node would otherwise get a duplicate node. That
+            // is triggers and notes and nothing else - whether a type makes a provider call cannot
+            // be read off it (a tool arrives as a UUID, a prefixed UUID or apiSlug/toolSlug, and an
+            // unrecognised type IS a tool as far as the switch below is concerned), so that rule
+            // runs after the creator, off the stored node id.
+            String bareType = bareNodeType(type);
+            policyError = NodePolicyApplier.rejectionForType(nodePolicyRequest,
+                    TRIGGER_TYPES.contains(bareType) || "trigger".equals(bareType) || "note".equals(bareType));
+        }
+        if (policyError != null) {
+            // Refused BEFORE the node exists. Refusing afterwards would leave a node behind that
+            // reads as configured and behaves as if it were not, which is the worst outcome for a
+            // caller that cannot look at the canvas.
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                    policyError + " No node was created. Send add_node again with a corrected "
+                    + "nodePolicy. See workflow(action='help', topics=['node_policy']).");
         }
 
         // Silent alias: type='mcp' + tool_id in params → rewrite to type=<tool_id> with flat params
@@ -1850,7 +1910,7 @@ public class WorkflowBuilderProvider implements ToolsProvider {
         Set<String> tableTypes = Set.of("insert_row", "create_row", "read_rows", "get_rows", "get_row", "fetch_rows",
                 "update_row", "modify_row", "delete_row", "remove_row", "find_rows", "find", "search_rows",
                 "create_column", "add_column", "add_columns");
-        Set<String> triggerTypes = Set.of("webhook", "schedule", "table", "manual", "chat", "form", "workflow", "error", "datasource");
+        Set<String> triggerTypes = TRIGGER_TYPES;
         if (!isUuid(type) && !tableTypes.contains(type.toLowerCase()) && !triggerTypes.contains(type.toLowerCase())
                 && nodeLibraryService.findByType(type).isPresent()) {
             @SuppressWarnings("unchecked")
@@ -2022,6 +2082,43 @@ public class WorkflowBuilderProvider implements ToolsProvider {
                 // Format: workflow(action='add_node', type='<tool-uuid>', label='...', params={...})
                 default -> creator.executeAddMcp(sr.session(), merged, cleanType);
             };
+            // The per-node execution policy, written once for every node type. Runs after the
+            // creator, because the rules that remain need the node's real type, which only the
+            // creator knows (the aliases this switch accepts are not the stored type).
+            if (result != null && result.success() && nodePolicyRequest != null) {
+                String createdNodeId = sr.session().getLastAddedNodeId();
+                String rejection = NodePolicyApplier.rejectionForNode(createdNodeId,
+                        sr.session().findNode(createdNodeId).orElse(null), nodePolicyRequest);
+                if (rejection != null) {
+                    // The node stays, WITHOUT the policy, and the caller is told so in the same
+                    // breath. Leaving the node parseable matters more than a tidy all-or-nothing:
+                    // an unparseable plan cannot be opened to repair, while an unpoliced node can
+                    // be fixed with one modify.
+                    return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                            "Node '" + createdNodeId + "' was created, but its execution policy was "
+                            + "NOT applied: " + rejection + " Apply a corrected policy with "
+                            + "workflow(action='modify', node='" + createdNodeId
+                            + "', nodePolicy={...}).");
+                }
+                // Whether the node RESOLVED is the question here, not whether anything was
+                // written: a caller may legitimately send nodePolicy={} (the documented way to
+                // clear one) or a block of nothing but defaults, and on a node that has no policy
+                // yet both correctly write nothing. Reading "no change" as "could not be written"
+                // failed a call that had done exactly what was asked, on a node it had created.
+                if (sr.session().findNode(createdNodeId).isEmpty()) {
+                    log.error("Node policy could not be written after creating '{}' (type {}): "
+                            + "the created node id did not resolve", createdNodeId, cleanType);
+                    return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                            "Node '" + label + "' was created, but its execution policy could not "
+                            + "be written to it. Set it with workflow(action='modify', node='"
+                            + label + "', nodePolicy={...}) and check the result reports it.");
+                }
+                NodePolicyApplier.apply(sr.session(), nodePolicyRequest, createdNodeId);
+                sessionManager.getSessionStore().save(sr.session());
+                // Reported back for the same reason modify reports it: the caller cannot see the
+                // canvas, so a policy it does not read back is a policy it cannot trust.
+                result = NodePolicyApplier.describeInResult(result, sr.session(), createdNodeId);
+            }
             return resultEnricher.enrichResult(result, sr.session());
         } catch (Exception e) {
             String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();

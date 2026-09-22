@@ -20,7 +20,13 @@ public class ApiVisibilityController {
     private final ApiVisibilityService apiVisibilityService;
 
     @GetMapping("/integrations")
-    public ResponseEntity<?> listIntegrations() {
+    public ResponseEntity<?> listIntegrations(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles) {
+        // Reads the same GLOBAL (cross-tenant) is_active state the two toggles below guard,
+        // including rows hidden from every tenant, so it is admin-only for the same reason.
+        // Only the admin Platform Credentials screen calls it.
+        var denied = AdminRoleGuard.denyIfNotAdmin(roles);
+        if (denied != null) return denied;
         try {
             var integrations = apiVisibilityService.listIntegrations();
             return ResponseEntity.ok(Map.of("integrations", integrations));
@@ -50,7 +56,12 @@ public class ApiVisibilityController {
     }
 
     @GetMapping("/apis/{apiId}/tools")
-    public ResponseEntity<?> listApiTools(@PathVariable UUID apiId) {
+    public ResponseEntity<?> listApiTools(
+            @PathVariable UUID apiId,
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles) {
+        // Same GLOBAL is_active state as the tool toggle below. Admin-only for the same reason.
+        var denied = AdminRoleGuard.denyIfNotAdmin(roles);
+        if (denied != null) return denied;
         try {
             var tools = apiVisibilityService.listApiTools(apiId);
             return ResponseEntity.ok(tools);

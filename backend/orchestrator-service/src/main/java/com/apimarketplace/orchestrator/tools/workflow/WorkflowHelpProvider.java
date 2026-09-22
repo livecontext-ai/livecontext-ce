@@ -76,7 +76,8 @@ public class WorkflowHelpProvider {
         "generate",      // Generate node (image, video, audio, voice, music from a prompt)
         "runs",          // Inspecting past workflow runs
         "pin",           // Production version pinning (pin/unpin actions)
-        "mocking"        // Node mocks: pin a node's output for editor runs (mock/mock_mode/mock_suggest)
+        "mocking",       // Node mocks: pin a node's output for editor runs (mock/mock_mode/mock_suggest)
+        "node_policy"    // Per-node execution policy: retry, backoff, timeout, continueOnFailure, executeOnce, provider retry budget
     );
 
     // ==================== MAIN ENTRY POINT ====================
@@ -275,6 +276,10 @@ public class WorkflowHelpProvider {
 
             // Mock mode - pin node outputs for editor runs
             case "mocking", "mock", "mocks", "mock_mode", "mock_suggest", "dry_run" -> ConceptsHelpProvider.getMockingHelp();
+
+            // Per-node execution policy - retry / backoff / timeout / continueOnFailure / executeOnce / provider retry budget
+            case "node_policy", "nodepolicy", "policy", "retry", "retries", "timeout", "continue_on_failure",
+                 "execute_once", "execution_policy", "provider_retry" -> ConceptsHelpProvider.getNodePolicyHelp();
 
             // Plan format - JSON structure for set_plan/get_plan
             case "plan", "set_plan", "get_plan", "plan_format" -> ExamplesHelpProvider.getPlanHelp();
@@ -849,6 +854,18 @@ public class WorkflowHelpProvider {
                 + "provider reads them in. A list longer than maxItems is refused before the provider is "
                 + "called, at no cost, and so is a list where any one file cannot be read (never partly "
                 + "sent, so you are never charged for a request you did not make).",
+            "first_frame_image / last_frame_image / reference_image", "The slots of a model that takes "
+                + "SEVERAL files in one call, named by what each file IS: the still the clip opens on, the "
+                + "one it lands on, and files it borrows a subject or a style from without ever showing "
+                + "them. Same shape as input_image, one whole FileRef each (reference_image takes a LIST "
+                + "where its 'inputs' row says maxItems above 1). A model shows the ones it has in that "
+                + "'inputs' row, and only those: send a slot it does not list and the run is refused, at no "
+                + "cost. They are not interchangeable, and filling the wrong one is a different video that "
+                + "you have paid for. That row also carries two rules, when the provider has them: "
+                + "'requires' names slots this one must be sent WITH (a model that pins both ends of a clip "
+                + "refuses one frame on its own) and 'excludes' names slots it may never be sent with "
+                + "(pinning a frame and lending a reference are, for some providers, two different kinds of "
+                + "request). Both are refused before anything is charged.",
             "credential_source", "'platform' = the platform's provider key, billed at the platform "
                 + "price. 'user' = a key the owner configured themselves, billed nothing by the platform. "
                 + "UNSTATED MEANS 'platform' for this node: it is substituted before the run, so leaving "
@@ -877,8 +894,10 @@ public class WorkflowHelpProvider {
             + "model at 60 credits/second costs 600 credits for a 10 second clip. The node reports what it "
             + "actually billed on as output.billed_quantity, counted in output.billed_unit. That unit is the "
             + "one the size was MEASURED in, which is not always the unit the rate is quoted in: a model "
-            + "listed per minute reports seconds. To work out what a run cost, convert billed_quantity into "
-            + "the rate's own unit first (60 seconds is 1 minute), then multiply. The size billed is derived "
+            + "listed per minute reports seconds. What the run COST is reported directly as "
+            + "output.billed_credits, so read that rather than multiplying a rate by a size: the rate can be "
+            + "republished between the run and the reading. It is absent when the platform charged nothing, "
+            + "which is not a charge of zero. The size billed is derived "
             + "from the request, and it is the size ASKED FOR rather than the size delivered: a provider "
             + "that clamps a long request to its own maximum still charges what you sent, so set the "
             + "length you need rather than the ceiling. It is not a param and setting one does not change "
@@ -894,6 +913,9 @@ public class WorkflowHelpProvider {
             "billed_quantity", "The size billed on, counted in billed_unit. A model sold per call reports 1.",
             "billed_unit", "call, second, image or character. It is the unit the size was MEASURED in, not "
                 + "always the one the rate is quoted in: a model listed per minute reports seconds here.",
+            "billed_credits", "What the platform charged for this run, in credits, as it was committed. "
+                + "ABSENT means the platform charged nothing (credential_source='user' pays the provider "
+                + "directly), which is not a charge of zero.",
             "provider_response", "The provider's own payload, kept under its own key so a provider field can "
                 + "never shadow file. Its shape varies by provider; do not build on it."
         ));
@@ -936,7 +958,8 @@ public class WorkflowHelpProvider {
             "merge_edges", "Multiple edges can point to the same target (implicit merge). Example: mcp:task_a → mcp:final AND mcp:task_b → mcp:final. The target waits for ALL predecessors.",
             "one_port_one_target", "Each NAMED port (decision if/else, switch case_N, loop body/exit, fork branch_N, option choice_N, approval approved/rejected/timeout, classify category_N, guardrail pass/fail) connects to AT MOST ONE target. A second connect from the same port is rejected - to fan one port out to several nodes in parallel, add a fork on that port and connect each branch separately.",
             "builder", "Use workflow(action='connect', from='Source Label', to='Target Label') - labels are auto-normalized. For ports: from='Decision Label:if'",
-            "conditions", "Stored in cores[] definition, NOT on edges. Edges only carry port references."
+            "conditions", "Stored in cores[] definition, NOT on edges. Edges only carry port references.",
+            "mail_account", "send_email and email_inbox use the default account only when credentialId is omitted. An unavailable selected account fails without using another mailbox. Relay the refusal to the user; do not remove the selection to retry with another account."
         ));
         result.put("ports_by_node_type", ordered(
             "decision", "if, else, elseif_0, elseif_1, ... - Example: core:check:if, core:check:else, core:check:elseif_0",
@@ -1178,7 +1201,7 @@ public class WorkflowHelpProvider {
         actions.put("2_get_run_overview", ordered(
             "syntax", "workflow(action='get_run', run_id='uuid')",
             "zoom_level", "Run-level - macro overview: epoch summaries + DAG counters, no per-node detail.",
-            "returns", "{run_id, status, plan_version, dags:{<trigger_id>:{current_epoch,fire_count,current_spawn}}, epochs:[{epoch,trigger_id,started_at,ended_at,duration_ms,node_counts:{completed,failed,skipped},status}], total_epochs}",
+            "returns", "{run_id, status, plan_version, dags:{<trigger_id>:{current_epoch,fire_count,current_spawn}}, epochs:[{epoch,trigger_id,started_at,ended_at,duration_ms,node_counts:{completed,failed,partial_failed,skipped},status}], total_epochs}",
             "next", "Pick an epoch number from epochs[] and call get_run with epoch=N for the per-node breakdown."
         ));
         actions.put("3_get_run_epoch_detail", ordered(
@@ -1203,7 +1226,10 @@ public class WorkflowHelpProvider {
                 "condition_expression / condition_result", "For decision nodes: the SpEL expression and its boolean result for this row.",
                 "loop_iteration / loop_exit_reason", "For nodes inside a loop: which iteration this is (1-based) and why the loop exited (MAX_ITERATIONS, CONDITION_MET, etc.).",
                 "merge_*", "For merge nodes: the strategy used and the lists of branches that contributed (received) vs. were skipped.",
-                "skip_reason / skip_source_node", "For SKIPPED rows: why the row was skipped and which upstream node propagated the skip."
+                "skip_reason / skip_source_node", "For SKIPPED rows: why the row was skipped and which upstream node propagated the skip.",
+                "resolved_params.list / resolved_params.listResolved", "For split and find nodes: `list` is the expression as configured, `listResolved` is what it evaluated to, described in one line (e.g. 'List(size=0)', 'Map(keys=[items])', 'null'). Read it whenever the node produced 0 items: 'List(size=0)' means the upstream node really returned an empty array, while 'Map(keys=[items])' means the reference points at the object WRAPPING the array - re-point it one level deeper. On a find whose table served the rows, listResolved reads '(not evaluated: the table returned rows)'.",
+                "resolved_params.variableMapping", "For interface nodes: one entry per template variable - {expression, resolved, status}. `status` is 'resolved' (it held a value when the node ran), 'unresolved' (it held nothing) or 'not_evaluated' (nothing measured it, e.g. the render's variable byte budget was exhausted before this one; resolved_params.variableMappingError says why). Read it when the page renders empty: a variable whose `resolved` is 'Map(keys=[result])' means the template must read one level deeper, and a mapping of '{{core:<code node>.output}}' always carries that extra `result` wrapper - map '{{core:<code node>.output.result}}' instead. A variable fed by a node that runs AFTER the interface reports 'unresolved' here and still displays once that node has run. A variable mapped from a WORKSPACE variable ({{$vars.x}}) reports '<withheld: workspace variable>' instead of its value, since one can be declared secret - its expression and its status still tell you whether the wiring works.",
+                "resolved_params values that are not the value", "Two strings can appear anywhere in resolved_params, on any node, and both are also what `{{core:<label>.input.<key>}}` returns for that key. '<withheld: credential>' means the key's NAME says it holds a credential (token, apiKey, password, connectionString, a qualified key like accessToken) - the parameter ran with its real value, only the report hides it, so do not read it back into another node's parameters. '<withheld: workspace variable>' means the value came from a {{$vars.x}} workspace variable, same rule. A key named `paramsTruncated` is not a parameter at all: it says how many entries were dropped because the whole map exceeded its size budget, and the entries that survived are the ones the node reported first."
             )
         ));
         help.put("actions", actions);
@@ -1245,6 +1271,20 @@ public class WorkflowHelpProvider {
             "A version you have never executed can be pinned: pin prepares the production run that " +
             "fires accumulate into, so there is no execute-then-pin sequence to perform.");
 
+        help.put("interactive_chat_authorization",
+            "IMPORTANT (interactive chat only): pin and unpin are sensitive actions and need the "
+            + "user's authorization, because pinning hands a version every trigger its plan declares "
+            + "and unpinning takes them all off the air. Asking them happens inside your call: it may "
+            + "simply take longer to answer while they decide. Do NOT stop, do NOT announce that you "
+            + "are waiting, and do NOT re-call pin - just read what comes back. A normal result "
+            + "(workflow_id, pinned_version, is_production, status) means they allowed it and it took "
+            + "effect; "
+            + "{executed:false} with status 'authorization_required', 'denied' or 'stopped' means "
+            + "NOTHING changed - the workflow is still on whatever version it was on, and no trigger "
+            + "was armed or disarmed. On {executed:false} do not describe the workflow as live, do not "
+            + "call pin again, and continue with other work or finish your turn. If they answer after "
+            + "that, they come back with a new request.");
+
         help.put("production_model", List.of(
             "The pinned version IS the production workflow - think of it as 'what's live'.",
             "Production triggers always target the LATEST run of the pinned version (ordered by startedAt DESC). " +
@@ -1272,7 +1312,7 @@ public class WorkflowHelpProvider {
         actions.put("inspect", ordered(
             "syntax", "workflow(action='get', workflow_id='<uuid>')",
             "returns", "id, name, plan (full JSON), pinned_version, is_production, latest_version, default_trigger_id, trigger_types, data_inputs_schema (field names + select options for the fireable trigger), fireable_triggers (only on multi-trigger workflows). " +
-                       "workflow(action='list') items carry just trigger_types - call get before execute when you need the data_inputs field names."
+                       "workflow(action='list') items carry trigger_types and node_types, but no data_inputs_schema - call get before execute when you need the data_inputs field names."
         ));
         help.put("actions", actions);
 

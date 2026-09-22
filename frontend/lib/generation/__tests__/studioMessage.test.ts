@@ -110,6 +110,7 @@ describe('buildStudioResult', () => {
         file: { id: 'file-9', name: 'out.png', mimeType: 'image/png' },
         billed_quantity: 1,
         billed_unit: 'image',
+        billed_credits: 78,
       },
     };
     expect(parseStudioEnvelope(buildStudioResult(result, request))).toMatchObject({
@@ -118,7 +119,98 @@ describe('buildStudioResult', () => {
       file: { id: 'file-9' },
       billedQuantity: 1,
       billedUnit: 'image',
+      // What it COST, not only the size it was charged on. The turn card states it beside the
+      // history cards under it, and this mapping is the only thing that carries it there: deleted,
+      // the thread silently stops pricing the generation the reader just ran and every other suite
+      // stays green.
+      billedCredits: 78,
     });
+  });
+
+  it('carries NO charge for a turn the platform did not bill, and none for a zero', () => {
+    // The reader's own provider key paid, or the endpoint carries no platform price. Both arrive
+    // as an absent field, and a zero must not be turned into one either: on the card an amount of
+    // nothing reads as "this was free", which is a claim about money rather than a missing value.
+    const base = { model: 'flux-1', kind: 'image', provider: 'flux' };
+
+    expect(parseStudioEnvelope(buildStudioResult(
+      { success: true, data: { ...base } } as GenerationResult, request,
+    ))).not.toHaveProperty('billedCredits');
+
+    expect(parseStudioEnvelope(buildStudioResult(
+      { success: true, data: { ...base, billed_credits: 0 } } as GenerationResult, request,
+    ))).not.toHaveProperty('billedCredits');
+  });
+
+  it('carries the factor that moved the price, with the reasons the server gave', () => {
+    // The third number in the charge. The size says what was produced and the amount says what it
+    // cost; without this, the two do not multiply out and the card reads as an arithmetic error.
+    const result = {
+      success: true,
+      data: {
+        model: 'seedance-2.0',
+        kind: 'video',
+        billed_quantity: 10,
+        billed_unit: 'second',
+        billed_credits: 240,
+        billed_multiplier: 1.2,
+        billed_multiplier_reasons: ['resolution x1.2'],
+      },
+    } as GenerationResult;
+
+    expect(parseStudioEnvelope(buildStudioResult(result, request))).toMatchObject({
+      billedMultiplier: 1.2,
+      billedMultiplierReasons: ['resolution x1.2'],
+    });
+  });
+
+  it('carries a factor BELOW one, because a discount is a fact about the charge too', () => {
+    // The composer's badge fires on `!== 1` and this carried only `> 1`, so a model with a cheaper
+    // tier (the descriptor parser refuses only factors <= 0, so 0.5 is legal) announced "x0.5"
+    // before the run and nothing after it. The card then stated a size and an amount off by half
+    // with no third number to reconcile them, which is the arithmetic-error reading the factor
+    // exists to prevent.
+    const result = {
+      success: true,
+      data: {
+        model: 'seedance-2.0', kind: 'video',
+        billed_quantity: 10, billed_unit: 'second', billed_credits: 60,
+        billed_multiplier: 0.5, billed_multiplier_reasons: ['quality x0.5'],
+      },
+    } as GenerationResult;
+
+    expect(parseStudioEnvelope(buildStudioResult(result, request))).toMatchObject({
+      billedMultiplier: 0.5,
+      billedMultiplierReasons: ['quality x0.5'],
+    });
+  });
+
+  it('carries no factor for a NON-POSITIVE one, which is not a price at all', () => {
+    // Zero would read as a free generation and a negative one is not a factor. Neither can come
+    // from a descriptor this platform accepts, so the honest reading is that nothing was said.
+    const base = { model: 'flux-1', kind: 'image', billed_quantity: 1, billed_unit: 'image' };
+
+    expect(parseStudioEnvelope(buildStudioResult(
+      { success: true, data: { ...base, billed_multiplier: 0 } } as GenerationResult, request,
+    ))).not.toHaveProperty('billedMultiplier');
+
+    expect(parseStudioEnvelope(buildStudioResult(
+      { success: true, data: { ...base, billed_multiplier: -2 } } as GenerationResult, request,
+    ))).not.toHaveProperty('billedMultiplier');
+  });
+
+  it('carries NO factor for a call at the published rate', () => {
+    // A factor of 1 is the ordinary case, not a fact about this turn. Carried, it would put a
+    // "x1" on every card in the thread, next to every amount that is exactly the published rate.
+    const base = { model: 'flux-1', kind: 'image', billed_quantity: 1, billed_unit: 'image' };
+
+    expect(parseStudioEnvelope(buildStudioResult(
+      { success: true, data: { ...base, billed_multiplier: 1 } } as GenerationResult, request,
+    ))).not.toHaveProperty('billedMultiplier');
+
+    expect(parseStudioEnvelope(buildStudioResult(
+      { success: true, data: { ...base } } as GenerationResult, request,
+    ))).not.toHaveProperty('billedMultiplier');
   });
 
   it('records a failure as a turn, with the endpoint words verbatim', () => {

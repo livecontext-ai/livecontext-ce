@@ -27,6 +27,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -411,7 +412,7 @@ class GuardrailServiceTest {
         void claudeCodeRoutesToBridge() {
             when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
             String json = "{\"passed\":true,\"violations\":[],\"details\":{},\"sanitized\":null}";
-            when(bridgeDispatcher.execute(any())).thenReturn(loopResult(json, 100, 60, 40));
+            when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(loopResult(json, 100, 60, 40));
 
             GuardrailRequestDto req = new GuardrailRequestDto(
                 "content", null, RULES, "flag", "claude-code", null, null, null, "tenant-1", "agent-1");
@@ -419,7 +420,7 @@ class GuardrailServiceTest {
 
             assertThat(result.success()).isTrue();
             assertThat(result.passed()).isTrue();
-            org.mockito.Mockito.verify(bridgeDispatcher).execute(any());
+            org.mockito.Mockito.verify(bridgeDispatcher).execute(any(), anyBoolean());
             org.mockito.Mockito.verify(agentLoopService, org.mockito.Mockito.never()).execute(any(), any());
         }
 
@@ -448,7 +449,7 @@ class GuardrailServiceTest {
                 .thenReturn("claude-code");
             when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
             String json = "{\"passed\":true,\"violations\":[],\"details\":{},\"sanitized\":null}";
-            when(bridgeDispatcher.execute(any())).thenReturn(loopResult(json, 100, 60, 40));
+            when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(loopResult(json, 100, 60, 40));
 
             GuardrailRequestDto req = new GuardrailRequestDto(
                 "content", null, RULES, "flag", "anthropic", "claude-opus-4-7", null, null, "tenant-1", "agent-1");
@@ -457,7 +458,7 @@ class GuardrailServiceTest {
             assertThat(result.success()).isTrue();
             // Routed to the bridge, never the direct-API agent loop.
             ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
-            verify(bridgeDispatcher).execute(ctx.capture());
+            verify(bridgeDispatcher).execute(ctx.capture(), anyBoolean());
             verify(agentLoopService, org.mockito.Mockito.never()).execute(any(), any());
             // The corrected slug propagated into the dispatched context.
             assertThat(ctx.getValue().provider()).isEqualTo("claude-code");
@@ -490,7 +491,7 @@ class GuardrailServiceTest {
             AgentLoopResult failure = AgentLoopResult.failure(
                 "Bridge execution failed: no response from bridge server",
                 50, "claude-code", AgentStopReason.ERROR);
-            when(bridgeDispatcher.execute(any())).thenReturn(failure);
+            when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(failure);
 
             GuardrailRequestDto req = new GuardrailRequestDto(
                 "content", null, RULES, "flag", "claude-code", null, null, null, null, null);
@@ -498,6 +499,76 @@ class GuardrailServiceTest {
 
             assertThat(result.success()).isFalse();
             assertThat(result.error()).contains("Bridge execution failed");
+        }
+
+        @Test
+        @DisplayName("EXECUTION-LINK FALLBACK: a linked bridge failure silently retries on the billed pair's direct API and succeeds")
+        void linkedBridgeFailureFallsBackToDirectApi() {
+            when(executionLinkRouter.runnableRoute("openai", "gpt-4o", GuardrailService.ACTIVITY_SOURCE))
+                .thenReturn(new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute(
+                    "claude-code", "claude-opus-4-8"));
+            when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+            when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(
+                AgentLoopResult.failure("CLI crashed", 50, "claude-code", AgentStopReason.ERROR));
+            String json = "{\"passed\":true,\"violations\":[],\"details\":{},\"sanitized\":null}";
+            ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
+            when(agentLoopService.execute(ctx.capture(), isNull())).thenReturn(loopResult(json, 100, 60, 40));
+
+            GuardrailRequestDto req = new GuardrailRequestDto(
+                "content", null, RULES, "flag", "openai", "gpt-4o", null, null, "tenant-1", "agent-1");
+            GuardrailResponseDto result = service.execute(req);
+
+            // The fallback ran on the BILLED pair, never on claude-code.
+            assertThat(ctx.getValue().provider()).isEqualTo("openai");
+            assertThat(ctx.getValue().model()).isEqualTo("gpt-4o");
+            assertThat(ctx.getValue().credentials()).isNull();
+            assertThat(result.success()).isTrue();
+            assertThat(result.passed()).isTrue();
+            assertThat(result.provider()).isEqualTo("openai");
+        }
+
+        @Test
+        @DisplayName("EXECUTION-LINK FALLBACK: when the direct-API retry ALSO fails, the error surfaces normally (a single retry, never a loop)")
+        void linkedBridgeFailureFallbackAlsoFailsSurfacesError() {
+            when(executionLinkRouter.runnableRoute("openai", "gpt-4o", GuardrailService.ACTIVITY_SOURCE))
+                .thenReturn(new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute(
+                    "claude-code", "claude-opus-4-8"));
+            when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+            when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(
+                AgentLoopResult.failure("CLI crashed", 50, "claude-code", AgentStopReason.ERROR));
+            when(agentLoopService.execute(any(), isNull())).thenReturn(
+                AgentLoopResult.failure("upstream 500", 10, "openai", AgentStopReason.ERROR));
+
+            GuardrailRequestDto req = new GuardrailRequestDto(
+                "content", null, RULES, "flag", "openai", "gpt-4o", null, null, "tenant-1", "agent-1");
+            GuardrailResponseDto result = service.execute(req);
+
+            verify(bridgeDispatcher, org.mockito.Mockito.times(1)).execute(any(), anyBoolean());
+            verify(agentLoopService, org.mockito.Mockito.times(1)).execute(any(), isNull());
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).contains("upstream 500");
+        }
+
+        @Test
+        @DisplayName("EXECUTION-LINK FALLBACK: records a Prometheus fallback counter for operators")
+        void linkedBridgeFailureRecordsPrometheusMetric() {
+            com.apimarketplace.agent.metrics.AgentPrometheusMetrics metrics =
+                org.mockito.Mockito.mock(com.apimarketplace.agent.metrics.AgentPrometheusMetrics.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "prometheusMetrics", metrics);
+            when(executionLinkRouter.runnableRoute("openai", "gpt-4o", GuardrailService.ACTIVITY_SOURCE))
+                .thenReturn(new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute(
+                    "claude-code", "claude-opus-4-8"));
+            when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+            when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(
+                AgentLoopResult.failure("CLI crashed", 50, "claude-code", AgentStopReason.ERROR));
+            when(agentLoopService.execute(any(), isNull())).thenReturn(
+                loopResult("{\"passed\":true,\"violations\":[],\"details\":{},\"sanitized\":null}", 100, 60, 40));
+
+            GuardrailRequestDto req = new GuardrailRequestDto(
+                "content", null, RULES, "flag", "openai", "gpt-4o", null, null, "tenant-1", "agent-1");
+            service.execute(req);
+
+            verify(metrics).recordExecutionLinkFallback("openai", "gpt-4o", "claude-code");
         }
     }
 
@@ -528,5 +599,102 @@ class GuardrailServiceTest {
             .durationMs(100)
             .stopReason(AgentStopReason.COMPLETED)
             .build();
+    }
+
+    /**
+     * A guardrail turn is billed from the response DTO alone, exactly like classify, and
+     * it carried prompt and completion only. Over a model execution link that charged the
+     * bridge's INCLUSIVE prompt total at full input rate (6.1x its cost, measured); without
+     * a link the cache was free. The transport now carries it, and these tests are what
+     * stops it going missing again - guardrail is a copy of the classify node shape, and a
+     * fix applied to one and tested only on the other is a fix that half-survives.
+     */
+    @Nested
+    @DisplayName("The cache counters reach the bill")
+    class CacheCountersTravel {
+
+        private GuardrailRequestDto anthropicRequest() {
+            return new GuardrailRequestDto("Safe content", null, RULES, "flag",
+                "anthropic", "claude-fable-5", null, null, null, null);
+        }
+
+        /** The Claude Code bridge shape: the prompt total already contains the cache. */
+        private AgentLoopResult bridgeReported() {
+            return AgentLoopResult.builder()
+                .success(true)
+                .content("{\"passed\":true,\"violations\":[]}")
+                .model("claude-fable-5")
+                .stopReason(AgentStopReason.COMPLETED)
+                .usage(UsageInfo.builder()
+                    .promptTokens(6 + 18_945 + 79_368)
+                    .completionTokens(1_915)
+                    .totalTokens(6 + 18_945 + 79_368 + 1_915)
+                    .cacheCreationInputTokens(18_945)
+                    .cacheReadInputTokens(79_368)
+                    .build())
+                .build();
+        }
+
+        @Test
+        @DisplayName("an unlinked run carries its cache counters, so the cached part stops being free")
+        void unlinkedRunCarriesTheCache() {
+            when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(null);
+            when(agentLoopService.execute(any(), any())).thenReturn(
+                AgentLoopResult.builder()
+                    .success(true)
+                    .content("{\"passed\":true,\"violations\":[]}")
+                    .model("claude-fable-5")
+                    .stopReason(AgentStopReason.COMPLETED)
+                    .usage(UsageInfo.builder()
+                        .promptTokens(6).completionTokens(1_915).totalTokens(1_921)
+                        .cacheCreationInputTokens(18_945).cacheReadInputTokens(79_368).build())
+                    .build());
+
+            GuardrailResponseDto response = service.execute(anthropicRequest());
+
+            assertThat(response.cacheUsage()).isNotNull();
+            assertThat(response.cacheUsage().cacheCreationInputTokens()).isEqualTo(18_945);
+            assertThat(response.cacheUsage().cacheReadInputTokens()).isEqualTo(79_368);
+            assertThat(response.promptTokens()).isEqualTo(6);
+        }
+
+        @Test
+        @DisplayName("a run moved onto a bridge by a link reports PLAIN input and its cache beside it, the convention the billed provider is read with")
+        void linkedRunIsConvertedAndCarried() {
+            when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute(
+                    "claude-code", "claude-fable-5"));
+            when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+            when(bridgeDispatcher.execute(any(), org.mockito.ArgumentMatchers.eq(true)))
+                .thenReturn(bridgeReported());
+
+            GuardrailResponseDto response = service.execute(anthropicRequest());
+
+            // 98,319 stripped back to the 6 tokens of plain input...
+            assertThat(response.promptTokens()).isEqualTo(6);
+            // ...and the cache carried on its own line, where the cache rate applies. Both
+            // assertions must move together: stripping without carrying is the worse bug.
+            assertThat(response.cacheUsage()).isNotNull();
+            assertThat(response.cacheUsage().cacheReadInputTokens()).isEqualTo(79_368);
+            assertThat(response.cacheUsage().cacheCreationInputTokens()).isEqualTo(18_945);
+        }
+
+        @Test
+        @DisplayName("a provider that reports no counts yields no cache, and the verdict still returns")
+        void noUsageIsNotAFailure() {
+            when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(null);
+            when(agentLoopService.execute(any(), any())).thenReturn(
+                AgentLoopResult.builder()
+                    .success(true)
+                    .content("{\"passed\":true,\"violations\":[]}")
+                    .model("claude-fable-5")
+                    .stopReason(AgentStopReason.COMPLETED)
+                    .build());
+
+            GuardrailResponseDto response = service.execute(anthropicRequest());
+
+            assertThat(response.success()).isTrue();
+            assertThat(response.cacheUsage()).isNull();
+        }
     }
 }

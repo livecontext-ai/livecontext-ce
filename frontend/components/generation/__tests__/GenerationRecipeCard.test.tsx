@@ -66,10 +66,40 @@ describe('GenerationRecipeCard', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('names the model that made the asset', () => {
+  it('names the model in the catalogue words, as the history does for the same asset', () => {
+    render(<GenerationRecipeCard entryId="f1" onRegenerate={() => {}} />);
+
+    expect(screen.getByText('generatedWith:FLUX 1.1 Pro')).toBeInTheDocument();
+  });
+
+  it('still names a model that has left the catalogue, by its id', () => {
+    // Losing the row would leave the card saying nothing at all about what made the file.
+    mocks.useGenerationModels.mockReturnValue({ models: [], isLoading: false, availability: 'ready' });
+
     render(<GenerationRecipeCard entryId="f1" onRegenerate={() => {}} />);
 
     expect(screen.getByText('generatedWith:flux-1.1-pro')).toBeInTheDocument();
+  });
+
+  it('states what the platform charged for it', () => {
+    mocks.useGenerationProvenance.mockReturnValue({
+      provenance: { ...RECIPE, billedCredits: 78 }, isLoading: false,
+    });
+
+    render(<GenerationRecipeCard entryId="f1" onRegenerate={() => {}} />);
+
+    // The VALUE the recipe carries, anchored to the start of the stub translator's output - see the
+    // note in GenerationHistoryList.test.tsx. The rendered wording is pinned against the real
+    // dictionaries in GenerationCard.price.realIntl.test.tsx.
+    expect(screen.getByTitle('costTitle')).toHaveTextContent(/^cost:78,/);
+  });
+
+  it('says nothing about price when the platform charged nothing, rather than saying zero', () => {
+    // The reader ran it on their own provider key: they were charged, by that provider. "0 credits"
+    // here would be a claim about money, not a missing value.
+    render(<GenerationRecipeCard entryId="f1" onRegenerate={() => {}} />);
+
+    expect(screen.queryByTitle('costTitle')).not.toBeInTheDocument();
   });
 
   it('shows the words it was made from', () => {
@@ -85,7 +115,7 @@ describe('GenerationRecipeCard', () => {
 
     render(<GenerationRecipeCard entryId="f1" onRegenerate={() => {}} />);
 
-    expect(screen.getByText('regenerate').closest('button')).toBeDisabled();
+    expect(screen.getByText('modify').closest('button')).toBeDisabled();
   });
 
   it('hands back the whole recipe, parameters included', () => {
@@ -93,7 +123,7 @@ describe('GenerationRecipeCard', () => {
     const onRegenerate = vi.fn();
     render(<GenerationRecipeCard entryId="f1" onRegenerate={onRegenerate} />);
 
-    fireEvent.click(screen.getByText('regenerate'));
+    fireEvent.click(screen.getByText('modify'));
 
     expect(onRegenerate).toHaveBeenCalledWith(RECIPE);
   });

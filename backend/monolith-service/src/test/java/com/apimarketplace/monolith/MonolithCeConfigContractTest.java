@@ -48,6 +48,107 @@ import org.yaml.snakeyaml.Yaml;
 class MonolithCeConfigContractTest {
 
     @Test
+    @DisplayName("application-ce.yml binds the SMTP transport keys, without which the cleartext guard "
+        + "is inert in CE and no relay can be configured")
+    @SuppressWarnings("unchecked")
+    void ceMailTransportKeysArePresent() throws Exception {
+        Map<String, Object> root = loadCeYaml();
+        Map<String, Object> spring = (Map<String, Object>) root.get("spring");
+        Map<String, Object> mail = (Map<String, Object>) spring.get("mail");
+        Map<String, Object> properties = (Map<String, Object>) mail.get("properties");
+
+        // CE is the ONLY edition that owns passwords (auth.mode=embedded), so it is
+        // the only one that sends a password reset link, and the two transport
+        // flags are settled DIFFERENTLY here on purpose: STARTTLS is bound (below),
+        // AUTH is deliberately not. Read both assertions before changing either.
+        assertThat(mail)
+            .as("a self-hosted install cannot point at an authenticated relay without them")
+            .containsKeys("username", "password");
+
+        // mail.smtp.auth must stay UNBOUND, and this is the assertion that says so
+        // rather than a comment nobody re-reads.
+        //
+        // Bound with a false default, MailTransportSecurityValidator starts
+        // refusing to boot any install whose MAIL_HOST is a non-local relay
+        // without AUTH - an install that worked on every earlier release, since
+        // this file bound no mail properties at all. Bound with a true default,
+        // the shipped credential-less config cannot send at all (measured in
+        // MailAuthDefaultContractTest). And the flag buys nothing either way:
+        // SmtpAuthNegotiationProbeTest measures that a client with both
+        // credentials sends AUTH regardless of it.
+        assertThat(properties)
+            .as("binding mail.smtp.auth either breaks an upgrade or breaks the credential-less "
+                + "default, and credentials alone already authenticate")
+            .doesNotContainKey("mail.smtp.auth");
+
+        // STARTTLS is the opposite call, and the difference is worth pinning.
+        // Unbound, the session sends in plaintext and NO mainstream relay accepts
+        // the mail at all (SendGrid, SES, Mailgun and Gmail all answer 530 Must
+        // issue a STARTTLS command first), so the feature was unusable with
+        // anything but a local relay. Bound true it is opportunistic: a dev relay
+        // that does not advertise TLS is untouched, and the one case that changes
+        // (a certificate the JVM does not trust) has mail.smtp.ssl.trust as its
+        // escape hatch instead of everyone sending in the clear.
+        assertThat(properties)
+            .as("without STARTTLS no mainstream relay accepts the message")
+            .containsKey("mail.smtp.starttls.enable");
+
+        // mail.smtp.ssl.trust must stay UNBOUND, and this assertion is the guard
+        // because the mistake reads as a kindness.
+        //
+        // An earlier version bound it to ${MAIL_SMTP_SSL_TRUST:} believing an
+        // empty value means "use the normal trust store". Measured in
+        // auth-service's SmtpSslTrustBindingProbeTest: an empty placeholder binds
+        // as a PRESENT key, JavaMail branches on presence, "".split("\s+") is a
+        // ONE-element array holding "", and a factory whose trusted-host list is
+        // [""] answers isServerTrusted(anything) with false - AFTER the handshake
+        // and after CA and hostname validation have already passed. So it blocked
+        // delivery to every relay that offers STARTTLS, and only to those, which
+        // is why an e2e run against a dev relay that offers none passed anyway.
+        //
+        // A private-CA relay is handled by trusting the CA (/app/extra-ca, which
+        // ce-entrypoint.sh imports into a runtime truststore), not by waiving
+        // verification for a host.
+        assertThat(properties)
+            .as("an empty ssl.trust is an allow-list that allows nothing, not a no-op")
+            .doesNotContainKey("mail.smtp.ssl.trust");
+        assertThat(String.valueOf(properties.get("mail.smtp.starttls.enable")))
+            .isEqualTo("${MAIL_SMTP_STARTTLS:true}");
+    }
+
+    @Test
+    @DisplayName("application-ce.yml bounds all three SMTP timeouts, which JavaMail otherwise treats "
+        + "as infinite on a PUBLIC endpoint that sends mail")
+    @SuppressWarnings("unchecked")
+    void ceMailTimeoutsAreBounded() throws Exception {
+        Map<String, Object> root = loadCeYaml();
+        Map<String, Object> spring = (Map<String, Object>) root.get("spring");
+        Map<String, Object> mail = (Map<String, Object>) spring.get("mail");
+        Map<String, Object> properties = (Map<String, Object>) mail.get("properties");
+
+        // /api/auth/forgot-password is public and unauthenticated. With no timeout,
+        // a relay that accepts the TCP connection and never answers holds a thread
+        // with nothing to release it.
+        assertThat(properties).containsKeys(
+            "mail.smtp.connectiontimeout", "mail.smtp.timeout", "mail.smtp.writetimeout");
+        for (String key : Arrays.asList(
+                "mail.smtp.connectiontimeout", "mail.smtp.timeout", "mail.smtp.writetimeout")) {
+            // Parsed rather than pattern-matched: an earlier version asserted
+            // only that the string had no ":0}" in it, which passed for
+            // "${X:00}" and for "${X:-5}", and JavaMail reads both as no timeout.
+            String declared = String.valueOf(properties.get(key));
+            java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("^\\$\\{[A-Z_]+:(-?\\d+)}$").matcher(declared);
+            assertThat(matcher.matches())
+                .as("%s must be an env placeholder with a numeric default, was %s", key, declared)
+                .isTrue();
+            assertThat(Integer.parseInt(matcher.group(1)))
+                .as("%s must be a POSITIVE number of milliseconds", key)
+                .isPositive();
+        }
+    }
+
+    @Test
     @DisplayName("application-ce.yml JDBC URL carries libpq options= for lc.migration.source_timezone=UTC (PR14 Layer A)")
     @SuppressWarnings("unchecked")
     void jdbcUrlCarriesLcMigrationSourceTimezoneOption() throws Exception {
@@ -323,6 +424,58 @@ class MonolithCeConfigContractTest {
         assertThat(keys.find("livecontext-prod-v1"))
             .as("the pinned keyId must resolve to a real Ed25519 public key the verifier can use")
             .isPresent();
+    }
+
+    @Test
+    @DisplayName("the three cloud-bundle pollers default to a spread schedule, not the quarter hour - "
+            + "this file is the ONLY place CE reads them from")
+    void bundlePollersDefaultToASpreadSchedule() throws Exception {
+        // All three schedulers are @ConditionalOnProperty(...sync.enabled=true) and
+        // only CE sets that, so on every install the cron comes from HERE and the
+        // annotation default is never reached. Without this assertion, reverting
+        // these three lines to `0 */15 * * * *` puts the whole fleet back on the
+        // same second - every install downloading the same ~24 MB bundle at once
+        // whenever one is published - with the entire suite still green.
+        Map<String, Object> root = loadCeYaml();
+
+        for (String[] path : new String[][] {
+                {"catalog", "bundle", "sync", "cron"},
+                {"api-catalog", "bundle", "sync", "cron"},
+                {"skill", "bundle", "sync", "cron"}}) {
+            assertThat((String) nestedValue(root, path))
+                    .as(String.join(".", path) + " must default to a per-process slot")
+                    .contains("PollSpread")
+                    .doesNotContain("0 */15 * * * *");
+        }
+    }
+
+    @Test
+    @DisplayName("application-ce.yml sets the MVC async deadline, without which CE serves every "
+        + "long file download truncated")
+    void asyncRequestTimeoutIsSetForFileStreaming() throws Exception {
+        Map<String, Object> root = loadCeYaml();
+
+        // MonolithFileController.proxySignedDownload mounts the SAME endpoint as the
+        // cloud storage-service and returns a StreamingResponseBody, so the container's
+        // async deadline governs the whole transfer. The container default is 30s.
+        // Measured on the cloud mount over the 3 days to 2026-09-21: 112 of 4979
+        // requests ran past 30s and 77 past 60s. Losing this property raises no error,
+        // it truncates the body on an already-committed response - which is why it needs
+        // an assertion rather than a comment.
+        Object value = nestedValue(root, "spring", "mvc", "async", "request-timeout");
+        assertThat(value)
+            .as("spring.mvc.async.request-timeout must stay set in the CE profile")
+            .isNotNull();
+
+        // Parsed the way Spring binds it, so `10m` is as valid here as `600000`.
+        java.time.Duration timeout = org.springframework.boot.convert.DurationStyle
+            .detectAndParse(String.valueOf(value), java.time.temporal.ChronoUnit.MILLIS);
+        assertThat(timeout)
+            .as("must leave room above the ~61s worst case observed in production, and stay "
+                + "FINITE: the async deadline is the only backstop for a stream whose task is "
+                + "rejected during a graceful shutdown")
+            .isGreaterThanOrEqualTo(java.time.Duration.ofMinutes(10))
+            .isLessThanOrEqualTo(java.time.Duration.ofMinutes(30));
     }
 
     private Map<String, Object> loadCeYaml() throws Exception {

@@ -486,4 +486,12 @@ class ApplicationHelpModuleTest {
                     .contains("application(action='create'");
         }
     }
+    @Test
+    @DisplayName("Installation help resumes the original request with the acquired application's input schema")
+    void installationContinuesOriginalTask() {
+        var result = helpModule.execute("help", Map.of(), "tenant", null).orElseThrow();
+        assertThat(result.data().toString()).contains("Continue the original task", "SAME application_id",
+                "data_inputs_schema", "Do not acquire again")
+                .doesNotContain("user comes back with a NEW request");
+    }
 }

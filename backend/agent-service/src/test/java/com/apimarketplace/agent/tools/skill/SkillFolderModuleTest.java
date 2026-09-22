@@ -251,4 +251,63 @@ class SkillFolderModuleTest {
             assertThat(SkillFolderModule.resolveNullableFolderId(Map.of("k", "not-uuid"), "k")).isNull();
         }
     }
+
+    @Nested
+    @DisplayName("access mode gate")
+    class AccessModeGate {
+
+        private ToolExecutionContext readModeCtx() {
+            return new ToolExecutionContext(TENANT, Map.of("skillAccessMode", "read"),
+                    Map.of(), Set.of(), null, null, null, null);
+        }
+
+        @Test
+        @DisplayName("read-mode denies every folder WRITE and never touches the service")
+        void readModeDeniesFolderWrites() {
+            // Regression: this module had no write gate at all. Skills carry no grant axis, so
+            // skillAccessMode is the family's ONLY gate and these four actions were unreachable
+            // by any configuration: a read-only agent could create, rename, move and delete
+            // skill folders, with an HTTP 200 and no log line.
+            for (String action : List.of("create_folder", "rename_folder", "move_folder", "delete_folder")) {
+                Optional<ToolExecutionResult> res =
+                        module.execute(action, Map.of("name", "x", "folder_id", "f1"), TENANT, readModeCtx());
+
+                assertThat(res).as("action %s must be handled", action).isPresent();
+                assertThat(res.get().success()).as("action %s must be denied", action).isFalse();
+                assertThat(res.get().error()).contains("read-only");
+            }
+            verifyNoInteractions(skillFolderService);
+        }
+
+        @Test
+        @DisplayName("read-mode still allows list_folders (it is a declared READ action)")
+        void readModeAllowsListFolders() {
+            when(skillFolderService.listAllFolders(TENANT)).thenReturn(List.of());
+
+            Optional<ToolExecutionResult> res = module.execute("list_folders", Map.of(), TENANT, readModeCtx());
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isTrue();
+        }
+
+        @Test
+        @DisplayName("write-mode leaves the folder writes working - the gate blocks read-only, not everyone")
+        void writeModeAllowsFolderWrites() {
+            // Asserts the real outcome rather than the ABSENCE of an error string: AssertJ's
+            // doesNotContain passes vacuously on a null actual, so the weaker form would have
+            // stayed green even if the gate had started refusing every caller.
+            SkillFolderEntity folder = mockFolder(FOLDER_ID, "Research", null);
+            when(skillFolderService.createFolder(TENANT, "Research", null, null)).thenReturn(folder);
+
+            ToolExecutionContext writeCtx = new ToolExecutionContext(TENANT,
+                    Map.of("skillAccessMode", "write"), Map.of(), Set.of(), null, null, null, null);
+
+            Optional<ToolExecutionResult> res =
+                    module.execute("create_folder", Map.of("name", "Research"), TENANT, writeCtx);
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isTrue();
+        }
+    }
+
 }

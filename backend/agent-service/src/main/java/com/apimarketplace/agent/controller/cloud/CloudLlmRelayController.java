@@ -6,6 +6,7 @@ import com.apimarketplace.agent.cloud.CloudLlmRelayRequest;
 import com.apimarketplace.agent.cloud.CloudLlmStreamEvent;
 import com.apimarketplace.agent.cloud.CloudRelaySupport;
 import com.apimarketplace.agent.domain.CompletionRequest;
+import com.apimarketplace.agent.domain.KeyRoute;
 import com.apimarketplace.agent.domain.CompletionResponse;
 import com.apimarketplace.agent.domain.Message;
 import com.apimarketplace.agent.domain.SystemBlock;
@@ -311,9 +312,15 @@ public class CloudLlmRelayController {
             prompt += acc.promptTokens();
             completion += acc.completionTokens();
         }
+        // CE_LLM_RELAY, not the default CHAT_CONVERSATION: this turn is DEBITED as a
+        // relay (CreditService.consumeForCeLlmRelay), and the FREE AI allowance
+        // deliberately does not fund relay traffic. Gating it as a chat turn counted a
+        // pot the debit can never draw, so the tokens ran and the whole cost landed on
+        // an empty PAYG bucket - repeatedly, since the pot never decremented.
         return creditClient.checkChatBudget(userId, provider, model,
                 (int) Math.min(Integer.MAX_VALUE, prompt),
-                (int) Math.min(Integer.MAX_VALUE, completion));
+                (int) Math.min(Integer.MAX_VALUE, completion),
+                CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY);
     }
 
     private void recordUsageOnce(AtomicBoolean recorded, BillingTarget target, TokenUsage usage) {
@@ -404,6 +411,9 @@ public class CloudLlmRelayController {
                                               boolean streaming) {
         return CompletionRequest.builder()
                 .tenantId(cloudUserId)
+                // The relay is a platform-billed service (CE_LLM_RELAY at token rate): it must
+                // never run on the cloud user's own saved key, or that user pays twice.
+                .keyRoute(KeyRoute.PLATFORM)
                 .model(model)
                 .systemPrompt(source.systemPrompt())
                 .userPrompt(source.userPrompt())

@@ -383,6 +383,22 @@ public interface CreditLedgerRepository extends JpaRepository<CreditLedgerEntry,
     BigDecimal sumAmountByUserIdSince(@Param("userId") Long userId, @Param("periodStart") LocalDateTime periodStart);
 
     /**
+     * Credits the monthly AI allowance paid for, within a billing period (V494).
+     *
+     * <p>Reconciliation adds this back to the ledger sum: those rows carry the full
+     * cost of the turn in {@code amount}, but the allowance is a bucket
+     * {@code Subscription.getTotalBalance()} excludes, so that part of the movement
+     * never touched the balance being compared. Without the add-back, every AI-funded
+     * turn reads as a lost movement.
+     */
+    @Query("SELECT COALESCE(SUM(e.aiPortion), 0) FROM CreditLedgerEntry e WHERE e.userId = :userId AND e.createdAt >= :periodStart")
+    BigDecimal sumAiPortionByUserIdSince(@Param("userId") Long userId, @Param("periodStart") LocalDateTime periodStart);
+
+    /** Lifetime counterpart of {@link #sumAiPortionByUserIdSince}, for the lifetime invariant. */
+    @Query("SELECT COALESCE(SUM(e.aiPortion), 0) FROM CreditLedgerEntry e WHERE e.userId = :userId")
+    BigDecimal sumAiPortionByUserId(@Param("userId") Long userId);
+
+    /**
      * Get all distinct user IDs that have ledger entries (for reconciliation).
      */
     @Query("SELECT DISTINCT e.userId FROM CreditLedgerEntry e")

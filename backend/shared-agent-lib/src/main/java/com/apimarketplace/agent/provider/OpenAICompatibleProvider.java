@@ -4,13 +4,8 @@ import com.apimarketplace.agent.domain.*;
 import com.apimarketplace.agent.domain.UsageInfo;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
-import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
 
@@ -26,19 +21,11 @@ import java.util.*;
 @Slf4j
 public class OpenAICompatibleProvider extends AbstractLLMProvider {
 
-    /** Discovery is a small JSON GET, not a completion - keep it short. */
-    static final int DISCOVERY_CONNECT_TIMEOUT_MS = 5_000;
-    static final int DISCOVERY_READ_TIMEOUT_MS = 10_000;
-
     private final String providerName;
     private final String apiUrl;
     private final String apiKey;
     private final List<String> models;
     private final int displayOrder;
-
-    /** Lazily built, mirrors the webClient pattern in the parent class. */
-    private volatile RestTemplate discoveryRestTemplate;
-    private final Object discoveryRestTemplateLock = new Object();
 
     public OpenAICompatibleProvider(String providerName, String apiUrl, String apiKey,
                                      List<String> models, int displayOrder) {
@@ -79,142 +66,16 @@ public class OpenAICompatibleProvider extends AbstractLLMProvider {
         return apiUrl;
     }
 
-    // isConfigured() is intentionally NOT overridden - the parent
-    // AbstractLLMProvider.isConfigured() calls resolveApiKey() which
-    // checks DB-stored keys via credentialResolver, then falls back
-    // to the env-injected apiKey field. Overriding here would bypass
-    // DB credential resolution entirely.
-
-    /**
-     * Ask the provider itself which models it serves, via the OpenAI-compatible
-     * {@code GET <base>/models} endpoint.
-     *
-     * <p>This is the ONLY authoritative answer to "what does this vendor offer
-     * today". The catalog feeds are third-party mirrors and lag badly for some
-     * vendors: measured 2026-08-19, LiteLLM's {@code zai} block stopped at
-     * glm-5.1 while Z.AI had already shipped glm-5.2, glm-5.3 and
-     * glm-5v-turbo, and its {@code moonshot} block stopped at kimi-k2.6 while
-     * Kimi K3 had been out for a month. A vendor's own endpoint has neither
-     * lag nor a mirror's editorial choices.
-     *
-     * <p>What it does NOT give is pricing - {@code /models} carries none. So a
-     * caller must treat the result as an EXISTENCE list only and source the
-     * price elsewhere. Never infer a price from an aggregator's row for the
-     * same id: an aggregator quotes its own resale rate, not the vendor's
-     * direct rate (measured: z-ai/glm-5.1 at 0.966/3.036 on OpenRouter vs
-     * 1.40/4.40 on Z.AI direct).
-     *
-     * <p>Fails soft: an unconfigured provider, a network error, an auth
-     * rejection or an unexpected body all yield {@link Optional#empty()}, never
-     * an exception. A discovery pass must not be able to break a catalog sync.
-     * Empty is "could not ask", which is deliberately distinct from a present
-     * but empty list ("asked, vendor serves nothing").
-     */
-    public Optional<List<String>> listRemoteModelIds() {
-        if (!isConfigured()) {
-            return Optional.empty();
-        }
-        String url = modelsEndpoint();
-        if (url == null) {
-            return Optional.empty();
-        }
-        try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.setBearerAuth(resolveApiKey());
-            ResponseEntity<Map> response = discoveryRestTemplate().exchange(
-                    url, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
-            return Optional.of(extractModelIds(response.getBody()));
-        } catch (Exception e) {
-            log.warn("Model discovery failed for provider '{}' at {}: {}",
-                    providerName, url, e.getMessage());
-            return Optional.empty();
-        }
-    }
-
-    /**
-     * A separate, tightly-bounded {@link RestTemplate} for the {@code /models}
-     * call.
-     *
-     * <p>It must NOT reuse the completions {@code restTemplate}: that one is
-     * sized for LLM generation and carries a 1-hour read timeout
-     * ({@code ai.agent.llm.read-timeout-ms}), which is right for a long
-     * completion and catastrophic here. Discovery runs inside the catalog
-     * sync's transaction, once per configured provider, so a single vendor
-     * being unreachable would otherwise pin an open DB transaction for an hour
-     * and stall the whole refresh. A model list is a few KB of JSON; if it has
-     * not arrived in seconds it is not coming.
-     */
-    private RestTemplate discoveryRestTemplate() {
-        RestTemplate local = discoveryRestTemplate;
-        if (local == null) {
-            synchronized (discoveryRestTemplateLock) {
-                local = discoveryRestTemplate;
-                if (local == null) {
-                    SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-                    factory.setConnectTimeout(DISCOVERY_CONNECT_TIMEOUT_MS);
-                    factory.setReadTimeout(DISCOVERY_READ_TIMEOUT_MS);
-                    local = new RestTemplate(factory);
-                    discoveryRestTemplate = local;
-                }
-            }
-        }
-        return local;
-    }
-
-    /**
-     * Derive {@code <base>/models} from the configured chat-completions URL.
-     * Every provider we register is configured with its full completions path
-     * (e.g. {@code https://api.z.ai/api/paas/v4/chat/completions}), and the
-     * OpenAI-compatible contract puts {@code /models} as a sibling of
-     * {@code /chat/completions}. Returns null when the configured URL does not
-     * follow that shape, so an exotic override degrades to "no discovery"
-     * rather than to a request against a wrong path.
-     */
-    String modelsEndpoint() {
-        if (apiUrl == null || apiUrl.isBlank()) {
-            return null;
-        }
-        int idx = apiUrl.indexOf("/chat/completions");
-        if (idx < 0) {
-            return null;
-        }
-        return apiUrl.substring(0, idx) + "/models";
-    }
-
-    /**
-     * Pull the ids out of an OpenAI {@code /models} body: {@code {"data":[{"id":…}]}}.
-     * Tolerates a bare list and entries that are plain strings - several
-     * OpenAI-compatible vendors take liberties with the envelope. Unknown
-     * shapes yield an empty list rather than an error.
-     */
-    @SuppressWarnings("unchecked")
-    static List<String> extractModelIds(Map<String, Object> body) {
-        if (body == null) {
-            return List.of();
-        }
-        Object data = body.get("data");
-        if (!(data instanceof List<?> entries)) {
-            return List.of();
-        }
-        List<String> ids = new ArrayList<>(entries.size());
-        for (Object entry : entries) {
-            if (entry instanceof String s && !s.isBlank()) {
-                ids.add(s.trim());
-            } else if (entry instanceof Map<?, ?> map) {
-                Object id = ((Map<String, Object>) map).get("id");
-                if (id != null && !id.toString().isBlank()) {
-                    ids.add(id.toString().trim());
-                }
-            }
-        }
-        return ids;
-    }
+    // isConfigured() / isConfiguredFor() are intentionally NOT overridden - the
+    // parent resolves the key per request (tenant + pinned route) through
+    // credentialResolver, then falls back to the env-injected apiKey field.
+    // Overriding here would bypass DB credential resolution entirely.
 
     @Override
-    protected HttpHeaders buildHeaders() {
+    protected HttpHeaders buildHeaders(CompletionRequest request) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(resolveApiKey());
+        headers.setBearerAuth(resolveApiKey(request));
         return headers;
     }
 

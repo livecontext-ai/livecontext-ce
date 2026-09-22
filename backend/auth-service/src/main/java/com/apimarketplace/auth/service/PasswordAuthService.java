@@ -1,7 +1,6 @@
 package com.apimarketplace.auth.service;
 
-import com.apimarketplace.auth.audit.AuditEventTypes;
-import com.apimarketplace.auth.audit.AuditLogger;
+import com.apimarketplace.auth.audit.AuthEventRecorder;
 import com.apimarketplace.auth.bootstrap.FirstAdminBootstrap;
 import com.apimarketplace.auth.domain.AuthProvider;
 import com.apimarketplace.auth.domain.RefreshToken;
@@ -54,6 +53,39 @@ public class PasswordAuthService {
     private static final int BCRYPT_STRENGTH = 12;
     private static final int MAX_ACTIVE_TOKENS_PER_USER = 10;
     private static final int MAX_LOGIN_ATTEMPTS = 5;
+    /**
+     * Provider tag for embedded (self-hosted) email+password auth. Must stay equal to
+     * what {@code AuthEventRecorder.providerTag(AuthProvider.LOCAL)} returns, or the same
+     * sign-in would land under two labels on the same counter.
+     */
+    private static final String LOCAL_PROVIDER_TAG = "local";
+
+    /**
+     * Still here for the counters that have no recorder method yet: password change, token
+     * refresh, token reuse and logout. Login and signup telemetry goes through
+     * {@link #authEventRecorder} instead, so metric, audit row and analytics cannot drift
+     * apart.
+     */
+    @Autowired(required = false)
+    private AuthMetrics authMetrics;
+
+    /**
+     * The one strength rule for every password this service writes, and there are
+     * THREE places that write one: {@link #register}, {@link #changePassword} and
+     * {@link #resetPasswordTo}. All three go through
+     * {@link #requireMinimumLength}, because an earlier version of this constant
+     * claimed to cover them while register kept its own literal 8 (so weakening
+     * the constant weakened two paths and silently left the third stricter).
+     *
+     * <p>The reset flow validates against it BEFORE claiming a single-use token,
+     * so a rejected password does not cost the link.
+     *
+     * <p>{@code frontend/app/[locale]/reset-password/page.tsx} mirrors this value
+     * to check before spending a link. Nothing can enforce that across the two
+     * languages, so the number is pinned by a test on this side and the mirror
+     * names this constant in a comment.
+     */
+    public static final int MIN_PASSWORD_LENGTH = 8;
     private static final int REFRESH_TOKEN_BYTES = 32;
 
     private final UserRepository userRepository;
@@ -68,17 +100,41 @@ public class PasswordAuthService {
     @Autowired(required = false)
     private OrganizationService organizationService;
 
+    /**
+     * Optional FIELD injection rather than constructor injection: the table ships to
+     * both editions, but a slice test that never scanned the repository still has to be
+     * able to build this service.
+     */
     @Autowired(required = false)
-    private AuthMetrics authMetrics;
+    private com.apimarketplace.auth.repository.PasswordResetTokenRepository passwordResetTokenRepository;
 
+    /**
+     * The one door for login/signup telemetry: metric, audit row and product analytics
+     * in a single call, so the three cannot drift apart.
+     *
+     * <p>This replaced a bare {@code AuditLogger} field that was injected here and never
+     * once used, which is why self-hosted sign-ins bumped a counter and left NO audit
+     * trail at all, while cloud sign-ins left one. Optional, like the other collaborators
+     * above, so a slice test can still build this service by hand.
+     */
     @Autowired(required = false)
-    private AuditLogger auditLogger;
+    private AuthEventRecorder authEventRecorder;
 
     @Autowired(required = false)
     private UsernameValidator usernameValidator;
 
     // Rate limiting: email -> failed attempt count (1 minute window)
     private final Cache<String, Integer> loginAttempts = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofMinutes(1))
+            .maximumSize(10_000)
+            .build();
+
+    /**
+     * Addresses whose lockout has already been written to the audit trail, so a flood of
+     * refused attempts produces ONE signed row rather than one per request. Same window and
+     * same bound as the limiter it shadows; losing an entry costs one extra audit row.
+     */
+    private final Cache<String, Boolean> rateLimitAudited = Caffeine.newBuilder()
             .expireAfterWrite(Duration.ofMinutes(1))
             .maximumSize(10_000)
             .build();
@@ -106,9 +162,7 @@ public class PasswordAuthService {
         }
         email = email.trim().toLowerCase();
 
-        if (password == null || password.length() < 8) {
-            throw new IllegalArgumentException("Password must be at least 8 characters");
-        }
+        requireMinimumLength(password, "Password");
 
         if (userRepository.existsByEmail(email)) {
             throw new IllegalArgumentException("Email already registered");
@@ -128,7 +182,11 @@ public class PasswordAuthService {
         user.setEnabled(true);
         user.setEmailVerified(true);
         user.setRoles(isFirstUser ? Set.of("USER", "ADMIN") : Set.of("USER"));
-        user.setLastLoginAt(LocalDateTime.now());
+        LocalDateTime registeredAt = LocalDateTime.now();
+        user.setLastLoginAt(registeredAt);
+        // Registration issues tokens immediately, so it is also this account's first
+        // authentication (see the recordSignupAndLogin call below).
+        user.setLastAuthenticatedAt(registeredAt);
 
         if (firstName != null && !firstName.isBlank()) {
             user.setFirstName(firstName.trim());
@@ -153,7 +211,11 @@ public class PasswordAuthService {
         }
 
         logger.info("New local user registered: id={}, email={}", user.getId(), email);
-        if (authMetrics != null) authMetrics.signup("local", isFirstUser);
+        // Registration hands back a token pair straight away (EmbeddedAuthController), so
+        // it IS the first sign-in - same pairing the cloud path records.
+        if (authEventRecorder != null) {
+            authEventRecorder.recordSignupAndLogin(user.getId(), LOCAL_PROVIDER_TAG, isFirstUser);
+        }
         return user;
     }
 
@@ -174,9 +236,17 @@ public class PasswordAuthService {
         Integer attempts = loginAttempts.getIfPresent(email);
         if (attempts != null && attempts >= MAX_LOGIN_ATTEMPTS) {
             logger.warn("Login rate limited for email={}", email);
-            if (authMetrics != null) {
-                authMetrics.rateLimitHit("login");
-                authMetrics.loginFailure("local", "rate_limited");
+            // Once per lockout, not once per refused attempt. After the limiter arms, the
+            // attacker sets the rate, and an HMAC-signed audit row per request would be write
+            // amplification on the path meant to CONTAIN abuse, drowning the very trail a
+            // security review reads. The metrics still count every refusal; they are cheap.
+            if (authEventRecorder != null) {
+                if (rateLimitAudited.getIfPresent(email) == null) {
+                    rateLimitAudited.put(email, Boolean.TRUE);
+                    authEventRecorder.recordLoginRateLimited(LOCAL_PROVIDER_TAG);
+                } else {
+                    authEventRecorder.recordLoginFailure(LOCAL_PROVIDER_TAG, "rate_limited");
+                }
             }
             throw new AuthenticationException("Too many login attempts. Please try again later.");
         }
@@ -188,25 +258,37 @@ public class PasswordAuthService {
                 || !passwordEncoder.matches(password, user.getPasswordHash())) {
             // Increment failed attempts
             loginAttempts.put(email, (attempts != null ? attempts : 0) + 1);
-            if (authMetrics != null) authMetrics.loginFailure("local", "invalid_credentials");
+            if (authEventRecorder != null) authEventRecorder.recordLoginFailure(LOCAL_PROVIDER_TAG, "invalid_credentials");
             throw new AuthenticationException("Invalid email or password");
         }
 
         // Check account is enabled
         if (!user.isEnabled()) {
-            if (authMetrics != null) authMetrics.loginFailure("local", "disabled");
+            if (authEventRecorder != null) authEventRecorder.recordLoginFailure(LOCAL_PROVIDER_TAG, "disabled");
             throw new AuthenticationException("Account is disabled");
         }
 
         // Reset rate limit on success
         loginAttempts.invalidate(email);
 
-        // Update last login
-        user.setLastLoginAt(LocalDateTime.now());
+        // Both columns, because this IS the authentication instant. Cloud infers that
+        // moment from a token's auth_time claim; here it is literally now, and leaving
+        // last_authenticated_at alone would freeze it on self-hosted at whatever V495
+        // seeded at upgrade time, under a column comment promising it only moves forward.
+        LocalDateTime now = LocalDateTime.now();
+        user.setLastLoginAt(now);
+        // Guarded, because the column's contract is "moves forward only" and a clock that
+        // steps backwards (an NTP correction on a self-hosted box) would otherwise write a
+        // value that every later sign-in has to climb back over.
+        if (user.getLastAuthenticatedAt() == null || now.isAfter(user.getLastAuthenticatedAt())) {
+            user.setLastAuthenticatedAt(now);
+        }
         userRepository.save(user);
 
         logger.info("User logged in: id={}, email={}", user.getId(), email);
-        if (authMetrics != null) authMetrics.loginSuccess("local");
+        // One call, one sign-in. This path is already the authentication moment, so it
+        // needs no auth_time comparison: the cloud path infers what happens literally here.
+        if (authEventRecorder != null) authEventRecorder.recordLoginSuccess(user.getId(), LOCAL_PROVIDER_TAG);
         return user;
     }
 
@@ -368,17 +450,64 @@ public class PasswordAuthService {
             throw new AuthenticationException("Current password is incorrect");
         }
 
-        if (newPassword == null || newPassword.length() < 8) {
-            if (authMetrics != null) authMetrics.passwordChanged("failure");
-            throw new IllegalArgumentException("New password must be at least 8 characters");
-        }
+        validateNewPassword(newPassword);
 
         user.setPasswordHash(passwordEncoder.encode(newPassword));
         userRepository.save(user);
 
         // Revoke all refresh tokens on password change
         refreshTokenRepository.revokeAllByUserId(userId, LocalDateTime.now());
+        // And any pending reset link, for the same reason the reset flow burns
+        // them: a link minted before this change must not still open the account
+        // after it. The realistic case is someone who notices a stranger in their
+        // mailbox and changes their password from a live session; without this the
+        // stranger's link keeps working for the rest of the hour.
+        if (passwordResetTokenRepository != null) {
+            int burned = passwordResetTokenRepository.invalidateLiveTokens(userId, LocalDateTime.now());
+            if (burned > 0) {
+                logger.info("Password changed for user {}; {} pending reset link(s) invalidated",
+                        userId, burned);
+            }
+        }
         logger.info("Password changed for user {}, all refresh tokens revoked", userId);
+        if (authMetrics != null) authMetrics.passwordChanged("success");
+    }
+
+    /**
+     * Sets a password WITHOUT proving the old one, for the reset-by-e-mail flow.
+     *
+     * <p>Lives here rather than in {@code PasswordResetService} on purpose: this
+     * class is the only place in the service that writes {@code passwordHash},
+     * so the strength rule, the encoder strength and the "revoke every session"
+     * consequence cannot drift between the two ways a password can change. The
+     * caller has already proven possession of a single-use token; that is the
+     * authorisation, and it is the caller's job, not this method's.
+     *
+     * <p>Revoking the refresh tokens is not housekeeping. Someone resetting a
+     * password is often doing it BECAUSE a session is not theirs any more, and a
+     * reset that left the old refresh tokens alive would hand the account back
+     * to whoever holds them.
+     */
+    @Transactional
+    public void resetPasswordTo(Long userId, String newPassword) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
+        // Re-checked HERE, not only when the token was issued: an account can be
+        // suspended during the hour a link is live, and redeeming one afterwards
+        // would let whoever holds it rewrite a suspended account's password.
+        // PasswordResetService folds this into its uniform refusal message.
+        if (!user.isEnabled()) {
+            throw new IllegalArgumentException("User not found");
+        }
+
+        validateNewPassword(newPassword);
+
+        user.setPasswordHash(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+
+        refreshTokenRepository.revokeAllByUserId(userId, LocalDateTime.now());
+        logger.info("Password reset for user {}, all refresh tokens revoked", userId);
         if (authMetrics != null) authMetrics.passwordChanged("success");
     }
 
@@ -423,7 +552,46 @@ public class PasswordAuthService {
         return atIdx > 0 ? email.substring(0, atIdx) : email;
     }
 
-    private String hashToken(String rawToken) {
+    /**
+     * Throws if {@code newPassword} fails the rule, without writing anything.
+     *
+     * <p>Public because the reset flow needs to check the password BEFORE it
+     * spends the single-use token: it is the same rule, evaluated earlier, not a
+     * second copy of it. {@link #changePassword} and {@link #resetPasswordTo}
+     * both go through here so the rule and its message cannot drift.
+     */
+    public void validateNewPassword(String newPassword) {
+        try {
+            // The label differs from register's on purpose: "New password" is what
+            // a change or reset form asks for, "Password" is what a signup form
+            // asks for. Only the RULE is shared, which is the part that must not
+            // drift, so the condition lives in exactly one place.
+            requireMinimumLength(newPassword, "New password");
+        } catch (IllegalArgumentException e) {
+            if (authMetrics != null) authMetrics.passwordChanged("failure");
+            throw e;
+        }
+    }
+
+    /**
+     * The length rule itself, in one place, phrased for the form that asked.
+     *
+     * @param label how the caller's form names the field, so the message reads
+     *              naturally on signup as well as on a change or a reset
+     */
+    private static void requireMinimumLength(String password, String label) {
+        if (password == null || password.length() < MIN_PASSWORD_LENGTH) {
+            throw new IllegalArgumentException(
+                    label + " must be at least " + MIN_PASSWORD_LENGTH + " characters");
+        }
+    }
+
+    /**
+     * Package-private and static so {@link PasswordResetService} hashes its
+     * tokens with THIS construction rather than a second copy of it. Two
+     * implementations of one security primitive are two things to keep in step.
+     */
+    static String hashToken(String rawToken) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(rawToken.getBytes(StandardCharsets.UTF_8));

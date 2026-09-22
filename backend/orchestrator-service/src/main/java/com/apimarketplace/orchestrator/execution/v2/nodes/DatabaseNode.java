@@ -126,6 +126,7 @@ public class DatabaseNode extends BaseNode {
         resolvedParams.put("query", query);
         if (!queryParams.isEmpty()) resolvedParams.put("queryParams", queryParams);
         resolvedParams.put("timeout", timeout);
+
         resolvedParams.put("sslEnabled", sslEnabled);
 
         logger.info("Database node executing: nodeId={}, dbType={}, host={}, database={}, operation={}, itemId={}",

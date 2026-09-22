@@ -253,8 +253,8 @@ class PlanStorageQuotaSyncerTest {
             // Tenant sync (legacy path)
             verify(quotaService).updateLimits("42", 107_374_182_400L, 0.8);
             // Org sync (new path): one call per owned org
-            verify(quotaService).updateOrganizationLimits(personalOrgId.toString(), 107_374_182_400L, 0.8);
-            verify(quotaService).updateOrganizationLimits(teamOrgId.toString(), 107_374_182_400L, 0.8);
+            verify(quotaService).updateOrganizationLimits(personalOrgId.toString(), 107_374_182_400L, 0.8, "42");
+            verify(quotaService).updateOrganizationLimits(teamOrgId.toString(), 107_374_182_400L, 0.8, "42");
         }
 
         @Test
@@ -266,7 +266,7 @@ class PlanStorageQuotaSyncerTest {
             syncer.syncAfterCommit(42L, plan("STARTER", 1_073_741_824L));
 
             verify(quotaService).updateLimits("42", 1_073_741_824L, 0.8);
-            verify(quotaService, never()).updateOrganizationLimits(anyString(), anyLong(), anyDouble());
+            verify(quotaService, never()).updateOrganizationLimits(anyString(), anyLong(), anyDouble(), anyString());
         }
 
         @Test
@@ -281,7 +281,7 @@ class PlanStorageQuotaSyncerTest {
                     .doesNotThrowAnyException();
 
             verify(quotaService).updateLimits("42", 1_073_741_824L, 0.8);
-            verify(quotaService, never()).updateOrganizationLimits(anyString(), anyLong(), anyDouble());
+            verify(quotaService, never()).updateOrganizationLimits(anyString(), anyLong(), anyDouble(), anyString());
         }
 
         @Test
@@ -290,7 +290,7 @@ class PlanStorageQuotaSyncerTest {
             UUID orgId = UUID.randomUUID();
             when(organizationRepository.findByOwnerId(42L)).thenReturn(List.of(org(orgId)));
             doThrow(new RuntimeException("storage down"))
-                    .when(quotaService).updateOrganizationLimits(eq(orgId.toString()), anyLong(), anyDouble());
+                    .when(quotaService).updateOrganizationLimits(eq(orgId.toString()), anyLong(), anyDouble(), anyString());
 
             PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
 
@@ -298,7 +298,7 @@ class PlanStorageQuotaSyncerTest {
                     .doesNotThrowAnyException();
 
             // Tighten audit nit: ensure the call WAS attempted (a NO-OP impl would silently pass otherwise).
-            verify(quotaService).updateOrganizationLimits(eq(orgId.toString()), eq(1_073_741_824L), eq(0.8));
+            verify(quotaService).updateOrganizationLimits(eq(orgId.toString()), eq(1_073_741_824L), eq(0.8), eq("42"));
         }
 
         @Test
@@ -310,7 +310,7 @@ class PlanStorageQuotaSyncerTest {
                     .thenReturn(List.of(org(firstOrgId), org(secondOrgId)));
             // First org throws; second must STILL be attempted.
             doThrow(new RuntimeException("row-level lock contention on first org"))
-                    .when(quotaService).updateOrganizationLimits(eq(firstOrgId.toString()), anyLong(), anyDouble());
+                    .when(quotaService).updateOrganizationLimits(eq(firstOrgId.toString()), anyLong(), anyDouble(), anyString());
 
             PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
 
@@ -320,9 +320,9 @@ class PlanStorageQuotaSyncerTest {
             // Tenant sync untouched.
             verify(quotaService).updateLimits("42", 107_374_182_400L, 0.8);
             // First org WAS attempted (and threw).
-            verify(quotaService).updateOrganizationLimits(eq(firstOrgId.toString()), eq(107_374_182_400L), eq(0.8));
+            verify(quotaService).updateOrganizationLimits(eq(firstOrgId.toString()), eq(107_374_182_400L), eq(0.8), eq("42"));
             // CRITICAL: second org MUST have been synced despite first failure.
-            verify(quotaService).updateOrganizationLimits(eq(secondOrgId.toString()), eq(107_374_182_400L), eq(0.8));
+            verify(quotaService).updateOrganizationLimits(eq(secondOrgId.toString()), eq(107_374_182_400L), eq(0.8), eq("42"));
         }
     }
 
@@ -355,6 +355,140 @@ class PlanStorageQuotaSyncerTest {
         }
     }
 
+    /**
+     * {@code syncOrgAfterCommit} seeds the storage allowance of ONE organization, the one just
+     * created. Its whole reason to exist is the blast radius it does NOT have: workspace creation
+     * resolves the owner's plan through a narrower rule than a plan-change event does (a
+     * {@code past_due} owner resolves to FREE), so reusing the sweeping {@code syncAfterCommit}
+     * there would rewrite healthy 100 GB workspaces down to 100 MB.
+     */
+    @Nested
+    @DisplayName("syncOrgAfterCommit() - seed ONE new organization")
+    class NewOrgSeed {
+
+        private final UUID orgId = UUID.randomUUID();
+
+        @Test
+        @DisplayName("writes that org's limit only - never the tenant quota, never a sibling org")
+        void writesOnlyTheGivenOrg() {
+            PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
+
+            syncer.syncOrgAfterCommit(42L, orgId, plan("TEAM", 107_374_182_400L));
+
+            verify(quotaService).updateOrganizationLimits(orgId.toString(), 107_374_182_400L, 0.8, "42");
+            verify(quotaService, never()).updateLimits(anyString(), anyLong(), anyDouble());
+            verifyNoInteractions(organizationRepository);
+        }
+
+        @Test
+        @DisplayName("defers to afterCommit when a transaction is active")
+        void defersUntilCommit() {
+            PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
+
+            TransactionSynchronizationManager.initSynchronization();
+            syncer.syncOrgAfterCommit(42L, orgId, plan("TEAM", 107_374_182_400L));
+
+            // Nothing written yet: the workspace row must not exist if the creation rolls back.
+            verify(quotaService, never()).updateOrganizationLimits(anyString(), anyLong(), anyDouble(), anyString());
+
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(TransactionSynchronization::afterCommit);
+
+            verify(quotaService).updateOrganizationLimits(orgId.toString(), 107_374_182_400L, 0.8, "42");
+        }
+
+        @Test
+        @DisplayName("microservice path routes the seed through storage-service")
+        void routesThroughStorageService() {
+            PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
+            ReflectionTestUtils.setField(syncer, "storageClient", storageClient);
+            when(storageClient.updateOrganizationStorageLimits(orgId.toString(), 107_374_182_400L, 0.8, "42"))
+                    .thenReturn(true);
+
+            syncer.syncOrgAfterCommit(42L, orgId, plan("TEAM", 107_374_182_400L));
+
+            verify(storageClient).updateOrganizationStorageLimits(orgId.toString(), 107_374_182_400L, 0.8, "42");
+            verify(quotaService, never()).updateOrganizationLimits(anyString(), anyLong(), anyDouble(), anyString());
+        }
+
+        @Test
+        @DisplayName("a failing write is swallowed - workspace creation must not fail on a storage outage")
+        void swallowsWriteFailure() {
+            PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
+            doThrow(new RuntimeException("storage down"))
+                    .when(quotaService).updateOrganizationLimits(anyString(), anyLong(), anyDouble());
+
+            assertThatCode(() -> syncer.syncOrgAfterCommit(42L, orgId, plan("TEAM", 107_374_182_400L)))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("null org id writes nothing")
+        void nullOrgIdWritesNothing() {
+            PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
+
+            syncer.syncOrgAfterCommit(42L, null, plan("TEAM", 107_374_182_400L));
+
+            verifyNoInteractions(quotaService);
+        }
+
+        @Test
+        @DisplayName("null plan writes nothing")
+        void nullPlanWritesNothing() {
+            PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
+
+            syncer.syncOrgAfterCommit(42L, orgId, null);
+
+            verifyNoInteractions(quotaService);
+        }
+
+        @Test
+        @DisplayName("null user id writes nothing")
+        void nullUserIdWritesNothing() {
+            PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
+
+            syncer.syncOrgAfterCommit(null, orgId, plan("TEAM", 107_374_182_400L));
+
+            verifyNoInteractions(quotaService);
+        }
+
+        @Test
+        @DisplayName("a plan with zero storage (CREDIT_PACK) writes nothing rather than zeroing the org")
+        void zeroStoragePlanWritesNothing() {
+            PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
+
+            syncer.syncOrgAfterCommit(42L, orgId, plan("CREDIT_PACK", 0L));
+
+            verifyNoInteractions(quotaService);
+        }
+
+        @Test
+        @DisplayName("a plan with no storage opinion (null) writes nothing rather than overriding")
+        void nullStoragePlanWritesNothing() {
+            PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
+
+            syncer.syncOrgAfterCommit(42L, orgId, plan("LEGACY", null));
+
+            verifyNoInteractions(quotaService);
+        }
+
+        @Test
+        @DisplayName("captures maxBytes inside the session - a later entity mutation cannot leak in")
+        void snapshotsPlanBeforeCommit() {
+            PlanStorageQuotaSyncer syncer = new PlanStorageQuotaSyncer(quotaService, organizationRepository);
+            Plan p = plan("TEAM", 107_374_182_400L);
+
+            TransactionSynchronizationManager.initSynchronization();
+            syncer.syncOrgAfterCommit(42L, orgId, p);
+            p.setIncludedStorageBytes(999_999_999_999L);
+
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(TransactionSynchronization::afterCommit);
+
+            verify(quotaService).updateOrganizationLimits(orgId.toString(), 107_374_182_400L, 0.8, "42");
+        }
+    }
+
     @Nested
     @DisplayName("Microservice path - routes through storage-service (HTTP), not in-process")
     class MicroservicePath {
@@ -372,13 +506,13 @@ class PlanStorageQuotaSyncerTest {
             UUID orgId = UUID.randomUUID();
             when(organizationRepository.findByOwnerId(42L)).thenReturn(List.of(orgWithId(orgId)));
             when(storageClient.updateTenantStorageLimits("42", 1_073_741_824L, 0.8)).thenReturn(true);
-            when(storageClient.updateOrganizationStorageLimits(orgId.toString(), 1_073_741_824L, 0.8))
+            when(storageClient.updateOrganizationStorageLimits(orgId.toString(), 1_073_741_824L, 0.8, "42"))
                     .thenReturn(true);
 
             syncerWithClient().syncAfterCommit(42L, plan("STARTER", 1_073_741_824L));
 
             verify(storageClient).updateTenantStorageLimits("42", 1_073_741_824L, 0.8);
-            verify(storageClient).updateOrganizationStorageLimits(orgId.toString(), 1_073_741_824L, 0.8);
+            verify(storageClient).updateOrganizationStorageLimits(orgId.toString(), 1_073_741_824L, 0.8, "42");
             // The whole point of the architectural fix: auth no longer writes the storage schema itself.
             verifyNoInteractions(quotaService);
         }

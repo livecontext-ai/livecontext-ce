@@ -65,4 +65,37 @@ describe('FeatureLabel', () => {
     expect(screen.getByText('Label')).toBeTruthy();
     expect(screen.queryByText('Label||tip')).toBeNull();
   });
+
+  it('pins the "i" to the right of the row, so a wrapping label cannot pull it inward', () => {
+    // The defect: the icon used to sit immediately after the last word, which
+    // looks right-aligned only while every label is one line. As soon as one
+    // wraps, its icon lands mid-row while its neighbours' sit at the edge.
+    // The row is a full-width flex line and the icon is its LAST item, pushed
+    // out by justify-between - the only arrangement jsdom can hold us to.
+    const { container } = render(
+      <FeatureLabel feature="A feature whose label is long enough to wrap onto a second line||why" />
+    );
+
+    const row = container.firstElementChild as HTMLElement;
+    expect(row.className).toContain('flex');
+    expect(row.className).toContain('justify-between');
+    // Width to fill, or justify-between has nothing to push against.
+    expect(row.className).toContain('flex-1');
+    const icon = screen.getByRole('button', {
+      name: 'A feature whose label is long enough to wrap onto a second line',
+    });
+    expect(row.lastElementChild).toBe(icon);
+    // Top-aligned, so the icon stays on the label's FIRST line when it wraps.
+    expect(row.className).toContain('items-start');
+  });
+
+  it('bolds a figure the tooltip marks, and shows no marker to the reader', () => {
+    render(<FeatureLabel feature="5,000 credits per month||About **80 credits** for a plain question." />);
+
+    fireEvent.focus(screen.getByRole('button', { name: '5,000 credits per month' }));
+    const bolded = Array.from(document.body.querySelectorAll('strong'))
+      .map((node) => node.textContent);
+    expect(bolded).toContain('80 credits');
+    expect(document.body.textContent).not.toContain('**');
+  });
 });

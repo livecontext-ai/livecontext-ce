@@ -18,6 +18,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.math.BigDecimal;
 import java.util.Optional;
 
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.util.ReflectionTestUtils;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -54,6 +57,8 @@ class CreditServiceConsumptionAuditTest {
 
     private static final Long USER_ID = 42L;
     private static final BigDecimal INITIAL_BALANCE = new BigDecimal("100.0000");
+    private static final LlmTokenBreakdown REJECTED_USAGE =
+            new LlmTokenBreakdown(36402, 228, 0, 0, 18048, 0);
 
     private Subscription createSubscription(BigDecimal remainingCredits) {
         Subscription sub = new Subscription();
@@ -617,6 +622,51 @@ class CreditServiceConsumptionAuditTest {
             assertThat(rejected.getSourceType()).isEqualTo("AGENT_EXECUTION_REJECTED");
             assertThat(rejected.getAmount()).isEqualByComparingTo(BigDecimal.ZERO);
             assertThat(rejected.getCachedTokens()).isEqualTo(18048);
+        }
+
+        @Test
+        @DisplayName("the rejection audit row is written OUTSIDE the consume transaction")
+        void rejectionAuditRowIsWrittenInItsOwnTransaction() {
+            CreditRejectionAuditWriter writer = mock(CreditRejectionAuditWriter.class);
+            ReflectionTestUtils.setField(service, "rejectionAuditWriter", writer);
+            givenAnEmptyWallet();
+
+            service.consumeForAgent(USER_ID, "exec-own-tx", "deepseek", "deepseek-chat",
+                    REJECTED_USAGE, "AGENT_EXECUTION");
+
+            // source_id is unique across the whole ledger, so a retried turn on an empty wallet
+            // writes this same key twice. In the consume transaction the second write poisons it
+            // and the commit throws past the catch below, which is how ten refused turns became
+            // twenty HTTP 500s in production. It has to land somewhere else.
+            verify(writer).write(ledgerCaptor.capture());
+            assertThat(ledgerCaptor.getValue().getSourceType()).isEqualTo("AGENT_EXECUTION_REJECTED");
+            verify(ledgerRepository, never()).save(any(CreditLedgerEntry.class));
+        }
+
+        @Test
+        @DisplayName("an audit row that cannot be written still yields a clean insufficient-credits answer")
+        void aFailedRejectionAuditDoesNotBecomeAServerError() {
+            CreditRejectionAuditWriter writer = mock(CreditRejectionAuditWriter.class);
+            doThrow(new DataIntegrityViolationException("idx_cl_source_id_unique"))
+                    .when(writer).write(any(CreditLedgerEntry.class));
+            ReflectionTestUtils.setField(service, "rejectionAuditWriter", writer);
+            givenAnEmptyWallet();
+
+            CreditConsumeResult result = service.consumeForAgent(
+                    USER_ID, "exec-dup", "deepseek", "deepseek-chat", REJECTED_USAGE, "AGENT_EXECUTION");
+
+            // The promise the code always made and could not keep while the audit shared this
+            // transaction: a best-effort audit never hides the primary signal.
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).contains("Insufficient credits");
+        }
+
+        /** A balance too low to cover the turn, which is what routes it to the rejection branch. */
+        private void givenAnEmptyWallet() {
+            when(subscriptionRepository.findActiveByUserIdForUpdate(USER_ID))
+                    .thenReturn(Optional.of(createSubscription(new BigDecimal("0.5000"))));
+            when(pricingService.calculateCost("deepseek", "deepseek-chat", REJECTED_USAGE))
+                    .thenReturn(new BigDecimal("10.3324"));
         }
 
         @Test

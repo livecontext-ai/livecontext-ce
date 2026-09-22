@@ -5,13 +5,14 @@ import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.OutputUnwrapper;
 import com.apimarketplace.orchestrator.domain.execution.NodeStatus;
 import com.apimarketplace.orchestrator.execution.v2.nodes.NodeExecutionResult;
+import com.apimarketplace.orchestrator.execution.v2.nodes.SplitParamsReport;
+import com.apimarketplace.orchestrator.services.template.ResolvedValuePreview;
 import com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -96,7 +97,8 @@ public class SplitNodeExecutor {
         if (evaluation.items() == null) {
             logger.error("[SplitExecutor] Split source did not resolve to an iterable: nodeId={}, expression={}, reason={}",
                 nodeId, sourceExpression, evaluation.diagnostic());
-            return createErrorResult(nodeId, evaluation.diagnostic());
+            return createErrorResult(nodeId, evaluation.diagnostic(), sourceExpression, maxItems,
+                splitStrategy, evaluation.resolvedPreview());
         }
         List<Object> items = evaluation.items();
 
@@ -111,7 +113,8 @@ public class SplitNodeExecutor {
             logger.info("[SplitExecutor] Source expression evaluated to empty list: nodeId={}", nodeId);
             // Still create context (empty), split is COMPLETED
             contextManager.createContext(runId, nodeId, workflowItemIndex, parentScopeKey, items, epochOf(context));
-            return createSuccessResult(nodeId, items, "empty_list", sourceExpression, maxItems, splitStrategy);
+            return createSuccessResult(nodeId, items, "empty_list", sourceExpression, maxItems, splitStrategy,
+                evaluation.resolvedPreview());
         }
 
         // 4. Create SplitContext with items (scoped to workflow item and parent scope)
@@ -121,7 +124,8 @@ public class SplitNodeExecutor {
             items.size(), nodeId, splitContext.splitNodeId());
 
         // 5. Return COMPLETED - split job is done
-        return createSuccessResult(nodeId, items, "items_spawned", sourceExpression, maxItems, splitStrategy);
+        return createSuccessResult(nodeId, items, "items_spawned", sourceExpression, maxItems, splitStrategy,
+            evaluation.resolvedPreview());
     }
 
     /**
@@ -142,12 +146,12 @@ public class SplitNodeExecutor {
     private ListEvaluation evaluateSourceExpression(String expression, ExecutionContext context) {
         if (expression == null || expression.isBlank()) {
             logger.warn("[SplitExecutor] Source expression is null or blank");
-            return ListEvaluation.failure("Split `list` expression is null or blank.");
+            return ListEvaluation.failure("Split `list` expression is null or blank.", null);
         }
 
         if (templateAdapter == null) {
             logger.error("[SplitExecutor] TemplateAdapter is not configured");
-            return ListEvaluation.failure("Split template adapter is not configured.");
+            return ListEvaluation.failure("Split template adapter is not configured.", null);
         }
 
         Object result;
@@ -157,37 +161,47 @@ public class SplitNodeExecutor {
             logger.error("[SplitExecutor] Failed to evaluate expression: expression={}, error={}",
                 expression, e.getMessage(), e);
             return ListEvaluation.failure(
-                "Split `list` expression `" + expression + "` threw during evaluation: " + e.getMessage());
+                "Split `list` expression `" + expression + "` threw during evaluation: " + e.getMessage(),
+                null);
         }
+
+        // What the expression resolved to, described once here and carried to every exit
+        // path below. It is taken from THIS evaluation - the one that decided how many
+        // items the split spawns - never from a second resolution pass.
+        String resolvedPreview = ResolvedValuePreview.describe(result);
 
         // null: missing step output or unresolved template - distinct from a legitimately empty list.
         if (result == null) {
             return ListEvaluation.failure(
                 "Split `list` expression `" + expression + "` resolved to null. "
-                    + "Check the upstream node has completed and the reference path matches its output schema.");
+                    + "Check the upstream node has completed and the reference path matches its output schema.",
+                resolvedPreview);
         }
 
         // List/Collection/array → pass through; wrapper Map → unwrap on an array-bearing key.
         Optional<List<Object>> extracted = OutputUnwrapper.tryUnwrapToList(result);
         if (extracted.isPresent()) {
-            return ListEvaluation.success(extracted.get());
+            return ListEvaluation.success(extracted.get(), resolvedPreview);
         }
 
         // Recognized-key-but-not-array, no recognized key, or a primitive - fail loud, never wrap.
-        return ListEvaluation.failure(OutputUnwrapper.describeNonListShape(result, expression));
+        return ListEvaluation.failure(OutputUnwrapper.describeNonListShape(result, expression), resolvedPreview);
     }
 
     /**
      * Carrier for the list-evaluation outcome: {@code items} on success, {@code diagnostic} on
      * failure. Mirrors {@code SplitNode.EvaluationResult} so callers surface the real reason to the
      * failure output instead of a generic "Failed to evaluate" string.
+     *
+     * @param resolvedPreview what the expression resolved to, bounded for display; null when no
+     *                        evaluation took place (a blank expression, no adapter wired)
      */
-    private record ListEvaluation(List<Object> items, String diagnostic) {
-        static ListEvaluation success(List<Object> items) {
-            return new ListEvaluation(items, null);
+    private record ListEvaluation(List<Object> items, String diagnostic, String resolvedPreview) {
+        static ListEvaluation success(List<Object> items, String resolvedPreview) {
+            return new ListEvaluation(items, null, resolvedPreview);
         }
-        static ListEvaluation failure(String diagnostic) {
-            return new ListEvaluation(null, diagnostic);
+        static ListEvaluation failure(String diagnostic, String resolvedPreview) {
+            return new ListEvaluation(null, diagnostic, resolvedPreview);
         }
     }
 
@@ -206,7 +220,7 @@ public class SplitNodeExecutor {
      */
     private NodeExecutionResult createSuccessResult(String nodeId, List<Object> items, String reason,
                                                      String sourceExpression, int maxItems,
-                                                     String splitStrategy) {
+                                                     String splitStrategy, String listResolved) {
         Map<String, Object> output = new HashMap<>();
         output.put(ExecutionMetadataKeys.NODE_TYPE, "SPLIT");
         output.put("split_id", nodeId);
@@ -217,23 +231,17 @@ public class SplitNodeExecutor {
 
         // Persist resolved configuration as resolved_params for the inspector panel.
         // Without this, the split node shows empty "Resolved parameters" in the run view.
-        // Keys follow the PLAN vocabulary (list / maxItems / splitStrategy), which is
-        // what the builder form writes and what the inspector labels. They used to be
-        // source_expression / max_items / item_count, so the same three settings had
-        // three different names across the form, this executor and SplitNode - and two
-        // of them had no label, reaching the Params column as raw keys.
-        Map<String, Object> resolvedParams = new LinkedHashMap<>();
-        if (sourceExpression != null) {
-            resolvedParams.put("list", sourceExpression);
-        }
-        if (maxItems > 0) {
-            resolvedParams.put("maxItems", maxItems);
-        }
-        if (splitStrategy != null) {
-            resolvedParams.put("splitStrategy", splitStrategy);
-        }
-        resolvedParams.put("itemCount", items.size());
-        output.put("resolved_params", resolvedParams);
+        // Keys and their meanings come from SplitParamsReport, shared with SplitNode so
+        // the two producers of a split's parameters describe one node one way. They used
+        // to be source_expression / max_items / item_count here, so the same three
+        // settings had three different names across the form, this executor and SplitNode.
+        //
+        // `listResolved` matters most on the path this method is reached with an EMPTY
+        // list: "the expression resolved to an empty array" and "it resolved to an object
+        // the split could not iterate" are the two things a reader of a split that
+        // spawned nothing is trying to tell apart, and neither was reported.
+        output.put("resolved_params", SplitParamsReport.build(
+            sourceExpression, maxItems, splitStrategy, listResolved, items.size()));
 
         return new NodeExecutionResult(
             nodeId,
@@ -247,15 +255,23 @@ public class SplitNodeExecutor {
 
     /**
      * Creates an error result for failed split execution.
+     *
+     * <p>Reports the whole configuration, not just the error. A split that failed is
+     * the case where the Params column is opened, and it used to hold one key - the
+     * error message the Output column already carries - so the reader learnt nothing
+     * from the panel they went to. `listResolved` is the shape that could not be
+     * iterated, which is what the error names but does not show.
      */
-    private NodeExecutionResult createErrorResult(String nodeId, String errorMessage) {
+    private NodeExecutionResult createErrorResult(String nodeId, String errorMessage,
+                                                   String sourceExpression, int maxItems,
+                                                   String splitStrategy, String listResolved) {
         Map<String, Object> output = new HashMap<>();
         output.put(ExecutionMetadataKeys.NODE_TYPE, "SPLIT");
         output.put("split_id", nodeId);
         output.put("error", errorMessage);
-        // Persist minimal resolved_params even on failure for inspector visibility
-        Map<String, Object> resolvedParams = new LinkedHashMap<>();
-        resolvedParams.put("error", errorMessage);
+        Map<String, Object> resolvedParams = SplitParamsReport.build(
+            sourceExpression, maxItems, splitStrategy, listResolved, null);
+        SplitParamsReport.putError(resolvedParams, errorMessage);
         output.put("resolved_params", resolvedParams);
 
         return new NodeExecutionResult(
@@ -303,7 +319,7 @@ public class SplitNodeExecutor {
 
         if (items == null) {
             logger.error("[SplitExecutor] Items list is null: nodeId={}", nodeId);
-            return createErrorResult(nodeId, "Items list is null");
+            return createErrorResult(nodeId, "Items list is null", null, maxItems, null, null);
         }
 
         // Apply maxItems limit if specified
@@ -317,7 +333,7 @@ public class SplitNodeExecutor {
         if (effectiveItems.isEmpty()) {
             logger.info("[SplitExecutor] Items list is empty: nodeId={}", nodeId);
             contextManager.createContext(runId, nodeId, workflowItemIndex, parentScopeKey, effectiveItems, epochOf(context));
-            return createSuccessResult(nodeId, effectiveItems, "empty_list", null, maxItems, null);
+            return createSuccessResult(nodeId, effectiveItems, "empty_list", null, maxItems, null, null);
         }
 
         // Create SplitContext with items
@@ -326,7 +342,7 @@ public class SplitNodeExecutor {
         logger.info("[SplitExecutor] Split spawned {} items (from pre-resolved): nodeId={}, contextKey={}",
             effectiveItems.size(), nodeId, splitContext.splitNodeId());
 
-        return createSuccessResult(nodeId, effectiveItems, "items_spawned", null, maxItems, null);
+        return createSuccessResult(nodeId, effectiveItems, "items_spawned", null, maxItems, null, null);
     }
 
     /**

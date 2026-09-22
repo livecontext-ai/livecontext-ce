@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -868,10 +869,13 @@ class StripeBillingServiceTest {
             when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
             when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.empty());
 
-            // No existing billing customer -> ensureValidStripeCustomer creates one
+            // No existing billing customer. ensureValidStripeCustomer does NOT create one here:
+            // the row is taken at the save point, AFTER the Stripe call, so a concurrent first
+            // checkout waits on that key for a statement rather than for an HTTP round-trip.
             BillingCustomer newBc = new BillingCustomer(user, "stripe");
             newBc.setId(1L);
             when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+            when(billingCustomerRepository.findOrCreate(USER_ID, "stripe")).thenReturn(newBc);
             when(nonceUtil.generateNonce(USER_ID)).thenReturn(NONCE_VALUE);
 
             Customer createdCustomer = mock(Customer.class);
@@ -893,6 +897,15 @@ class StripeBillingServiceTest {
             assertThat(result).isEqualTo("https://checkout.stripe.com/new");
             verify(customerService).create(any(CustomerCreateParams.class));
             verify(billingCustomerRepository).save(any(BillingCustomer.class));
+
+            // Ordering IS the fix, so pin it. The unique key on billing_customer.user_id must be
+            // taken AFTER the Stripe customer call, because whoever loses that key waits on it
+            // until this transaction commits, and everything above it is time they wait through.
+            // Without this assertion, moving findOrCreate back to the top of
+            // ensureValidStripeCustomer leaves every other assertion in this class green.
+            InOrder keyTakenLate = inOrder(customerService, billingCustomerRepository);
+            keyTakenLate.verify(customerService).create(any(CustomerCreateParams.class));
+            keyTakenLate.verify(billingCustomerRepository).findOrCreate(USER_ID, "stripe");
         }
 
         @Test

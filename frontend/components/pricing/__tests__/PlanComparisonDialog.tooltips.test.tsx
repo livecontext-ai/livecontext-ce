@@ -20,6 +20,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, act, fireEvent } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
+import { CHAT_EXCHANGE_CREDITS, PRICING_BASIS_MODEL } from '@/lib/billing/pricing-constants';
 import en from '@/messages/en.json';
 import fr from '@/messages/fr.json';
 import de from '@/messages/de.json';
@@ -90,6 +91,34 @@ function openEveryTooltip(): string[] {
   return texts;
 }
 
+/**
+ * What ONE named row's "i" says, scoped to that row.
+ *
+ * <p>The sweep above pools every tooltip in the dialog, which was fine while each row
+ * priced a different unit. It is not any more: the credits row and the AI-allowance row
+ * now quote the same figure, the same basis model and the same sentence, so an assertion
+ * against the pooled text is satisfied by EITHER of them and would stay green with the
+ * credits row blanked. Proven, not assumed: replacing that message with a figure-free
+ * sentence left the whole file passing.
+ */
+function tooltipOfRow(rowId: string): string {
+  const row = document.body.querySelector(`[data-testid="plan-comparison-row-${rowId}"]`);
+  expect(row, `the ${rowId} row is not in the dialog`).toBeTruthy();
+  const trigger = row!.querySelector('button:has(svg.lucide-info)')
+    ?? Array.from(row!.querySelectorAll('button')).find((b) => b.querySelector('svg.lucide-info'));
+  expect(trigger, `the ${rowId} row carries no info button`).toBeTruthy();
+  act(() => {
+    fireEvent.focus(trigger as HTMLElement);
+  });
+  const text = Array.from(document.body.querySelectorAll('[role="tooltip"]'))
+    .map((tip) => tip.textContent ?? '')
+    .join(' ');
+  act(() => {
+    fireEvent.blur(trigger as HTMLElement);
+  });
+  return text;
+}
+
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
@@ -123,14 +152,28 @@ describe('the comparison table renders every tooltip it offers', () => {
       openPlanComparison();
     });
 
-    const text = openEveryTooltip().join(' ');
-    // The three per-conversation figures the tooltip interpolates. If any value
-    // were missing, next-intl would have rendered the key instead, and if the
-    // tooltip were absent the sweep above would prove nothing.
-    for (const figure of ['80', '300', '3']) {
-      expect(text, `the credits tooltip is missing the ${figure}-credit figure`).toContain(figure);
-    }
-    expect(text).toContain('Credits pay for what the models and tools actually process');
+    // Scoped to the credits ROW, not to the pooled sweep: its neighbour quotes the same
+    // figure and the same basis model, so a pooled assertion cannot tell which row
+    // produced them and stays green with this one blanked.
+    const text = tooltipOfRow('credits');
+    // The figure the credits "i" interpolates. If the value were missing, next-intl
+    // would have rendered the key instead, and if the tooltip were absent the sweep
+    // above would prove nothing.
+    // Derived from the constant, not restated: a re-price must not fail this test, and
+    // a tooltip that stopped interpolating must still fail it.
+    expect(
+      text,
+      `the credits tooltip is missing the ${CHAT_EXCHANGE_CREDITS}-credit figure`,
+    ).toContain(CHAT_EXCHANGE_CREDITS.toLocaleString('en'));
+    // The sentence that makes the figures readable as measurements rather than
+    // allowances. It is the voice every credit tooltip now uses, here and in the
+    // model pickers, so a tooltip that drifted back to abstract copy fails here.
+    expect(text).toContain('An estimate from real usage');
+    // And the model they were priced on, which is the half that keeps the estimate
+    // honest now that the basis is the lightweight end rather than the top of the range.
+    expect(text).toContain(PRICING_BASIS_MODEL);
+    // And the emphasis marker never reaches a reader: FeatureLabel renders it.
+    expect(text).not.toContain('**');
     expect(errors).toEqual([]);
   });
 

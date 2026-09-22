@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { conversationApi, Message } from '@/lib/api/conversationApi';
+import { reconcileMessageIdentity } from '@/lib/utils/messageUtils';
 import { orchestratorApi } from '@/lib/api';
 import { useStreaming } from '@/contexts/StreamingContext';
 import { SelectedModel, getEffectiveDefaultSelectedModel } from '@/hooks/useModels';
@@ -95,7 +96,8 @@ export function useWorkflowChat({
             try {
               const messagesData = await conversationApi.getRecentMessagesAsc(convId);
               if (Array.isArray(messagesData)) {
-                setMessages(messagesData);
+                // Identity-preserving: the reconciliation must not repaint the thread.
+                setMessages(prev => reconcileMessageIdentity(prev, messagesData));
               }
             } catch (err) {
               console.error('[useWorkflowChat] Failed to reload messages on reconnect:', err);
@@ -232,7 +234,9 @@ export function useWorkflowChat({
             try {
               const messagesData = await conversationApi.getRecentMessagesAsc(convId);
               if (Array.isArray(messagesData)) {
-                setMessages(messagesData);
+                // Identity-preserving: only the bubbles that actually changed re-render, so
+                // picking up the persisted tool calls costs no visible refresh.
+                setMessages(prev => reconcileMessageIdentity(prev, messagesData));
                 console.log('[useWorkflowChat] 📝 Messages reloaded from DB, count:', messagesData.length);
               }
             } catch (err) {

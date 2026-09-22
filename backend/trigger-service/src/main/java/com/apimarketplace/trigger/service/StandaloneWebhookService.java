@@ -1,5 +1,11 @@
 package com.apimarketplace.trigger.service;
 
+import java.util.Optional;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.trigger.security.TriggerTokenAtRestBackfill;
+
 import com.apimarketplace.common.security.CredentialEncryptionService;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.trigger.client.dto.StandaloneWebhookDto;
@@ -42,6 +48,14 @@ public class StandaloneWebhookService {
 
     @Value("${orchestrator.webhook.base-url:http://localhost:8080}")
     private String baseUrl;
+
+    /**
+     * Read-only plaintext fallback for a webhook row still stored in clear (pre-2026-09-17) when its hash lookup misses.
+     * Optional so a unit test can build the service without a database; in a Spring context
+     * the component is always present (same package tree).
+     */
+    @Autowired(required = false)
+    private TriggerTokenAtRestBackfill tokenBackfill;
 
     public StandaloneWebhookService(StandaloneWebhookRepository webhookRepository,
                                     WebhookCallLogRepository callLogRepository,
@@ -207,7 +221,8 @@ public class StandaloneWebhookService {
     }
 
     public Optional<StandaloneWebhookEntity> findByToken(String token) {
-        return webhookRepository.findByToken(token);
+        return TokenAtRest.lookup(token, webhookRepository::findByTokenHash,
+                t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(TriggerTokenAtRestBackfill.STANDALONE_WEBHOOKS, t, webhookRepository::findLegacyPlaintext));
     }
 
     public List<StandaloneWebhookEntity> findByWorkflowId(UUID workflowId) {

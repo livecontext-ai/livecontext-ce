@@ -641,10 +641,14 @@ export const ConversationSidebar = memo(function ConversationSidebar({
                     onClick={(e) => {
                       e.stopPropagation();
                       setOpenMenuId(null);
+                      // No per-agent page exists: `/app/agent/<id>` 404s. The agent opens
+                      // in the right-side panel through the `?openAgent=<id>` deep link
+                      // handled by AgentTable (same entry point as the notification rows).
+                      const target = `/app/agent?openAgent=${conversation.agentId}`;
                       if (onNavigate) {
-                        onNavigate(`/app/agent/${conversation.agentId}`);
+                        onNavigate(target);
                       } else {
-                        router.push(`/app/agent/${conversation.agentId}`);
+                        router.push(target);
                       }
                     }}
                     className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors text-theme-primary hover:bg-gray-100 dark:hover:bg-gray-800"

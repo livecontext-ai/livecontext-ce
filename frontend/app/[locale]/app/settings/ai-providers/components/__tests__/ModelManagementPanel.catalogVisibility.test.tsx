@@ -22,6 +22,16 @@ const mocks = vi.hoisted(() => ({
   deleteOverride: vi.fn(),
   resetAll: vi.fn(),
   clearModelsCache: vi.fn(),
+  // The panel reads the execution links once so each row can show its routing
+  // badge; unrouted catalogs answer with an empty list.
+  listExecutionLinks: vi.fn().mockResolvedValue([]),
+  saveExecutionLink: vi.fn(),
+  deleteExecutionLink: vi.fn(),
+}));
+
+// The per-model execution-link badge translates its own labels.
+vi.mock('next-intl', () => ({
+  useTranslations: (ns?: string) => (k: string) => (ns ? `${ns}.${k}` : k),
 }));
 
 vi.mock('@/lib/api/model-config.service', () => ({
@@ -32,6 +42,9 @@ vi.mock('@/lib/api/model-config.service', () => ({
     bulkUpdateRankings: mocks.bulkUpdateRankings,
     deleteOverride: mocks.deleteOverride,
     resetAll: mocks.resetAll,
+    listExecutionLinks: mocks.listExecutionLinks,
+    saveExecutionLink: mocks.saveExecutionLink,
+    deleteExecutionLink: mocks.deleteExecutionLink,
   },
 }));
 vi.mock('@/hooks/useModels', () => ({ clearModelsCache: mocks.clearModelsCache }));
@@ -73,7 +86,8 @@ describe('ModelManagementPanel - full-catalog visibility + not-configured badge'
     await screen.findByTestId('model-toggle-openai-gpt-5');
     expect(screen.getByTestId('model-toggle-perplexity-sonar')).toBeInTheDocument();
     // Exactly one "not configured" badge, for the unavailable row.
-    expect(screen.getAllByText('modelConfig.notConfigured')).toHaveLength(1);
+    // An icon since the badges were thinned out, so the mark is the accessible name.
+    expect(screen.getAllByLabelText('modelConfig.notConfigured')).toHaveLength(1);
   });
 
   it('does NOT badge a bridge row as not-configured (bridges use their own availability)', async () => {
@@ -83,7 +97,7 @@ describe('ModelManagementPanel - full-catalog visibility + not-configured badge'
 
     render(<ModelManagementPanel t={t} />);
     await screen.findByTestId('model-toggle-claude-code-claude-code-model');
-    expect(screen.queryByText('modelConfig.notConfigured')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('modelConfig.notConfigured')).not.toBeInTheDocument();
   });
 });
 

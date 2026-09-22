@@ -21,7 +21,7 @@ import java.util.Map;
  * 2. CONSECUTIVE CALLS (total tool calls regardless of signature):
  *    - After 15 calls: reminder (suggest workflow)
  *    - After 25 calls: strong recommendation
- *    - After 35 calls: final warning (1 iteration left)
+ *    - After 35 calls: final warning (5 calls before the hard stop)
  *    - After 40 calls: hard stop
  *
  * Key insight: Repetitive patterns should be automated via workflows.
@@ -203,7 +203,7 @@ public class LoopDetector {
                 totalConsecutiveCalls);
             return ConsecutiveResult.STOP;
         } else if (totalConsecutiveCalls >= consecutiveFinal) {
-            log.warn("🚨 [CONSECUTIVE FINAL] {} tool calls - 1 iteration left before stop",
+            log.warn("🚨 [CONSECUTIVE FINAL] {} tool calls - prioritize completion before the hard stop",
                 totalConsecutiveCalls);
             return ConsecutiveResult.FINAL_WARNING;
         } else if (totalConsecutiveCalls >= consecutiveStrong) {
@@ -239,13 +239,14 @@ public class LoopDetector {
                 totalConsecutiveCalls
             );
             case STRONG_RECOMMENDATION -> String.format(
-                "[RECOMMEND] %d calls. SHOULD: respond with results OR suggest workflow. " +
-                "Remaining: %d.",
+                "[RECOMMEND] %d calls. Prioritize completing and verifying the original task. " +
+                "Reuse results; avoid exploration. Hard limit in %d calls.",
                 totalConsecutiveCalls, remaining
             );
             case FINAL_WARNING -> String.format(
-                "[LAST CHANCE] %d calls. 1 iteration left. STOP tools, RESPOND NOW.",
-                totalConsecutiveCalls
+                "[LAST CHANCE] %d calls. Hard limit in %d calls. Use the remaining budget for " +
+                "essential completion and verification; report exact unfinished steps if it is insufficient.",
+                totalConsecutiveCalls, remaining
             );
             case STOP -> String.format(
                 "[TERMINATED] %d calls limit. Respond NOW with results.",

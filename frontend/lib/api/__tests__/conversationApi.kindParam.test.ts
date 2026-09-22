@@ -72,3 +72,13 @@ describe('conversationApi.getConversations - the kind narrowing', () => {
     expect(page).toMatchObject({ content: [], totalElements: 0 });
   });
 });
+
+describe('conversationApi.searchConversations - pagination', () => {
+  it('sends the requested title-search page and size', async () => {
+    await conversationApi.searchConversations('needle', 'title', 2, 100);
+
+    expect(api.get).toHaveBeenCalledWith('/conversations/search/title', {
+      params: { searchTerm: 'needle', page: '2', size: '100' },
+    });
+  });
+});

@@ -9,6 +9,13 @@ import { getPrefixForKind } from '../registry/nodeRegistry';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { RerunConfirmModal } from '../components/RerunConfirmModal';
 
+/**
+ * The signal kinds a NODE can be parked on and a user can resolve from the
+ * canvas. Mirrors backend `SignalType`; only the two that carry an on-node
+ * control are named, because a kind nothing can resolve has no queue to read.
+ */
+export type PendingSignalKind = 'USER_APPROVAL' | 'INTERFACE_SIGNAL';
+
 export interface StepByStepContextValue {
   // Mode
   isStepByStepMode: boolean;
@@ -51,7 +58,16 @@ export interface StepByStepContextValue {
   // Approval actions
   resolveApproval: (nodeId: string, resolution: 'APPROVED' | 'REJECTED', epoch?: number, itemId?: string) => Promise<void>;
   getPendingSignalCount: (nodeId: string) => number;
-  getPendingSignalsForNode: (nodeId: string) => PendingSignal[];
+  /**
+   * Pending signals of ONE type parked on a node, newest epoch first.
+   *
+   * <p>The type is a required argument rather than a default, because the two
+   * kinds drive two unrelated affordances: `USER_APPROVAL` feeds the approve /
+   * reject buttons, `INTERFACE_SIGNAL` feeds the interface node's Continue
+   * button. A default would let a new caller silently read the wrong queue and
+   * render an empty control that no user can explain.
+   */
+  getPendingSignalsForNode: (nodeId: string, signalType: PendingSignalKind) => PendingSignal[];
   /** ALL pending USER_APPROVAL signals across every node (run-wide queue). */
   getAllPendingSignals: () => PendingSignal[];
 
@@ -343,12 +359,16 @@ export function StepByStepProvider({
     ).length;
   }, [pendingSignals]);
 
-  // Get pending signals for a specific node (for per-item approval UI)
-  const getPendingSignalsForNode = React.useCallback((nodeId: string): PendingSignal[] => {
-    return pendingSignals.filter(
-      s => s.nodeId === nodeId && s.signalType === 'USER_APPROVAL'
-    );
-  }, [pendingSignals]);
+  // Get pending signals of one kind for a specific node (per-item approval UI,
+  // interface Continue button).
+  const getPendingSignalsForNode = React.useCallback(
+    (nodeId: string, signalType: PendingSignalKind): PendingSignal[] => {
+      return pendingSignals.filter(
+        s => s.nodeId === nodeId && s.signalType === signalType
+      );
+    },
+    [pendingSignals],
+  );
 
   // ALL pending USER_APPROVAL signals across every node - feeds the run-wide
   // approval queue so the ApprovalReviewBar can navigate between approvals that
@@ -509,6 +529,7 @@ export function useNodeExecutionStatus(
       isExecuting: false,
       isCore: false,
       isEvaluated: false,
+      isInteractive: false,
       // Outside a run there is no backend step id to give - a React Flow node id
       // here would be a lie that silently reaches cross-component events.
       stepId: undefined as string | undefined,
@@ -523,6 +544,8 @@ export function useNodeExecutionStatus(
       resolveApproval: async () => {},
       pendingSignalCount: 0,
       pendingSignals: [],
+      // Interface `__continue`
+      interfaceSignals: [],
     };
   }
 
@@ -652,6 +675,16 @@ export function useNodeExecutionStatus(
     // Historical epoch viewing disables all controls - epoch data determines visuals.
     isStepByStepMode: ctx.isStepByStepMode && isInteractive,
     isSteppedRun: ctx.isSteppedRun,
+    /**
+     * The view is one the run can be ACTED on from: the all-epochs view, or the
+     * epoch the run is living in. A historical epoch is a record and stays
+     * read-only. Folded into most controls already; exposed for the ones that
+     * are not derived from a step set, such as the interface node's Continue
+     * button (an interface fire carries no epoch, so the backend resolves the
+     * node's newest signal - offering it while an older epoch is on screen
+     * would advance an epoch the user is not looking at).
+     */
+    isInteractive,
     canExecute: isInteractive && (isControl ? ctx.canExecuteCore(normalizedId) : ctx.canExecuteStep(normalizedId)),
     isReady: isInteractive && isReady,
     /**
@@ -712,7 +745,19 @@ export function useNodeExecutionStatus(
     resolveApproval: (resolution: 'APPROVED' | 'REJECTED', itemId?: string, epochOverride?: number) =>
       ctx.resolveApproval(normalizedId, resolution, epochOverride ?? viewingEpoch ?? undefined, itemId),
     pendingSignalCount: ctx.getPendingSignalCount(normalizedId),
-    pendingSignals: ctx.getPendingSignalsForNode(normalizedId),
+    pendingSignals: ctx.getPendingSignalsForNode(normalizedId, 'USER_APPROVAL'),
+    /**
+     * Pending INTERFACE_SIGNAL waits parked on this node - what the interface
+     * node's Continue button resolves. Kept apart from `pendingSignals` (which
+     * is the APPROVAL queue every approval surface already reads) because the
+     * two are resolved through different endpoints and must never be counted
+     * together in one badge.
+     *
+     * Present on a node that is NOT awaiting too: a non-blocking interface
+     * registers a signal and completes anyway, so this list alone never means
+     * "the run is waiting here" - gate the control on `isAwaitingSignal`.
+     */
+    interfaceSignals: ctx.getPendingSignalsForNode(normalizedId, 'INTERFACE_SIGNAL'),
   };
 }
 

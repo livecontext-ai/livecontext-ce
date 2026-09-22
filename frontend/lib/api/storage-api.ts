@@ -19,6 +19,13 @@ export interface StorageQuota {
   status: QuotaStatus;
   /** Backend-driven unlimited flag (true in CE). Defaults to false when absent. */
   unlimited?: boolean;
+  /**
+   * What the whole account stores across every workspace it owns, or absent when this workspace
+   * is not attributed to an account. `maxBytes` is that account's single allowance, not this
+   * workspace's private grant: all of its workspaces draw on the pool and all are refused once
+   * it is full, so a near-empty workspace can still be blocked.
+   */
+  accountUsedBytes?: number | null;
 }
 
 export interface TenantStats {
@@ -117,6 +124,15 @@ export interface GenerationProvenance {
   credentialSource?: string;
   billedQuantity?: number;
   billedUnit?: string;
+  /**
+   * Credits the platform charged for it, as the ledger committed them.
+   *
+   * <p>Absent whenever the platform charged nothing: the generation ran on a provider key the
+   * reader configured themselves, or this install has no ledger at all. Absent is NOT zero - the
+   * asset was paid for, somewhere else - so a surface shows the amount when it is there and shows
+   * nothing when it is not, never a zero.
+   */
+  billedCredits?: number;
   /** ISO-8601 instant the asset was generated. */
   at?: string;
 }

@@ -32,16 +32,16 @@
  * are hour grids), and a chip has no menu, so nothing here opens a run or a
  * resource.
  *
- * Hardcoded English, hardcoded month and weekday names: the landing renders one
- * English page on every locale URL (see the metadata comment in page.tsx), so
- * this cannot call `useTranslations` and must not reach for `Intl` with a
- * hardcoded locale either.
+ * The homepage keeps its original English demo. Persona pages supply translated
+ * schedules and reuse the app's agenda labels with dates in the app locale.
  */
 
 import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useLocale, useTranslations } from 'next-intl';
 import { ChevronLeft, ChevronRight, MoveRight } from 'lucide-react';
 import { RESOURCE_ACCENT, STATUS_ACCENT, resourceIcon } from '@/components/agenda/agendaVisuals';
 import type { ResourceType } from '@/lib/api/orchestrator/agenda.service';
+import type { PersonaKey } from '@/components/landing/personas/personas';
 import LandingSidebarRail from './LandingSidebarRail';
 
 // ---------------------------------------------------------------------------
@@ -81,7 +81,14 @@ interface DemoSchedule {
 // Names are kept short on purpose: a month cell gives a chip about twelve
 // characters before the width tiers truncate it, and a calendar a visitor
 // cannot read sells nothing. The list view prints them in full.
-const SCHEDULES: DemoSchedule[] = [
+/**
+ * The calendar the showcase draws when it is not given one.
+ *
+ * <p>Exported for its TEST only, for the same reason as `DEMO_AGENTS`: the ids a server
+ * component reads live in `demoRosterIds.ts`, and the suite pins that this array still
+ * matches them.
+ */
+export const SCHEDULES: DemoSchedule[] = [
   { id: 'triage', name: 'Inbox triage', resourceType: 'AGENT', time: '06:45', recurrence: { kind: 'weekdays' }, cadence: 'Every weekday at 06:45' },
   { id: 'leads', name: 'New leads', resourceType: 'WORKFLOW', time: '07:30', recurrence: { kind: 'everyNDays', n: 2 }, cadence: 'Every 2 days at 07:30', moveAllSupported: false },
   { id: 'standup', name: 'Standup', resourceType: 'AGENT', time: '08:00', recurrence: { kind: 'weekdays' }, cadence: 'Every weekday at 08:00' },
@@ -112,6 +119,87 @@ const STATUS_LABELS: Record<string, string> = {
   RUNNING: 'Running',
   COMPLETED: 'Completed',
   FAILED: 'Failed',
+};
+
+const DEFAULT_COPY = {
+  previousPeriod: 'Previous period', nextPeriod: 'Next period', today: 'Today',
+  resourceTypes: 'Resource types', view: 'View', month: 'Month', list: 'List',
+  emptyTitle: 'No resource kind selected',
+  emptyDescription: 'Turn a resource kind back on to see what is scheduled.',
+  moved: 'Moved off its schedule', blocked: 'Will not run: spending cap reached',
+  showLess: 'Show less', more: (count: number) => `+${count} more`,
+  status: STATUS_LABELS,
+  kindFilters: KIND_FILTERS,
+};
+type AgendaCopy = typeof DEFAULT_COPY;
+
+// Only schedule data varies. All personas use the same recurrence projection,
+// status colours, filters and rescheduling rules as the homepage demo.
+const PERSONA_SCHEDULES: Record<PersonaKey, Omit<DemoSchedule, 'name' | 'cadence'>[]> = {
+  // Operations is the one calendar where the week has a shape: the Monday report, the
+  // daily checks, the month close on the last working day.
+  ops: [
+    { id: 'first', resourceType: 'WORKFLOW', time: '08:00', recurrence: { kind: 'weekly', weekday: 1 } },
+    { id: 'second', resourceType: 'WORKFLOW', time: '09:30', recurrence: { kind: 'weekdays' } },
+    { id: 'third', resourceType: 'AGENT', time: '07:30', recurrence: { kind: 'weekdays' } },
+    { id: 'fourth', resourceType: 'WORKFLOW', time: '18:30', recurrence: { kind: 'weekdays' } },
+    { id: 'fifth', resourceType: 'APPLICATION', time: '17:00', recurrence: { kind: 'weekdays' } },
+    { id: 'sixth', resourceType: 'WORKFLOW', time: '23:00', recurrence: { kind: 'everyNDays', n: 2 }, moveAllSupported: false },
+    // Seventh on Saturday at 09:00 and eighth on Sunday, like every other persona: the
+    // calendar's point is that the weekend runs too, and a test holds that shape.
+    { id: 'seventh', resourceType: 'AGENT', time: '09:00', recurrence: { kind: 'weekly', weekday: 6 } },
+    { id: 'eighth', resourceType: 'WORKFLOW', time: '17:00', recurrence: { kind: 'weekly', weekday: 0 } },
+  ],
+  creator: [
+    { id: 'first', resourceType: 'AGENT', time: '08:00', recurrence: { kind: 'weekdays' } },
+    { id: 'second', resourceType: 'WORKFLOW', time: '09:00', recurrence: { kind: 'weekdays' } },
+    { id: 'third', resourceType: 'WORKFLOW', time: '10:00', recurrence: { kind: 'weekdays' } },
+    { id: 'fourth', resourceType: 'APPLICATION', time: '11:30', recurrence: { kind: 'weekdays' } },
+    { id: 'fifth', resourceType: 'WORKFLOW', time: '18:00', recurrence: { kind: 'weekdays' } },
+    { id: 'sixth', resourceType: 'AGENT', time: '16:00', recurrence: { kind: 'weekly', weekday: 5 } },
+    { id: 'seventh', resourceType: 'WORKFLOW', time: '09:00', recurrence: { kind: 'weekly', weekday: 6 } },
+    { id: 'eighth', resourceType: 'APPLICATION', time: '17:00', recurrence: { kind: 'weekly', weekday: 0 } },
+  ],
+  support: [
+    { id: 'first', resourceType: 'AGENT', time: '07:00', recurrence: { kind: 'weekdays' } },
+    { id: 'second', resourceType: 'AGENT', time: '08:30', recurrence: { kind: 'weekdays' } },
+    { id: 'third', resourceType: 'APPLICATION', time: '09:00', recurrence: { kind: 'weekdays' } },
+    { id: 'fourth', resourceType: 'WORKFLOW', time: '11:00', recurrence: { kind: 'weekdays' } },
+    { id: 'fifth', resourceType: 'WORKFLOW', time: '15:00', recurrence: { kind: 'everyNDays', n: 2 }, moveAllSupported: false },
+    { id: 'sixth', resourceType: 'AGENT', time: '17:00', recurrence: { kind: 'weekly', weekday: 5 } },
+    { id: 'seventh', resourceType: 'AGENT', time: '09:00', recurrence: { kind: 'weekly', weekday: 6 } },
+    { id: 'eighth', resourceType: 'WORKFLOW', time: '17:00', recurrence: { kind: 'weekly', weekday: 0 } },
+  ],
+  sales: [
+    { id: 'first', resourceType: 'WORKFLOW', time: '07:30', recurrence: { kind: 'weekdays' } },
+    { id: 'second', resourceType: 'AGENT', time: '08:00', recurrence: { kind: 'weekdays' } },
+    { id: 'third', resourceType: 'AGENT', time: '09:00', recurrence: { kind: 'weekdays' } },
+    { id: 'fourth', resourceType: 'APPLICATION', time: '10:00', recurrence: { kind: 'weekly', weekday: 1 } },
+    { id: 'fifth', resourceType: 'WORKFLOW', time: '14:00', recurrence: { kind: 'everyNDays', n: 2 }, moveAllSupported: false },
+    { id: 'sixth', resourceType: 'WORKFLOW', time: '17:30', recurrence: { kind: 'weekdays' } },
+    { id: 'seventh', resourceType: 'WORKFLOW', time: '09:00', recurrence: { kind: 'weekly', weekday: 6 } },
+    { id: 'eighth', resourceType: 'AGENT', time: '17:00', recurrence: { kind: 'weekly', weekday: 0 } },
+  ],
+  marketing: [
+    { id: 'first', resourceType: 'AGENT', time: '09:00', recurrence: { kind: 'weekly', weekday: 1 } },
+    { id: 'second', resourceType: 'WORKFLOW', time: '10:00', recurrence: { kind: 'weekly', weekday: 2 } },
+    { id: 'third', resourceType: 'APPLICATION', time: '14:00', recurrence: { kind: 'weekly', weekday: 3 } },
+    { id: 'fourth', resourceType: 'WORKFLOW', time: '09:30', recurrence: { kind: 'weekly', weekday: 4 } },
+    { id: 'fifth', resourceType: 'WORKFLOW', time: '16:00', recurrence: { kind: 'weekdays' } },
+    { id: 'sixth', resourceType: 'AGENT', time: '17:00', recurrence: { kind: 'weekly', weekday: 5 } },
+    { id: 'seventh', resourceType: 'AGENT', time: '09:00', recurrence: { kind: 'weekly', weekday: 6 } },
+    { id: 'eighth', resourceType: 'WORKFLOW', time: '17:00', recurrence: { kind: 'weekly', weekday: 0 } },
+  ],
+  recruiting: [
+    { id: 'first', resourceType: 'WORKFLOW', time: '08:00', recurrence: { kind: 'weekdays' } },
+    { id: 'second', resourceType: 'AGENT', time: '09:00', recurrence: { kind: 'weekdays' } },
+    { id: 'third', resourceType: 'APPLICATION', time: '10:00', recurrence: { kind: 'weekly', weekday: 2 } },
+    { id: 'fourth', resourceType: 'WORKFLOW', time: '11:00', recurrence: { kind: 'weekly', weekday: 3 } },
+    { id: 'fifth', resourceType: 'WORKFLOW', time: '15:00', recurrence: { kind: 'weekdays' } },
+    { id: 'sixth', resourceType: 'AGENT', time: '16:00', recurrence: { kind: 'monthDays', days: [1, 15] } },
+    { id: 'seventh', resourceType: 'WORKFLOW', time: '09:00', recurrence: { kind: 'weekly', weekday: 6 } },
+    { id: 'eighth', resourceType: 'AGENT', time: '17:00', recurrence: { kind: 'weekly', weekday: 0 } },
+  ],
 };
 
 const DAY_MS = 86_400_000;
@@ -227,6 +315,7 @@ function projectMonth(
   todayIndex: number,
   nowMinutes: number,
   overrides: Map<string, string>,
+  schedules: DemoSchedule[],
 ): Map<string, DemoOccurrence[]> {
   const byDay = new Map<string, DemoOccurrence[]>();
   for (const day of days) byDay.set(day.iso, []);
@@ -234,7 +323,7 @@ function projectMonth(
   const indexByIso = new Map(days.map((day) => [day.iso, day.index]));
 
   for (const day of days) {
-    for (const schedule of SCHEDULES) {
+    for (const schedule of schedules) {
       if (!kinds.has(schedule.resourceType) || !fires(schedule, day)) continue;
 
       const id = `${schedule.id}:${day.iso}`;
@@ -343,14 +432,14 @@ function accentOf(occurrence: DemoOccurrence): { chip: string; dot: string } {
   return RESOURCE_ACCENT[occurrence.schedule.resourceType];
 }
 
-function describe(occurrence: DemoOccurrence): string {
+function describe(occurrence: DemoOccurrence, copy: AgendaCopy): string {
   const when = `${occurrence.schedule.time} ${occurrence.schedule.name}`;
   // The moved badge is drawn whatever else is true of the chip, so it has to be
   // said whatever else is true of the chip: a moved run whose cap is also
   // reached showed the arrow and explained nothing.
-  const moved = occurrence.moved ? ' - Moved off its schedule' : '';
-  if (occurrence.blocked) return `${when} - Will not run: spending cap reached${moved}`;
-  if (occurrence.past) return `${when} - ${STATUS_LABELS[occurrence.status]}${moved}`;
+  const moved = occurrence.moved ? ` - ${copy.moved}` : '';
+  if (occurrence.blocked) return `${when} - ${copy.blocked}${moved}`;
+  if (occurrence.past) return `${when} - ${copy.status[occurrence.status]}${moved}`;
   if (occurrence.moved) return `${when}${moved}`;
   return `${when} - ${occurrence.schedule.cadence}`;
 }
@@ -376,6 +465,42 @@ function readClientNow(): string {
   return clientLoadIso;
 }
 
+/**
+ * Whether the window is too narrow for a month grid to say anything.
+ *
+ * Seven columns inside this frame give a 31px cell on a phone and 72px on a
+ * tablet, and a cell has to reach 4.5rem before the dot appears and 6.5rem
+ * before the name does. So below this width the grid was drawing 42 boxes of
+ * clipped times: not dense, empty. The replica answers it the way every phone
+ * calendar does, by showing the list instead and keeping the grid as dots.
+ *
+ * Read through `useSyncExternalStore` for the same reason as the clock above:
+ * the server has no window, so it renders the desktop layout and React swaps in
+ * the real answer after hydration, with no mismatch and no setState in an
+ * effect. A media query, not a container query, because the choice is which
+ * VIEW to show, and CSS cannot make that one.
+ */
+const NARROW_CALENDAR = '(max-width: 900px)';
+function subscribeToWidth(onChange: () => void) {
+  if (typeof window === 'undefined' || !window.matchMedia) return () => {};
+  const mql = window.matchMedia(NARROW_CALENDAR);
+  // `change` needs the modern listener; Safari before 14 only has addListener,
+  // and a landing is exactly where that still turns up.
+  if (mql.addEventListener) {
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }
+  mql.addListener(onChange);
+  return () => mql.removeListener(onChange);
+}
+function readNarrow(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia(NARROW_CALENDAR).matches;
+}
+function useNarrowCalendar(): boolean {
+  return useSyncExternalStore(subscribeToWidth, readNarrow, () => false);
+}
+
 /** The day index of a date, read in the VISITOR's zone, not in UTC. */
 function dayIndexOf(date: Date): number {
   return Math.round(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / DAY_MS);
@@ -385,8 +510,12 @@ function dayIndexOf(date: Date): number {
  * The month a (year, month) pair lands on. `month` may sit outside 0..11 because
  * the arrows just add and subtract, and `Date.UTC` normalises it.
  */
-function periodOf(year: number, month: number): { name: string; title: string } {
+function periodOf(year: number, month: number, locale?: string): { name: string; title: string } {
   const shown = new Date(Date.UTC(year, month, 1));
+  if (locale) return {
+    name: new Intl.DateTimeFormat(locale, { month: 'long', timeZone: 'UTC' }).format(shown),
+    title: new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(shown),
+  };
   const name = MONTH_NAMES[shown.getUTCMonth()];
   return { name, title: `${name} ${shown.getUTCFullYear()}` };
 }
@@ -397,11 +526,13 @@ function periodOf(year: number, month: number): { name: string; title: string } 
 
 function Chip({
   occurrence,
+  copy,
   draggable,
   onDragStart,
   onDragEnd,
 }: {
   occurrence: DemoOccurrence;
+  copy: AgendaCopy;
   draggable: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -424,8 +555,8 @@ function Chip({
       // also holds the two overflow buttons, so the roles would have put the
       // controls at risk of being dropped to gain nothing the label does not
       // already give. MonthView carries neither role either.
-      aria-label={describe(occurrence)}
-      title={describe(occurrence)}
+      aria-label={describe(occurrence, copy)}
+      title={describe(occurrence, copy)}
       className={`flex items-center gap-1 rounded-md px-1 py-0.5 @[6.5rem]:gap-1.5 @[6.5rem]:px-1.5 ${accent.chip}
                   ${occurrence.blocked ? 'opacity-50' : ''}
                   ${occurrence.past ? 'border border-dashed border-current/25' : ''}
@@ -456,8 +587,78 @@ function Chip({
 // what a month of automation looks like, so it has to be reachable here.
 const VISIBLE_PER_DAY = 3;
 
+// A phone cell is 31px wide. Nothing textual survives that, so the compact cell
+// shows what a phone calendar shows: the day number, and one dot per run in the
+// colour of its kind. Four, because a fifth would wrap the row and the month grid
+// is fixed height; the rest are counted. Every dot still carries the full
+// sentence as its label, so nothing is lost to a reader who hovers or uses a
+// screen reader, exactly as the chips do at full width.
+const DOTS_PER_DAY = 4;
+
+function CompactDay({
+  day,
+  copy,
+  occurrences,
+  isToday,
+}: {
+  day: GridDay;
+  copy: AgendaCopy;
+  occurrences: DemoOccurrence[];
+  isToday: boolean;
+}) {
+  const shown = occurrences.slice(0, DOTS_PER_DAY);
+  const hidden = occurrences.length - shown.length;
+  return (
+    <div
+      data-day={day.iso}
+      className="flex min-h-0 flex-col items-center gap-1 border-b border-r px-0.5 py-1"
+      style={{
+        borderColor: 'var(--border-color)',
+        background: day.outside ? 'var(--bg-secondary)' : undefined,
+      }}
+    >
+      <span
+        className="text-[11px] tabular-nums"
+        style={
+          isToday
+            ? {
+                display: 'inline-flex',
+                height: 18,
+                width: 18,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 999,
+                background: 'var(--accent-primary)',
+                color: 'var(--accent-foreground)',
+              }
+            : { color: day.outside ? 'var(--text-muted)' : 'var(--text-secondary)' }
+        }
+      >
+        {day.dayOfMonth}
+      </span>
+      <div className="flex flex-wrap items-center justify-center gap-[3px]">
+        {shown.map((occurrence) => (
+          <span
+            key={occurrence.id}
+            className={`h-1.5 w-1.5 rounded-full ${accentOf(occurrence).dot}
+                        ${occurrence.blocked ? 'opacity-40' : ''}`}
+            aria-label={describe(occurrence, copy)}
+            title={describe(occurrence, copy)}
+          />
+        ))}
+        {hidden > 0 && (
+          <span className="text-[9px] leading-none tabular-nums" style={{ color: 'var(--text-muted)' }}>
+            +{hidden}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DayCell({
   day,
+  copy,
   occurrences,
   isToday,
   droppable,
@@ -468,6 +669,7 @@ function DayCell({
   onDropOnDay,
 }: {
   day: GridDay;
+  copy: AgendaCopy;
   occurrences: DemoOccurrence[];
   isToday: boolean;
   droppable: boolean;
@@ -541,6 +743,7 @@ function DayCell({
           <Chip
             key={occurrence.id}
             occurrence={occurrence}
+            copy={copy}
             // The app's rule, not "anything not in the past": see `movable`.
             draggable={occurrence.movable}
             onDragStart={() => onDragStart(occurrence.id)}
@@ -554,7 +757,7 @@ function DayCell({
             className="px-1.5 text-left text-[11px] hover:underline"
             style={{ color: 'var(--text-muted)' }}
           >
-            +{hidden} more
+            {copy.more(hidden)}
           </button>
         )}
         {/* The way back. Without it the cell stays expanded for the rest of the
@@ -567,7 +770,7 @@ function DayCell({
             className="px-1.5 text-left text-[11px] hover:underline"
             style={{ color: 'var(--text-muted)' }}
           >
-            Show less
+            {copy.showLess}
           </button>
         )}
       </div>
@@ -582,16 +785,90 @@ function DayCell({
 const BAR_BUTTON = 'inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-xs transition-colors';
 
 
-export default function AgendaShowcase({ nowIso }: { nowIso: string }) {
+/**
+ * @param persona a persona page: its own schedules, named from its own messages.
+ * @param locale the HOME page: the generic schedules, named from `LandingHome`. Without it
+ *   the window renders its English defaults, which is what left this calendar in English on
+ *   the five translated locales while everything around it had been translated.
+ */
+export default function AgendaShowcase({ nowIso, persona, locale }: { nowIso: string; persona?: PersonaKey; locale?: string }) {
+  if (persona) return <PersonaAgendaWindow key={`${persona}:${locale ?? ''}`} nowIso={nowIso} persona={persona} locale={locale} />;
+  if (locale) return <HomeAgendaWindow key={locale} nowIso={nowIso} locale={locale} />;
   return <AgendaAppWindow nowIso={nowIso} />;
 }
 
-function AgendaAppWindow({ nowIso }: { nowIso: string }) {
+function PersonaAgendaWindow({ nowIso, persona, locale }: { nowIso: string; persona: PersonaKey; locale?: string }) {
+  const names = useTranslations(`PersonaLanding.personas.${persona}.agendaSchedules`);
+  return <LocalizedAgendaWindow nowIso={nowIso} locale={locale} source={PERSONA_SCHEDULES[persona]} idPrefix={persona} name={names} />;
+}
+
+function HomeAgendaWindow({ nowIso, locale }: { nowIso: string; locale: string }) {
+  const names = useTranslations('LandingHome.agendaSchedules');
+  return <LocalizedAgendaWindow nowIso={nowIso} locale={locale} source={SCHEDULES} name={names} />;
+}
+
+/**
+ * The window with every label translated: the chrome from the app's own `agenda` messages,
+ * the cadences from the shared cadence patterns, and each entry's name from whichever
+ * namespace the caller owns. It is one component rather than two because the persona pages
+ * and the home page differ ONLY in which schedules they show and where the names come from.
+ */
+function LocalizedAgendaWindow({ nowIso, locale, source, idPrefix, name }: {
+  // The persona sets carry no name or cadence (they are translated here); the home set is a
+  // full DemoSchedule and is assignable to the same narrower shape.
+  nowIso: string; locale?: string; source: readonly Omit<DemoSchedule, 'name' | 'cadence'>[]; idPrefix?: string; name: (id: string) => string;
+}) {
+  const appLocale = useLocale();
+  const displayLocale = locale ?? appLocale;
+  const t = useTranslations('agenda');
+  const cadence = useTranslations('PersonaLanding.agenda.common.cadence');
+  const schedules = useMemo(() => source.map((schedule) => {
+    const rule = schedule.recurrence;
+    let cadenceLabel: string;
+    switch (rule.kind) {
+      case 'weekly':
+        cadenceLabel = cadence('weekly', {
+          day: new Intl.DateTimeFormat(displayLocale, { weekday: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, 0, 4 + rule.weekday))),
+          time: schedule.time,
+        });
+        break;
+      case 'monthDays':
+        cadenceLabel = cadence('monthDays', { days: rule.days.map((day) => day.toLocaleString(displayLocale)).join(', '), time: schedule.time });
+        break;
+      case 'everyNDays':
+        cadenceLabel = cadence('everyNDays', { count: rule.n, time: schedule.time });
+        break;
+      default:
+        cadenceLabel = cadence('weekdays', { time: schedule.time });
+    }
+    return { ...schedule, id: idPrefix ? `${idPrefix}-${schedule.id}` : schedule.id, name: name(schedule.id), cadence: cadenceLabel };
+  }), [source, idPrefix, displayLocale, name, cadence]);
+  const copy: AgendaCopy = {
+    previousPeriod: t('nav.previous'), nextPeriod: t('nav.next'), today: t('nav.today'),
+    resourceTypes: t('filters.resourceTypes'), view: t('filters.view'), month: t('view.month'), list: t('view.list'),
+    emptyTitle: t('empty.allFilteredTitle'), emptyDescription: t('empty.allFilteredDescription'),
+    moved: t('movedBadge'), blocked: t('status.budgetBlocked'), showLess: t('showLess'),
+    more: (count) => t('moreCount', { n: count }),
+    status: { RUNNING: t('status.running'), COMPLETED: t('status.completed'), FAILED: t('status.failed') },
+    kindFilters: KIND_FILTERS.map(({ type }) => ({ type, label: t(`resource.${type.toLowerCase()}`) })),
+  };
+  return <AgendaAppWindow nowIso={nowIso} schedules={schedules} copy={copy} locale={displayLocale} />;
+}
+
+function AgendaAppWindow({ nowIso, schedules = SCHEDULES, copy = DEFAULT_COPY, locale }: {
+  nowIso: string; schedules?: DemoSchedule[]; copy?: AgendaCopy; locale?: string;
+}) {
   const resolvedIso = useSyncExternalStore(subscribeToNothing, readClientNow, () => nowIso);
   const now = useMemo(() => new Date(resolvedIso), [resolvedIso]);
 
   const [monthOffset, setMonthOffset] = useState(0);
-  const [view, setView] = useState<'month' | 'list'>('month');
+  // The view FOLLOWS the width until somebody chooses for themselves, and then
+  // their choice wins: a visitor who taps Month on a phone meant it, and having
+  // the layout take it back on the next resize would be the page arguing.
+  const narrow = useNarrowCalendar();
+  const [picked, setPicked] = useState<'month' | 'list' | null>(null);
+  const view: 'month' | 'list' = picked ?? (narrow ? 'list' : 'month');
+  const setView = setPicked;
   const [kinds, setKinds] = useState<Set<ResourceType>>(
     () => new Set<ResourceType>(['WORKFLOW', 'APPLICATION', 'AGENT']),
   );
@@ -610,11 +887,14 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
   );
   const days = useMemo(() => buildMonthGrid(anchor.year, anchor.month), [anchor]);
   const byDay = useMemo(
-    () => projectMonth(days, kinds, todayIndex, nowMinutes, overrides),
-    [days, kinds, todayIndex, nowMinutes, overrides],
+    () => projectMonth(days, kinds, todayIndex, nowMinutes, overrides, schedules),
+    [days, kinds, todayIndex, nowMinutes, overrides, schedules],
   );
 
-  const period = useMemo(() => periodOf(anchor.year, anchor.month), [anchor]);
+  const period = useMemo(() => periodOf(anchor.year, anchor.month, locale), [anchor, locale]);
+  const weekdayHeaders = useMemo(() => locale
+    ? WEEKDAY_HEADERS.map((_, index) => new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, 0, 5 + index))))
+    : WEEKDAY_HEADERS, [locale]);
 
   const toggleKind = (type: ResourceType) => {
     setKinds((previous) => {
@@ -655,7 +935,7 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                aria-label="Previous period"
+                aria-label={copy.previousPeriod}
                 onClick={() => setMonthOffset((offset) => offset - 1)}
                 className={`${BAR_BUTTON} w-7 justify-center px-0`}
                 style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
@@ -664,7 +944,7 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
               </button>
               <button
                 type="button"
-                aria-label="Next period"
+                aria-label={copy.nextPeriod}
                 onClick={() => setMonthOffset((offset) => offset + 1)}
                 className={`${BAR_BUTTON} w-7 justify-center px-0`}
                 style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
@@ -677,7 +957,7 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
                 className={BAR_BUTTON}
                 style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}
               >
-                Today
+                {copy.today}
               </button>
             </div>
 
@@ -685,8 +965,8 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
               {period.title}
             </span>
 
-            <div className="ml-auto flex items-center gap-1" role="group" aria-label="Resource types">
-              {KIND_FILTERS.map(({ type, label }) => {
+            <div className="ml-auto flex items-center gap-1" role="group" aria-label={copy.resourceTypes}>
+              {copy.kindFilters.map(({ type, label }) => {
                 const Icon = resourceIcon(type);
                 const active = kinds.has(type);
                 return (
@@ -706,7 +986,7 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
               })}
             </div>
 
-            <div className="flex items-center gap-1" role="group" aria-label="View">
+            <div className="flex items-center gap-1" role="group" aria-label={copy.view}>
               {(['month', 'list'] as const).map((mode) => (
                 <button
                   key={mode}
@@ -724,30 +1004,30 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
                       : { borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }
                   }
                 >
-                  {mode === 'month' ? 'Month' : 'List'}
+                  {mode === 'month' ? copy.month : copy.list}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* One height for all three views, sized so the six-week month grid
-              fits without scrolling: a list of a whole month is several thousand
-              pixels tall, and letting it set the section's height would push the
-              rest of the page down every time someone pressed List.
-              `overscroll-y-auto`, not `contain`: on a landing the page must keep
-              scrolling once the box is at its end, or a thumb over the calendar
-              is trapped there. */}
-          <div className="h-[35rem] overflow-y-auto overscroll-y-auto">
+          {/* One height for all three views, and a CROP rather than a scrollbox: a
+              list of a whole month is several thousand pixels tall, so letting it
+              set the height would push the rest of the page down every time
+              someone pressed List. Scrolling it in place was the previous answer
+              and it made the landing carry a second scroll surface, which a thumb
+              lands in by accident on a phone. Cut off, the calendar reads as a
+              glimpse of a real one, the way the agents window is cropped. */}
+          <div className="h-[35rem] overflow-hidden">
           {kinds.size === 0 ? (
             // The app's own words for this state, not a landing paraphrase: the
             // visitor turned every kind off, and the calendar says so instead of
             // looking broken.
             <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
               <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                No resource kind selected
+                {copy.emptyTitle}
               </p>
               <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Turn a resource kind back on to see what is scheduled.
+                {copy.emptyDescription}
               </p>
             </div>
           ) : view === 'month' ? (
@@ -760,13 +1040,15 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
                   background: 'var(--bg-secondary)',
                 }}
               >
-                {WEEKDAY_HEADERS.map((header) => (
+                {weekdayHeaders.map((header) => (
                   <div
                     key={header}
-                    className="px-2 py-1.5 text-[11px] font-medium"
+                    className={`py-1.5 text-[11px] font-medium ${narrow ? 'text-center px-0' : 'px-2'}`}
                     style={{ color: 'var(--text-muted)' }}
                   >
-                    {header}
+                    {/* One letter is all a 31px column can hold, and a clipped
+                        "Wed" is worse than a "W" nobody has to decode. */}
+                    {narrow ? header.slice(0, 1) : header}
                   </div>
                 ))}
               </div>
@@ -774,29 +1056,42 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
                 className="grid"
                 style={{
                   gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-                  gridAutoRows: 'minmax(5.25rem, 1fr)',
+                  // A dotted cell needs a fifth of the height a stack of chips
+                  // does, and the whole month still has to fit the fixed frame.
+                  gridAutoRows: narrow ? 'minmax(2.75rem, 1fr)' : 'minmax(5.25rem, 1fr)',
                 }}
               >
-                {days.map((day) => (
-                  <DayCell
-                    key={day.iso}
-                    day={day}
-                    occurrences={byDay.get(day.iso) ?? []}
-                    isToday={day.index === todayIndex}
-                    // A run can only be moved onto a day that has not happened
-                    // yet, the only move the platform can honour. Offering the
-                    // past would teach a gesture and then refuse it.
-                    droppable={Boolean(dragging) && day.index > todayIndex}
-                    isOver={dragOver === day.iso}
-                    onDragStart={setDragging}
-                    onDragEnd={() => {
-                      setDragging(null);
-                      setDragOver(null);
-                    }}
-                    onDragOverDay={setDragOver}
-                    onDropOnDay={dropOn}
-                  />
-                ))}
+                {days.map((day) =>
+                  narrow ? (
+                    <CompactDay
+                      key={day.iso}
+                      day={day}
+                      copy={copy}
+                      occurrences={byDay.get(day.iso) ?? []}
+                      isToday={day.index === todayIndex}
+                    />
+                  ) : (
+                    <DayCell
+                      key={day.iso}
+                      day={day}
+                      copy={copy}
+                      occurrences={byDay.get(day.iso) ?? []}
+                      isToday={day.index === todayIndex}
+                      // A run can only be moved onto a day that has not happened
+                      // yet, the only move the platform can honour. Offering the
+                      // past would teach a gesture and then refuse it.
+                      droppable={Boolean(dragging) && day.index > todayIndex}
+                      isOver={dragOver === day.iso}
+                      onDragStart={setDragging}
+                      onDragEnd={() => {
+                        setDragging(null);
+                        setDragOver(null);
+                      }}
+                      onDragOverDay={setDragOver}
+                      onDropOnDay={dropOn}
+                    />
+                  ),
+                )}
               </div>
             </div>
           ) : (
@@ -811,7 +1106,9 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
                       color: day.index === todayIndex ? 'var(--accent-primary)' : 'var(--text-muted)',
                     }}
                   >
-                    {`${WEEKDAY_HEADERS[(day.weekday + 6) % 7]} ${day.dayOfMonth} ${period.name}`}
+                    {locale
+                      ? new Intl.DateTimeFormat(locale, { weekday: 'short', day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(`${day.iso}T00:00:00Z`))
+                      : `${weekdayHeaders[(day.weekday + 6) % 7]} ${day.dayOfMonth} ${period.name}`}
                   </h3>
                   <ul>
                     {items.map((occurrence) => {
@@ -840,9 +1137,9 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
                             </span>
                             <span className="block truncate text-xs" style={{ color: 'var(--text-muted)' }}>
                               {occurrence.blocked
-                                ? 'Will not run: spending cap reached'
+                                ? copy.blocked
                                 : occurrence.past
-                                  ? STATUS_LABELS[occurrence.status]
+                                  ? copy.status[occurrence.status]
                                   : occurrence.schedule.cadence}
                             </span>
                           </span>
@@ -850,7 +1147,7 @@ function AgendaAppWindow({ nowIso }: { nowIso: string }) {
                             <MoveRight
                               className="h-3.5 w-3.5 shrink-0"
                               style={{ color: 'var(--text-muted)' }}
-                              aria-label="Moved off its schedule"
+                              aria-label={copy.moved}
                             />
                           )}
                           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${accent.dot}`} aria-hidden="true" />

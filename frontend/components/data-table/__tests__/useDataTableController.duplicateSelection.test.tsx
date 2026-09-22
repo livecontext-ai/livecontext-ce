@@ -47,7 +47,7 @@ vi.mock('@/components/data-table/hooks', () => ({
     rows: [], columns: [], tableLoading: false, loadingColumns: false, error: null,
     backendColumns: null, nodeType: null,
     setRows: vi.fn(), setColumns: vi.fn(), setError: vi.fn(),
-    fetchColumns: vi.fn(), fetchData: vi.fn().mockResolvedValue(undefined), setColumnOrder: vi.fn(),
+    fetchColumns: vi.fn(), fetchData: vi.fn().mockResolvedValue(undefined),
   }),
   useRowOperations: () => ({
     showAddRowModal: false, newRowData: {}, newRowPriority: 1,

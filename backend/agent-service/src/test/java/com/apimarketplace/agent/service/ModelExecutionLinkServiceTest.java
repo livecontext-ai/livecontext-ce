@@ -1,8 +1,10 @@
 package com.apimarketplace.agent.service;
 
+import com.apimarketplace.agent.bridge.BridgeAllowlist;
 import com.apimarketplace.agent.domain.ModelExecutionLinkEntity;
 import com.apimarketplace.agent.domain.ModelExecutionLinkScope;
 import com.apimarketplace.agent.repository.ModelExecutionLinkRepository;
+import com.apimarketplace.agent.service.execution.SubAgentBridgeClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -409,5 +411,38 @@ class ModelExecutionLinkServiceTest {
         e.setScope(scope);
         e.setEnabled(enabled);
         return e;
+    }
+
+    @Test
+    @DisplayName("the pair the Models panel mints from a CLI counterpart is one resolve actually serves")
+    void cliCounterpartPairIsRoutableEndToEnd() {
+        // The seam between the two halves of the one-click button: the admin panel
+        // stamps a row with BridgeAllowlist.cliCounterpart and writes exactly
+        // (billed pair -> that CLI, same model id, ALL). Each half is tested on its
+        // own side against a hand-written fixture, so this pins that they meet: the
+        // link such a click creates resolves back to a bridge route, on any surface.
+        // Written as the literal row the panel PUTs, not re-derived from cliCounterpart:
+        // deriving it here would make the test agree with itself. The same literals are
+        // asserted from the other side by the frontend suite
+        // (ModelManagementPanel.executionLink.test.tsx, "one click routes the model to
+        // its CLI on every surface, then re-reads the links"), so a change to the payload
+        // has to be made twice
+        // on purpose rather than slipping through on one side.
+        when(repository.findAll()).thenReturn(List.of(
+            link("anthropic", "claude-opus-4-7", "claude-code", "claude-opus-4-7",
+                 ModelExecutionLinkScope.ALL, true)));
+        assertThat(BridgeAllowlist.cliCounterpart("anthropic", "claude-opus-4-7"))
+            .as("the stamp the panel reads must name the provider it then writes")
+            .isEqualTo("claude-code");
+
+        Optional<ModelExecutionLinkService.ExecutionRoute> route =
+            service.resolve("anthropic", "claude-opus-4-7", "WORKFLOW");
+
+        assertThat(route).isPresent();
+        assertThat(route.get().executionProvider()).isEqualTo("claude-code");
+        assertThat(route.get().executionModel()).isEqualTo("claude-opus-4-7");
+        assertThat(SubAgentBridgeClient.isBridgeProvider(route.get().executionProvider()))
+            .as("the route must reach the bridge transport, not the direct agent loop")
+            .isTrue();
     }
 }

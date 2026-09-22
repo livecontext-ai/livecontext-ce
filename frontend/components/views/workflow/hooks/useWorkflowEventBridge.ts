@@ -2,6 +2,12 @@
 
 import { useEffect, type RefObject } from 'react';
 import { isEventForWorkflow } from '@/lib/workflow/workflowEventScope';
+import {
+  INTERFACE_CONTINUE_EVENT,
+  INTERFACE_CONTINUE_RESPONSE_EVENT,
+  type InterfaceContinueDetail,
+  type InterfaceContinueResponse,
+} from '@/lib/workflow/interfaceContinue';
 /**
  * Shared event bridge hook for WorkflowDetailView and ApplicationDetailView.
  * Listens for 3 CustomEvents dispatched by WorkflowPanelContent and forwards
@@ -64,12 +70,28 @@ export function useWorkflowEventBridge(
 
   // Listen for __continue events: resolve interface signal via fire API
   useEffect(() => {
-    const handler = async (event: CustomEvent<{ runId: string; nodeId: string; actionKey: string; data: Record<string, unknown>; itemIndex?: number; workflowId?: string }>) => {
+    const handler = async (event: CustomEvent<InterfaceContinueDetail>) => {
       if (!isEventForWorkflow(event.detail, workflowId)) return;
-      const { runId, nodeId, actionKey, data, itemIndex } = event.detail;
+      const { runId, nodeId, actionKey, data, itemIndex, requestId } = event.detail;
+      // Answered only when the dispatcher asked to be. Until this existed the
+      // handler was write-only: it swallowed a 404 (signal already resolved
+      // elsewhere, stale awaiting set) or a 403 (read-only visitor) into a
+      // console line, so a caller could not tell a refusal from a success.
+      const ack = (response: Omit<InterfaceContinueResponse, 'requestId'>) => {
+        if (!requestId) return;
+        window.dispatchEvent(new CustomEvent(INTERFACE_CONTINUE_RESPONSE_EVENT, {
+          detail: { requestId, ...response },
+        }));
+      };
       try {
         const { interfaceService } = await import('@/lib/api/orchestrator/interface.service');
-        await interfaceService.fireInterfaceAction(runId, nodeId, actionKey, data, itemIndex);
+        const result = await interfaceService.fireInterfaceAction(runId, nodeId, actionKey, data, itemIndex);
+        // A 200 does NOT mean the run moved: the endpoint answers
+        // `{"status":"already_resolved"}` with 200 when the signal was resolved
+        // before this fire landed. Acking that as a plain success cleared the
+        // caller's spinner and reported progress that did not happen.
+        const alreadyResolved = result?.status === 'already_resolved';
+        ack({ ok: !alreadyResolved, alreadyResolved });
 
         // Refresh run state after signal resolution to pick up new readySteps.
         if (runContext) {
@@ -81,9 +103,21 @@ export function useWorkflowEventBridge(
         }
       } catch (err) {
         console.error('[useWorkflowEventBridge] __continue action failed:', err);
+        // `status` travels separately from `error`: the message is the client's
+        // own English (`HTTP 404: Not Found` when the body is empty), which must
+        // never reach a localized UI, while the code is what lets the caller
+        // pick a translated sentence. A 404 means the signal row is gone, i.e.
+        // resolved elsewhere - the same non-failure as the 200 above.
+        const status = (err as { status?: number } | null)?.status;
+        ack({
+          ok: false,
+          alreadyResolved: status === 404,
+          status,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     };
-    window.addEventListener('workflowInterfaceContinue', handler as EventListener);
-    return () => window.removeEventListener('workflowInterfaceContinue', handler as EventListener);
+    window.addEventListener(INTERFACE_CONTINUE_EVENT, handler as EventListener);
+    return () => window.removeEventListener(INTERFACE_CONTINUE_EVENT, handler as EventListener);
   }, [runContext, workflowId]);
 }

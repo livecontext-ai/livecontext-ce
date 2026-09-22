@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       <b>publication-service</b> (twin - guarded by a sibling test in that
  *       module asserting against the same canonical map below).</li>
  *   <li>Frontend {@code KIND_TO_NODE_ICON_KEY} in
- *       {@code frontend/lib/api/orchestrator/dashboard.service.ts}
+ *       {@code frontend/lib/workflows/triggerNodeIcons.ts}
  *       (TS, inverse direction).</li>
  * </ol>
  *
@@ -55,7 +55,7 @@ class WorkflowIconExtractorParityTest {
         assertThat(WorkflowIconExtractor.TRIGGER_TYPE_TO_NODE_ID)
                 .as("If this fails, the orchestrator extractor drifted from the canonical 8-kind map. "
                   + "Update the canonical map here AND the publication-service twin AND the frontend "
-                  + "KIND_TO_NODE_ICON_KEY in dashboard.service.ts.")
+                  + "KIND_TO_NODE_ICON_KEY in triggerNodeIcons.ts.")
                 .isEqualTo(CANONICAL_TRIGGER_TYPE_TO_NODE_ID);
     }
 

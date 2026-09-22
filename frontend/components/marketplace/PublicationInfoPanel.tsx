@@ -12,6 +12,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
+import { VerifiedBadge } from '@/components/profile/VerifiedBadge';
 import { UserActionMenu } from '@/components/profile/UserActionMenu';
 import { CredentialWizard } from '@/components/credentials/CredentialWizard';
 import { useMissingCredentials } from '@/hooks/useMissingCredentials';
@@ -174,6 +175,7 @@ function ReplyItem({ reply, isOwn, publicationId, onUpdated, onDeleted, formatTi
           <span className="text-sm text-gray-700 dark:text-gray-200 truncate">
             {reply.reviewerName || 'Anonymous'}
           </span>
+          <VerifiedBadge userId={reply.reviewerId} />
         </UserActionMenu>
         <span className="text-xs text-gray-400 dark:text-gray-500">&middot;</span>
         <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">
@@ -309,6 +311,7 @@ function ReviewItem({ review, isOwn, publicationId, userId, formatTimeAgo, t, tM
             <span className="text-sm font-medium text-gray-700 dark:text-gray-200 truncate">
               {review.reviewerName || tMarketplace('anonymous')}
             </span>
+            <VerifiedBadge userId={review.reviewerId} />
           </UserActionMenu>
         </div>
         {isOwn && (
@@ -782,6 +785,7 @@ export function PublicationInfoPanel({
                     <UserActionMenu userId={publication.publisherId} remote={remote}>
                       <PublisherAvatar userId={publication.publisherId} name={publication.publisherName} size={16} variant="neutral" remote={remote} />
                       <span className="text-xs text-gray-500 dark:text-gray-400">{publication.publisherName}</span>
+                      <VerifiedBadge userId={publication.publisherId} size="xs" />
                     </UserActionMenu>
                     <span className="text-xs text-gray-300 dark:text-gray-600">&middot;</span>
                   </>

@@ -11,13 +11,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { orchestratorApi, type GenerationModel } from '@/lib/api/orchestrator';
 import { FORMAT_ICONS, FORMAT_ORDER, ProviderIcon } from '@/lib/generation/formats';
-import { describeQuotedPrice } from '@/lib/generation/price';
+import { describeQuotedPrice, withQuotedPriceReason } from '@/lib/generation/price';
 import { getClientLocale } from '@/lib/utils/locale';
 import { useGenerationModels } from '@/hooks/useGenerationModels';
 import { useGenerationOptions } from '@/hooks/useGenerationOptions';
 import type { BuilderNodeData } from '../../../types';
 import type { ConnectionProps } from '../ExpressionField';
 import { CredentialSection, type CredentialSource } from '../CredentialSection';
+import {
+  priceFactorDependsOnRuntime, priceFactorReasons, priceMultiplierFor,
+} from '@/lib/generation/priceModifiers';
+import { describePriceFactors } from '@/lib/generation/price';
+import { generationQuoteKey } from '@/lib/generation/quoteKey';
 import { UpgradeRequiredBadge, UpgradeRequiredNotice } from '@/components/billing/UpgradeRequiredBadge';
 import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
 import {
@@ -355,12 +360,26 @@ export function GenerateParametersForm({
    */
   const quoteFor = React.useCallback((m: GenerationModel) => {
     const quantity = quantityFor(m);
+    // What the node's own CHOICES do to the rate. The run is charged with it,
+    // so an estimate that left it out states a price the step never costs: a
+    // 1080p node quoted at the 720p rate, with nothing on screen to say so.
+    // Only the model being configured has parameters to read; the rest are
+    // quoted at their published rate, which is what a run of them would default
+    // to as well.
+    const priceMultiplier = priceMultiplierFor(m, m.model === model ? params : {});
     return {
-      // Same key shape as the credential section's and the dialog's, so a model
-      // already quoted on either is served from cache instead of re-asked.
-      queryKey: ['platform-credential-public-info',
-        m.integrationName?.toLowerCase() ?? '', m.apiToolId, m.model, quantity, true,
-        m.measuredUnit ?? null],
+      // The shared key, so a model already quoted by the credential section or the dialog is
+      // served from cache instead of re-asked. It is a function rather than a literal because
+      // three copies of it once promised to match and silently stopped.
+      queryKey: generationQuoteKey({
+        integrationName: m.integrationName,
+        apiToolId: m.apiToolId,
+        modelId: m.model,
+        quantity,
+        generation: true,
+        quantityUnit: m.measuredUnit,
+        priceMultiplier,
+      }),
       queryFn: () => orchestratorApi.getPlatformCredentialPublicInfo(
         m.integrationName as string, m.apiToolId,
         // Every row of this catalogue is a generation. Stated rather than
@@ -368,11 +387,12 @@ export function GenerateParametersForm({
         // billing path does: a generation is not sold on the credential-wide
         // default, and a rate of one dimension cannot price a call counted in
         // another.
-        { modelId: m.model, quantity, generation: true, quantityUnit: m.measuredUnit },
+        { modelId: m.model, quantity, generation: true, quantityUnit: m.measuredUnit,
+          priceMultiplier },
       ),
       staleTime: 5 * 60_000,
     };
-  }, [quantityFor]);
+  }, [quantityFor, model, params]);
 
   /**
    * The quote for the model actually chosen, asked for on its own.
@@ -459,8 +479,29 @@ export function GenerateParametersForm({
     const query = quoteOf(m);
     if (query?.isLoading) return '';
     if (!quoteSells(query?.data)) return '';
-    return describeQuotedPrice(query?.data, tGen, tUnits) || tGen('price.unpriced');
-  }, [platformSellsForSure, quoteOf, tGen, tUnits]);
+    // WITH the reason, when the server says it applied one. The row used to print a total that
+    // already carried the factor and nothing that accounted for it: "60 credits per second, 10
+    // seconds" beside 1200 credits reads as a mistake, not as a surcharge.
+    const quoted = describeQuotedPrice(query?.data, tGen, tUnits) || tGen('price.unpriced');
+    // A priced parameter bound to an EXPRESSION cannot be estimated at all: its value does not
+    // exist until the run reaches this step. The local calculation silently fell to the reference
+    // tier for it (a template matches no entry in the by_value table) and a file slot bound to one
+    // template counted as one file however many it resolves to, so the row quoted the published
+    // rate for a step the server may bill at four times it, with no badge and no note.
+    //
+    // Nothing here can compute the right number, so the row stops presenting one as if it could.
+    if (quoted && priceFactorDependsOnRuntime(m, m.model === model ? params : {})) {
+      return `${quoted} (${tGen('price.factorRuntime')})`;
+    }
+    return withQuotedPriceReason(
+      quoted,
+      query?.data,
+      // The factor belongs to the parameters currently in the form, which are THIS model's only
+      // when it is the selected one; every other row is quoted at the published rate.
+      priceFactorReasons(m, m.model === model ? params : {}),
+      tGen,
+    );
+  }, [platformSellsForSure, quoteOf, tGen, tUnits, model, params]);
 
   /**
    * Whether the PLATFORM can actually sell the chosen model, read as a yes
@@ -737,6 +778,23 @@ export function GenerateParametersForm({
             apiToolId={selected.apiToolId}
             modelId={selected.model}
             quantity={quantity}
+            // The SAME factor the estimate above was quoted with, so this control and the estimate
+            // read ONE cache entry rather than asking two questions about one node.
+            priceMultiplier={priceMultiplierFor(selected, params)}
+            // In WORDS as well as as a number. The pane quotes an amount that already carries the
+            // factor, and without this it printed "60 credits per second, 10 seconds = 1200
+            // credits": a total that does not multiply out, with nothing on screen to explain it.
+            //
+            // And the RUNTIME hedge, which the model row above already had and this did not - so
+            // one screen said "600 credits (the final price depends on a value this step resolves
+            // when it runs)" on the row, and directly beneath it "60 credits per second, 10
+            // seconds = 600 credits" as a plain fact, on a step the server bills 2400. The hedged
+            // half exists precisely because the number cannot be known; the unhedged half was the
+            // one sitting next to the choice of who pays.
+            priceFactorReason={priceFactorDependsOnRuntime(selected, params)
+              ? tGen('price.factorRuntime')
+              : describePriceFactors(priceFactorReasons(selected, params), tGen)}
+            priceFactorIsUncertain={priceFactorDependsOnRuntime(selected, params)}
             // What this call is COUNTED in, so the quote can refuse a rate that
             // cannot price it at all: a rate published per image against a call
             // counted in seconds shows a number, and then every run of that
@@ -838,12 +896,35 @@ export function GenerateParametersForm({
               const slots = isFile
                 ? Math.max(1, Math.min(shape?.maxItems ?? 1, MAX_FILE_SLOTS))
                 : 1;
+              // Guarded like every other dynamic key in this file. A role the locale files do not
+              // know renders its own key path onto the field, so a role added to the backend enum
+              // would ship as "assetRoles.depth_map" on screen with nothing failing. The parameter
+              // name is a worse label than the role and a much better one than that.
+              const fileRole = isFile && shape?.role && GENERATE_ASSET_ROLES.includes(shape.role)
+                ? shape.role
+                : null;
+              // The HEADING is the role when there is one. It used to be the parameter's own name
+              // while the fields under it were named by the role, so an endpoint whose image is a
+              // first frame read "Reference image" with "First frame" directly beneath it - the
+              // form contradicting itself about the one thing the reader has to get right.
+              const fileLabel = fileRole ? tGen(`assetRoles.${fileRole}`) : paramLabel(key);
+              // The two rules that decide whether the run is accepted at all. An author reading
+              // only the field names cannot see either, and both are refusals at run time: one
+              // free, one after the provider has answered.
+              const slotName = (other: string) => {
+                const role = selected.inputs?.[other]?.role;
+                return role && GENERATE_ASSET_ROLES.includes(role)
+                  ? tGen(`assetRoles.${role}`)
+                  : paramLabel(other);
+              };
+              const goesWith = (shape?.requires ?? []).map(slotName);
+              const notWith = (shape?.excludes ?? []).map(slotName);
 
               return (
                 <div key={key} className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">
-                      {paramLabel(key)}
+                      {isFile ? fileLabel : paramLabel(key)}
                     </span>
                     {isRequired && (
                       <span className="text-sm text-slate-500 dark:text-slate-400">{t('required')}</span>
@@ -852,30 +933,37 @@ export function GenerateParametersForm({
 
                   {isFile ? (
                     <div className="flex flex-col gap-2">
+                      {/* What the model DOES with this file. The heading says which file to give
+                          it; only this says what happens to it, and on a model taking a first
+                          frame, a last frame and references that is the whole difference. */}
+                      {fileRole && (
+                        <span className="text-xs text-slate-400 dark:text-slate-500">
+                          {tGen(`assetRoleHints.${fileRole}`)}
+                        </span>
+                      )}
+                      {goesWith.length > 0 && (
+                        <span className="text-xs text-slate-400 dark:text-slate-500">
+                          {tGen('assetPairing.goesWith', { slots: goesWith.join(', ') })}
+                        </span>
+                      )}
+                      {notWith.length > 0 && (
+                        <span className="text-xs text-slate-400 dark:text-slate-500">
+                          {tGen('assetPairing.notWith', { slots: notWith.join(', ') })}
+                        </span>
+                      )}
                       {Array.from({ length: slots }, (_, slot) => {
                         const list: any[] = Array.isArray(value) ? value : value ? [value] : [];
                         const slotValue = list[slot];
-                        // Guarded like every other dynamic key in this file. A role
-                        // the locale files do not know renders its own key path onto
-                        // the field, so a fifth AssetRole added to the backend enum
-                        // would ship as "assetRoles.last_frame" on screen with nothing
-                        // failing. The parameter name is a worse label than the role
-                        // and a much better one than that.
-                        const role = shape?.role && GENERATE_ASSET_ROLES.includes(shape.role)
-                          ? shape.role
-                          : null;
-                        const base = role ? tGen(`assetRoles.${role}`) : paramLabel(key);
                         return (
                           <div key={slot} className="flex flex-col gap-1">
-                            {/* Named whether or not there are several: the role says
-                                what the file IS to this model (a first frame, a source,
-                                a reference), and that is worth as much on a model that
-                                takes one as on a model that takes three. Numbered only
-                                when there are several, because "Source image 1" on a
-                                lone field invites the reader to look for a second. */}
+                            {/* Numbered, and only when there are several: the heading already
+                                names the slot, so repeating it under a field that takes exactly
+                                one says the same thing twice and invites a look for a second. */}
+                            {slots > 1 && (
                             <span className="text-xs text-slate-400 dark:text-slate-500">
-                              {slots > 1 ? `${base} ${slot + 1}` : base}
+                              {`${fileLabel} ${slot + 1}`}
                             </span>
+                            )}
                             <ExpressionEditor
                               {...expressionProps(key, slotValue, slots > 1 ? slot : undefined)}
                               onChange={(v) => setFileSlot(key, slot, slots, v)}

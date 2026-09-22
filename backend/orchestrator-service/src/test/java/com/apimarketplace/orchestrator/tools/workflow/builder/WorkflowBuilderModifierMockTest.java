@@ -146,6 +146,24 @@ class WorkflowBuilderModifierMockTest {
         }
 
         @Test
+        @DisplayName("undoing a FIRST mock leaves the node with no mock key at all, not one set to null")
+        void undoOfAFirstMockRemovesTheKey() {
+            // Undo restores old values, and the old value of a field that did not exist is null.
+            // Writing that null back left the key PRESENT, which is what the report keys "is a mock
+            // configured" off - so undo announced a mock the node no longer had.
+            WorkflowBuilderSession session = sessionWithMcpNode();
+            modifier.executeModifyNode(session, Map.of(
+                    "node", "Fetch Emails",
+                    "mock", Map.of("output", Map.of("v", 1))));
+
+            modifier.executeUndo(session);
+
+            assertThat(mcpNode(session))
+                    .as("absent, not present-and-null")
+                    .doesNotContainKey("mock");
+        }
+
+        @Test
         @DisplayName("catalog_example is accepted on a catalog-tool node (slug id)")
         void catalogExampleAccepted() {
             WorkflowBuilderSession session = sessionWithMcpNode();

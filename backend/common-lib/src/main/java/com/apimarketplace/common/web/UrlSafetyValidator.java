@@ -48,7 +48,19 @@ public final class UrlSafetyValidator {
     }
 
     private static String substitutePlaceholders(String url) {
-        return PLACEHOLDER.matcher(url).replaceAll(PLACEHOLDER_SUBSTITUTE);
+        String substituted = PLACEHOLDER.matcher(url).replaceAll(PLACEHOLDER_SUBSTITUTE);
+        // A template whose FIRST segment is a variable carries the scheme and host inside that
+        // variable ("{instance_url}/api/v1"). Substituting a bare token leaves a string with no
+        // scheme, which this validator then rejects, so that shape could not be declared at all:
+        // every templated base URL had to hard-code https and any port, and a self-hosted product
+        // reachable only over http, or on a port the template did not anticipate, was unreachable
+        // through its own integration. Give the leading variable a scheme so the FORM can be
+        // checked here. Nothing is loosened: once the variable is resolved, validateUrl runs on
+        // the real URL and still allows only http and https and still refuses private addresses.
+        if (url.stripLeading().startsWith("{") && substituted.startsWith(PLACEHOLDER_SUBSTITUTE)) {
+            substituted = "https://" + substituted;
+        }
+        return substituted;
     }
 
     private static boolean hasPlaceholder(String s) {
@@ -179,11 +191,11 @@ public final class UrlSafetyValidator {
             boolean acquired = DNS_RESOLUTION_PERMITS.tryAcquire(
                     DNS_RESOLUTION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
             if (!acquired) {
-                throw new IllegalArgumentException("DNS resolution capacity exceeded for hostname: " + host);
+                throw new UrlResolutionException("DNS resolution capacity exceeded for hostname: " + host);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalArgumentException("DNS resolution interrupted for hostname: " + host);
+            throw new UrlResolutionException("DNS resolution interrupted for hostname: " + host);
         }
 
         var future = DNS_RESOLVER_EXECUTOR.submit(() -> {
@@ -198,10 +210,10 @@ public final class UrlSafetyValidator {
             return future.get(DNS_RESOLUTION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             future.cancel(true);
-            throw new IllegalArgumentException("DNS resolution timed out for hostname: " + host);
+            throw new UrlResolutionException("DNS resolution timed out for hostname: " + host);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalArgumentException("DNS resolution interrupted for hostname: " + host);
+            throw new UrlResolutionException("DNS resolution interrupted for hostname: " + host);
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             if (cause instanceof UnknownHostException) {

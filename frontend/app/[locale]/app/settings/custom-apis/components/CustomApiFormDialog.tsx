@@ -26,6 +26,7 @@ import { fileService, getFileUrlById } from '@/lib/api/orchestrator/file.service
 import { useAuthedObjectUrl } from '@/hooks/useAuthedObjectUrl';
 import { useStandardApi } from '@/lib/hooks/useStandardApi';
 import type {
+  CustomApiAuthEntry,
   CustomApiDefinition,
   CustomApiDetails,
   CustomApiEndpoint,
@@ -59,6 +60,64 @@ const EMPTY_ENDPOINT: CustomApiEndpoint = {
   params: [],
 };
 
+/**
+ * Map any stored spelling of an auth type onto the canonical one the options use.
+ * Mirrors CredentialTypeNormalizer on the backend; unknown values pass through lowercased so a
+ * future type degrades to "no option selected" rather than to the wrong one.
+ */
+/**
+ * The `auth` array to submit, or nothing when there is nothing to say. Preserves a placement the
+ * form cannot author, and rebuilds the OAuth endpoints from the fields that can.
+ */
+function buildAuthEntry(
+  authType: string,
+  preserved: CustomApiAuthEntry[] | undefined,
+  authorizationUrl: string,
+  tokenUrl: string,
+  scopes: string,
+): { auth?: CustomApiAuthEntry[] } {
+  const base: CustomApiAuthEntry = { ...(preserved?.[0] ?? {}), type: authType };
+  if (authType === 'oauth2') {
+    const scopeList = scopes.trim() ? scopes.trim().split(/\s+/) : undefined;
+    base.oauth2Config = {
+      ...(authorizationUrl.trim() ? { authorizationUrl: authorizationUrl.trim() } : {}),
+      ...(tokenUrl.trim() ? { tokenUrl: tokenUrl.trim() } : {}),
+      ...(scopeList ? { scopes: scopeList } : {}),
+    };
+  } else {
+    delete base.oauth2Config;
+  }
+  const meaningful = base.apiKeyConfig !== undefined || base.oauth2Config !== undefined;
+  return meaningful ? { auth: [base] } : {};
+}
+
+function canonicalAuthType(raw: string | undefined | null): string {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (!v) return 'none';
+  switch (v) {
+    case 'apikey':
+    case 'api_key':
+    case 'api-key':
+      return 'api_key';
+    case 'bearer':
+    case 'bearer_token':
+    case 'bearertoken':
+    case 'bearer-token':
+      return 'bearer_token';
+    case 'basic':
+    case 'basic_auth':
+    case 'basicauth':
+    case 'basic-auth':
+      return 'basic_auth';
+    case 'oauth':
+    case 'oauth2':
+    case 'oauth_2':
+      return 'oauth2';
+    default:
+      return v;
+  }
+}
+
 export function CustomApiFormDialog({
   open,
   onOpenChange,
@@ -73,6 +132,14 @@ export function CustomApiFormDialog({
   const [description, setDescription] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [authType, setAuthType] = useState('none');
+  // Declared auth placement / OAuth endpoints. This form has no editor for either, so it holds
+  // them only to hand them back on save. Rebuilding the definition without them silently reset a
+  // custom header or a whole OAuth configuration to the default on the next edit.
+  const [preservedAuth, setPreservedAuth] = useState<CustomApiAuthEntry[] | undefined>(undefined);
+  const [oauthAuthorizationUrl, setOauthAuthorizationUrl] = useState('');
+  const [oauthTokenUrl, setOauthTokenUrl] = useState('');
+  const [oauthScopes, setOauthScopes] = useState('');
+  const [preservedIconSlug, setPreservedIconSlug] = useState<string | undefined>(undefined);
   const [iconUrl, setIconUrl] = useState('');
   const [isUploadingIcon, setIsUploadingIcon] = useState(false);
   const iconInputRef = useRef<HTMLInputElement>(null);
@@ -120,6 +187,11 @@ export function CustomApiFormDialog({
       setDescription('');
       setBaseUrl('');
       setAuthType('none');
+      setPreservedAuth(undefined);
+      setPreservedIconSlug(undefined);
+      setOauthAuthorizationUrl('');
+      setOauthTokenUrl('');
+      setOauthScopes('');
       setIconUrl('');
       setIconError('');
       setCategory('Custom APIs');
@@ -137,7 +209,20 @@ export function CustomApiFormDialog({
   // Apply fetched details once available
   useEffect(() => {
     if (apiDetails && !detailsApplied && open && api) {
-      setAuthType(apiDetails.authType || 'none');
+      // Canonicalise what the API returns before it reaches the Select. Both spellings exist in
+      // the wild: everything registered before the auth type was canonicalised stored 'bearer' /
+      // 'apikey' / 'oauth2', everything since stores 'bearer_token' / 'api_key' / 'oauth2'. A
+      // Select whose value matches no SelectItem renders blank, so pinning the options to either
+      // spelling alone leaves one half of the existing APIs with an empty control.
+      setAuthType(canonicalAuthType(apiDetails.authType));
+      setPreservedAuth(apiDetails.auth);
+      setPreservedIconSlug(apiDetails.iconSlug);
+      const storedOauth = apiDetails.auth?.[0]?.oauth2Config as
+        | { authorizationUrl?: string; tokenUrl?: string; scopes?: string[] }
+        | undefined;
+      setOauthAuthorizationUrl(storedOauth?.authorizationUrl ?? '');
+      setOauthTokenUrl(storedOauth?.tokenUrl ?? '');
+      setOauthScopes((storedOauth?.scopes ?? []).join(' '));
       setCategory(apiDetails.categoryName || 'Custom APIs');
       if (apiDetails.iconUrl) setIconUrl(apiDetails.iconUrl);
       if (apiDetails.endpoints && apiDetails.endpoints.length > 0) {
@@ -182,6 +267,12 @@ export function CustomApiFormDialog({
       baseUrl: baseUrl.trim(),
       apiDescription: description.trim() || undefined,
       authType,
+      // The declaration outlives an edit made in a form that cannot express all of it: the
+      // placement is carried through verbatim, while the OAuth endpoints ARE editable here and
+      // so are rebuilt from the fields. The type is re-stamped from the dropdown so the two can
+      // never disagree.
+      ...buildAuthEntry(authType, preservedAuth, oauthAuthorizationUrl, oauthTokenUrl, oauthScopes),
+      ...(preservedIconSlug ? { iconSlug: preservedIconSlug } : {}),
       apiCategory: category.trim() || 'Custom APIs',
       ...(iconUrl.trim() ? { iconUrl: iconUrl.trim() } : {}),
       ...(apiVersion.trim() ? { apiVersion: apiVersion.trim() } : {}),
@@ -201,7 +292,7 @@ export function CustomApiFormDialog({
     };
 
     onSubmit(definition);
-  }, [name, baseUrl, description, authType, category, iconUrl, endpoints, apiVersion, documentation, rateLimitRps, rateLimitRpd, onSubmit]);
+  }, [name, baseUrl, description, authType, preservedAuth, preservedIconSlug, oauthAuthorizationUrl, oauthTokenUrl, oauthScopes, category, iconUrl, endpoints, apiVersion, documentation, rateLimitRps, rateLimitRpd, onSubmit]);
 
   const addEndpoint = useCallback(() => {
     setEndpoints((prev) => [...prev, { ...EMPTY_ENDPOINT, params: [] }]);
@@ -324,9 +415,17 @@ export function CustomApiFormDialog({
   }, [t]);
 
   const validEndpointsForCheck = endpoints.filter((ep) => ep.name.trim() !== '');
+  // OAuth2 is refused server-side without both endpoints, and that refusal surfaces as a bare
+  // "Error" toast with no message, so the user would be told nothing about which field is
+  // missing. Keeping Save disabled says it where it can be acted on.
+  const oauthIsComplete =
+    authType !== 'oauth2' ||
+    (oauthAuthorizationUrl.trim() !== '' && oauthTokenUrl.trim() !== '');
+
   const isValid =
     name.trim() !== '' &&
     baseUrl.trim() !== '' &&
+    oauthIsComplete &&
     validEndpointsForCheck.length > 0 &&
     validEndpointsForCheck.every(
       (ep) =>
@@ -429,16 +528,58 @@ export function CustomApiFormDialog({
             <Label className="text-sm">{t('form.authType')}</Label>
             <Select value={authType} onValueChange={setAuthType}>
               <SelectTrigger className="mt-1">
-                <SelectValue />
+                <SelectValue placeholder={t('form.authType')} />
               </SelectTrigger>
               <SelectContent>
+                {/* Canonical spellings. What is STORED may be either spelling, so the loaded
+                    value is canonicalised on the way in rather than the options being widened. */}
                 <SelectItem value="none">{t('form.authNone')}</SelectItem>
-                <SelectItem value="bearer">{t('form.authBearer')}</SelectItem>
-                <SelectItem value="apikey">{t('form.authApiKey')}</SelectItem>
+                <SelectItem value="bearer_token">{t('form.authBearer')}</SelectItem>
+                <SelectItem value="api_key">{t('form.authApiKey')}</SelectItem>
+                <SelectItem value="basic_auth">{t('form.authBasic')}</SelectItem>
                 <SelectItem value="oauth2">{t('form.authOAuth2')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
+
+          {/* OAuth2 endpoints. Registration REFUSES oauth2 without them, so without these fields
+              the option would be a dead end - and an API already stored as oauth2 could not be
+              saved at all, because the form had no way to supply what the backend now requires. */}
+          {authType === 'oauth2' && (
+            <div className="space-y-2 rounded-md border border-theme-border-subtle p-3">
+              <p className="text-sm text-theme-text-secondary">{t('form.oauthHint')}</p>
+              {!oauthIsComplete && (
+                <p className="text-sm text-red-500">{t('form.oauthUrlsRequired')}</p>
+              )}
+              <div>
+                <Label className="text-sm">{t('form.oauthAuthorizationUrl')}</Label>
+                <Input
+                  value={oauthAuthorizationUrl}
+                  onChange={(e) => setOauthAuthorizationUrl(e.target.value)}
+                  placeholder="https://provider.example.com/oauth/authorize"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-sm">{t('form.oauthTokenUrl')}</Label>
+                <Input
+                  value={oauthTokenUrl}
+                  onChange={(e) => setOauthTokenUrl(e.target.value)}
+                  placeholder="https://provider.example.com/oauth/token"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-sm">{t('form.oauthScopes')}</Label>
+                <Input
+                  value={oauthScopes}
+                  onChange={(e) => setOauthScopes(e.target.value)}
+                  placeholder="read write"
+                  className="mt-1"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Category */}
           <div>
@@ -636,6 +777,7 @@ export function CustomApiFormDialog({
                                   <SelectItem value="query">query</SelectItem>
                                   <SelectItem value="path">path</SelectItem>
                                   <SelectItem value="body">body</SelectItem>
+                                  <SelectItem value="header">header</SelectItem>
                                 </SelectContent>
                               </Select>
                               <Select

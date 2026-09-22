@@ -146,7 +146,7 @@ class AbstractLLMProviderRetryAfterTest {
         @Override public String getDefaultModel() { return "test-model"; }
         @Override public List<String> getSupportedModels() { return List.of("test-model"); }
         @Override protected Map<String, Object> buildRequestBody(CompletionRequest request) { return Map.of(); }
-        @Override protected HttpHeaders buildHeaders() { return new HttpHeaders(); }
+        @Override protected HttpHeaders buildHeaders(CompletionRequest request) { return new HttpHeaders(); }
         @Override protected CompletionResponse parseResponse(Map<String, Object> body) { return null; }
         @Override protected String processStreamingLine(String line) { return null; }
     }

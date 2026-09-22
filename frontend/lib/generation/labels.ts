@@ -1,4 +1,18 @@
-import type { StudioField } from '@/lib/generation/paramSpec';
+/**
+ * The three things a label needs to know about a file slot.
+ *
+ * <p>Narrower than the field itself on purpose: the dialog builds its slots from the model listing
+ * rather than from a StudioField, and asking it for a whole field would have been the third place
+ * in the app to decide what a file slot is called.
+ */
+export interface AssetSlotShape {
+  /** The unified parameter name, which is the fallback when no word exists for the role. */
+  name: string;
+  /** What the file IS to this model, as the catalogue declares it. */
+  role?: string;
+  /** How many files the slot takes. A slot taking exactly one is never numbered. */
+  slots: number;
+}
 
 /**
  * What to call a generation parameter and a file slot, in the reader's language.
@@ -39,11 +53,26 @@ export function paramLabel(name: string, t: LabelTranslator): string {
  * @param slot when given AND the parameter takes several files, the label is numbered. A parameter
  *        taking exactly one is never numbered: "Source image 1" invites a look for a second.
  */
-export function assetRoleLabel(field: StudioField, t: LabelTranslator, slot?: number): string {
+export function assetRoleLabel(field: AssetSlotShape, t: LabelTranslator, slot?: number): string {
   const base = field.role && t.has(`assetRoles.${field.role}`)
     ? t(`assetRoles.${field.role}`)
     : paramLabel(field.name, t);
   return slot !== undefined && field.slots > 1 ? `${base} ${slot + 1}` : base;
+}
+
+/**
+ * What this file will DO, in one line, or null when nothing is known.
+ *
+ * <p>The name of a slot says which file goes in it; it does not say what happens to the file. "First
+ * frame" and "Reference image" are both images of the same thing and produce two different videos,
+ * and the reader who guesses wrong finds out from a finished clip they have paid for. Null rather
+ * than a placeholder, so a role this build has no sentence for simply shows nothing instead of a
+ * key path.
+ */
+export function assetRoleHint(field: AssetSlotShape, t: LabelTranslator): string | null {
+  if (!field.role) return null;
+  const key = `assetRoleHints.${field.role}`;
+  return t.has(key) ? t(key) : null;
 }
 
 /**

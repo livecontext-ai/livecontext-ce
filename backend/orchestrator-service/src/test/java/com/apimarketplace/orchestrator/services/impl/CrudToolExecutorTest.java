@@ -217,6 +217,92 @@ class CrudToolExecutorTest {
         }
     }
 
+    /**
+     * The step output is what a workflow can branch on. Whatever the write reported about the
+     * values it stored has to arrive here under a name, or the run reads as clean.
+     */
+    @Nested
+    @DisplayName("Coercion warnings")
+    class CoercionWarningTests {
+
+        /**
+         * The sentence the coercion really writes, character for character (column prefix from
+         * CrudExecutorService, body from ColumnValueCoercer). A fixture in an invented shape would
+         * assert this layer against a string production never produces.
+         */
+        private static final String UNUSABLE =
+            "video: File reference has no id and no URL - it cannot be displayed "
+                + "(storage key: 1/wf/run/clip.mp4)";
+
+        @Test
+        @DisplayName("An insert that reported a warning puts it in the step output")
+        void insertCarriesWarningsIntoTheOutput() {
+            when(dataSourceClient.executeCrud(any())).thenReturn(new CrudResultDto(
+                "create-row", true, "Created 1 row",
+                new CrudResultDto.ResultData(null, null, null, null, List.of(42L), 1, null, null,
+                    null, List.of(UNUSABLE))));
+
+            ExecutionResult execResult = executor.execute("crud/create-row",
+                Map.of("dataSourceId", 1L, "crud",
+                    Map.of("rows", List.of(Map.of("id", "r1", "columns", Map.of("video", "x"))))),
+                "tenant-1");
+
+            assertThat(execResult.isSuccess())
+                .as("a diagnosed value does not fail the step - that is what makes it easy to miss")
+                .isTrue();
+            assertThat(execResult.output().get("warnings")).isEqualTo(List.of(UNUSABLE));
+        }
+
+        @Test
+        @DisplayName("An update that reported a warning puts it in the step output")
+        void updateCarriesWarningsIntoTheOutput() {
+            when(dataSourceClient.executeCrud(any())).thenReturn(new CrudResultDto(
+                "update-row", true, "Updated 1 row",
+                new CrudResultDto.ResultData(null, null, null, null, null, null, 1, null,
+                    null, List.of(UNUSABLE))));
+
+            ExecutionResult execResult = executor.execute("crud/update-row",
+                Map.of("dataSourceId", 1L, "crud", Map.of()), "tenant-1");
+
+            assertThat(execResult.output().get("warnings")).isEqualTo(List.of(UNUSABLE));
+            assertThat(execResult.output().get("updated_count")).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("A clean write leaves no warnings key at all")
+        void cleanWriteHasNoWarningsKey() {
+            when(dataSourceClient.executeCrud(any())).thenReturn(new CrudResultDto(
+                "create-row", true, "Created 1 row",
+                new CrudResultDto.ResultData(null, null, null, null, List.of(42L), 1, null, null,
+                    null, null)));
+
+            ExecutionResult execResult = executor.execute("crud/create-row",
+                Map.of("dataSourceId", 1L, "crud",
+                    Map.of("rows", List.of(Map.of("id", "r1", "columns", Map.of("name", "Test"))))),
+                "tenant-1");
+
+            assertThat(execResult.output())
+                .as("an empty array would make every clean write look like it had something to say")
+                .doesNotContainKey("warnings");
+        }
+
+        @Test
+        @DisplayName("An empty warnings list is treated as nothing to say")
+        void emptyWarningsListIsOmitted() {
+            when(dataSourceClient.executeCrud(any())).thenReturn(new CrudResultDto(
+                "create-row", true, "Created 1 row",
+                new CrudResultDto.ResultData(null, null, null, null, List.of(42L), 1, null, null,
+                    null, List.of())));
+
+            ExecutionResult execResult = executor.execute("crud/create-row",
+                Map.of("dataSourceId", 1L, "crud",
+                    Map.of("rows", List.of(Map.of("id", "r1", "columns", Map.of("name", "Test"))))),
+                "tenant-1");
+
+            assertThat(execResult.output()).doesNotContainKey("warnings");
+        }
+    }
+
     @Nested
     @DisplayName("DataSourceId extraction")
     class DataSourceIdTests {

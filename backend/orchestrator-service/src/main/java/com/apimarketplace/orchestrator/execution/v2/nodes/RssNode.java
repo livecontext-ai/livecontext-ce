@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.common.web.UrlSafetyValidator;
@@ -354,7 +355,9 @@ public class RssNode extends BaseNode {
 
     private Map<String, Object> buildInputDataMap(String url, int maxItems) {
         Map<String, Object> inputData = new LinkedHashMap<>();
-        inputData.put("url", url);
+        // Masked like every other reported url: a feed url can carry its token in the
+        // query string, and download_file and http_request both mask theirs.
+        inputData.put("url", ReportedParams.maskUrlSecrets(url));
         inputData.put("maxItems", maxItems);
         return inputData;
     }

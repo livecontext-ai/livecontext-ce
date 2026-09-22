@@ -36,11 +36,23 @@ vi.mock('@/lib/api/orchestrator/agenda.service', () => ({
   agendaFailureOf: () => ({}),
 }));
 
+vi.mock('@/lib/api/orchestrator/resource-control', () => ({
+  canControlProductionResource: (resource: ActiveAutomation) =>
+    resource.resourceType === 'AGENT' || Boolean(resource.productionRunIdPublic),
+  productionResourceKind: (resourceType: ActiveAutomation['resourceType']) => (
+    resourceType === 'AGENT' ? 'agent' : resourceType === 'APPLICATION' ? 'interface' : 'workflow'
+  ),
+  setProductionResourcePaused: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Not mocked, deliberately. The refresh's whole difficulty is the KEY: `useOrgScopedQuery`
 // prefixes it with the active workspace, so a hand-written `['home-status']` invalidates
-// nothing while looking exactly right. A mocked hook would assert that a function was
-// called; a real one asserts the rows actually come back.
+// nothing while looking exactly right. A mocked hook would assert that some function was
+// called; the real one is driven here, against a spied `invalidateQueries`, so what is pinned
+// is the KEY - that the rows actually come back is pinned against a real cache in
+// useRefreshHomeStatus.freshness.test.tsx.
 import { agendaService } from '@/lib/api/orchestrator/agenda.service';
+import { setProductionResourcePaused } from '@/lib/api/orchestrator/resource-control';
 
 let queryClient: QueryClient;
 let invalidate: ReturnType<typeof vi.fn>;
@@ -48,6 +60,7 @@ let invalidate: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.mocked(agendaService.runNow).mockReset()
     .mockResolvedValue({ success: true, occurrenceConsumed: true });
+  vi.mocked(setProductionResourcePaused).mockReset().mockResolvedValue(undefined);
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   invalidate = vi.fn();
   queryClient.invalidateQueries = invalidate as unknown as QueryClient['invalidateQueries'];
@@ -180,6 +193,28 @@ describe('TriggerRowActions', () => {
 
     renderRow(webhook);
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('pauses a manual workflow resource even though it has no schedule', async () => {
+    const onResult = vi.fn();
+    const manual = automation({
+      triggerType: 'MANUAL',
+      schedule: undefined,
+      productionRunIdPublic: 'run-public-1',
+    });
+
+    expect(hasTriggerRowActions(manual)).toBe(true);
+    renderRow(manual, onResult);
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByText('pauseResource:{"type":"workflow"}'));
+
+    await waitFor(() => expect(setProductionResourcePaused).toHaveBeenCalledWith(manual, true));
+    expect(onResult).toHaveBeenCalledWith('success', 'resourcePaused:{"type":"workflow"}');
+    // Pausing the resource changes the SAME rows a run does: the row must stop counting down to
+    // a fire that will not happen, and the bell's imminent ring with it.
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ['org', '__personal__', 'home-status'],
+    }));
   });
 
   it.each(REVEAL_SITUATIONS)(
@@ -329,6 +364,61 @@ describe('TriggerRowActions', () => {
 
       await waitFor(() => expect(onResult).toHaveBeenCalledWith('error', expect.anything()));
       expect(invalidate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a schedule its spending cap is refusing', () => {
+    /** The row shape the server sends once a cap is holding the schedule back. */
+    const capped = () => automation({
+      resourceType: 'AGENT',
+      resourceId: 'agent-1',
+      name: 'Reporter',
+      schedule: {
+        cronExpression: '0 9 * * *',
+        timezone: 'UTC',
+        nextFireAt: '2026-09-03T09:00:00Z',
+        executionCount: 4,
+        scheduleId: 'sched-1',
+        // Still ARMED, and that is the point: the schedule is healthy, the cap is what
+        // refuses the run. A row that read `armed` alone would see nothing wrong.
+        armed: true,
+        budgetBlocked: true,
+      },
+    });
+
+    it('does not let either run choice be clicked', () => {
+      // The engine refuses the fire whoever asked for it, so an enabled button here is a
+      // button whose only possible outcome is a failure toast.
+      renderRow(capped());
+      fireEvent.click(trigger());
+
+      expect((screen.getByText('runNow').closest('button') as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByText('runInstead').closest('button') as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('spends no round trip trying', () => {
+      renderRow(capped());
+      runFromMenu('runNow');
+
+      expect(agendaService.runNow).not.toHaveBeenCalled();
+    });
+
+    it('says WHY, rather than just going grey', () => {
+      // A disabled control with no explanation reads as a bug. The hint is the only place
+      // the reason can appear on this surface.
+      renderRow(capped());
+      fireEvent.click(trigger());
+
+      expect(screen.getAllByText('runNowBudgetBlocked').length).toBeGreaterThan(0);
+    });
+
+    it('leaves an unblocked row exactly as it was', () => {
+      // The regression this kind of gate causes: every other row loses its actions.
+      renderRow(automation());
+      fireEvent.click(trigger());
+
+      expect((screen.getByText('runNow').closest('button') as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.getByText('runNowHint')).toBeTruthy();
     });
   });
 });

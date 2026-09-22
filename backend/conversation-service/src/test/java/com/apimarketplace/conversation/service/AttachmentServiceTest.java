@@ -20,6 +20,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -297,6 +298,52 @@ class AttachmentServiceTest {
             assertThat(result).hasSize(1);
             assertThat(result.get(0).data()).isEqualTo(data);
             verify(attachmentBlobStore, never()).download(anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("should attach a FileRef so an agent can pass an S3-backed attachment to a tool's file argument")
+        void shouldAttachFileRefForS3BackedAttachment() {
+            UUID storageId = UUID.randomUUID();
+            AttachmentRef ref = new AttachmentRef(storageId.toString(), "IMAGE", "photo.jpg", "image/jpeg");
+
+            byte[] data = new byte[]{1, 2, 3};
+            StorageEntity entity = mock(StorageEntity.class);
+            when(entity.getS3Key()).thenReturn("user-1/general/chat/photo.jpg");
+            when(entity.getTenantId()).thenReturn("user-1");
+            when(entity.getFileName()).thenReturn("photo.jpg");
+            when(entity.getMimeType()).thenReturn("image/jpeg");
+            when(entity.getSizeBytes()).thenReturn(3);
+            when(storageService.getEntityById(storageId, "user-1")).thenReturn(Optional.of(entity));
+            when(attachmentBlobStore.download("user-1", "user-1/general/chat/photo.jpg")).thenReturn(Optional.of(data));
+
+            List<MessageAttachment> result = attachmentService.loadAttachments(List.of(ref), "user-1");
+
+            assertThat(result).hasSize(1);
+            Map<String, Object> fileRef = result.get(0).fileRef();
+            assertThat(fileRef).isNotNull();
+            assertThat(fileRef.get("_type")).isEqualTo("file");
+            assertThat(fileRef.get("path")).isEqualTo("user-1/general/chat/photo.jpg");
+            assertThat(fileRef.get("name")).isEqualTo("photo.jpg");
+            assertThat(fileRef.get("mimeType")).isEqualTo("image/jpeg");
+            assertThat(fileRef.get("size")).isEqualTo(3);
+            assertThat(fileRef.get("id")).isEqualTo(storageId.toString());
+        }
+
+        @Test
+        @DisplayName("should leave fileRef null for a legacy DB-binary attachment (no s3_key), since there is no durable key another tool could read it from")
+        void shouldLeaveFileRefNullForLegacyBinary() {
+            UUID storageId = UUID.randomUUID();
+            AttachmentRef ref = new AttachmentRef(storageId.toString(), "IMAGE", "old.png", "image/png");
+
+            StorageEntity entity = mock(StorageEntity.class);
+            when(entity.getS3Key()).thenReturn(null);
+            when(entity.getDataBinary()).thenReturn(new byte[]{9, 8, 7});
+            when(storageService.getEntityById(storageId, "user-1")).thenReturn(Optional.of(entity));
+
+            List<MessageAttachment> result = attachmentService.loadAttachments(List.of(ref), "user-1");
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).fileRef()).isNull();
         }
 
         @Test

@@ -1,8 +1,12 @@
 package com.apimarketplace.agent.tools.authz;
 
+import com.apimarketplace.agent.tools.common.ToolParamUtils;
+
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * Hand-curated source of truth for which tool actions require a synchronous
@@ -23,6 +27,9 @@ import java.util.Set;
  * tool below (one line). Keys are tool names and actions exactly as the facade
  * tools expose them (lowercase ASCII identifiers - do NOT introduce
  * {@code LabelNormalizer}, which is for workflow node slugs, not tool actions).
+ * When the action alone does not say whether the call is sensitive - the same
+ * action being ordinary or not depending on an argument - add a
+ * {@code ConditionalRule} instead; see {@link #RULE_AGENT_SCHEDULE}.
  *
  * <p>Criterion for "sensitive": spends credit, acquires/installs a resource,
  * executes something external, or performs a notable state mutation.
@@ -68,10 +75,132 @@ public final class ToolAuthorizationPolicy {
             // On an automatic run it re-executes the named node and everything downstream
             // unattended, with the same credit spend and the same external side effects as a
             // fresh fire - only the part upstream of the node is spared.
-            "workflow",    Set.of("execute", "continue_interface", "resolve_approval", "restart_from_node", "run_node"),
+            // pin/unpin decide what PRODUCTION is. Pinning a version hands it every trigger
+            // the plan declares - schedules, webhooks, chat and form endpoints all re-sync to
+            // it and start firing on their own, with no further call from anyone. That is the
+            // one action in this tool whose effects outlive the conversation, so it is gated
+            // even though it runs nothing by itself.
+            // unpin is gated too, and it is the one entry here that ENDS something rather
+            // than starting it - which the stop_run paragraph above argues against. The
+            // difference is what is racing: stop_run is a safety valve over an execution
+            // happening right now, where waiting on a click defeats the action, while unpin
+            // takes a workspace's automation off the air with nothing in flight. Asking costs
+            // a click; not asking costs schedules nobody noticed had stopped.
+            "workflow",    Set.of("execute", "continue_interface", "resolve_approval", "restart_from_node", "run_node",
+                                  "pin", "unpin"),
             "agent",       Set.of("execute"),
-            "catalog",     Set.of("execute", "call")   // "call" is an alias of "execute"
+            "catalog",     Set.of("execute", "call"),  // "call" is an alias of "execute"
+            // Mail that LEAVES the account, or stops existing in it. Gated for the same reason
+            // catalog:execute is: the effect lands outside the product, under the user's own
+            // identity, and cannot be taken back. Sending in particular is irreversible in a way
+            // even a paid API call is not, because the recipient is a person.
+            //
+            // The reads are deliberately absent. Listing a folder, naming its folders and
+            // marking a message seen change nothing a user would want a click over, and gating
+            // them would put a card in front of every inbox scan, which is the shape of gate
+            // people learn to approve without reading. move and flag are the same: reversible,
+            // inside the mailbox, and visible in it afterwards.
+            "mailbox",     Set.of("send", "delete")
     );
+
+    /**
+     * Rule key for arming a recurring agent: {@code agent:create} or {@code agent:update}
+     * carrying a cron.
+     *
+     * <p>ONE key for both actions on purpose. What the user authorizes is "let an agent run
+     * itself on a schedule", not "let you call create" - and a "don't ask again" ticked on
+     * the creation must cover the update that changes the same agent's cron, which a
+     * per-action key would not.
+     */
+    public static final String RULE_AGENT_SCHEDULE = "agent:schedule";
+
+    /** The argument that arms an agent's schedule, on create and on update alike. */
+    public static final String PARAM_SCHEDULE_CRON = "schedule_cron";
+
+    /**
+     * A rule that depends on the ARGUMENTS, not only on the action.
+     *
+     * @param tool    facade tool name, lowercase
+     * @param action  action name, lowercase
+     * @param when    tested against the call's arguments; true means "gate this call"
+     * @param ruleKey the canonical rule this call raises when {@code when} matches
+     */
+    private record ConditionalRule(String tool, String action,
+                                   Predicate<Map<String, Object>> when, String ruleKey) {}
+
+    /**
+     * Rules that the {@code (tool, action)} pair alone cannot express.
+     *
+     * <p>Why this second registry exists. {@code agent:create} is ordinary: naming a model and
+     * a prompt does nothing until someone runs it. The same call carrying {@code schedule_cron}
+     * is not ordinary at all - it arms an agent that will wake up on its own, spend credit and
+     * reach external services with nobody watching, for as long as the cron runs. Putting
+     * {@code create} in {@link #SENSITIVE_ACTIONS} would raise a card on every agent ever
+     * created to catch the few that are armed; leaving it out lets the armed ones through.
+     * Neither is the product rule, so the condition is expressed instead.
+     *
+     * <p>A BLANK cron is deliberately not here: on both actions that means "delete the
+     * schedule", which disarms rather than arms. Same posture as {@code stop_run}.
+     */
+    private static final List<ConditionalRule> CONDITIONAL_RULES = List.of(
+            new ConditionalRule("agent", "create",
+                    ToolAuthorizationPolicy::armsAgentSchedule, RULE_AGENT_SCHEDULE),
+            new ConditionalRule("agent", "update",
+                    ToolAuthorizationPolicy::armsAgentSchedule, RULE_AGENT_SCHEDULE)
+    );
+
+    /**
+     * True when the call carries a non-blank cron, which is what arms the schedule.
+     *
+     * <p><b>Reads the MERGED view, and that is the whole correctness of this rule.</b>
+     * {@code AgentCrudModule} starts create and update with
+     * {@link ToolParamUtils#mergeParams}, which flattens a nested {@code params} object into
+     * the top level, and the agent tool's own help gives that nested form in every scheduled
+     * -agent example it publishes. A guard reading only the top level would therefore answer
+     * "no cron" for the shape models actually send, arm the schedule, and report success:
+     * gate installed, tests green, nothing asked. The condition has to look exactly where the
+     * module looks, so it calls the same function the module calls rather than reimplementing
+     * the flattening.
+     */
+    private static boolean armsAgentSchedule(Map<String, Object> arguments) {
+        if (arguments == null) {
+            return false;
+        }
+        Object cron = ToolParamUtils.mergeParams(arguments).get(PARAM_SCHEDULE_CRON);
+        return cron != null && !String.valueOf(cron).trim().isEmpty();
+    }
+
+    /**
+     * The conditional rule this call raises, or {@code null} when no condition matches.
+     *
+     * @param toolName  facade tool name (any case)
+     * @param action    resolved action (any case); {@code null} matches nothing here - an
+     *                  unresolvable action is handled by the guard's fail-closed branch
+     * @param arguments the call's arguments, which is what the conditions read
+     */
+    public static String conditionalRuleKey(String toolName, String action,
+                                            Map<String, Object> arguments) {
+        if (toolName == null || action == null) {
+            return null;
+        }
+        String tool = toolName.toLowerCase(Locale.ROOT);
+        String act = action.toLowerCase(Locale.ROOT);
+        for (ConditionalRule rule : CONDITIONAL_RULES) {
+            if (rule.tool().equals(tool) && rule.action().equals(act) && rule.when().test(arguments)) {
+                return rule.ruleKey();
+            }
+        }
+        return null;
+    }
+
+    /** True iff this tool has at least one argument-conditional rule. */
+    public static boolean hasConditionalRules(String toolName) {
+        if (toolName == null) {
+            return false;
+        }
+        String tool = toolName.toLowerCase(Locale.ROOT);
+        return CONDITIONAL_RULES.stream().anyMatch(rule -> rule.tool().equals(tool));
+    }
 
     /** True iff this exact {@code (toolName, action)} pair is in the sensitive list. */
     public static boolean requires(String toolName, String action) {
@@ -82,9 +211,17 @@ public final class ToolAuthorizationPolicy {
         return actions != null && actions.contains(action.toLowerCase(Locale.ROOT));
     }
 
-    /** True iff this tool has at least one action requiring authorization. */
+    /**
+     * True iff this tool has at least one gated shape - an unconditional sensitive action OR
+     * an argument-conditional rule. A tool that only ever gates conditionally still counts:
+     * callers use this to decide whether the tool is worth looking at at all.
+     */
     public static boolean isSensitiveTool(String toolName) {
-        return toolName != null && SENSITIVE_ACTIONS.containsKey(toolName.toLowerCase(Locale.ROOT));
+        if (toolName == null) {
+            return false;
+        }
+        return SENSITIVE_ACTIONS.containsKey(toolName.toLowerCase(Locale.ROOT))
+                || hasConditionalRules(toolName);
     }
 
     /**

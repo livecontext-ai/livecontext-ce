@@ -3,6 +3,8 @@
 import React, { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { useMobileDetection } from '@/hooks/useMobileDetection';
+import { parseTabResource } from '@/lib/sidePanel/tabResource';
+import { useResourceDeleted, type ResourceDeletedDetail } from '@/lib/resources/resourceDeleted';
 
 // ── Types ──
 
@@ -396,6 +398,53 @@ export function SidePanelProvider({ children }: { children: ReactNode }) {
       return [];
     });
   }, []);
+
+  /**
+   * A tab showing a resource that has just been deleted is dropped, PINNED OR NOT.
+   *
+   * This is the one route that overrides the pin, and it has to be: `pinned`
+   * means "the user may not close this", which is the right answer for a tab the
+   * page owns and a trap for a tab whose subject no longer exists. Deleting an
+   * agent from the list used to leave a pinned `agent-<id>` tab with no X, no
+   * menu and no Delete entry, showing an agent that was gone; the only ways out
+   * were closing the whole panel (it came back on reopen) or navigating off the
+   * section.
+   *
+   * Matching goes through `parseTabResource`, the one place that reads the tab-id
+   * grammar, so a deleted workflow also takes its `workflow-run-<id>-<runId>`
+   * tabs with it. The reserved control-panel ids (`workflow-panel`,
+   * `application-panel`) parse to null and are deliberately untouched: they are
+   * owned by the page, not by one addressable resource.
+   */
+  const closeTabsForDeletedResource = useCallback(({ kind, id }: ResourceDeletedDetail) => {
+    setTabs(prev => {
+      // Compared as text for the same reason `useResourceRowsDeleted` does it: a
+      // table's id is a JSON number from the server while the type says string.
+      // Every producer stringifies today, so this is symmetry rather than a fix.
+      const target = String(id);
+      const remaining = prev.filter(t => {
+        const resource = parseTabResource(t.id);
+        return !(resource && resource.kind === kind && String(resource.id) === target);
+      });
+      if (remaining.length === prev.length) return prev;
+      // Same nested-setState idiom as the navigation effect above: queued against
+      // post-setTabs state, and idempotent so a double invocation is harmless.
+      setActiveTabId(prevActive => {
+        if (prevActive && remaining.some(t => t.id === prevActive)) return prevActive;
+        return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
+      });
+      // Closing the panel is decided INSIDE the updater, unlike the navigation
+      // effect, and deliberately. The alternative is to filter a ref mirror of
+      // `tabs` and call setTabs with the result, which reads the state COMMITTED
+      // at the last render: two deletions in one tick then compute from the same
+      // stale list and the second one puts the first one's tab back. Both calls
+      // queued here are idempotent, so a StrictMode double-invocation is a no-op,
+      // which is the price that buys correctness under a burst.
+      if (remaining.length === 0) setIsOpen(false);
+      return remaining;
+    });
+  }, []);
+  useResourceDeleted(closeTabsForDeletedResource);
 
   const moveTab = useCallback((fromIndex: number, toIndex: number) => {
     setTabs(prev => {

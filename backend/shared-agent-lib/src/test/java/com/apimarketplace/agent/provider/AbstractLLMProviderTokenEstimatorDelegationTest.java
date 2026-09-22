@@ -33,7 +33,7 @@ class AbstractLLMProviderTokenEstimatorDelegationTest {
         @Override protected String getApiUrl() { return "u"; }
         @Override protected Map<String, Object> buildRequestBody(CompletionRequest r) { return Map.of(); }
         @Override protected CompletionResponse parseResponse(Map<String, Object> r) { return CompletionResponse.text(""); }
-        @Override protected HttpHeaders buildHeaders() { return new HttpHeaders(); }
+        @Override protected HttpHeaders buildHeaders(CompletionRequest request) { return new HttpHeaders(); }
         @Override protected String processStreamingLine(String line) { return null; }
         @Override public String getProviderName() { return "probe"; }
         @Override public String getDefaultModel() { return "m"; }

@@ -46,6 +46,46 @@ public class AgentHelpModule implements ToolModule {
     @Autowired(required = false)
     private BridgeAccessGuard bridgeAccessGuard;
 
+    /**
+     * {@code auth.mode}: {@code "embedded"} ⇒ CE. Same spelling and same blank default as
+     * {@code ModelCatalogService} and {@code BridgeProviderSaveGuard}, so what the agent is SHOWN,
+     * what the picker LISTS and what a save ACCEPTS all change edition together.
+     */
+    @org.springframework.beans.factory.annotation.Value("${auth.mode:}")
+    private String authMode = "";
+
+    /** Package-private setter used by unit tests. */
+    void setAuthMode(String authMode) {
+        this.authMode = authMode;
+    }
+
+    @Autowired(required = false)
+    private com.apimarketplace.common.web.AppEditionProvider appEditionProvider;
+
+    /** Visible for tests. */
+    public void setAppEditionProvider(com.apimarketplace.common.web.AppEditionProvider provider) {
+        this.appEditionProvider = provider;
+    }
+
+    /**
+     * Whether this install runs its own CLI. Resolved from {@code AppEditionProvider}, which
+     * knows the difference between CE_FREE, SELF_HOSTED_ENTERPRISE (self-hosted, but running
+     * keycloak) and the hosted product - a difference {@code auth.mode} alone cannot express, and
+     * getting it wrong would ban an enterprise operator from the CLI they installed themselves.
+     *
+     * <p>The bean comes from common-lib auto-configuration and is present in every service. It is
+     * optional only so test slices need not raise it; absent, the check falls back to
+     * {@code auth.mode=embedded}, which is right for the CE monolith and is the value every
+     * pre-existing test already sets.
+     */
+    private boolean isSelfHostedInstall() {
+        if (appEditionProvider != null) {
+            return appEditionProvider.isSelfHosted();
+        }
+        return "embedded".equalsIgnoreCase(authMode == null ? "" : authMode.trim());
+    }
+
+
     public AgentHelpModule(AgentDefaultsConfig defaults,
                            ModelCatalogService modelCatalogService) {
         this.defaults = defaults;
@@ -147,7 +187,9 @@ public class AgentHelpModule implements ToolModule {
             "Insert a new agent. Requires name + system_prompt; any other parameter (webhook, schedule, " +
             "resources, skills, budget) can be set atomically in the same call. Response includes resources, " +
             "a summarized tools_config (grants + list sizes - call get for the raw lists), budget, and " +
-            "webhook_url + webhook_curl when webhook_enabled.");
+            "webhook_url + webhook_curl when webhook_enabled. " +
+            "Passing schedule_cron here needs the user's authorization in an interactive chat - " +
+            "see interactive_chat_authorization below.");
         actions.put("get",
             "Fetch a single agent by agent_id. Returns full configuration + resources summary + RAW tools_config " +
             "(full id lists) + budget object + webhook info when configured.");
@@ -157,10 +199,32 @@ public class AgentHelpModule implements ToolModule {
         actions.put("update",
             "Merge-update an agent by agent_id. ONLY provided fields change; omitted fields are preserved. " +
             "Resource arrays (workflows, tables, agents, …) REPLACE the entire list for their category - pass " +
-            "the full list every time. Supports webhook/schedule/budget updates in the same call.");
+            "the full list every time. Supports webhook/schedule/budget updates in the same call. " +
+            "Passing schedule_cron here needs the user's authorization in an interactive chat - " +
+            "see interactive_chat_authorization below.");
         actions.put("delete",
             "Hard-delete an agent by agent_id. Cascades to the agent's webhook, schedule, and pending tasks " +
             "assigned to it.");
+
+        // --- Spending oversight ---
+        actions.put("budgets",
+            "List the agents you can see that have their OWN credit cap, ordered closest-to-the-cap first, so " +
+            "you can act before one stops. Uncapped agents are omitted: they have no threshold to be near. " +
+            "Each row carries total, consumed, reserved_for_subagents, free, used_ratio and status. " +
+            "used_ratio is committed divided by the cap and is NOT clamped: an agent that overshot reads " +
+            "above 1 (200 spent against a cap of 100 reads 2.0), which is the figure that tells you by " +
+            "how much. status is: " +
+            "'blocked' = its next run is already refused, on every surface including its schedule, its webhook " +
+            "and its chat; 'near' = at or above the threshold; 'ok' = below it. A blocked row also carries " +
+            "blocked_until when the cap lifts by itself, and omits it when the cap never resets. " +
+            "OPTIONAL threshold moves what counts as 'near': greater than 0 and at most 1, default 0.8. " +
+            "The figures are POST-reset, unlike get, whose budget.consumed is the stored counter: an " +
+            "agent whose weekly or monthly period has rolled over reads near 0 " +
+            "here even though its stored counter is still at the cap, because that is what its next run sees. " +
+                        "At most 50 rows come back; capped_agents, blocked and near are counted over ALL of " +
+            "them, so those numbers stay true when the list is cut. A cut answer carries " +
+            "truncated=true and showing=50, and the rows you lose are the furthest from their cap. " +
+            "To act on a row: raise its cap with update(agent_id=..., credit_budget=N).");
 
         // --- Synchronous execution ---
         actions.put("execute",
@@ -390,6 +454,26 @@ public class AgentHelpModule implements ToolModule {
             "Call only if you want to override the platform default for create/update - both model fields are OPTIONAL.");
         result.put("actions", actions);
 
+        // Stated once, at top level, rather than on each action: the gate keys on an
+        // ARGUMENT, so it applies across create and update and to neither of them
+        // unconditionally. Both action entries point here.
+        result.put("interactive_chat_authorization",
+            "INTERACTIVE CHAT ONLY: passing schedule_cron on create or update arms an agent that "
+            + "will wake up on its own and spend credit with nobody watching, so it needs the "
+            + "user's authorization. ONLY the cron does: the same call without schedule_cron is "
+            + "never gated, and schedule_cron='' (which REMOVES a schedule) is not either. Asking "
+            + "them happens inside your call, so it may simply take longer to answer while they "
+            + "decide. Do NOT stop, do NOT announce that you are waiting, and do NOT re-call - just "
+            + "read what comes back. An agent result means they allowed it; {executed:false} with status "
+            + "'authorization_required', 'denied' or 'stopped' means NOTHING happened - no agent "
+            + "was created, no schedule was changed. On {executed:false} do not describe the agent "
+            + "as existing or scheduled, and continue with other work or finish your turn. Note that on "
+            + "update the response echoes schedule_cron back from your request whether or not the "
+            + "schedule was actually written, so it is not proof the agent is armed: read back with "
+            + "agent(action='get') when it matters. If they "
+            + "authorize it afterwards, they come back with a new request. The same applies to "
+            + "agent(action='execute'), which is gated on every call.");
+
         result.put("concepts", buildConcepts());
 
         // Catalog moved to a dedicated action (help_models) to keep this default
@@ -413,7 +497,7 @@ public class AgentHelpModule implements ToolModule {
         result.put("tips", List.of(
             // --- CRUD semantics ---
             "CREATE: resource lists (workflows, tables, interfaces, agents, applications) default to [] on create = NO access. Grant each category explicitly, e.g. tables=[1,2], workflows=['uuid-a','uuid-b'].",
-            "GRANT scope: each family has a <family>_grant param (workflows_grant, tables_grant, interfaces_grant, agents_grant, applications_grant) = 'none' | 'all' | 'custom'. Set <family>_grant='all' to grant EVERY resource of that family (e.g. a builder agent that can edit ALL workflows) - the id list is then ignored. Omit the grant param to derive it from the list (empty=none, non-empty=custom). 'all' is ONLY expressible via the grant param, never via the list.",
+            "GRANT scope: each family has a <family>_grant param (workflows_grant, tables_grant, interfaces_grant, agents_grant, applications_grant) = 'none' | 'all' | 'custom'. Set <family>_grant='all' to grant EVERY resource of that family (e.g. a builder agent that can edit ALL workflows) - the id list is then ignored. Deriving the grant from the list happens on CREATE only. On UPDATE every agent already carries an explicit grant, so omitting the grant param KEEPS the stored one: sending tables=[1,2] on an agent whose tables_grant is 'none' or 'all' leaves that grant in place and the ids are discarded. On update, always send the grant together with the list. Read the '<family>Grant' key back from 'tools_config' in the update response to confirm what was stored ('<family>_count' is emitted only for a NON-EMPTY list, so its absence means the list is empty). 'all' is ONLY expressible via the grant param, never via the list.",
             "CREATE: tools_mode defaults to 'all' (every MCP/catalog tool enabled), web_search defaults to true.",
             "UPDATE: merge semantics - only provided fields change, omitted fields are preserved.",
             "UPDATE: resource arrays REPLACE the entire list for their category. To remove all tables: tables=[]. To add a third: tables=[1,2,3] (send the full new list, not a diff).",
@@ -443,7 +527,9 @@ public class AgentHelpModule implements ToolModule {
             "RECURRENCES: target_agent_id=null creates BACKLOG tasks. Useful for 'daily QA sweep' where any idle agent with a schedule can pick up the work.",
 
             // --- Budget - operational detail; full model lives in concepts.budget_hierarchy ---
-            "BUDGET_EXHAUSTED stop_reason includes a scope: 'tenant' (tenant ran out), 'agent' (this agent's own cap hit), or 'parent_reservation' (an ancestor refused the cascade reservation required to start the child)."
+            "BUDGET_EXHAUSTED stop_reason includes a scope: 'tenant' (tenant ran out), 'agent' (this agent's own cap hit), or 'parent_reservation' (an ancestor refused the cascade reservation required to start the child).",
+            "BUDGET: an agent whose own cap is spent is refused BEFORE the run starts on its schedule, its webhook, its public widget and a workflow agent node. A chat turn and an execute call are stopped by the in-run guard instead, which ends the run without a useful answer. Its schedule is not disabled by any of this: it keeps its cadence and each fire is refused, so the agent resumes by itself the moment a weekly or monthly cap rolls over. Read budget.blocked to know, and budget.blocked_until to know when; a 'cumulative' cap never rolls over, so there the only way back is raising credit_budget with update.",
+            "BUDGET: budget.blocked counts credits an in-flight sub-agent is holding, and one path does NOT: a chat turn on a CLI model (claude-code, codex, gemini-cli) is guarded on the bridge, which is sent the cap and the spend but not the reservation. So an agent blocked ONLY by a descendant reservation can still answer a chat turn there while every other surface refuses it. Do not read budget.blocked as a promise that a chat turn will be refused."
         ));
 
         return ToolExecutionResult.success(result);
@@ -655,6 +741,14 @@ public class AgentHelpModule implements ToolModule {
         }
         String userId = context != null ? context.tenantId() : null;
         String userRoles = credentialString(context, CRED_USER_ROLES);
+        // CLOUD: a bridge is an administrator's choice only. For any other caller it is hidden
+        // WITHOUT asking the access policy - a policy an admin can widen to all_users must not
+        // put the shared operator subscription back in front of every user - and
+        // BridgeProviderSaveGuard refuses to STORE one for them on the same rule, so listing it
+        // would describe a choice the very next call rejects. An admin, in cloud as on a
+        // self-hosted install, gets the per-caller access check below, the same decision the
+        // dispatch path enforces.
+        boolean hiddenInCloud = !isSelfHostedInstall() && !AdminRoleGuard.isAdmin(userRoles);
 
         Map<String, Boolean> allowedByProvider = new HashMap<>();
         List<AvailableModel> out = new ArrayList<>(models.size());
@@ -662,6 +756,9 @@ public class AgentHelpModule implements ToolModule {
             String provider = am.provider();
             if (!BridgeAccessGuard.isBridgeProvider(provider)) {
                 out.add(am); // non-bridge providers are never gated here
+                continue;
+            }
+            if (hiddenInCloud) {
                 continue;
             }
             boolean allowed = allowedByProvider.computeIfAbsent(
@@ -740,7 +837,18 @@ public class AgentHelpModule implements ToolModule {
         params.put("generation", "boolean, default=FALSE - Let the agent produce images, video, audio, "
                 + "voice and music with the generation tool. Off unless you pass true, because every asset "
                 + "it produces spends the account's credits at the rate the chosen model sets. The agent "
-                + "then lists what it can make with generation(action='models').");
+                + "then lists what it can make with generation(action='models')."
+                + " If YOU are an agent, you can only switch it ON for another agent when you have"
+                + " it yourself; if you do not, create the agent without this parameter and ask"
+                + " the user to enable it.");
+        params.put("mailbox", "boolean, default=FALSE - Let the agent read and send email on the account's "
+                + "connected mailbox with the mailbox tool. Off unless you pass true, because it reaches a "
+                + "real mailbox and can send from its address, to a person, with no undo. The agent then "
+                + "lists what it can do with mailbox(action='help'), and a missing credential comes back as "
+                + "a refusal it resolves with credential(action='require')."
+                + " If YOU are an agent, you can only switch it ON for another agent when you have"
+                + " it yourself; if you do not, create the agent without this parameter and ask"
+                + " the user to enable it.");
 
         // Per-resource access modes
         params.put("table_access_mode", "'write' (default, full CRUD) or 'read' (query_rows/get/list only, no create/update/delete)");
@@ -751,12 +859,13 @@ public class AgentHelpModule implements ToolModule {
         params.put("skill_access_mode", "'write' (default) or 'read' (get/list only, no create/update/delete)");
         params.put("file_access_mode", "'write' (default) or 'read' (files list/get/view/visualize only - blocks create_folder/move_to_folder). Independent of the 'files' allow-list scope");
         params.put("memory_access_mode", "'write' (default) or 'read' (memory get/list/search/help only - blocks save and delete). Use 'read' for an agent that should act on the workspace's remembered facts without adding to them, since a saved memory is injected into every agent in the workspace");
+        params.put("mailbox_access_mode", "'write' (default) or 'read' (mailbox read/folders/mark_read/help only - blocks send, delete, move, flag and mark_unread). Only meaningful when mailbox=true. Use 'read' for an agent that triages or reports on an inbox, since a sent message reaches a person and cannot be taken back. If your own mailbox is read-only you cannot grant 'write' to another agent, and you cannot omit this parameter while granting a mailbox: a mailbox with no mode means FULL access"); 
         // Per-resource GRANT scope (none/all/custom) - the only way to express grant='all'
-        params.put("workflows_grant", "'none' | 'all' | 'custom'. 'all'=EVERY workflow (list ignored), 'custom'=only the IDs in 'workflows'. Omit to derive from the list (empty=none, non-empty=custom)");
-        params.put("applications_grant", "'none' | 'all' | 'custom'. 'all'=EVERY application (list ignored), 'custom'=only the IDs in 'applications'. Omit to derive from the list");
-        params.put("tables_grant", "'none' | 'all' | 'custom'. 'all'=EVERY table (list ignored), 'custom'=only the IDs in 'tables'. Omit to derive from the list");
-        params.put("interfaces_grant", "'none' | 'all' | 'custom'. 'all'=EVERY interface (list ignored), 'custom'=only the IDs in 'interfaces'. Omit to derive from the list");
-        params.put("agents_grant", "'none' | 'all' | 'custom'. 'all'=EVERY sub-agent (list ignored), 'custom'=only the IDs in 'agents'. Omit to derive from the list");
+        params.put("workflows_grant", "'none' | 'all' | 'custom'. 'all'=EVERY workflow (list ignored), 'custom'=only the IDs in 'workflows'. On CREATE, omitting it derives the grant from the list (empty=none, non-empty=custom); on UPDATE the stored grant is kept and an omitted grant makes the list a no-op, so send both");
+        params.put("applications_grant", "'none' | 'all' | 'custom'. 'all'=EVERY application (list ignored), 'custom'=only the IDs in 'applications'. On CREATE, omitting it derives the grant from the list (empty=none, non-empty=custom); on UPDATE the stored grant is kept and an omitted grant makes the list a no-op, so send both");
+        params.put("tables_grant", "'none' | 'all' | 'custom'. 'all'=EVERY table (list ignored), 'custom'=only the IDs in 'tables'. On CREATE, omitting it derives the grant from the list (empty=none, non-empty=custom); on UPDATE the stored grant is kept and an omitted grant makes the list a no-op, so send both");
+        params.put("interfaces_grant", "'none' | 'all' | 'custom'. 'all'=EVERY interface (list ignored), 'custom'=only the IDs in 'interfaces'. On CREATE, omitting it derives the grant from the list (empty=none, non-empty=custom); on UPDATE the stored grant is kept and an omitted grant makes the list a no-op, so send both");
+        params.put("agents_grant", "'none' | 'all' | 'custom'. 'all'=EVERY sub-agent (list ignored), 'custom'=only the IDs in 'agents'. On CREATE, omitting it derives the grant from the list (empty=none, non-empty=custom); on UPDATE the stored grant is kept and an omitted grant makes the list a no-op, so send both");
 
         // Skills
         params.put("skill_ids", "array of UUIDs - REPLACES all skills. Max 10. Use skill(action='assign') to ADD without replacing");
@@ -798,7 +907,9 @@ public class AgentHelpModule implements ToolModule {
             "default). Set on create or update (for: create, update).");
         params.put("compaction_after_turns", "integer >= 1, optional - Compaction cadence: how many new turns may " +
             "accumulate before this agent's conversation is re-summarised. Omit = inherit (conversation setting, then " +
-            "platform default). Only takes effect while compaction is enabled (for: create, update).");
+            "platform default). Only takes effect while compaction is enabled. Setting it guarantees the cadence " +
+            "applies to this agent; the platform may also re-summarise sooner on its own, so treat this as a ceiling " +
+            "on how long the summary may go unrefreshed, not as an exact schedule (for: create, update).");
 
         // List-specific
         params.put("limit", "integer, default=25 - Max results to return (for list)");
@@ -859,7 +970,21 @@ public class AgentHelpModule implements ToolModule {
         Map<String, Object> budget = new LinkedHashMap<>();
         budget.put("unlimited", "boolean - true when credit_budget is null (no cap)");
         budget.put("total", "number|null - configured credit_budget, null when unlimited");
-        budget.put("consumed", "number - lifetime credits spent after any automatic reset");
+        budget.put("consumed",
+            "number - the STORED counter. It is zeroed lazily, when the agent next runs, so a " +
+            "weekly or monthly agent that reached its cap in the previous period still reads at " +
+            "the cap here. budgets(action='budgets') reports the same agent post-reset, so the " +
+            "two actions disagree by design on exactly that agent - read 'blocked' for the verdict.");
+        // Both of these have been in the response since the cascade-reservation work and
+        // were never described here. Found by the parity test below them, which is the
+        // point of having one: the drift was invisible from either side alone.
+        budget.put("consumed_from_subagents",
+            "number - the part of 'consumed' that descendants spent, settled back onto this " +
+            "agent when each sub-agent run finished. Always <= consumed.");
+        budget.put("consumed_own",
+            "number - consumed minus consumed_from_subagents: what this agent's own turns " +
+            "cost, with delegated work excluded. Use it to tell a runaway agent from one " +
+            "whose children are expensive.");
         budget.put("reserved_for_subagents",
             "number - credits currently locked by in-flight sub-agent cascade reservations. " +
             "Non-zero means a descendant is running and holding budget from this agent. " +
@@ -872,6 +997,19 @@ public class AgentHelpModule implements ToolModule {
         budget.put("last_reset",
             "string|absent - ISO-8601 timestamp of the last automatic reset (weekly/monthly only). " +
             "Key is omitted entirely for agents that have never been reset.");
+        budget.put("blocked",
+            "boolean - true when this cap refuses the agent's NEXT run before it spends anything, " +
+            "including a scheduled one: the schedule keeps its cadence and every fire is refused " +
+            "until the cap lifts. Always false when unlimited. Do NOT infer this from free=0: " +
+            "'consumed' is only zeroed when the agent next RUNS, so a weekly or monthly agent " +
+            "that hit its cap in the previous period still reports free=0 while blocked=false.");
+        budget.put("blocked_until",
+            "string|absent - ISO-8601 instant at which blocked becomes false on its own. " +
+            "Omitted when blocked=false, and omitted whenever the cap does not roll over at all: " +
+            "reset_mode='cumulative', and equally any value that is not exactly 'weekly' or " +
+            "'monthly' (the column is stored without validation, so 'Monthly' is such a value). " +
+            "Those never " +
+            "lifts: there, the only way back is raising credit_budget with update.");
         shape.put("budget",
             "nested object - unified budget view across create/get/update. " +
             "Keys: " + budget);

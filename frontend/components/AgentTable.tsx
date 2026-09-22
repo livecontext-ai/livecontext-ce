@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Search, Bot, Plus, Trash2, Copy, Loader2, Globe, Clock, Webhook, CalendarClock, ArrowUpDown, Eye, Pencil } from 'lucide-react';
 import { PublicationStatusIcon } from '@/components/publications/PublicationStatusIcon';
+import { ResourceInfoPopover } from '@/components/resource-info/ResourceInfoPopover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { favoritesFirst, type ListSortKey, type VisibilityFilter } from '@/lib/utils/listSort';
 import { useResourceFavorites } from '@/hooks/useResourceFavorites';
@@ -45,6 +46,7 @@ import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { AgentPanelContent, AGENT_CONFIGURATION_TAB } from '@/components/app/AgentPanelContent';
 import PublishAgentModal from '@/components/marketplace/PublishAgentModal';
 import { track } from '@/lib/analytics/analytics';
+import { useResourceRowsDeleted } from '@/lib/resources/resourceDeleted';
 
 export interface AgentRow {
   id: string;
@@ -69,6 +71,15 @@ export interface AgentRow {
   creditsConsumed?: number | null;
   /** How creditsConsumed resets. Same union the agent modal edits, so a row can be handed straight to it. */
   budgetResetMode?: 'cumulative' | 'monthly' | 'weekly';
+  /**
+   * Server verdict: this agent's cap refuses its next run, scheduled runs included.
+   * Not derivable from the two fields above - the consumed counter is only zeroed when
+   * the agent next executes, so an agent that hit a monthly cap last month still reads
+   * at the cap and will run fine.
+   */
+  budgetBlocked?: boolean;
+  /** ISO-8601 instant the block lifts by itself. Absent when it never does. */
+  budgetBlockedUntil?: string | null;
 }
 
 interface AgentTableProps {
@@ -210,6 +221,11 @@ export function AgentTable({ className = '' }: AgentTableProps) {
   useEffect(() => {
     setPage(0);
   }, [debouncedSearch, sortBy, visibilityFilter, folders.folderIdParam]);
+
+  // An agent deleted anywhere else (its side-panel tab, the edit modal, a chat card)
+  // drops out of this list at once, then the page is refetched so the total and the
+  // page fill come from the server rather than from what was on screen.
+  useResourceRowsDeleted('agent', agents, setAgents, fetchAgents);
 
   // The hook reloads through this ref, so it can be created before the fetch it triggers.
   reloadRef.current = fetchAgents;
@@ -398,7 +414,7 @@ export function AgentTable({ className = '' }: AgentTableProps) {
   // Open agent in side panel - scoped to /app/agent so the tab disappears when the
   // user navigates to another section (matches the workflow-panel / application-panel
   // scope pattern).
-  const openAgentPanel = useCallback((agent: AgentRow) => {
+  const openAgentPanel = useCallback((agent: Pick<AgentRow, 'id' | 'name' | 'avatarUrl'>) => {
     if (!sidePanel) return;
     track('agent_opened', { agent_id: agent.id });
     sidePanel.openTab({
@@ -407,34 +423,72 @@ export function AgentTable({ className = '' }: AgentTableProps) {
       icon: <AvatarDisplay avatarUrl={agent.avatarUrl} name={agent.name} size="sm" className="!w-4 !h-4" />,
       content: <AgentPanelContent agentId={agent.id} initialTab={AGENT_CONFIGURATION_TAB} />,
       preferredWidth: 0.35,
-      pinned: true,
+      // Deliberately NOT pinned. A pin means "this panel belongs to the page and the
+      // user may not close it", which is true of the agent tab on that agent's own
+      // conversation (`agentConfigPanelTab`, scoped to /app/c/*) and false here: on
+      // the list, opening an agent is a look, and the tab has to be closable like
+      // anything else the user opened. Pinning it also hid the tab's X, 3-dot menu
+      // and Delete entry, so browsing the list silently accumulated unclosable tabs.
       scope: ['/app/agent'],
     });
   }, [sidePanel]);
 
   // Deep-link entry point: `/app/agent?openAgent=<id>` opens the right-side
-  // panel for the target agent once the list has loaded. Used by the
-  // NotificationBell rows (TRIGGER + recent-activity AGENT subjects) because
-  // no per-agent page exists - the legacy /app/agent/<id> route 404s.
-  // One-shot: the param is stripped from the address after the first match so a manual reload
-  // doesn't re-pop the panel.
+  // panel for the target agent. Used by the notification rows, the global search, the
+  // agenda and the conversation sidebar's "go to agent" because no per-agent page
+  // exists - the legacy /app/agent/<id> route 404s.
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const openAgentParam = searchParams.get('openAgent');
   const handledOpenAgentRef = useRef<string | null>(null);
+  // Cancellation is bound to UNMOUNT, never to a dependency change. This effect re-runs on
+  // every list reload and on every side-panel update (`openAgentPanel` follows that context's
+  // identity), so a per-run `cancelled` flag dropped the answer of a fetch that was still
+  // wanted - and since the claim above stays taken, the re-run bailed out too: no panel, no
+  // message, and the id stuck in the address for good.
+  // Two links can be in flight at once (two rows clicked in a search or notification list),
+  // and the claim above cannot order them: it is released as soon as the address clears. The
+  // newest link wins, so a slower earlier answer is dropped rather than stealing the panel -
+  // same monotonic-id idiom this list already uses for its own page loads.
+  const openRequestRef = useRef(0);
+  const mountedRef = useRef(true);
+  // Re-armed on mount, not only cleared on unmount: React may remount an effect while keeping
+  // its refs (StrictMode, and a re-shown <Activity> tree), and a flag left false would disable
+  // the deep link for the rest of the session.
   useEffect(() => {
-    if (!openAgentParam) return;
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  // Resolved here, as STRINGS: `t` is a new function on every render (next-intl), so listing
+  // it as a dependency below would re-run the effect on every render and its fetch would never
+  // settle. Two equal strings compare equal, so these are stable dependencies.
+  const openFailedTitle = t('chat.agentCard.notFound');
+  const openFailedMessage = t('emptyState.agent.openFailed');
+  useEffect(() => {
+    // The address is cleared as soon as an agent is handled, so forgetting what was handled
+    // when the param is gone is what makes the entry point REPEATABLE: the sidebar menu item
+    // is clicked again and again for the same agent, unlike a notification row, and a ref that
+    // stayed set made every click after the first do nothing at all.
+    if (!openAgentParam) {
+      handledOpenAgentRef.current = null;
+      return;
+    }
     if (handledOpenAgentRef.current === openAgentParam) return;
-    if (loading || agents.length === 0) return;
-    const target = agents.find((a) => a.id === openAgentParam);
-    if (!target) return;
+    if (loading) return;
+    // Claimed before the async branch below so a re-render cannot fire a second lookup.
     handledOpenAgentRef.current = openAgentParam;
-    openAgentPanel(target);
+    const requestId = ++openRequestRef.current;
+
     // Strip the query param so a reload doesn't re-open the panel forever. Through the
     // history API, not the router: when `openAgent` is the only param this removes the last
     // one, and a router replace of the bare pathname is dropped on a page loaded at it - so
     // the param survived and the panel re-opened on every reload, which is the very thing
     // this is here to prevent.
+    // Done NOW, from the params of THIS render, before anything asynchronous: deferred to the
+    // fetch's answer it rebuilt the address from a snapshot taken long before, silently
+    // reverting a folder the user had opened meanwhile - and the fetch branch is exactly the
+    // "agent lives in a folder" case. Up front also means a fetch that never answers no longer
+    // spends the link: the address is already clean, so the same link can simply be used again.
     const next = new URLSearchParams(searchParams.toString());
     next.delete('openAgent');
     const qs = next.toString();
@@ -443,7 +497,33 @@ export function AgentTable({ className = '' }: AgentTableProps) {
       samePageUrl(pathname, searchParams),
       'replace',
     );
-  }, [openAgentParam, loading, agents, openAgentPanel, pathname, searchParams]);
+
+    const target = agents.find((a) => a.id === openAgentParam);
+    if (target) {
+      openAgentPanel(target);
+      return;
+    }
+
+    // The list holds ONE page of ONE folder (25 rows, top level by default), so an agent that
+    // is filed away or further down is simply not in `agents` - matching only against what is
+    // on screen left those links dead silently. Fetch it by id instead; the panel needs no
+    // more than the id, the name and the avatar.
+    agentService.getAgent(openAgentParam)
+      .then((agent) => {
+        if (!mountedRef.current || requestId !== openRequestRef.current) return;
+        openAgentPanel(agent);
+      })
+      .catch(() => {
+        if (!mountedRef.current || requestId !== openRequestRef.current) return;
+        // Deleted, or owned by another workspace: say so, rather than dropping the user on a
+        // list where nothing happened and leaving them to guess.
+        addToast({
+          type: 'error',
+          title: openFailedTitle,
+          message: openFailedMessage,
+        });
+      });
+  }, [openAgentParam, loading, agents, openAgentPanel, pathname, searchParams, addToast, openFailedTitle, openFailedMessage]);
 
 
   return (
@@ -726,7 +806,11 @@ export function AgentTable({ className = '' }: AgentTableProps) {
                         )}
                         <div className="flex items-center gap-1.5 mt-0.5 text-xs text-theme-muted">
                           {agent.modelProvider && agent.modelName && (
-                            <span>{agent.modelProvider}/{agent.modelName}</span>
+                            // `truncate` is what keeps this row on one line now that it ends
+                            // in a 28px control: the model name is the only long text here, so
+                            // it is the segment that gives width. Same mechanism the workflow
+                            // card's footer documents at length.
+                            <span className="truncate">{agent.modelProvider}/{agent.modelName}</span>
                           )}
                           {/* Budget at a glance. The figures were already on the
                               agent, but only readable from the metrics tab, so a
@@ -745,11 +829,21 @@ export function AgentTable({ className = '' }: AgentTableProps) {
                                 // An agent with no reset mode never resets,
                                 // unlike a workflow, which resets monthly.
                                 fallbackPeriod="cumulative"
-                                // An agent's counter is reset lazily, by the
-                                // resolver that enforces its budget, and that
-                                // only runs when the agent EXECUTES. So this
-                                // figure can be a month old, and nothing here
-                                // may claim the agent is stopped because of it.
+                                // The server resolves the pending reset before
+                                // answering, so this row may now say STOPPED where
+                                // the figure alone could not. resetsAt is the same
+                                // verdict's companion: set only while blocked.
+                                blocked={agent.budgetBlocked}
+                                resetsAt={agent.budgetBlockedUntil}
+                                // Still false, and still for the original reason:
+                                // the FIGURE is reset lazily by the resolver that
+                                // enforces the budget, which only runs when the
+                                // agent EXECUTES, so it can be a month old. What
+                                // changed is that the claim no longer rests on it
+                                // - `blocked` above is resolved server-side with
+                                // that pending reset applied. Leaving this true
+                                // would put the stale figure back in charge
+                                // whenever the server sends no verdict.
                                 spendIsCurrent={false}
                               />
                             </>
@@ -796,6 +890,16 @@ export function AgentTable({ className = '' }: AgentTableProps) {
                               </>
                             );
                           })()}
+                          {/* Attribution, at the right edge of the meta row - the same
+                              control, in the same corner, as every other resource card. */}
+                          <ResourceInfoPopover
+                            resourceName={agent.name}
+                            ownerId={agent.tenantId}
+                            createdAt={agent.createdAt}
+                            updatedAt={agent.updatedAt}
+                            className="ml-auto shrink-0"
+                            data-testid={`agent-info-${agent.id}`}
+                          />
                         </div>
                       </div>
                     </div>

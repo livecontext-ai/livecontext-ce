@@ -504,7 +504,7 @@ class CreditConsumptionClientTest {
         @Test
         @DisplayName("Should return true when auth-service returns allowed=true")
         void shouldReturnTrueWhenAllowed() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse(true));
 
             boolean result = client.checkCredits(USER_ID);
@@ -515,7 +515,7 @@ class CreditConsumptionClientTest {
         @Test
         @DisplayName("Should return false when auth-service returns allowed=false")
         void shouldReturnFalseWhenNotAllowed() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse(false));
 
             boolean result = client.checkCredits(USER_ID);
@@ -526,7 +526,7 @@ class CreditConsumptionClientTest {
         @Test
         @DisplayName("Should call correct URL with X-User-ID header")
         void shouldCallCorrectUrlWithHeader() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse(true));
 
             client.checkCredits(USER_ID);
@@ -535,7 +535,7 @@ class CreditConsumptionClientTest {
             ArgumentCaptor<HttpEntity<Map<String, Object>>> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
             verify(restTemplate).exchange(
                     eq(AUTH_SERVICE_URL + "/api/credits/check"),
-                    eq(HttpMethod.GET), entityCaptor.capture(), eq(Map.class));
+                    eq(HttpMethod.GET), entityCaptor.capture(), eq(Map.class), anyMap());
             assertThat(entityCaptor.getValue().getHeaders().getFirst("X-User-ID")).isEqualTo(USER_ID);
         }
 
@@ -545,40 +545,131 @@ class CreditConsumptionClientTest {
         @Test
         @DisplayName("Scoped overload appends ?sourceType=CHAT_CONVERSATION so the server applies FREE-plan bucket scoping")
         void scopedOverloadAppendsSourceTypeQueryParam() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse(true));
 
             boolean result = client.checkCredits(USER_ID, "CHAT_CONVERSATION");
 
             assertThat(result).isTrue();
             verify(restTemplate).exchange(
-                    eq(AUTH_SERVICE_URL + "/api/credits/check?sourceType=CHAT_CONVERSATION"),
-                    eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+                    eq(AUTH_SERVICE_URL + "/api/credits/check?sourceType={sourceType}"),
+                    eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class),
+                    eq(Map.of("sourceType", "CHAT_CONVERSATION")));
+        }
+
+        @Test
+        @DisplayName("V494: the model-aware overload sends provider and model, so the AI allowance can count toward the gate")
+        void modelAwareOverloadSendsProviderAndModel() {
+            // Without these the server cannot know whether the turn runs on a model the
+            // Free plan's allowance covers, and refuses a turn the debit would have paid.
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
+                    .thenReturn(checkAllowedResponse(true));
+
+            client.checkCredits(USER_ID, "CHAT_CONVERSATION", "anthropic", "claude-haiku-4-5");
+
+            verify(restTemplate).exchange(
+                    eq(AUTH_SERVICE_URL + "/api/credits/check?sourceType={sourceType}"
+                            + "&provider={provider}&model={model}"),
+                    eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class),
+                    eq(Map.of("sourceType", "CHAT_CONVERSATION",
+                            "provider", "anthropic", "model", "claude-haiku-4-5")));
+        }
+
+        @Test
+        @DisplayName("V494: a model id carrying / and : travels as a URI VARIABLE, so it is encoded exactly once")
+        void modelIdTravelsAsAUriVariable() {
+            // Router and bridge ids really look like this ("minimax/minimax-m2.7" and
+            // "z-ai/glm-4.6v" ship in the catalogue today).
+            //
+            // An earlier version hand-encoded the value into the URL string. That reads
+            // as the careful thing to do and was the bug: RestTemplate expands whatever
+            // it is handed through DefaultUriBuilderFactory, which encodes AGAIN, so the
+            // server received "meta%252Fllama-3" - a model id that does not exist,
+            // failing closed and refusing a turn the allowance would have paid for.
+            // Asserting the string a MOCK was handed cannot see that, which is why the
+            // companion case below expands the template through the real builder.
+            client.checkCredits(USER_ID, "CHAT_CONVERSATION", "openrouter", "meta/llama-3:70b");
+
+            verify(restTemplate).exchange(
+                    eq(AUTH_SERVICE_URL + "/api/credits/check?sourceType={sourceType}"
+                            + "&provider={provider}&model={model}"),
+                    eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class),
+                    eq(Map.of("sourceType", "CHAT_CONVERSATION",
+                            "provider", "openrouter", "model", "meta/llama-3:70b")));
+        }
+
+        @Test
+        @DisplayName("V494: RestTemplate's OWN handler expands that template with exactly one encoding pass")
+        void theTemplateIsEncodedExactlyOnce() {
+            // The other half of the proof, and it has to use the handler a real
+            // RestTemplate is configured with - not a freshly constructed
+            // DefaultUriBuilderFactory, which defaults to a DIFFERENT encoding mode and
+            // would pin a string production never sends. Taking the handler off a real
+            // RestTemplate is what makes this an assertion about the wire.
+            java.net.URI expanded = new org.springframework.web.client.RestTemplate()
+                    .getUriTemplateHandler()
+                    .expand(AUTH_SERVICE_URL + "/api/credits/check?sourceType={sourceType}"
+                                    + "&provider={provider}&model={model}",
+                            Map.of("sourceType", "CHAT_CONVERSATION",
+                                    "provider", "openrouter", "model", "meta/llama-3:70b"));
+
+            // What matters is that the value survives ONE pass: a second one shows up as
+            // %25, and that is what auth-service would then look up and fail to find.
+            assertThat(expanded.toString())
+                    .as("a second encoding pass would show up as %25")
+                    .doesNotContain("%25");
+            assertThat(expanded.getQuery())
+                    .as("the decoded query must carry the model id verbatim")
+                    .contains("model=meta/llama-3:70b");
+        }
+
+        @Test
+        @DisplayName("V494: a model's cached verdict is NOT served for a different model on transport failure")
+        void verdictIsCachedPerModel() {
+            // The cache is only ever READ on the fail-closed path, so asking twice on
+            // the happy path proves nothing: both calls go to the network whatever the
+            // key looks like. The question that has teeth is which answer survives an
+            // outage - and a key that ignored the model would hand model-b the "yes"
+            // that was recorded for model-a, which after V494 is a different question
+            // (one model is open to the free tier, the other is not).
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
+                    .thenReturn(checkAllowedResponse(true));
+            assertThat(client.checkCredits(USER_ID, "CHAT_CONVERSATION", "anthropic", "model-a")).isTrue();
+
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
+                    .thenThrow(new ResourceAccessException("Connection refused"));
+
+            assertThat(client.checkCredits(USER_ID, "CHAT_CONVERSATION", "anthropic", "model-b"))
+                    .as("model-b has no cache entry of its own, so it must fail closed")
+                    .isFalse();
+            assertThat(client.checkCredits(USER_ID, "CHAT_CONVERSATION", "anthropic", "model-a"))
+                    .as("positive control: model-a's own entry still answers, so the split is real and not just an empty cache")
+                    .isTrue();
         }
 
         @Test
         @DisplayName("Legacy 1-arg overload keeps the unscoped /api/credits/check URL (back-compat for workflow launch gates)")
         void legacyOverloadKeepsUnscopedUrl() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse(true));
 
             client.checkCredits(USER_ID);
 
             verify(restTemplate).exchange(
                     eq(AUTH_SERVICE_URL + "/api/credits/check"),
-                    eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+                    eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap());
         }
 
         @Test
         @DisplayName("Unscoped cached allowed=true is NOT served to the scoped chat check on transport failure (fail-closed) - regression: workflow-gate cache must not admit a chat turn")
         void unscopedCacheNotServedToScopedCheck() {
             // Arrange - unscoped success caches allowed=true under the unscoped key.
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse(true));
             assertThat(client.checkCredits(USER_ID)).isTrue();
 
             // Act - the scoped chat check hits a transport failure.
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(new ResourceAccessException("Connection refused"));
             boolean result = client.checkCredits(USER_ID, "CHAT_CONVERSATION");
 
@@ -591,12 +682,12 @@ class CreditConsumptionClientTest {
         @DisplayName("Scoped cached allowed=true is NOT served to the unscoped check on transport failure (fail-closed) - distinct keys in both directions")
         void scopedCacheNotServedToUnscopedCheck() {
             // Arrange - scoped success caches allowed=true under the scoped key.
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse(true));
             assertThat(client.checkCredits(USER_ID, "CHAT_CONVERSATION")).isTrue();
 
             // Act - the unscoped check hits a transport failure.
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(new ResourceAccessException("Connection refused"));
 
             // Assert - fail-closed: no unscoped cache entry exists.
@@ -606,11 +697,11 @@ class CreditConsumptionClientTest {
         @Test
         @DisplayName("Scoped check reuses its OWN cached result on transport failure (positive control for the key split)")
         void scopedCheckUsesOwnCacheOnError() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse(true));
             client.checkCredits(USER_ID, "CHAT_CONVERSATION");
 
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(new ResourceAccessException("Connection refused"));
 
             assertThat(client.checkCredits(USER_ID, "CHAT_CONVERSATION")).isTrue();
@@ -643,7 +734,7 @@ class CreditConsumptionClientTest {
         @SuppressWarnings("unchecked")
         void shouldReturnFalseOn402ResponseStatus() {
             ResponseEntity<Map> response = new ResponseEntity<>(Map.of("allowed", false), HttpStatus.PAYMENT_REQUIRED);
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(response);
 
             boolean result = client.checkCredits(USER_ID);
@@ -654,7 +745,7 @@ class CreditConsumptionClientTest {
         @Test
         @DisplayName("Should return false on HttpClientErrorException with 402")
         void shouldReturnFalseOnHttpClientErrorException402() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(new org.springframework.web.client.HttpClientErrorException(HttpStatus.PAYMENT_REQUIRED));
 
             boolean result = client.checkCredits(USER_ID);
@@ -667,7 +758,7 @@ class CreditConsumptionClientTest {
         @Test
         @DisplayName("Should return false on generic exception with no cache (fail-closed)")
         void shouldReturnFalseOnExceptionNoCache() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(new ResourceAccessException("Connection refused"));
 
             boolean result = client.checkCredits(USER_ID);
@@ -678,7 +769,7 @@ class CreditConsumptionClientTest {
         @Test
         @DisplayName("Should return false on HttpClientErrorException non-402 with no cache")
         void shouldReturnFalseOnNon402HttpClientError() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(new org.springframework.web.client.HttpClientErrorException(HttpStatus.INTERNAL_SERVER_ERROR));
 
             boolean result = client.checkCredits(USER_ID);
@@ -692,12 +783,12 @@ class CreditConsumptionClientTest {
         @DisplayName("Should use cached allowed=true on subsequent error")
         void shouldUseCachedAllowedOnError() {
             // First call: success → cache allowed=true
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse(true));
             client.checkCredits(USER_ID);
 
             // Second call: error → should use cache
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(new ResourceAccessException("Connection refused"));
             boolean result = client.checkCredits(USER_ID);
 
@@ -708,12 +799,12 @@ class CreditConsumptionClientTest {
         @DisplayName("Should use cached allowed=false on subsequent error")
         void shouldUseCachedNotAllowedOnError() {
             // First call: 402 → cache allowed=false
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(new org.springframework.web.client.HttpClientErrorException(HttpStatus.PAYMENT_REQUIRED));
             client.checkCredits(USER_ID);
 
             // Second call: error → should use cache
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(new ResourceAccessException("Connection refused"));
             boolean result = client.checkCredits(USER_ID);
 
@@ -724,17 +815,17 @@ class CreditConsumptionClientTest {
         @DisplayName("Should update cache on fresh successful response")
         void shouldUpdateCacheOnFreshResponse() {
             // First call: allowed=false
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse(false));
             assertThat(client.checkCredits(USER_ID)).isFalse();
 
             // Second call: allowed=true (user purchased credits)
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse(true));
             assertThat(client.checkCredits(USER_ID)).isTrue();
 
             // Third call: error → should use updated cache (true)
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(new ResourceAccessException("Connection refused"));
             assertThat(client.checkCredits(USER_ID)).isTrue();
         }
@@ -746,7 +837,7 @@ class CreditConsumptionClientTest {
         @SuppressWarnings("unchecked")
         void shouldReturnFalseOnUnexpectedStatusNoCache() {
             ResponseEntity<Map> response = new ResponseEntity<>(Map.of(), HttpStatus.SERVICE_UNAVAILABLE);
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(response);
 
             boolean result = client.checkCredits(USER_ID);
@@ -759,7 +850,7 @@ class CreditConsumptionClientTest {
         @SuppressWarnings("unchecked")
         void shouldHandleNullResponseBody() {
             ResponseEntity<Map> response = new ResponseEntity<>(null, HttpStatus.OK);
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(response);
 
             boolean result = client.checkCredits(USER_ID);
@@ -773,7 +864,7 @@ class CreditConsumptionClientTest {
         @SuppressWarnings("unchecked")
         void shouldHandleMissingAllowedKey() {
             ResponseEntity<Map> response = new ResponseEntity<>(Map.of("foo", "bar"), HttpStatus.OK);
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(response);
 
             boolean result = client.checkCredits(USER_ID);
@@ -959,6 +1050,82 @@ class CreditConsumptionClientTest {
 
             assertThat(result).isEqualByComparingTo(new BigDecimal("999999999"));
             verifyNoInteractions(restTemplate);
+        }
+
+        @Test
+        @DisplayName("V494: fetchBalance IGNORES the AI allowance - it funds no workflow run and no image")
+        void fetchBalanceExcludesTheAllowance() {
+            // The orchestrator's workflow budget and the image pre-flight both read this.
+            // Folding the allowance in would start a run on credits no WORKFLOW_NODE
+            // debit can draw, so the run dies mid-execution instead of being refused.
+            Map<String, Object> body = Map.of("balance", 10.0, "aiBalance", 100.0);
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                    .thenReturn(new ResponseEntity<>(body, HttpStatus.OK));
+
+            assertThat(client.fetchBalance(USER_ID)).isEqualByComparingTo("10.0");
+        }
+
+        @Test
+        @DisplayName("V494: fetchLlmSpendableBalance ADDS the allowance, in ONE request")
+        void llmSpendableAddsTheAllowanceInOneRequest() {
+            // The LLM budget guards run this every few agent-loop iterations. Two
+            // requests would double the round trip AND could read two different
+            // snapshots, so the two halves of one balance would not be one balance.
+            Map<String, Object> body = Map.of("balance", 10.0, "aiBalance", 100.0);
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
+                    .thenReturn(new ResponseEntity<>(body, HttpStatus.OK));
+
+            assertThat(client.fetchLlmSpendableBalance(USER_ID)).isEqualByComparingTo("110.0");
+            verify(restTemplate, times(1)).exchange(
+                    anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap());
+        }
+
+        @Test
+        @DisplayName("V494: a payload without aiBalance falls back to the wallet alone")
+        void llmSpendableFallsBackToTheWallet() {
+            // CE, a paid plan, or an older auth-service: absent must mean "no allowance",
+            // never an error and never a guessed figure.
+            Map<String, Object> body = Map.of("balance", 10.0);
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
+                    .thenReturn(new ResponseEntity<>(body, HttpStatus.OK));
+
+            assertThat(client.fetchLlmSpendableBalance(USER_ID)).isEqualByComparingTo("10.0");
+        }
+
+        @Test
+        @DisplayName("V494: with a model, the SERVER decides whether the pot counts - the client takes its word")
+        void modelAwareSpendableTakesTheServerAnswer() {
+            // The client cannot answer this itself: whether a model is open to the free
+            // tier lives in the billing mirror. Adding the pot blindly would budget an
+            // agent loop against money no debit on a closed model can draw.
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
+                    .thenReturn(new ResponseEntity(Map.of(
+                            "balance", 10.0, "aiBalance", 100.0, "llmSpendableBalance", 10.0), HttpStatus.OK));
+
+            assertThat(client.fetchLlmSpendableBalance(USER_ID, "anthropic", "closed-model"))
+                    .as("the server said the pot does not apply here, so it must not be added")
+                    .isEqualByComparingTo("10.0");
+        }
+
+        @Test
+        @DisplayName("V494: an auth-service that does not answer the model question falls back to the wallet")
+        void modelAwareSpendableFallsBackToTheWallet() {
+            // A pod that predates the field. Falling back to wallet-only is the safe
+            // direction for a model we were asked about but got no verdict for.
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
+                    .thenReturn(new ResponseEntity(Map.of("balance", 10.0, "aiBalance", 100.0), HttpStatus.OK));
+
+            assertThat(client.fetchLlmSpendableBalance(USER_ID, "anthropic", "haiku"))
+                    .isEqualByComparingTo("10.0");
+        }
+
+        @Test
+        @DisplayName("V494: fetchLlmSpendableBalance fails closed on an error, like fetchBalance")
+        void llmSpendableFailsClosed() {
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
+                    .thenThrow(new ResourceAccessException("Connection refused"));
+
+            assertThat(client.fetchLlmSpendableBalance(USER_ID)).isEqualByComparingTo(BigDecimal.ZERO);
         }
 
         @Test

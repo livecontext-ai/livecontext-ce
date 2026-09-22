@@ -43,6 +43,11 @@ public class UserChatDefaultsService {
             // because a per-second video model spends an order of magnitude more per call
             // than the images that grant was given for.
             "generation",
+            // The mailbox, on the same terms as generation: opt-IN, off when absent, and its
+            // read/write axis beside it. Without the axis the chat would get FULL access the
+            // moment the grant is on, since an unstated mode reads as write everywhere.
+            "mailbox",
+            "mailboxAccessMode",
             "autoAuthorizeTools",
             "defaultSkillIds",
             "turnLimits",

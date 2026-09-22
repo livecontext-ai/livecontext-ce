@@ -70,4 +70,35 @@ class AgentLoopExecutorRequestWiringTest {
 
         assertThat(request.reasoningEffort()).isNull();
     }
+
+    @Test
+    @DisplayName("keyRoute pinned on the context reaches every CompletionRequest (the provider never re-decides from the thread)")
+    void keyRouteReachesTheRequest() {
+        AgentLoopContext context = AgentLoopContext.builder()
+            .tenantId("t-1")
+            .provider("anthropic")
+            .userPrompt("hi")
+            .keyRoute(com.apimarketplace.agent.domain.KeyRoute.OWN_KEY)
+            .build();
+
+        CompletionRequest request = executor.buildCompletionRequest(
+            context, "claude-fable-5", "sys", List.of(), List.of(), false);
+
+        assertThat(request.keyRoute()).isEqualTo(com.apimarketplace.agent.domain.KeyRoute.OWN_KEY);
+    }
+
+    @Test
+    @DisplayName("an unpinned context yields an unpinned request (provider resolves user-first by tenantId)")
+    void unpinnedContextYieldsUnpinnedRequest() {
+        AgentLoopContext context = AgentLoopContext.builder()
+            .tenantId("t-1")
+            .provider("anthropic")
+            .userPrompt("hi")
+            .build();
+
+        CompletionRequest request = executor.buildCompletionRequest(
+            context, "claude-fable-5", "sys", List.of(), List.of(), false);
+
+        assertThat(request.keyRoute()).isNull();
+    }
 }

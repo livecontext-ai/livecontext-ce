@@ -66,6 +66,31 @@ public class ModelConfigOverrideEntity {
     @Transient
     private boolean bundleEnabledExplicitlySet = false;
 
+    /**
+     * Cloud-admin-only (V493): TRUE opens this model to the FREE plan, meaning a free
+     * account may fund a chat / agent turn on it from its monthly AI ALLOWANCE (the
+     * separate 100-credit pot added by V494) instead of the PAYG bucket alone. The
+     * monthly credit grant is untouched by this and still covers workflow nodes only.
+     *
+     * <p>Mirrored into {@code auth.model_pricing.free_tier} by
+     * {@code AuthPricingSyncClient} - that mirror, not this column, is what the
+     * billing gate reads.
+     *
+     * <p>CLOUD-ONLY, like {@link #bundleEnabled}: never serialized into the catalog
+     * bundle and never read CE-side, where nothing is metered.
+     */
+    @Column(name = "free_tier_enabled", nullable = false)
+    private boolean freeTierEnabled = false;
+
+    /**
+     * Request-intake flag, same contract as {@link #bundleEnabledExplicitlySet}.
+     * The column is a primitive NOT NULL boolean, so without this a PATCH-style save
+     * that omits the key would carry {@code false} and silently close a model the
+     * admin had opened to the free plan.
+     */
+    @Transient
+    private boolean freeTierEnabledExplicitlySet = false;
+
     @Column(name = "display_name", nullable = false, length = 255)
     private String displayName;
 
@@ -284,6 +309,12 @@ public class ModelConfigOverrideEntity {
 
     public Boolean getEnabled() { return enabled; }
     public void setEnabled(Boolean enabled) { this.enabled = enabled; }
+
+    public boolean isFreeTierEnabled() { return freeTierEnabled; }
+    public void setFreeTierEnabled(boolean freeTierEnabled) { this.freeTierEnabled = freeTierEnabled; }
+
+    public boolean isFreeTierEnabledExplicitlySet() { return freeTierEnabledExplicitlySet; }
+    public void setFreeTierEnabledExplicitlySet(boolean v) { this.freeTierEnabledExplicitlySet = v; }
 
     public String getDisplayName() { return displayName; }
     public void setDisplayName(String displayName) { this.displayName = displayName; }

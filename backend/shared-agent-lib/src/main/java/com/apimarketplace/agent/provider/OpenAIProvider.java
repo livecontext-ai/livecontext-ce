@@ -101,10 +101,10 @@ public class OpenAIProvider extends AbstractLLMProvider {
     }
 
     @Override
-    protected HttpHeaders buildHeaders() {
+    protected HttpHeaders buildHeaders(CompletionRequest request) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(resolveApiKey());
+        headers.setBearerAuth(resolveApiKey(request));
         return headers;
     }
 

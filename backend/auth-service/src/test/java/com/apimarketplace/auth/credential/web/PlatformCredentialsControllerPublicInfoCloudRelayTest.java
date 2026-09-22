@@ -83,7 +83,7 @@ class PlatformCredentialsControllerPublicInfoCloudRelayTest {
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.empty());
         when(pricingService.hasAnyNonZeroMarkup(cred.id())).thenReturn(true);
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().get("available")).isEqualTo(true);
@@ -97,7 +97,7 @@ class PlatformCredentialsControllerPublicInfoCloudRelayTest {
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.empty());
         when(cloudInfoProvider.getIfAvailable()).thenReturn(null);
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -113,10 +113,10 @@ class PlatformCredentialsControllerPublicInfoCloudRelayTest {
     void cloudAvailableWithSubscriptionUnlocksToggle() {
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.empty());
         when(cloudInfoProvider.getIfAvailable()).thenReturn(cloudInfoAccess);
-        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, "tool-1", null, null))
+        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, "tool-1", null, null, null))
                 .thenReturn(Optional.of(cloudInfo(true, true, true, 42L, true, "0.05")));
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, "tool-1", null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, "tool-1", null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -138,11 +138,11 @@ class PlatformCredentialsControllerPublicInfoCloudRelayTest {
         // per MODEL and per call size, so an install that dropped either one was
         // told "not sold on the platform key" for a model the cloud then charged.
         // The quantity crosses as its plain string, scale included.
-        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, "tool-1", "veo-3-fast", "8.0"))
+        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, "tool-1", "veo-3-fast", "8.0", null))
                 .thenReturn(Optional.of(cloudInfo(true, true, true, 42L, true, "480")));
 
         ResponseEntity<Map<String, Object>> response =
-                controller.publicInfo(INTEGRATION, "tool-1", "veo-3-fast", new BigDecimal("8.0"), null, null);
+                controller.publicInfo(INTEGRATION, "tool-1", "veo-3-fast", new BigDecimal("8.0"), null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -152,14 +152,54 @@ class PlatformCredentialsControllerPublicInfoCloudRelayTest {
     }
 
     @Test
+    @DisplayName("what the call's own choices cost travels to the cloud too")
+    void priceMultiplierReachesTheCloud() {
+        // The cloud CHARGES the factor: its relay reads it back out of the body it executes. An
+        // install that quoted without it would show one amount and be billed another for the same
+        // request, and neither end would show the disagreement.
+        when(service.getCredential(INTEGRATION)).thenReturn(Optional.empty());
+        when(cloudInfoProvider.getIfAvailable()).thenReturn(cloudInfoAccess);
+        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, "tool-1", "veo-3-fast", "8.0", "2"))
+                .thenReturn(Optional.of(cloudInfo(true, true, true, 42L, true, "960")));
+
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(
+                INTEGRATION, "tool-1", "veo-3-fast", new BigDecimal("8.0"), null, null,
+                new BigDecimal("2"));
+
+        Map<String, Object> body = response.getBody();
+        assertThat(body).isNotNull();
+        assertThat(body.get("markupCredits")).isEqualTo("960");
+    }
+
+    @Test
+    @DisplayName("an absurd factor is dropped rather than relayed, and the quote still answers")
+    void absurdMultiplierIsNotRelayed() {
+        // A read must not turn a malformed factor into an error screen: the published rate is the
+        // true price of a call carrying no surcharge, and nothing here can buy anything since the
+        // amount charged is resolved again from the real parameters.
+        when(service.getCredential(INTEGRATION)).thenReturn(Optional.empty());
+        when(cloudInfoProvider.getIfAvailable()).thenReturn(cloudInfoAccess);
+        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, "tool-1", "veo-3-fast", "8.0", null))
+                .thenReturn(Optional.of(cloudInfo(true, true, true, 42L, true, "480")));
+
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(
+                INTEGRATION, "tool-1", "veo-3-fast", new BigDecimal("8.0"), null, null,
+                BigDecimal.ZERO);
+
+        Map<String, Object> body = response.getBody();
+        assertThat(body).isNotNull();
+        assertThat(body.get("markupCredits")).isEqualTo("480");
+    }
+
+    @Test
     @DisplayName("delegation success without markupCredits - key omitted (null never serialized)")
     void nullMarkupCreditsOmitted() {
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.empty());
         when(cloudInfoProvider.getIfAvailable()).thenReturn(cloudInfoAccess);
-        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null))
+        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null, null))
                 .thenReturn(Optional.of(cloudInfo(true, true, true, 42L, false, null)));
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -173,10 +213,10 @@ class PlatformCredentialsControllerPublicInfoCloudRelayTest {
     void cloudAvailableWithoutSubscriptionStaysLockedWithUpsell() {
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.empty());
         when(cloudInfoProvider.getIfAvailable()).thenReturn(cloudInfoAccess);
-        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null))
+        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null, null))
                 .thenReturn(Optional.of(cloudInfo(true, false, true, 42L, true, "0.05")));
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -191,10 +231,10 @@ class PlatformCredentialsControllerPublicInfoCloudRelayTest {
     void cloudUnavailableFallsThroughToLegacyShape() {
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.empty());
         when(cloudInfoProvider.getIfAvailable()).thenReturn(cloudInfoAccess);
-        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null))
+        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null, null))
                 .thenReturn(Optional.of(cloudInfo(false, true, true, null, false, null)));
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -208,10 +248,10 @@ class PlatformCredentialsControllerPublicInfoCloudRelayTest {
     void notRelayEligibleFallsThroughToLegacyShape() {
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.empty());
         when(cloudInfoProvider.getIfAvailable()).thenReturn(cloudInfoAccess);
-        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null))
+        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null, null))
                 .thenReturn(Optional.of(cloudInfo(true, true, false, 42L, true, "0.05")));
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -224,9 +264,9 @@ class PlatformCredentialsControllerPublicInfoCloudRelayTest {
     void emptyDelegationFallsThroughToLegacyShape() {
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.empty());
         when(cloudInfoProvider.getIfAvailable()).thenReturn(cloudInfoAccess);
-        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null)).thenReturn(Optional.empty());
+        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null, null)).thenReturn(Optional.empty());
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -239,10 +279,10 @@ class PlatformCredentialsControllerPublicInfoCloudRelayTest {
     void delegationFailureFallsThroughToLegacyShape() {
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.empty());
         when(cloudInfoProvider.getIfAvailable()).thenReturn(cloudInfoAccess);
-        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null))
+        when(cloudInfoAccess.fetchPlatformInfo(INTEGRATION, null, null, null, null))
                 .thenThrow(new IllegalStateException("cloud unreachable"));
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         Map<String, Object> body = response.getBody();

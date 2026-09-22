@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { PERSONA_KEYS } from '@/components/landing/personas/personas';
 import { DOCS_PAGES } from '../docs/_nav';
 
 const SITE = 'https://livecontext.ai';
@@ -57,6 +58,42 @@ function integration(overrides: Record<string, unknown> = {}) {
  * default would win over a test asking for its own integrations, and that test
  * would pass on nothing.
  */
+/** A film as the public library read hands it back. */
+function videoRow(overrides: Record<string, unknown> = {}) {
+  return {
+    slug: 'automate-x',
+    title: 'Automate X, end to end',
+    tagline: 'A five minute film about X.',
+    youtubeId: 'lG-wfKo2NOo',
+    durationSeconds: 318,
+    publishedAt: '2026-09-10T15:57:19Z',
+    // Absolute, like the library serves them.
+    poster: 'https://livecontext.ai/videos/automate-x.webp',
+    shareImage: 'https://livecontext.ai/videos/automate-x.jpg',
+    posterAlt: 'The X screen',
+    problem: [],
+    answer: [],
+    highlights: [],
+    chapters: [],
+    transcript: [],
+    marketplaceSlug: 'x-app',
+    marketplaceTitle: 'X App',
+    ...overrides,
+  };
+}
+
+/**
+ * Stub the film-library read, for the same reason as the two above: the sitemap
+ * must never reach the network in a unit test.
+ */
+function mockVideos(videos: unknown[] = []) {
+  vi.doMock('../videos/_lib/publicVideos', () => ({
+    fetchPublishedVideos: async () => videos,
+    fetchPublishedVideosOrEmpty: async () => videos,
+    fetchVideo: async () => null,
+  }));
+}
+
 function mockIntegrations(integrations: unknown[] = [], truncated = false) {
   vi.doMock('@/lib/integrations/publicIntegrations', () => ({
     fetchAllIntegrations: vi.fn().mockResolvedValue({
@@ -70,10 +107,31 @@ function mockIntegrations(integrations: unknown[] = [], truncated = false) {
 describe('sitemap - cloud edition', () => {
   beforeEach(() => vi.resetModules());
 
+  it('lists every persona page in six languages with reciprocal alternates', async () => {
+    vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
+    mockMarketplace();
+    mockIntegrations();
+    mockVideos();
+    const { default: sitemap } = await import('../sitemap');
+    const entries = (await sitemap()).filter((entry) => entry.url.includes('/for/'));
+    // Read from the list itself: adding a persona is a product decision that belongs in
+    // one place, and a hardcoded count here only ever says "someone added a page".
+    expect(entries).toHaveLength(PERSONA_KEYS.length * 6);
+    for (const persona of PERSONA_KEYS) {
+      const english = entries.find((entry) => entry.url === `${SITE}/for/${persona}`);
+      expect(english?.alternates?.languages?.fr).toBe(`${SITE}/fr/for/${persona}`);
+      expect(english?.alternates?.languages?.['x-default']).toBe(`${SITE}/for/${persona}`);
+      for (const locale of ['fr', 'de', 'es', 'pt', 'zh']) {
+        expect(entries.find((entry) => entry.url === `${SITE}/${locale}/for/${persona}`)?.alternates).toEqual(english?.alternates);
+      }
+    }
+  });
+
   it('emits one entry per live docs page, with the Overview at a higher priority', async () => {
     vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
     mockMarketplace();
     mockIntegrations();
+    mockVideos();
     const { default: sitemap } = await import('../sitemap');
     const entries = await sitemap();
     const urls = entries.map((e) => e.url);
@@ -90,19 +148,48 @@ describe('sitemap - cloud edition', () => {
     expect(urls).toContain(SITE);
   });
 
-  it('emits the landing page ONCE at the apex (locale duplicates canonicalize there, not sitemap entries)', async () => {
+  it('emits the landing once per locale, now that each one is a translated page', async () => {
+    // It used to emit the apex ALONE, and that was right while the landing was hardcoded
+    // English everywhere: /fr was a duplicate that canonicalized to /, so listing it
+    // advertised a URL the page asked the crawler to drop. Each locale canonicalizes to
+    // itself now, and an unlisted translation is one Google has to find on its own.
     vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
     mockMarketplace();
     mockIntegrations();
+    mockVideos();
     const { default: sitemap } = await import('../sitemap');
     const { routing } = await import('@/i18n/routing');
-    const urls = (await sitemap()).map((e) => e.url);
+    const entries = await sitemap();
+    const urls = entries.map((e) => e.url);
 
+    // The apex, unprefixed and with no trailing slash: the exact string the page's own
+    // canonical resolves to.
     expect(urls).toContain(SITE);
-    // The landing serves identical English content on every locale URL, so
-    // listing /fr, /es, ... would advertise duplicates that canonicalize away.
-    for (const locale of routing.locales) {
-      expect(urls).not.toContain(`${SITE}/${locale}`);
+    for (const locale of routing.locales.filter((value) => value !== 'en')) {
+      expect(urls).toContain(`${SITE}/${locale}`);
+    }
+    // English is the unprefixed URL: a /en entry would be a second address for one page.
+    expect(urls).not.toContain(`${SITE}/en`);
+  });
+
+  it('gives every landing entry the reciprocal hreflang cluster', async () => {
+    // A sitemap alternate that is not mirrored on the page, or between locales, is ignored
+    // by Google rather than half-applied, so all six must carry the same complete map.
+    vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
+    mockMarketplace();
+    mockIntegrations();
+    mockVideos();
+    const { default: sitemap } = await import('../sitemap');
+    const { routing } = await import('@/i18n/routing');
+    const entries = await sitemap();
+    const landing = entries.filter((entry) => entry.url === SITE || routing.locales.some((locale) => entry.url === `${SITE}/${locale}`));
+
+    expect(landing).toHaveLength(routing.locales.length);
+    for (const entry of landing) {
+      expect(Object.keys(entry.alternates?.languages ?? {}).sort()).toEqual([...routing.locales, 'x-default'].sort());
+      expect(entry.alternates?.languages?.en).toBe(SITE);
+      expect(entry.alternates?.languages?.['x-default']).toBe(SITE);
+      expect(entry.priority).toBe(1.0);
     }
   });
 
@@ -110,6 +197,7 @@ describe('sitemap - cloud edition', () => {
     vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
     mockMarketplace();
     mockIntegrations();
+    mockVideos();
     const { default: sitemap } = await import('../sitemap');
     const { COMPARISONS } = await import('../compare/_lib/comparisons');
     const entries = await sitemap();
@@ -123,22 +211,20 @@ describe('sitemap - cloud edition', () => {
     expect(entries.find((e) => e.url === `${SITE}/compare/n8n-alternative`)?.priority).toBe(0.8);
   });
 
-  it('withholds the blog while the section is being reworked', async () => {
+  it('advertises no blog URL, the section having been deleted', async () => {
     vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
     mockMarketplace();
     mockIntegrations();
+    mockVideos();
     const { default: sitemap } = await import('../sitemap');
-    const { getAllPosts } = await import('@/lib/blog/posts');
     const urls = (await sitemap()).map((e) => e.url);
 
-    // The blog routes still render but send `noindex, nofollow`. Advertising
-    // them here would point crawlers at URLs that then refuse indexing.
-    expect(urls).not.toContain(`${SITE}/blog`);
-    const posts = getAllPosts();
-    expect(posts.length).toBeGreaterThan(0); // the registry is non-empty, so this is a real exclusion
-    for (const post of posts) {
-      expect(urls).not.toContain(`${SITE}/blog/${post.slug}`);
-    }
+    // The blog routes, their content registry and their assets are gone, so
+    // every /blog URL now 404s. One listed here would be a dead entry.
+    // Assert the walk produced a real sitemap first: "contains no /blog" is
+    // vacuously true of an empty list, so without this the case could pass
+    // while asserting nothing.
+    expect(urls.length).toBeGreaterThan(10);
     expect(urls.some((url) => url.includes('/blog'))).toBe(false);
   });
 
@@ -151,6 +237,7 @@ describe('sitemap - marketplace listings', () => {
     vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
     mockMarketplace([listing(), listing({ id: 'pub-2', publicSlug: 'expense-sorter' })]);
     mockIntegrations();
+    mockVideos();
     const { default: sitemap } = await import('../sitemap');
     const entries = await sitemap();
     const urls = entries.map((e) => e.url);
@@ -164,6 +251,7 @@ describe('sitemap - marketplace listings', () => {
     vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
     mockMarketplace([listing()]);
     mockIntegrations();
+    mockVideos();
     const { default: sitemap } = await import('../sitemap');
     const entry = (await sitemap()).find((e) => e.url === `${SITE}/marketplace/invoice-bot`);
 
@@ -174,6 +262,7 @@ describe('sitemap - marketplace listings', () => {
     vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
     mockMarketplace([listing({ publicSlug: 'thin-app', description: 'too short' })]);
     mockIntegrations();
+    mockVideos();
     const { default: sitemap } = await import('../sitemap');
     const urls = (await sitemap()).map((e) => e.url);
 
@@ -186,6 +275,7 @@ describe('sitemap - marketplace listings', () => {
     vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
     mockMarketplace([listing({ publicSlug: null })]);
     mockIntegrations();
+    mockVideos();
     const { default: sitemap } = await import('../sitemap');
     const urls = (await sitemap()).map((e) => e.url);
 
@@ -196,6 +286,7 @@ describe('sitemap - marketplace listings', () => {
     vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
     mockMarketplace([], true);
     mockIntegrations();
+    mockVideos();
     const { default: sitemap } = await import('../sitemap');
     const urls = (await sitemap()).map((e) => e.url);
 
@@ -261,6 +352,66 @@ describe('sitemap - integrations', () => {
   });
 });
 
+describe('sitemap - product films', () => {
+  beforeEach(() => vi.resetModules());
+
+  async function sitemapWith(videos: unknown[]) {
+    vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
+    mockMarketplace();
+    mockIntegrations();
+    mockVideos(videos);
+    const { default: sitemap } = await import('../sitemap');
+    return sitemap();
+  }
+
+  it('emits the library and one entry per published film', async () => {
+    const entries = await sitemapWith([videoRow(), videoRow({ slug: 'automate-y' })]);
+    const urls = entries.map((e) => e.url);
+
+    expect(urls).toContain(`${SITE}/videos`);
+    expect(urls).toContain(`${SITE}/videos/automate-x`);
+    expect(urls).toContain(`${SITE}/videos/automate-y`);
+  });
+
+  it('advertises nothing when the library could not be read', async () => {
+    // The read degrades to an empty list, so the section loses itself rather
+    // than failing the whole sitemap.
+    const entries = await sitemapWith([]);
+    const urls = entries.map((e) => e.url);
+
+    expect(urls).toContain(`${SITE}/videos`);
+    expect(urls.some((url) => url.startsWith(`${SITE}/videos/`))).toBe(false);
+  });
+
+  it('carries the video block Google reads, for EVERY film', async () => {
+    const films = [videoRow(), videoRow({ slug: 'automate-y', youtubeId: 'kX9pQ2mL7bT' })];
+    const entries = await sitemapWith(films);
+
+    for (const film of films) {
+      const entry = entries.find((e) => e.url === `${SITE}/videos/${film.slug}`);
+      expect(entry, film.slug).toBeDefined();
+      expect(entry!.videos, film.slug).toHaveLength(1);
+      const video = entry!.videos![0];
+      expect(video.title).toBe(film.title);
+      // Absolute, on our domain, and the JPEG: a relative thumbnail_loc is
+      // dropped and not every consumer of this block reads WebP.
+      expect(video.thumbnail_loc).toBe(film.shareImage);
+      expect(video.thumbnail_loc.startsWith(`${SITE}/`)).toBe(true);
+      expect(video.thumbnail_loc.endsWith('.jpg')).toBe(true);
+      // The full string, not `toContain(id)`, which passes on a null id.
+      expect(video.player_loc).toBe(`https://www.youtube.com/embed/${film.youtubeId}`);
+      expect(video.duration).toBe(film.durationSeconds);
+      expect(video.publication_date).toBe(film.publishedAt);
+      // Google drops a video entry that claims neither, so they are not decoration.
+      expect(video.family_friendly).toBe('yes');
+      expect(video.live).toBe('no');
+      // The film's own date, not the crawl's.
+      expect(new Date(entry!.lastModified as Date).toISOString())
+        .toBe(new Date(film.publishedAt).toISOString());
+    }
+  });
+});
+
 describe('sitemap - community edition', () => {
   beforeEach(() => vi.resetModules());
 
@@ -268,6 +419,7 @@ describe('sitemap - community edition', () => {
     vi.doMock('@/lib/edition', () => ({ IS_CE: true }));
     mockMarketplace([listing()]);
     mockIntegrations();
+    mockVideos();
     const { default: sitemap } = await import('../sitemap');
 
     // Even with a full catalog available, a self-hosted install advertises

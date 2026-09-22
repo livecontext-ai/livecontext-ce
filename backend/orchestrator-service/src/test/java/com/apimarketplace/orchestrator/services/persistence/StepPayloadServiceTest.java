@@ -122,6 +122,94 @@ class StepPayloadServiceTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Provider-retry visibility (_provider_retries)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("A re-sent provider call leaves a trace on the step output")
+    class ProviderRetryVisibilityTests {
+
+        /**
+         * The wait happens INSIDE a single tool call, so the node stays RUNNING and emits nothing.
+         * Without this count on the persisted output, a step that silently spent ten extra seconds
+         * being re-sent is indistinguishable from a slow provider, and nobody reading the run can
+         * tell that the provider refused once.
+         */
+        @Test
+        @DisplayName("REGRESSION: the count survives the schema transformation that rebuilds the map")
+        void providerRetriesSurviveTheTransform() {
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(plan.findStep(anyString())).thenReturn(Optional.empty());
+            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any()))
+                    .thenReturn(UUID.randomUUID());
+            // A generic mapper builds a NEW map holding only the fields the schema declares, so
+            // metadata.providerRetries is gone by the time the payload is written.
+            when(outputSchemaMapper.hasMapper("MCP")).thenReturn(true);
+            when(outputSchemaMapper.transformToDbSchema(any(), eq("MCP")))
+                    .thenReturn(new HashMap<>(Map.of("data", "value")));
+
+            Map<String, Object> raw = new HashMap<>();
+            raw.put("node_type", "MCP");
+            raw.put("data", "value");
+            raw.put("metadata", new HashMap<>(Map.of("status", 200, "providerRetries", 2)));
+            StepExecutionResult result = new StepExecutionResult(
+                    "mcp:publish", NodeStatus.COMPLETED, "Success", raw, 12_000L, null);
+
+            service.persistStepPayload(execution, "mcp:publish", "alias", result, Map.of(), 0);
+
+            assertEquals(2, persistedOutput().get("_provider_retries"));
+        }
+
+        @Test
+        @DisplayName("a call answered first time carries no key at all")
+        void noKeyWhenNothingWasResent() {
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(plan.findStep(anyString())).thenReturn(Optional.empty());
+            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any()))
+                    .thenReturn(UUID.randomUUID());
+
+            Map<String, Object> raw = new HashMap<>();
+            raw.put("data", "value");
+            raw.put("metadata", new HashMap<>(Map.of("status", 200)));
+            StepExecutionResult result = new StepExecutionResult(
+                    "mcp:publish", NodeStatus.COMPLETED, "Success", raw, 100L, null);
+
+            service.persistStepPayload(execution, "mcp:publish", "alias", result, Map.of(), 0);
+
+            assertFalse(persistedOutput().containsKey("_provider_retries"),
+                    "absent, not zero: nothing changes for the overwhelming majority of steps");
+        }
+
+        @Test
+        @DisplayName("a node type that has no metadata at all is untouched")
+        void nodeWithoutMetadataIsUntouched() {
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(plan.findStep(anyString())).thenReturn(Optional.empty());
+            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any()))
+                    .thenReturn(UUID.randomUUID());
+
+            StepExecutionResult result = new StepExecutionResult(
+                    "core:transform", NodeStatus.COMPLETED, "Success",
+                    Map.of("result", "x"), 5L, null);
+
+            service.persistStepPayload(execution, "core:transform", "alias", result, Map.of(), 0);
+
+            assertFalse(persistedOutput().containsKey("_provider_retries"));
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> persistedOutput() {
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(storageService).saveJsonWithContext(eq("tenant-1"), payloadCaptor.capture(),
+                    anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any());
+            return (Map<String, Object>) payloadCaptor.getValue().get("output");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // persistStepPayload() tests
     // ═══════════════════════════════════════════════════════════════════════════
 

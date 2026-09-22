@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import FeatureLabel from '@/components/pricing/FeatureLabel';
 import ReferencePrice from '@/components/pricing/ReferencePrice';
 import { usePricingEvent } from '@/hooks/usePricingEvent';
-import { calcPrice, creditFactsFor, CREDIT_TIERS } from '@/lib/billing/pricing-constants';
+import { calcPrice, creditFactsFor, CREDIT_TIERS, FREE_AI_CREDITS } from '@/lib/billing/pricing-constants';
 import {
   buildPlanComparison,
   COMPARISON_PLAN_IDS,
@@ -44,12 +44,13 @@ import { cn } from '@/lib/utils';
  * changes and the CE cloud-link path. Reimplementing any of that here would put
  * a second, thinner purchase flow beside the real one.
  *
- * <p><b>The emphasis props have no caller today.</b> `highlightPlan` and
- * `highlightRow` (and the "Unlocks this" badge and scroll they drive) existed
- * for the pruned entry points, each of which knew which row and column answered
- * its own restriction. They are kept, not deleted: they are what any entry point
- * added back would need, and they cost nothing while unused. A reader wondering
- * why that code never runs is reading the reason here.
+ * <p><b>The emphasis props.</b> Neither `highlightPlan` (and the "Unlocks this"
+ * badge it drives) nor `highlightRow` has a caller today: both existed for the
+ * pruned entry points, each of which knew which column or row answered its own
+ * restriction. `highlightRow` briefly had one again, a post-onboarding opening
+ * on the credits row, and that is exactly the entry point WelcomeGiftModal
+ * replaced. They are kept, not deleted, because they are what any entry point
+ * added back would need, and `ComparePlansLink` already passes both through.
  *
  * <p><b>It renders above the floating hosts.</b> The composer menu (z-[10000])
  * and its options panel (z-[99999]) paint above an ordinary dialog. Nothing in
@@ -68,9 +69,21 @@ export interface PlanComparisonDialogProps {
    * for a self-hosted install with no cloud plan governing it.
    */
   currentPlanCode?: string | null;
+  /**
+   * The Free plan's monthly AI allowance (V494). Defaults to the seeded figure,
+   * which is the right answer on the public landing: the live value comes from
+   * the plans endpoint, which needs an authenticated query client this surface
+   * deliberately does not assume - see the note on {@link AppPlanComparisonDialog}.
+   * Inside the app the wrapper passes the configured number, so the pricing card
+   * and this table cannot quote two different allowances on the same screen.
+   */
+  freeAiCredits?: number;
 }
 
-export default function PlanComparisonDialog({ currentPlanCode = null }: PlanComparisonDialogProps) {
+export default function PlanComparisonDialog({
+  currentPlanCode = null,
+  freeAiCredits = FREE_AI_CREDITS,
+}: PlanComparisonDialogProps) {
   const [open, setOpen] = React.useState(false);
   const [request, setRequest] = React.useState<PlanComparisonRequest>({});
 
@@ -91,6 +104,7 @@ export default function PlanComparisonDialog({ currentPlanCode = null }: PlanCom
   return (
     <PlanComparisonBody
       currentPlanCode={currentPlanCode}
+      freeAiCredits={freeAiCredits}
       request={request}
       onClose={() => setOpen(false)}
     />
@@ -99,10 +113,12 @@ export default function PlanComparisonDialog({ currentPlanCode = null }: PlanCom
 
 function PlanComparisonBody({
   currentPlanCode,
+  freeAiCredits,
   request,
   onClose,
 }: {
   currentPlanCode: string | null;
+  freeAiCredits: number;
   request: PlanComparisonRequest;
   onClose: () => void;
 }) {
@@ -233,6 +249,7 @@ function PlanComparisonBody({
                     isHighlighted={row.id === highlightRow}
                     rowRef={row.id === highlightRow ? highlightedRowRef : undefined}
                     entryCredits={entryCredits}
+                    freeAiCredits={freeAiCredits}
                     creditFacts={creditFacts}
                   />
                 ))}
@@ -349,6 +366,7 @@ function ComparisonRowView({
   isHighlighted,
   rowRef,
   entryCredits,
+  freeAiCredits,
   creditFacts,
 }: {
   row: ComparisonRow;
@@ -356,6 +374,7 @@ function ComparisonRowView({
   isHighlighted: boolean;
   rowRef?: React.Ref<HTMLTableRowElement>;
   entryCredits: string;
+  freeAiCredits: number;
   creditFacts: Record<string, string | number>;
 }) {
   const t = useTranslations('pricing.compare');
@@ -389,7 +408,11 @@ function ComparisonRowView({
     }
     const cardLabel = tCards(`features.${row.id}`);
     const tooltipKey = `features.${row.id}Tooltip`;
-    return tCards.has(tooltipKey) ? `${cardLabel}||${tCards(tooltipKey)}` : cardLabel;
+    // The credit facts again, for the same reason the scale rows get them: a
+    // card tooltip that starts quoting a per-conversation price is edited in the
+    // message, and this surface must not be the one that discovers it by
+    // throwing a FORMATTING_ERROR and rendering its own key path.
+    return tCards.has(tooltipKey) ? `${cardLabel}||${tCards(tooltipKey, creditFacts)}` : cardLabel;
   }, [row.kind, row.id, t, tCards, creditFacts]);
 
   return (
@@ -426,7 +449,12 @@ function ComparisonRowView({
           )}
         >
           {row.kind === 'scale' ? (
-            <ScaleCell featureKey={row.cells[planId]} entryCredits={entryCredits} />
+            <ScaleCell
+              featureKey={row.cells[planId]}
+              entryCredits={entryCredits}
+              freeAiCredits={freeAiCredits}
+              fallbackValueKey={row.fallbackValueKey}
+            />
           ) : (
             <FlagCell included={row.cells[planId]} />
           )}
@@ -436,18 +464,44 @@ function ComparisonRowView({
   );
 }
 
-function ScaleCell({ featureKey, entryCredits }: { featureKey: string | null; entryCredits: string }) {
+function ScaleCell({
+  featureKey,
+  entryCredits,
+  freeAiCredits,
+  fallbackValueKey,
+}: {
+  featureKey: string | null;
+  entryCredits: string;
+  freeAiCredits: number;
+  fallbackValueKey?: string;
+}) {
   const t = useTranslations('pricing.compare');
-
+  // The APP locale, via next-intl, like every other component here: the figure is
+  // rendered server-side on the public landing too, so a /fr reader must get
+  // "100" grouped the French way on the first paint and after hydration alike.
+  const locale = useLocale();
   if (!featureKey) {
-    return <FlagCell included={false} />;
+    // A dimension can say what "no key here" MEANS rather than leaving the cross
+    // to imply the plan is missing something. The AI allowance is the case: paid
+    // plans have no separate pot because their credits already fund agents.
+    return fallbackValueKey ? <span>{t(`values.${fallbackValueKey}`)}</span> : <FlagCell included={false} />;
   }
-  // The one value that is not a constant: paid plans quote the pack the reader
-  // is currently looking at, and the pack itself is chosen on the plans page.
+  // The values that are not constants: paid plans quote the pack the reader is
+  // currently looking at (chosen on the plans page), and the Free AI allowance
+  // quotes whatever the Free plan row carries.
   const value =
     featureKey === 'creditsDynamic'
       ? t('values.creditsDynamic', { credits: entryCredits })
-      : t(`values.${featureKey}`);
+      : featureKey === 'aiCreditsFree'
+        // An allowance of zero is how an admin CLOSES the free tier. Printing
+        // '0 / month' would advertise a pot nobody has; printing the paid plans'
+        // "included in credits" would be worse still, since it says the opposite of
+        // what the Free plan's credits do. The honest cell is the same one every other
+        // dimension uses for "this plan does not have it".
+        ? (freeAiCredits > 0
+            ? t('values.aiCreditsFree', { credits: freeAiCredits.toLocaleString(locale) })
+            : t('notIncluded'))
+        : t(`values.${featureKey}`);
 
   return <span>{value}</span>;
 }

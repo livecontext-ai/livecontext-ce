@@ -59,6 +59,8 @@ const messages: AbstractIntlMessages = {
       user: 'My credential',
       platform: 'Platform',
       markupNote: 'A small markup is billed on each call.',
+      markupNoteFactor: 'The options you chose multiply that by {factor}.',
+      markupNoteFactorWithReason: 'The options you chose multiply that by {factor} ({reason}).',
       markupNoteWithRate: '{rate} credits are billed on each call as markup.',
       markupNoteWithUnitRate: 'It is billed {unitRate} credits per {unit}.',
       markupNoteWithUnitRateAndTotal:
@@ -316,7 +318,9 @@ describe('CredentialSection generation price', () => {
       expect(apiMocks.getPlatformCredentialPublicInfo).toHaveBeenCalledWith(
         'seedance',
         '11111111-2222-3333-4444-555555555555',
-        { modelId: 'seedance-2.0-fast', quantity: 4, generation: false },
+        // The factor travels on every quote now, and a call at the published rate sends 1: the
+        // surfaces that carry one have to share a cache entry with the ones that do not.
+        { modelId: 'seedance-2.0-fast', quantity: 4, generation: false, priceMultiplier: 1 },
       );
     });
   });
@@ -356,7 +360,7 @@ describe('CredentialSection generation price', () => {
       expect(apiMocks.getPlatformCredentialPublicInfo).toHaveBeenCalledWith(
         'seedance',
         '11111111-2222-3333-4444-555555555555',
-        { modelId: null, quantity: null, generation: true },
+        { modelId: null, quantity: null, generation: true, priceMultiplier: 1 },
       );
     });
   });
@@ -412,5 +416,91 @@ describe('CredentialSection generation price', () => {
     // The CHOICE survives: only the explanation is suppressed, so the reader
     // can still decide who pays.
     expect(screen.getByText('Platform')).toBeTruthy();
+  });
+});
+
+/**
+ * A price this pane CANNOT know, and must not state as a fact.
+ *
+ * <p>The inspector's fields accept expressions. A priced `resolution` bound to
+ * `{{trigger:webhook.output.res}}` has no value until the run reaches the step, so the local
+ * factor falls to the reference tier, the quote is asked without one, and the server answers the
+ * published rate. This pane then printed "60 credits per second, 10 seconds = 600 credits" as a
+ * plain statement for a step the server bills 2400 - while the model row ten pixels above it
+ * already said the price depended on a runtime value. One screen, two claims, the confident one
+ * next to the choice of who pays.
+ */
+describe('CredentialSection - a price that depends on a runtime value', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiMocks.getAllCredentials.mockResolvedValue([]);
+    apiMocks.getCredentialTemplates.mockResolvedValue({ credentials: [] });
+    apiMocks.getCredentialTemplateByName.mockResolvedValue(null);
+    apiMocks.getPlatformCredentialPublicInfo.mockResolvedValue({
+      integrationName: 'seedance',
+      platformCredentialId: 7,
+      available: true,
+      hasPricing: true,
+      priceUnit: 'second',
+      unitCredits: '60',
+      baseCredits: '0',
+      quantity: '10',
+      markupCredits: '600',
+    } as PlatformCredentialPublicInfo);
+  });
+
+  it('says the price depends on a value the run resolves, beside the total', async () => {
+    renderSection({
+      modelId: 'seedance-2.0-fast',
+      quantity: 10,
+      quantityUnit: 'second',
+      priceFactorReason: 'the final price depends on a value this step resolves when it runs',
+      priceFactorIsUncertain: true,
+    });
+
+    expect(await screen.findByText(/depends on a value this step resolves/)).toBeTruthy();
+  });
+
+  it('does not ALSO claim a surcharge, which it cannot know either', async () => {
+    // The hedge replaces the factor note rather than joining it: "multiply that by 1.2" beside
+    // "the price depends on a runtime value" is two incompatible claims about one number.
+    renderSection({
+      modelId: 'seedance-2.0-fast',
+      quantity: 10,
+      quantityUnit: 'second',
+      priceFactorReason: 'the final price depends on a value this step resolves when it runs',
+      priceFactorIsUncertain: true,
+    });
+
+    await screen.findByText(/depends on a value this step resolves/);
+    expect(screen.queryByText(/multiply that by/)).toBeNull();
+  });
+
+  it('states a KNOWN factor plainly when nothing is templated', async () => {
+    // The other half: the hedge must not swallow a factor the surface can actually stand behind.
+    apiMocks.getPlatformCredentialPublicInfo.mockResolvedValue({
+      integrationName: 'seedance',
+      platformCredentialId: 7,
+      available: true,
+      hasPricing: true,
+      priceUnit: 'second',
+      unitCredits: '60',
+      baseCredits: '0',
+      quantity: '10',
+      markupCredits: '1200',
+      priceMultiplier: '2',
+    } as PlatformCredentialPublicInfo);
+
+    renderSection({
+      modelId: 'seedance-2.0-fast',
+      quantity: 10,
+      quantityUnit: 'second',
+      priceMultiplier: 2,
+      priceFactorReason: 'includes Resolution x2',
+      priceFactorIsUncertain: false,
+    });
+
+    expect(await screen.findByText(/multiply that by 2 \(includes Resolution x2\)/))
+      .toBeTruthy();
   });
 });

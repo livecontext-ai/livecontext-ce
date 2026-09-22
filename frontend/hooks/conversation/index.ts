@@ -12,5 +12,5 @@
  */
 
 export { useConversationList, type UseConversationListOptions, type UseConversationListReturn } from './useConversationList';
-export { useMessages, type UseMessagesReturn } from './useMessages';
+export { useMessages, type UseMessagesReturn, type LoadMessagesOptions } from './useMessages';
 export { useConversationMutations, type UseConversationMutationsOptions, type UseConversationMutationsReturn } from './useConversationMutations';

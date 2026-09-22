@@ -15,9 +15,11 @@
  * marketing page has no version of; showing the product's surfaces is the point
  * here.
  *
- * Labels are hardcoded English instead of `sidebar.nav.*`, like the rest of the
- * landing: one English page on every locale URL (see the metadata comment in
- * page.tsx).
+ * Labels are hardcoded English instead of `sidebar.nav.*`. That used to be because the
+ * landing was one English page on every locale URL; it no longer is, and this rail is the
+ * exception rather than the rule now. It survives for the reason below: the whole block is
+ * aria-hidden, so these strings are never read out, and they are a picture of the product's
+ * sidebar rather than copy addressed to the reader.
  *
  * The whole rail is decorative: it navigates nowhere, so it is aria-hidden as a
  * block, with `title` tooltips left for sighted visitors.

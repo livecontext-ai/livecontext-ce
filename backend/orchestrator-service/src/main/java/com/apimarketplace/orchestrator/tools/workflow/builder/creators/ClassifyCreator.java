@@ -19,9 +19,17 @@ import com.apimarketplace.agent.tools.ToolErrorCode;
  * Parameters:
  * - prompt: string (required) - Classification instruction INCLUDING data via {{type:label.output.field}}
  * - categories: array of {label, description} (required, min 2)
- * - provider: string (optional, e.g. "openai", "anthropic", "google", "mistral", "deepseek")
+ * - provider: string (optional, e.g. "openai", "anthropic", "google", "mistral", "deepseek",
+ *   or "typesafe" for a decision model)
  * - model: string (optional)
- * - temperature: number (optional, 0-1)
+ * - temperature: number (optional, 0-1) - ignored by a decision model, which has no sampling
+ *
+ * TWO ENGINES, ONE NODE. A chat provider reads the categories in a prompt and writes back a
+ * label. A decision provider ("typesafe", model "jev-latest") scores every declared category
+ * in one call and answers with one of them plus a probability each: it cannot return a label
+ * that was not declared, it fills the `probabilities` output, and it costs a fraction of a
+ * chat model. Everything else about the node is identical - same categories, same ports,
+ * same branches - so switching engine is a provider/model change and nothing more.
  *
  * Extracted from WorkflowBuilderCreator for SOLID compliance.
  */

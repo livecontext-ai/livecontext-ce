@@ -4,7 +4,8 @@
  */
 
 import { apiClient } from './api-client';
-import type { ConversationKind, Message } from './conversation.types';
+import { notifyResourceDeleted } from '@/lib/resources/resourceDeleted';
+import type { ConversationKind, ConversationResponse, Message } from './conversation.types';
 
 // Re-export types from conversation.types for convenience
 export type { Conversation, ConversationKind, Message, MessageAttachment, ConversationResponse, CompactionMarker } from './conversation.types';
@@ -36,7 +37,7 @@ export class ConversationApiService {
      * activity is chat.
      */
     kind?: ConversationKind
-  ) {
+  ): Promise<ConversationResponse> {
     try {
       // getAuthToken: returning an empty list because the provider was not installed YET made a
       // signed-in user's conversation list render empty on a cold load, with nothing to correct it.
@@ -47,12 +48,23 @@ export class ConversationApiService {
       // to the login redirect anyway.
       const token = await apiClient.getAuthToken();
       if (!token) {
-        return { content: [] as unknown[], totalElements: 0, totalPages: 0, number: page, size };
+        return {
+          content: [],
+          totalElements: 0,
+          totalPages: 0,
+          page,
+          size,
+          first: true,
+          last: true,
+          hasNext: false,
+          hasPrevious: false,
+          numberOfElements: 0,
+        };
       }
       console.log(`🌐 [API CALL] GET /conversations?page=${page}&size=${size}${kind ? `&kind=${kind}` : ''} - timestamp: ${new Date().toISOString()}`);
       const params: Record<string, string> = { page: page.toString(), size: size.toString() };
       if (kind) params.kind = kind;
-      const response = await apiClient.get(`/conversations`, { params });
+      const response = await apiClient.get<ConversationResponse>(`/conversations`, { params });
       return response;
     } catch (error) {
       console.error(`❌ [API ERROR] GET /conversations?page=${page}&size=${size} - error:`, error);
@@ -66,12 +78,14 @@ export class ConversationApiService {
    */
   async searchConversations(
     searchTerm: string,
-    searchType: 'title' | 'content' = 'content'
-  ) {
+    searchType: 'title' | 'content' = 'content',
+    page = 0,
+    size = 10,
+  ): Promise<ConversationResponse> {
     try {
       const endpoint = searchType === 'title' ? '/conversations/search/title' : '/conversations/search/content';
-      const response = await apiClient.get(
-        endpoint, { params: { searchTerm } }
+      const response = await apiClient.get<ConversationResponse>(
+        endpoint, { params: { searchTerm, page: String(page), size: String(size) } }
       );
       return response;
     } catch (error) {
@@ -388,6 +402,7 @@ export class ConversationApiService {
     try {
       const result = await apiClient.delete(`/conversations/${conversationId}`);
       // La suppression peut retourner null (code 204) ou une reponse vide, c'est normal
+      notifyResourceDeleted('conversation', conversationId);
       return result;
     } catch (error) {
       console.error('Error deleting conversation:', error);
@@ -396,6 +411,10 @@ export class ConversationApiService {
       // c'est probablement que la suppression a reussi côte serveur
       if (error instanceof Error && error.message.includes('Invalid response status code 204')) {
         console.log('Server returned 204 (success) but frontend had parsing issue, considering deletion successful');
+        // Same broadcast as the happy path: this branch IS a success, so a surface
+        // still showing the conversation must be told, or it only heals on the
+        // response shape the server happens to send.
+        notifyResourceDeleted('conversation', conversationId);
         return null; // On considere que la suppression a reussi
       }
 
@@ -427,6 +446,10 @@ export class ConversationApiService {
   async permanentlyDeleteConversation(conversationId: string) {
     try {
       await apiClient.delete(`/conversations/${conversationId}/permanent`);
+      // Its soft-delete sibling announces, and the rule is "a delete method
+      // announces", not "the reachable ones do". No UI calls this today, so the
+      // line changes nothing now and saves whoever wires a button to it later.
+      notifyResourceDeleted('conversation', conversationId);
     } catch (error) {
       console.error('Error permanently deleting conversation:', error);
       throw new Error('Failed to permanently delete conversation');

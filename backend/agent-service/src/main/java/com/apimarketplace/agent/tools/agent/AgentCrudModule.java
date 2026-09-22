@@ -1,11 +1,15 @@
 package com.apimarketplace.agent.tools.agent;
 
+import com.apimarketplace.agent.config.AgentModuleResolver;
+import com.apimarketplace.agent.tools.authz.ToolAuthorizationPolicy;
 import com.apimarketplace.agent.config.AgentDefaultsConfig;
 import com.apimarketplace.agent.config.ToolAccessControl;
 import com.apimarketplace.agent.domain.AgentEntity;
 import com.apimarketplace.agent.domain.AgentWebhookTokenEntity;
 import com.apimarketplace.agent.registry.AgentToolDefinition;
 import com.apimarketplace.agent.service.AgentService;
+import com.apimarketplace.agent.domain.BridgeProviders;
+import com.apimarketplace.agent.service.BridgeProviderSaveGuard;
 import com.apimarketplace.agent.service.ModelCatalogService;
 import com.apimarketplace.agent.service.ModelCatalogService.AvailableModel;
 import com.apimarketplace.agent.service.SkillService;
@@ -16,6 +20,7 @@ import com.apimarketplace.agent.tools.common.ToolModule;
 import com.apimarketplace.agent.tools.common.ToolRateLimiter;
 import com.apimarketplace.agent.webhook.AgentWebhookTokenService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
@@ -64,6 +69,43 @@ public class AgentCrudModule implements ToolModule {
 
     private static final int MAX_CONSECUTIVE_UPDATES = 3;
     private final ToolRateLimiter updateLimiter = new ToolRateLimiter();
+    /**
+     * Same save-time bridge rule the REST path applies. Without it an LLM naming a CLI bridge
+     * here recreated exactly the state the guard exists to prevent - and this is the likelier
+     * origin of the stuck production agents, since the sibling AgentHelpModule already filters
+     * those models out of the LISTING while this writer accepted them.
+     */
+    private BridgeProviderSaveGuard bridgeProviderSaveGuard = new BridgeProviderSaveGuard();
+
+    @Autowired(required = false)
+    void setBridgeProviderSaveGuard(BridgeProviderSaveGuard guard) {
+        if (guard != null) {
+            this.bridgeProviderSaveGuard = guard;
+        }
+    }
+
+    private static final String CRED_USER_ROLES = "__userRoles__";
+
+    /**
+     * Refuses a save onto a CLI bridge this caller cannot dispatch, worded for the agent.
+     * Empty means the save may proceed.
+     */
+    private Optional<ToolExecutionResult> validateBridgeProvider(ToolExecutionContext context,
+                                                                 String requestedProvider,
+                                                                 String currentProvider) {
+        String userRoles = callerRoles(context);
+        String userId = context != null ? context.tenantId() : null;
+        return bridgeProviderSaveGuard
+            .denialReason(userId, userRoles, requestedProvider, currentProvider)
+            // The reason token does not reach the agent as a discriminator - an agent acts on
+            // prose - but it DOES choose which prose. "Ask an administrator" is useless advice
+            // when no administrator can grant the thing; the cloud wording tells the agent to pick
+            // the model it actually wants instead. The REST path surfaces the token itself,
+            // because a client keys on it.
+            .map(reason -> ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED,
+                BridgeProviderSaveGuard.deniedMessage(requestedProvider, reason)));
+    }
+
 
     /**
      * Resolves the per-turn create cap for agent resources via
@@ -118,7 +160,7 @@ public class AgentCrudModule implements ToolModule {
 
     private final ToolRateLimiter createLimiter = new ToolRateLimiter(CREATE_LIMITER_TTL_MINUTES);
 
-    private static final Set<String> HANDLED_ACTIONS = Set.of("create", "get", "list", "update", "delete");
+    private static final Set<String> HANDLED_ACTIONS = Set.of("create", "get", "list", "update", "delete", "budgets");
 
     @Override
     public List<AgentToolDefinition> getToolDefinitions() {
@@ -146,8 +188,152 @@ public class AgentCrudModule implements ToolModule {
             case "list" -> executeList(parameters, tenantId, context);
             case "update" -> executeUpdate(parameters, tenantId, context);
             case "delete" -> executeDelete(parameters, tenantId, context);
+            case "budgets" -> executeBudgets(parameters, tenantId, context);
             default -> ToolExecutionResult.failure(ToolErrorCode.INVALID_ENUM_VALUE, "Unknown action: " + action);
         });
+    }
+
+    // ==================== Budgets ====================
+
+    /** Default for "near": four fifths of the cap spent. */
+    private static final double DEFAULT_NEAR_THRESHOLD = 0.8d;
+
+    /**
+     * How many rows one {@code budgets} answer carries.
+     *
+     * <p>The list is ordered closest-to-the-cap first and is read to decide what to do next,
+     * so the tail is the part nobody acts on. The counts are computed before the cut, which
+     * is what keeps a truncated answer honest about the size of the problem.
+     */
+    private static final int BUDGETS_MAX_ROWS = 50;
+
+    /**
+     * Which capped agents are close to their own credit cap, or already past it.
+     *
+     * <p><b>Why this is its own action rather than a flag on list.</b> {@code list} answers
+     * "what agents are there", is paginated, and returns a resource summary per row. This
+     * answers "what is about to stop", which is a different question with a different
+     * shape: it ignores every uncapped agent (an agent with no cap has no threshold to be
+     * near), it is ordered by how close each one is rather than by name, and it is short by
+     * construction. Bolting it onto list would have meant a paginated answer to a question
+     * whose whole value is being read in one glance.
+     *
+     * <p>The verdict on each row is the entity own, resolved through the same rule the
+     * schedule gate and the in-run guard use, so a row that says {@code blocked} is a row
+     * whose next run is refused. {@code used_ratio} is deliberately computed from the
+     * POST-reset figures for the same reason: a monthly agent that reached its cap last
+     * month is at 0, not at 1, because that is what its next run will see.
+     */
+    private ToolExecutionResult executeBudgets(Map<String, Object> parameters, String tenantId,
+                                               ToolExecutionContext context) {
+        Map<String, Object> p = mergeParams(parameters);
+        double threshold = DEFAULT_NEAR_THRESHOLD;
+        Object rawThreshold = p.get("threshold");
+        if (rawThreshold instanceof Number n) {
+            threshold = n.doubleValue();
+        } else if (rawThreshold instanceof String s && !s.isBlank()) {
+            try {
+                threshold = Double.parseDouble(s.trim());
+            } catch (NumberFormatException e) {
+                return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                        "threshold must be a number between 0 and 1 (got: " + s + ")");
+            }
+        }
+        // isFinite FIRST: every comparison against NaN is false, so a bare range check
+        // lets "NaN" through, empties the near bucket in silence (ratio >= NaN is never
+        // true) and then serializes the literal NaN, which is not JSON.
+        if (!Double.isFinite(threshold) || threshold <= 0d || threshold > 1d) {
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                    "threshold must be greater than 0 and at most 1 (got: " + threshold + ")");
+        }
+
+        try {
+            String orgId = context != null ? context.orgId() : null;
+            String orgRole = context != null ? context.orgRole() : null;
+            List<AgentEntity> agents = agentService.listAgents(tenantId, orgId, orgRole);
+
+            // The same restriction list as `list`. An agent asking this question must not
+            // learn the spend of agents it is not allowed to see.
+            List<String> allowedAgentIds = getAllowedAgentIds(context);
+            if (allowedAgentIds != null) {
+                agents = agents.stream()
+                        .filter(a -> a.getId() != null && allowedAgentIds.contains(a.getId().toString()))
+                        .toList();
+            }
+
+            List<Map<String, Object>> rows = new java.util.ArrayList<>();
+            int blockedCount = 0;
+            int nearCount = 0;
+            // One clock for the whole answer, not one per row and not one per field: a cap
+            // rolling over mid-loop would otherwise put "blocked" beside a used_ratio of 0.
+            java.time.Instant budgetNow = java.time.Instant.now();
+            for (AgentEntity agent : agents) {
+                BigDecimal cap = agent.getCreditBudget();
+                if (cap == null || cap.signum() <= 0) {
+                    continue;   // no cap, nothing to be near
+                }
+                BigDecimal reserved = agent.getCreditsReserved() != null
+                        ? agent.getCreditsReserved() : BigDecimal.ZERO;
+                BigDecimal consumed = com.apimarketplace.common.credit.AgentBudgetRule.effectiveConsumed(
+                        agent.getCreditsConsumed(), reserved, agent.getBudgetResetMode(),
+                        agent.getBudgetLastReset(), budgetNow);
+                BigDecimal committed = consumed.add(reserved);
+                // ROUNDED once, then used for both the verdict and the figure. Deciding on
+                // the unrounded value and publishing the rounded one lets a row report
+                // used_ratio 0.8 beside status "ok" at a threshold of 0.8, which is the row
+                // contradicting the help that describes it.
+                double ratio = Math.round(
+                        committed.divide(cap, 6, java.math.RoundingMode.HALF_UP).doubleValue() * 1000d) / 1000d;
+                boolean blocked = agent.isBudgetBlockedAt(budgetNow);
+                boolean near = !blocked && ratio >= threshold;
+                if (blocked) blockedCount++;
+                if (near) nearCount++;
+
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("id", agent.getId() != null ? agent.getId().toString() : null);
+                row.put("name", agent.getName());
+                row.put("status", blocked ? "blocked" : near ? "near" : "ok");
+                row.put("total", cap);
+                row.put("consumed", consumed);
+                row.put("reserved_for_subagents", reserved);
+                row.put("free", cap.subtract(committed).max(BigDecimal.ZERO));
+                row.put("used_ratio", ratio);
+                row.put("reset_mode", agent.getBudgetResetMode());
+                java.time.Instant until = agent.getBudgetBlockedUntilAt(budgetNow);
+                if (until != null) {
+                    row.put("blocked_until", until.toString());
+                }
+                rows.add(row);
+            }
+
+            // Closest to the wall first: this list is read top-down and stopped at.
+            rows.sort((a, b) -> Double.compare(
+                    ((Number) b.get("used_ratio")).doubleValue(),
+                    ((Number) a.get("used_ratio")).doubleValue()));
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("threshold", threshold);
+            result.put("capped_agents", rows.size());
+            result.put("blocked", blockedCount);
+            result.put("near", nearCount);
+            // Bounded, and it says when it cut. The Javadoc above calls this list "short by
+            // construction", which is true of the shape and not of the count: a workspace
+            // that caps a hundred agents got a hundred rows in one tool result. The rows are
+            // already sorted closest-to-the-cap first, so a cut loses the least interesting
+            // end - and the counts above are computed over ALL of them, so the numbers stay
+            // true even when the list does not show everything.
+            if (rows.size() > BUDGETS_MAX_ROWS) {
+                result.put("truncated", true);
+                result.put("showing", BUDGETS_MAX_ROWS);
+                rows = rows.subList(0, BUDGETS_MAX_ROWS);
+            }
+            result.put("agents", rows);
+            return ToolExecutionResult.success(result);
+        } catch (Exception e) {
+            log.error("Failed to read agent budgets: {}", e.getMessage(), e);
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                    "Could not read agent budgets: " + e.getMessage());
+        }
     }
 
     // ==================== Create ====================
@@ -212,15 +398,20 @@ public class AgentCrudModule implements ToolModule {
         Object agentsList = p.get("agents");
         Boolean webSearch = getBooleanParam(p, "web_search");
         Boolean generation = getBooleanParam(p, "generation");
+        Boolean mailbox = getBooleanParam(p, "mailbox");
         // A value nobody can interpret is not "not stated": on create it would
         // land on a default the caller did not ask for (web_search grants
         // itself), and on update it would be a no-op the caller reads as a
         // change. Both are worse than being told, so say so and change nothing.
-        String unusableGrant = firstUnusableBooleanGrant(p, "web_search", "generation");
+        String unusableGrant = firstUnusableBooleanGrant(p, "web_search", "generation", "mailbox");
         if (unusableGrant != null) {
             return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
                 "'" + unusableGrant + "' must be true or false (got '" + p.get(unusableGrant)
                     + "'). Nothing was changed.");
+        }
+        String escalated = firstEscalatedGrant(p, context);
+        if (escalated != null) {
+            return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, escalationRefusal(escalated, getStringParam(p, "mailbox_access_mode")));
         }
         String tableAccessModeParam = getStringParam(p, "table_access_mode");
         String workflowAccessModeParam = getStringParam(p, "workflow_access_mode");
@@ -230,6 +421,7 @@ public class AgentCrudModule implements ToolModule {
         String skillAccessModeParam = getStringParam(p, "skill_access_mode");
         String fileAccessModeParam = getStringParam(p, "file_access_mode");
         String memoryAccessModeParam = getStringParam(p, "memory_access_mode");
+        String mailboxAccessModeParam = getStringParam(p, "mailbox_access_mode");
         // Explicit GRANT scope (none/all/custom). Authoritative when provided - the only way to
         // express grant='all' (the list params can only express none/custom). Omitted = derive from list.
         String workflowsGrantParam = getStringParam(p, "workflows_grant");
@@ -249,7 +441,10 @@ public class AgentCrudModule implements ToolModule {
         Boolean webhookMemory = (Boolean) p.get("webhook_memory");
 
         // Schedule config
-        String scheduleCron = getStringParam(p, "schedule_cron");
+        // The literal lives in ToolAuthorizationPolicy, which gates this call on the presence
+        // of a cron. Reading it from there means a rename cannot silently take the gate off
+        // while this module keeps arming schedules.
+        String scheduleCron = getStringParam(p, ToolAuthorizationPolicy.PARAM_SCHEDULE_CRON);
         String scheduleTimezone = getStringParam(p, "schedule_timezone");
         Integer scheduleMaxExecutions = getIntParam(p, "schedule_max_executions");
         String schedulePromptParam = getStringParam(p, "schedule_prompt");
@@ -296,7 +491,7 @@ public class AgentCrudModule implements ToolModule {
             String fallbackModel = modelCatalogService.getEffectiveDefaultModel();
             if (fallbackProvider == null || fallbackModel == null
                     || !modelCatalogService.isModelAvailable(fallbackProvider, fallbackModel)) {
-                return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, formatModelNotAvailable(effectiveProvider, effectiveModelName));
+                return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, formatModelNotAvailable(effectiveProvider, effectiveModelName, context));
             }
             // ModelSubstitution.requested must reflect what the LLM ACTUALLY
             // typed - not the yml-default we silently inferred for the missing
@@ -312,6 +507,19 @@ public class AgentCrudModule implements ToolModule {
             log.info("[AGENT_CREATE] Substituted unavailable model {}/{} → {}/{}",
                     requestedProviderRaw, requestedModelRaw, fallbackProvider, fallbackModel);
         }
+
+        // Judged on the POST-substitution pair - the value that would actually be persisted -
+        // and BEFORE the creation cap. After the cap, a refusal would still have consumed a
+        // create slot, and the retry this refusal invites would come back "LIMIT REACHED: you
+        // have already created N agents", which is false and sends the agent looking for an
+        // agent that was never created.
+        Optional<ToolExecutionResult> bridgeErr = validateBridgeProvider(
+            // Blank-aware like effectiveProvider above and like the update path: getStringParam
+            // returns "" verbatim, and a blank provider is not a provider.
+            context,
+            modelProvider != null && !modelProvider.isBlank() ? modelProvider : resolveDefaultProvider(),
+            null);
+        if (bridgeErr.isPresent()) return bridgeErr.get();
 
         // 5-minute fixed-window creation cap keyed on turnId (unique per user message).
         // See CREATE_LIMITER_TTL_MINUTES - caveats (per-pod, per-restart) documented there.
@@ -336,7 +544,7 @@ public class AgentCrudModule implements ToolModule {
         }
 
         try {
-            Map<String, Object> toolsConfig = buildToolsConfig(toolsMode, toolsList, workflowsList, applicationsList, tablesList, interfacesList, agentsList, webSearch, generation, maxIterations, tableAccessModeParam, workflowAccessModeParam, interfaceAccessModeParam, agentAccessModeParam, applicationAccessModeParam, skillAccessModeParam, workflowsGrantParam, applicationsGrantParam, tablesGrantParam, interfacesGrantParam, agentsGrantParam, fileAccessModeParam, memoryAccessModeParam);
+            Map<String, Object> toolsConfig = buildToolsConfig(toolsMode, toolsList, workflowsList, applicationsList, tablesList, interfacesList, agentsList, webSearch, generation, mailbox, maxIterations, tableAccessModeParam, workflowAccessModeParam, interfaceAccessModeParam, agentAccessModeParam, applicationAccessModeParam, skillAccessModeParam, workflowsGrantParam, applicationsGrantParam, tablesGrantParam, interfacesGrantParam, agentsGrantParam, fileAccessModeParam, memoryAccessModeParam, mailboxAccessModeParam);
             Map<String, Object> config = buildConfig(maxIterations);
             String orgId = context != null ? context.orgId() : null;
 
@@ -797,15 +1005,27 @@ public class AgentCrudModule implements ToolModule {
         Object agentsList = p.get("agents");
         Boolean webSearch = getBooleanParam(p, "web_search");
         Boolean generation = getBooleanParam(p, "generation");
+        Boolean mailbox = getBooleanParam(p, "mailbox");
         // A value nobody can interpret is not "not stated": on create it would
         // land on a default the caller did not ask for (web_search grants
         // itself), and on update it would be a no-op the caller reads as a
         // change. Both are worse than being told, so say so and change nothing.
-        String unusableGrant = firstUnusableBooleanGrant(p, "web_search", "generation");
+        // Both refusals below hand the slot BACK, as the bridge refusal further down already
+        // did. The rule is the same for all three and worth stating once: a refusal that
+        // changed nothing must not spend one of the three consecutive updates, or three
+        // rejected calls make the fourth answer "the configuration is COMPLETE" to an agent
+        // that has not succeeded once.
+        String unusableGrant = firstUnusableBooleanGrant(p, "web_search", "generation", "mailbox");
         if (unusableGrant != null) {
+            updateLimiter.decrement(updateKey);
             return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
                 "'" + unusableGrant + "' must be true or false (got '" + p.get(unusableGrant)
                     + "'). Nothing was changed.");
+        }
+        String escalated = firstEscalatedGrant(p, context);
+        if (escalated != null) {
+            updateLimiter.decrement(updateKey);
+            return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, escalationRefusal(escalated, getStringParam(p, "mailbox_access_mode")));
         }
         String tableAccessModeParam = getStringParam(p, "table_access_mode");
         String workflowAccessModeParam = getStringParam(p, "workflow_access_mode");
@@ -815,6 +1035,7 @@ public class AgentCrudModule implements ToolModule {
         String skillAccessModeParam = getStringParam(p, "skill_access_mode");
         String fileAccessModeParam = getStringParam(p, "file_access_mode");
         String memoryAccessModeParam = getStringParam(p, "memory_access_mode");
+        String mailboxAccessModeParam = getStringParam(p, "mailbox_access_mode");
         // Explicit GRANT scope (none/all/custom). Authoritative when provided - the only way to
         // express grant='all' (the list params can only express none/custom). Omitted = derive from list.
         String workflowsGrantParam = getStringParam(p, "workflows_grant");
@@ -834,7 +1055,10 @@ public class AgentCrudModule implements ToolModule {
         Boolean webhookMemory = (Boolean) p.get("webhook_memory");
 
         // Schedule config
-        String scheduleCron = getStringParam(p, "schedule_cron");
+        // The literal lives in ToolAuthorizationPolicy, which gates this call on the presence
+        // of a cron. Reading it from there means a rename cannot silently take the gate off
+        // while this module keeps arming schedules.
+        String scheduleCron = getStringParam(p, ToolAuthorizationPolicy.PARAM_SCHEDULE_CRON);
         String scheduleTimezone = getStringParam(p, "schedule_timezone");
         Integer scheduleMaxExecutions = getIntParam(p, "schedule_max_executions");
         String schedulePromptParam = getStringParam(p, "schedule_prompt");
@@ -870,7 +1094,7 @@ public class AgentCrudModule implements ToolModule {
                 String fallbackModel = modelCatalogService.getEffectiveDefaultModel();
                 if (fallbackProvider == null || fallbackModel == null
                         || !modelCatalogService.isModelAvailable(fallbackProvider, fallbackModel)) {
-                    return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, formatModelNotAvailable(targetProvider, targetModelName));
+                    return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, formatModelNotAvailable(targetProvider, targetModelName, context));
                 }
                 updateSubstitution = new ModelSubstitution(targetProvider, targetModelName, fallbackProvider, fallbackModel);
                 modelProvider = fallbackProvider;
@@ -881,8 +1105,27 @@ public class AgentCrudModule implements ToolModule {
             }
         }
 
+        // Judged AFTER the substitution above, exactly like the create path: both must judge the
+        // pair that would actually be PERSISTED. Judging the requested pair instead would refuse
+        // an update whose unavailable model the block above was about to rewrite onto a safe
+        // provider - a refusal for a bridge that would never have been stored. Only a CHANGE is
+        // judged, so an agent stuck on a forbidden bridge stays editable and can be moved off it.
+        //
+        // Unlike create, this cannot sit ahead of its rate limiter: deciding whether the provider
+        // is CHANGING needs the stored one, and that read happens after the cap. So the slot is
+        // given BACK instead, the same way a failed persist already does (refundCreateSlot). Left
+        // consumed, three refusals would make the fourth update answer "STOP: you have updated
+        // this agent 3 times already, the configuration is COMPLETE" - which is false, and tells
+        // the agent to stop trying exactly when it has not yet succeeded once.
+        Optional<ToolExecutionResult> bridgeErr =
+            validateBridgeProvider(context, modelProvider, existing.getModelProvider());
+        if (bridgeErr.isPresent()) {
+            updateLimiter.decrement(updateKey);
+            return bridgeErr.get();
+        }
+
         try {
-            Map<String, Object> toolsConfigPatch = buildToolsConfig(toolsMode, toolsList, workflowsList, applicationsList, tablesList, interfacesList, agentsList, webSearch, generation, maxIterations, tableAccessModeParam, workflowAccessModeParam, interfaceAccessModeParam, agentAccessModeParam, applicationAccessModeParam, skillAccessModeParam, workflowsGrantParam, applicationsGrantParam, tablesGrantParam, interfacesGrantParam, agentsGrantParam, fileAccessModeParam, memoryAccessModeParam);
+            Map<String, Object> toolsConfigPatch = buildToolsConfig(toolsMode, toolsList, workflowsList, applicationsList, tablesList, interfacesList, agentsList, webSearch, generation, mailbox, maxIterations, tableAccessModeParam, workflowAccessModeParam, interfaceAccessModeParam, agentAccessModeParam, applicationAccessModeParam, skillAccessModeParam, workflowsGrantParam, applicationsGrantParam, tablesGrantParam, interfacesGrantParam, agentsGrantParam, fileAccessModeParam, memoryAccessModeParam, mailboxAccessModeParam);
             Map<String, Object> config = buildConfig(maxIterations);
 
             // Patch is forwarded as-is to AgentService.updateAgent - the service does
@@ -1153,6 +1396,148 @@ public class AgentCrudModule implements ToolModule {
     }
 
     /**
+     * The first opt-in grant this caller is handing out without holding it, or null.
+     *
+     * <p>A capability travels DOWN, never up. Without this, an agent that was never given
+     * the mailbox could create a sub-agent that has it and then run it, which turns an
+     * access decision a person made into one an agent makes for itself. The same applies to
+     * {@code generation}: it spends the account's credits.
+     *
+     * <p>Silence is not a denial: {@link AgentModuleResolver#callerMayUse} answers true when
+     * the credentials carry no module list at all, which is every path with no bound agent
+     * (a schedule-fired workflow has none) and every caller predating that key. Reading
+     * silence as refusal would break work that was always allowed, and invisibly.
+     */
+    private static String firstEscalatedGrant(Map<String, Object> p, ToolExecutionContext context) {
+        Map<String, Object> credentials = context == null ? null : context.credentials();
+        // Only an AGENT can escalate. A plain chat is a PERSON, and a person granting a
+        // capability is not passing one on, it is exercising a right they already have: the
+        // same grant is two clicks away in the agent modal. Without this, the commonest
+        // caller on the platform was refused, because a direct chat's enabled modules are
+        // NO_CONFIG_MODULES, which deliberately excludes both opt-ins, so it reads as
+        // "does not hold it" for a caller that never could. `__agentId__` is written only
+        // when an agent is bound (AgentContextBuilder), which is exactly the distinction.
+        if (credentials == null || isDrivenByAPerson(credentials)) {
+            return null;
+        }
+        for (String grant : new String[] {"mailbox", "generation"}) {
+            if (Boolean.TRUE.equals(getBooleanParam(p, grant))
+                    && !AgentModuleResolver.callerMayUse(credentials, grant)) {
+                return grant;
+            }
+        }
+        // The read/write axis is a capability too, and the module list carries no trace of
+        // it: a read-only mail agent passes callerMayUse("mailbox") and could hand a sub-agent
+        // the write mode it was itself denied, then run it. That is the whole guard undone,
+        // because read-only is the one restriction no approval wildcard can lift.
+        if (isReadOnly(callerAccessMode(credentials, "mailbox"))) {
+            String requested = getStringParam(p, "mailbox_access_mode");
+            // ABSENT is a widening whenever this call TURNS THE MAILBOX ON, on create and on
+            // update alike. The tempting exception, "an update merges, so silence keeps the
+            // stored mode", is true only when a mode is stored: an update that switches the
+            // mailbox on for the first time has none to keep, normalizeToolsConfig backfills
+            // nothing for this key, and the row lands with a grant and no mode, which reads
+            // as FULL access. Two calls then do what one was refused, which is the whole
+            // guard undone. An update that leaves the grant alone is untouched by this.
+            // Anything that is not 'read' widens, not only 'write'. A value outside the two
+            // ("full", an empty string, a number read as null) is denied at enforcement, so it
+            // is not an escalation, but letting it through persists an agent whose mailbox is
+            // permanently broken and says nothing. And ABSENT widens whenever this call turns
+            // the mailbox on, because a grant with no mode reads as FULL access.
+            boolean grantsMailbox = Boolean.TRUE.equals(getBooleanParam(p, "mailbox"));
+            boolean revokesMailbox = Boolean.FALSE.equals(getBooleanParam(p, "mailbox"));
+            // A call that REVOKES widens nothing, whatever mode rides along with it: the mode
+            // of a mailbox nobody has is inert. Refusing it would block a read-only agent from
+            // taking a capability AWAY, which is the one direction that never needed a guard.
+            boolean widens = !revokesMailbox
+                    && ((requested != null && !isReadOnly(requested))
+                        || (requested == null && grantsMailbox));
+            if (widens) {
+                return "mailbox_access_mode";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Read the mode the way the ENFORCER reads it: trimmed and case-insensitive.
+     *
+     * <p>{@code ToolAccessControl.checkWriteAccess} compares with {@code equalsIgnoreCase} on a
+     * trimmed value, so a stored {@code " READ "} is read-only to it. A stricter comparison here
+     * would make this guard disagree with the gate it exists to protect, and disagree in the
+     * permissive direction: the caller would count as unrestricted and be allowed to pass on a
+     * right the tool itself would then deny it.
+     */
+    private static boolean isReadOnly(String mode) {
+        return mode != null && "read".equalsIgnoreCase(mode.trim());
+    }
+
+    /**
+     * Whether a PERSON is driving this call, which is the only case the guard exempts.
+     *
+     * <p>Escalation is something an agent does. A person granting a capability is exercising a
+     * right they already hold, and the same grant is two clicks away in the agent modal, so
+     * refusing them would block the commonest caller on the platform: a direct chat carries
+     * NO_CONFIG_MODULES, which excludes every opt-in by design and would read as "does not
+     * hold it" for a caller that never could.
+     *
+     * <p>A bound-agent id ALONE is the wrong test, and getting it wrong made the two halves of
+     * this feature cancel each other. An Agent node configured INLINE in a workflow has no
+     * agent entity, so {@code AgentNode} writes no {@code __agentId__}; it is nonetheless
+     * unmistakably an agent, its modules exclude the mailbox, and it holds the {@code agent}
+     * tool by default. It was exempted by the very guard written for it, while the credential
+     * mirror added for it carried the proof that it should be refused. A workflow run says no
+     * human is typing, whether or not an entity was linked, so both keys are consulted.
+     */
+    private static boolean isDrivenByAPerson(Map<String, Object> credentials) {
+        return credentials.get("__agentId__") == null
+                && credentials.get("__workflowRunId__") == null
+                && credentials.get("__workflowNodeId__") == null;
+    }
+
+
+    /**
+     * The caller's own read/write mode for a family, resolved EXACTLY as the enforcer
+     * resolves it: the plain spelling first, then the namespaced one.
+     *
+     * <p>The two do disagree in one real state, which this feature created: a sub-agent
+     * inherits its parent's namespaced mode and then has its OWN plain mode written over it,
+     * so a child whose row says write under a read-only parent holds plain=write,
+     * namespaced=read. ToolAccessControl.checkWriteAccess reads plain, so that child genuinely
+     * may send. A "most restrictive wins" rule here looked safer and was simply wrong about
+     * the same caller: it refused it from passing on a right the platform grants it, and a
+     * guard that disagrees with the gate it protects teaches people to distrust one of them.
+     */
+    private static String callerAccessMode(Map<String, Object> credentials, String category) {
+        if (credentials == null) {
+            return null;
+        }
+        Object plain = credentials.get(category + "AccessMode");
+        Object namespaced = credentials.get("__" + category + "AccessMode__");
+        Object value = plain != null ? plain : namespaced;
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private static String escalationRefusal(String grant, String statedMode) {
+        if ("mailbox_access_mode".equals(grant)) {
+            // Two different mistakes, told apart. Saying "a mailbox without a mode means FULL
+            // access" to a caller that DID state 'write' is noise about a rule it did not break,
+            // and noise in a refusal is what teaches an agent to skim the next one.
+            String cause = statedMode != null
+                    ? "you asked for '" + statedMode + "', which is not 'read'"
+                    : "you granted a mailbox without mailbox_access_mode, which means FULL access";
+            return "You cannot give another agent more mailbox access than you have: yours is "
+                    + "read-only and " + cause + ". Nothing was changed. Pass "
+                    + "mailbox_access_mode='read', and ask the user if that agent genuinely has "
+                    + "to send.";
+        }
+        return "You cannot grant '" + grant + "' to another agent, because you do not have it "
+                + "yourself. Nothing was changed. Create or update the agent without that "
+                + "parameter, and ask the user to switch it on for that agent: it is theirs to "
+                + "give, not yours to pass on.";
+    }
+
+    /**
      * The first grant parameter that was SENT but cannot be read as a boolean,
      * or null when every one of them is usable.
      *
@@ -1174,11 +1559,11 @@ public class AgentCrudModule implements ToolModule {
 
     private Map<String, Object> buildToolsConfig(String toolsMode, Object toolsList,
             Object workflowsList, Object applicationsList, Object tablesList,
-            Object interfacesList, Object agentsList, Boolean webSearch, Boolean generation,
+            Object interfacesList, Object agentsList, Boolean webSearch, Boolean generation, Boolean mailbox,
             Integer maxIterations,
             String tableAM, String workflowAM, String interfaceAM, String agentAM, String applicationAM, String skillAM,
             String workflowsGrant, String applicationsGrant, String tablesGrant, String interfacesGrant, String agentsGrant,
-            String fileAM, String memoryAM) {
+            String fileAM, String memoryAM, String mailboxAM) {
         Map<String, Object> toolsConfig = new LinkedHashMap<>();
         // tools_mode controls MCP/catalog tool access (all/none/custom) - separate from resource access
         if (toolsMode != null) toolsConfig.put("mode", toolsMode);
@@ -1205,6 +1590,10 @@ public class AgentCrudModule implements ToolModule {
         // so an agent has to be given it deliberately rather than inheriting it
         // from a create call that never mentioned it.
         if (generation != null) toolsConfig.put("generation", generation);
+        // The mailbox tool. Opt-IN for a different reason than generation: not cost, reach.
+        // It reads the account's mail and can send from its address, to a person, with no
+        // undo, so a create call that never mentioned it must not hand it over.
+        if (mailbox != null) toolsConfig.put("mailbox", mailbox);
         if (maxIterations != null) toolsConfig.put("maxIterations", maxIterations);
         // Access modes - store when provided so merge can revert read→write
         if (tableAM != null) toolsConfig.put("tableAccessMode", tableAM);
@@ -1219,6 +1608,8 @@ public class AgentCrudModule implements ToolModule {
         // 'read' leaves recall and search working and blocks save/delete, so a narrowly
         // scoped agent cannot write into every other agent's system prompt.
         if (memoryAM != null) toolsConfig.put("memoryAccessMode", memoryAM);
+        // Mailbox read/write axis. Absent leaves full access, like every other family.
+        if (mailboxAM != null) toolsConfig.put("mailboxAccessMode", mailboxAM);
         // Explicit GRANT sentinels - authoritative when a VALID value (none/all/custom) is provided.
         // AgentService.normalizeToolsConfig preserves them ('all'/'none' reset the id list to [],
         // 'custom' keeps it); an absent/invalid grant is dropped here so normalize derives it from
@@ -1272,6 +1663,9 @@ public class AgentCrudModule implements ToolModule {
         if (toolsConfig.containsKey("generation")) {
             summary.put("generation", toolsConfig.get("generation"));
         }
+        if (toolsConfig.containsKey("mailbox")) {
+            summary.put("mailbox", toolsConfig.get("mailbox"));
+        }
         return summary;
     }
 
@@ -1302,6 +1696,10 @@ public class AgentCrudModule implements ToolModule {
         addResourceEntry(enabledResources, toolsConfig, "applications", "application");
         if (Boolean.TRUE.equals(toolsConfig.get("webSearch"))) enabledResources.add("web_search");
         if (Boolean.TRUE.equals(toolsConfig.get("generation"))) enabledResources.add("generation");
+        // Asked of the resolver, not of the raw value: the grant is persisted as a boolean OR
+        // as {enabled:...}, and reading only the boolean reports a granted agent as having no
+        // mailbox. That is a read-back the caller then acts on.
+        if (com.apimarketplace.agent.config.AgentModuleResolver.isMailboxEnabled(toolsConfig)) enabledResources.add("mailbox");
         // Skills and catalog are always available (not resource-gated)
         enabledResources.add("skill");
         enabledResources.add("catalog");
@@ -1338,6 +1736,11 @@ public class AgentCrudModule implements ToolModule {
      *   <li>{@code reset_mode}: {@code cumulative | weekly | monthly} - how the consumed counter rolls</li>
      *   <li>{@code last_reset}: ISO-8601 timestamp of the last automatic reset - OMITTED when null
      *       (e.g. a brand-new cumulative agent that has never been reset)</li>
+     *   <li>{@code blocked}: whether the cap refuses the agent's next run outright, including a
+     *       scheduled one. Always present, always {@code false} for an unlimited agent.</li>
+     *   <li>{@code blocked_until}: ISO-8601 instant at which {@code blocked} lifts on its own -
+     *       OMITTED when the agent is not blocked, and also when it is blocked by a cumulative
+     *       cap, which never lifts</li>
      * </ul>
      *
      * <p>The shape is identical across create/get/update so the frontend doesn't branch on
@@ -1348,7 +1751,11 @@ public class AgentCrudModule implements ToolModule {
      * this method, update the help module in the same commit or an LLM consulting the tool
      * help will see a stale accessor surface.
      */
-    private Map<String, Object> buildBudgetResponse(AgentEntity entity) {
+    // Package-private and STATIC so the shape an LLM reads back can be tested against the
+    // tool help that describes it, the way ActiveAutomationsService.budgetBlock is. It reads
+    // nothing but its argument, so the visibility costs nothing and the alternative was a
+    // test that reflects into the module and allocates it without a constructor.
+    static Map<String, Object> buildBudgetResponse(AgentEntity entity) {
         Map<String, Object> budget = new LinkedHashMap<>();
         BigDecimal total = entity.getCreditBudget();
         BigDecimal consumed = entity.getCreditsConsumed() != null ? entity.getCreditsConsumed() : BigDecimal.ZERO;
@@ -1390,6 +1797,17 @@ public class AgentCrudModule implements ToolModule {
         budget.put("reset_mode", entity.getBudgetResetMode());
         if (entity.getBudgetLastReset() != null) {
             budget.put("last_reset", entity.getBudgetLastReset().toString());
+        }
+        // blocked is NOT "free == 0", and reading it that way is the mistake this key exists
+        // to prevent. free is raw arithmetic on the stored counter, while the counter itself
+        // is reset LAZILY at the next run: a monthly agent that hit its cap last month reads
+        // free = 0 all month and is not blocked at all. Ask the rule the schedule gate asks.
+        // One clock, for the reason InternalAgentController.toDto states.
+        java.time.Instant budgetNow = java.time.Instant.now();
+        budget.put("blocked", entity.isBudgetBlockedAt(budgetNow));
+        java.time.Instant blockedUntil = entity.getBudgetBlockedUntilAt(budgetNow);
+        if (blockedUntil != null) {
+            budget.put("blocked_until", blockedUntil.toString());
         }
         return budget;
     }
@@ -1465,8 +1883,34 @@ public class AgentCrudModule implements ToolModule {
         }
     }
 
-    private String formatModelNotAvailable(String requestedProvider, String requestedModelName) {
-        List<AvailableModel> available = modelCatalogService.listAvailableModels();
+    /**
+     * The caller's platform roles as the tool context carries them, or {@code null}. Blank
+     * normalises to null, matching {@code AgentHelpModule.credentialString}: the two are
+     * equivalent downstream (HttpBridgeAccessClient maps null and blank alike to USER); this is
+     * for the reader, so one spelling reaches the guard from both modules.
+     */
+    private static String callerRoles(ToolExecutionContext context) {
+        Object roles = context != null && context.credentials() != null
+            ? context.credentials().get(CRED_USER_ROLES) : null;
+        return roles instanceof String s && !s.isBlank() ? s : null;
+    }
+
+    private String formatModelNotAvailable(String requestedProvider, String requestedModelName,
+                                           ToolExecutionContext context) {
+        // The same trimming help_models applies, for the same reason: this block is the
+        // "here is what you CAN use" list an agent reads after a bad pair, so offering a provider
+        // the save guard refuses two calls later just moves the failure one turn further out.
+        // In cloud that is every bridge for a non-admin caller; an admin keeps them, as the save
+        // guard admits an admin to the access policy (which may still refuse). listAvailableModels
+        // itself stays unfiltered - it also
+        // backs validation, where dropping a bridge would invalidate the agents already stored on one.
+        boolean callerIsAdmin = com.apimarketplace.common.web.AdminRoleGuard.isAdmin(callerRoles(context));
+        List<AvailableModel> available = modelCatalogService.listAvailableModels().stream()
+                .filter(m -> !BridgeProviders.isHiddenFromUser(
+                        bridgeProviderSaveGuard == null || bridgeProviderSaveGuard.isSelfHosted(),
+                        callerIsAdmin,
+                        m.provider()))
+                .toList();
 
         StringBuilder sb = new StringBuilder();
         sb.append("ERROR: Model '").append(requestedProvider).append("/").append(requestedModelName)

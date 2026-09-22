@@ -638,6 +638,64 @@ describe('NodeConfigurationRule', () => {
       );
       expect(classifyIssues).toHaveLength(2);
     });
+
+    /**
+     * Duplicate category labels make one branch permanently unreachable: routing resolves
+     * a label to the FIRST category that matches it. The backend decision engine refuses
+     * such a node outright before it calls anything, so without this rule a node that
+     * works on a chat model becomes a run-time failure the moment its engine is switched,
+     * with nothing in the builder to say why.
+     */
+    const classifyWith = (categories: Array<{ id: string; label: string }>) => ({
+      id: 'classify-dup',
+      type: 'classifyNode',
+      position: { x: 0, y: 0 },
+      data: {
+        id: 'classify-dup',
+        label: 'My Classify',
+        kind: 'classify' as const,
+        paramExpressions: { prompt: 'Classify: {{trigger:t.output.message}}' },
+        classifyCategories: categories,
+      },
+    }) as any;
+
+    const duplicateIssues = (categories: Array<{ id: string; label: string }>) =>
+      rule.validate(buildContext([classifyWith(categories)], [])).issues
+        .filter((i) => i.context?.rule === 'classify_duplicate_category_labels');
+
+    it('should error when two categories share a label', () => {
+      const issues = duplicateIssues([
+        { id: 'c1', label: 'billing' },
+        { id: 'c2', label: 'billing' },
+      ]);
+
+      expect(issues).toHaveLength(1);
+      expect(issues[0].message).toContain('billing');
+    });
+
+    it('should treat labels differing only in case or padding as duplicates', () => {
+      // They normalise to the same routing key, so the second port is just as dead.
+      expect(duplicateIssues([
+        { id: 'c1', label: 'Billing' },
+        { id: 'c2', label: '  billing ' },
+      ])).toHaveLength(1);
+    });
+
+    it('should accept distinct labels', () => {
+      expect(duplicateIssues([
+        { id: 'c1', label: 'billing' },
+        { id: 'c2', label: 'technical' },
+      ])).toHaveLength(0);
+    });
+
+    it('should not report duplicates for empty labels, which the missing-field rules own', () => {
+      // Two blanks are not a duplicate-label problem; reporting both would tell the user
+      // to fix the wrong thing.
+      expect(duplicateIssues([
+        { id: 'c1', label: '' },
+        { id: 'c2', label: '' },
+      ])).toHaveLength(0);
+    });
   });
 
   describe('mixed scenarios', () => {

@@ -13,6 +13,7 @@ import type { BreadcrumbItem } from '@/components/ui/breadcrumb';
 import { useRouter } from '@/i18n/navigation';
 import { Table } from 'lucide-react';
 import ToastContainer from './ToastContainer';
+import { useTranslations } from 'next-intl';
 
 export default function DataTable({
   dataSourceId,
@@ -30,9 +31,11 @@ export default function DataTable({
   serverFilters,
   infiniteScroll = false,
 }: DataTableProps) {
+  const tLogs = useTranslations('workflow.logs');
   // Snapshot mode forces read-only + embedded - writes would try to hit an endpoint we don't have,
   // and URL-based nav would route to /app/tables/<undefined>.
-  const effectiveReadOnly = readOnly || !!snapshotData;
+  // Execution history is immutable, including nested workflow payload tables.
+  const effectiveReadOnly = readOnly || !!snapshotData || !!workflowContext;
   const effectiveEmbedded = embedded || !!snapshotData;
   const router = useRouter();
 
@@ -160,7 +163,12 @@ export default function DataTable({
 
       {/* Data Grid - sizes to content, shrinks with scroll when too tall */}
       <div className="w-full min-h-[200px] flex flex-col overflow-hidden" style={{ flex: '1 1 auto' }}>
-        <DataTableGrid
+        {workflowContext && controller.error ? (
+          <div role="alert" className="flex flex-1 flex-col items-center justify-center gap-3 p-4 text-center text-sm text-theme-secondary">
+            <p>{tLogs('loadDataError')}</p>
+            <button type="button" onClick={() => controller.handlePageChange(1)} disabled={controller.tableLoading} className="rounded-lg border border-theme px-3 py-2 text-theme-primary hover:bg-theme-secondary disabled:opacity-50">{tLogs('retry')}</button>
+          </div>
+        ) : <DataTableGrid
           controller={filteredController}
           workflowContext={workflowContext}
           jsonPath={jsonPath}
@@ -169,7 +177,7 @@ export default function DataTable({
           navigateTo={navigateTo}
           dataSourceBasePath={dataSourceBasePath}
           infiniteScroll={infiniteScroll}
-        />
+        />}
       </div>
 
       {/* Pagination - hidden in infinite-scroll mode (the grid renders an in-container

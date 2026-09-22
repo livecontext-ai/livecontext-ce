@@ -129,7 +129,7 @@ describe('GenerationHistoryList', () => {
     const onReuse = vi.fn();
     render(<GenerationHistoryList onReuse={onReuse} />);
 
-    fireEvent.click(screen.getByText('reuse'));
+    fireEvent.click(screen.getByText('modify'));
 
     expect(onReuse).toHaveBeenCalledWith(expect.objectContaining({ id: 'a1' }));
   });
@@ -144,13 +144,108 @@ describe('GenerationHistoryList', () => {
 
     render(<GenerationHistoryList onReuse={onReuse} />);
 
-    expect(screen.getByText('reuse').closest('button')).toBeDisabled();
+    expect(screen.getByText('modify').closest('button')).toBeDisabled();
   });
 
   it('offers no reuse control at all where there is nowhere for it to lead', () => {
     render(<GenerationHistoryList />);
 
-    expect(screen.queryByText('reuse')).not.toBeInTheDocument();
+    expect(screen.queryByText('modify')).not.toBeInTheDocument();
+  });
+
+  it('states what each generation cost when the platform charged for it', () => {
+    // The one number a reader cannot get anywhere else: the usage page knows the total, and the
+    // model listing knows today's rate, but only the asset knows what THIS one was charged.
+    mocks.useGenerationHistory.mockReturnValue(history({
+      entries: [entry({ provenance: {
+        model: 'flux-1.1-pro', kind: 'image', prompt: 'a boat', billedCredits: 78,
+      } })],
+    }));
+
+    render(<GenerationHistoryList />);
+
+    // The VALUE, anchored: this suite renders through a stub translator that emits the key and its
+    // arguments (`cost:78,78`), so the amount is observable even though the wording is not. Only
+    // presence was checked here at first, and doubling the number at the call site left every test
+    // in the file green - the binding from the stored recipe to the card was covered by nothing.
+    // What a reader actually SEES is pinned exactly, per edition and per locale, in
+    // GenerationCard.price.realIntl.test.tsx.
+    expect(screen.getByTitle('costTitle')).toHaveTextContent(/^cost:78,/);
+  });
+
+  it('says nothing about price for a generation the platform did not charge for', () => {
+    // Run on the reader's own provider key: they paid that provider. Drawing "0 credits" would
+    // report a price that was never charged, on the surface where prices are compared.
+    render(<GenerationHistoryList />);
+
+    expect(screen.queryByTitle('costTitle')).not.toBeInTheDocument();
+  });
+
+  it('says nothing about price for an amount of zero, or one that is not a number', () => {
+    // Zero is reachable (an endpoint published at nothing) and NaN is reachable (a value that
+    // crossed JSON badly). Both would draw a price that was never charged: "0 credits" reads as
+    // free, and a broken number reads as a bug in the ledger.
+    mocks.useGenerationHistory.mockReturnValue(history({
+      entries: [
+        entry({ id: 'z', provenance: { model: 'flux-1.1-pro', kind: 'image', prompt: 'zero', billedCredits: 0 } }),
+        entry({ id: 'n', provenance: { model: 'flux-1.1-pro', kind: 'image', prompt: 'nan', billedCredits: Number.NaN } }),
+      ],
+    }));
+
+    render(<GenerationHistoryList />);
+
+    expect(screen.queryByTitle('costTitle')).not.toBeInTheDocument();
+  });
+
+  it('keeps its heading and itself out of a surface where nothing has been generated', () => {
+    // For a page where the list is an addition rather than the point: a heading over an empty
+    // state is the empty shelf, and the studio has no reason to show one on a fresh install.
+    mocks.useGenerationHistory.mockReturnValue(history({ entries: [] }));
+
+    const { container } = render(<GenerationHistoryList heading="Your generations" hideWhenEmpty />);
+
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('keeps that surface intact while the answer is still coming, and when it fails', () => {
+    // Hiding during the load would make the section appear late and jump the page; hiding on a
+    // failed request would state that nothing has been generated, which a failure does not say.
+    mocks.useGenerationHistory.mockReturnValue(history({ entries: [], isLoading: true }));
+    const { container, rerender } = render(
+      <GenerationHistoryList heading="Your generations" hideWhenEmpty />,
+    );
+    expect(container).not.toBeEmptyDOMElement();
+
+    mocks.useGenerationHistory.mockReturnValue(history({ entries: [], isError: true }));
+    rerender(<GenerationHistoryList heading="Your generations" hideWhenEmpty />);
+
+    expect(screen.getByText('error')).toBeInTheDocument();
+  });
+
+  it('stays on screen when a FORMAT filter is what emptied it, so the chips remain', () => {
+    // Not "nothing has been generated": the reader narrowed to a format that happens to have none.
+    // Hiding takes the chips away with the grid, and there is then no way back to the other formats.
+    mocks.useGenerationHistory.mockReturnValue(history({ hasMore: true }));
+    const { rerender } = render(<GenerationHistoryList heading="Your generations" hideWhenEmpty />);
+
+    fireEvent.click(screen.getByText('formats.video'));
+    mocks.useGenerationHistory.mockReturnValue(history({ entries: [] }));
+    rerender(<GenerationHistoryList heading="Your generations" hideWhenEmpty />);
+
+    expect(screen.getByText('emptyForFormat:formats.video')).toBeInTheDocument();
+  });
+
+  it('stays on screen when a PAGE past the first is what emptied it, so Previous remains', () => {
+    // `page` state survives the hide, so a section that disappears here stays gone until the
+    // component remounts - with the reader stranded on a page they cannot leave.
+    mocks.useGenerationHistory.mockReturnValue(history({ hasMore: true }));
+    const { rerender } = render(<GenerationHistoryList heading="Your generations" hideWhenEmpty />);
+
+    fireEvent.click(screen.getByText('next'));
+    mocks.useGenerationHistory.mockReturnValue(history({ entries: [], hasMore: false }));
+    rerender(<GenerationHistoryList heading="Your generations" hideWhenEmpty />);
+
+    expect(screen.getByText('previous')).toBeInTheDocument();
   });
 
   it('opens the asset itself when asked to', () => {

@@ -1302,6 +1302,111 @@ class WorkflowCrudModuleTest {
             assertThat(data.get("total")).isEqualTo(2L);
         }
 
+        /** A workflow whose plan uses one MCP integration. */
+        private WorkflowEntity workflowUsing(UUID id, String name, String apiSlug) {
+            WorkflowEntity w = workflow(id, name, null, null);
+            w.setPlan(Map.of(
+                    "id", "wf",
+                    "tenantId", TENANT_ID,
+                    "mcps", List.of(Map.of("id", apiSlug + "/action")),
+                    "edges", List.of()));
+            return w;
+        }
+
+        private void stubListEnrichment() {
+            when(planVersionService.getCurrentVersion(any(UUID.class))).thenReturn(1);
+            when(publicationClient.findActivePublicationIdsByWorkflowIds(anyList(), eq(TENANT_ID)))
+                    .thenReturn(Map.of());
+            when(workflowRunRepository.findFirstByWorkflowIdOrderByStartedAtDesc(any(UUID.class)))
+                    .thenReturn(Optional.empty());
+        }
+
+        @Test
+        @DisplayName("node_types keeps only the workflows containing one of the given types, before pagination")
+        @SuppressWarnings("unchecked")
+        void nodeTypesFiltersBeforePagination() {
+            UUID a = UUID.randomUUID();
+            UUID b = UUID.randomUUID();
+            when(workflowService.listWorkflows(TENANT_ID, null, null))
+                    .thenReturn(List.of(
+                            workflowUsing(a, "Gmail digest", "gmail"),
+                            workflowUsing(b, "Slack alerts", "slack")));
+            stubListEnrichment();
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of("node_types", List.of("mcp:gmail")), TENANT_ID, null)
+                    .get().data();
+
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("workflows");
+            assertThat(items).extracting(m -> m.get("id")).containsExactly(a.toString());
+            // total describes the FILTERED set, so the agent's paging maths stays right.
+            assertThat(data.get("total")).isEqualTo(1L);
+        }
+
+        @Test
+        @DisplayName("several node_types mean ANY of them, not all of them")
+        @SuppressWarnings("unchecked")
+        void nodeTypesMeansAnyOfThem() {
+            when(workflowService.listWorkflows(TENANT_ID, null, null))
+                    .thenReturn(List.of(
+                            workflowUsing(UUID.randomUUID(), "Gmail digest", "gmail"),
+                            workflowUsing(UUID.randomUUID(), "Slack alerts", "slack"),
+                            workflowUsing(UUID.randomUUID(), "Notion sync", "notion")));
+            stubListEnrichment();
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of("node_types", List.of("mcp:gmail", "mcp:slack")),
+                            TENANT_ID, null)
+                    .get().data();
+
+            assertThat(data.get("total")).isEqualTo(2L);
+        }
+
+        @Test
+        @DisplayName("every item reports its own node_types, so the agent can discover the tokens to filter on")
+        @SuppressWarnings("unchecked")
+        void itemsCarryTheirNodeTypes() {
+            when(workflowService.listWorkflows(TENANT_ID, null, null))
+                    .thenReturn(List.of(workflowUsing(UUID.randomUUID(), "Gmail digest", "gmail")));
+            stubListEnrichment();
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of(), TENANT_ID, null).get().data();
+
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("workflows");
+            assertThat((List<String>) items.get(0).get("node_types")).containsExactly("mcp:gmail");
+        }
+
+        @Test
+        @DisplayName("an unknown node_types token returns nothing rather than widening back to everything")
+        @SuppressWarnings("unchecked")
+        void unknownNodeTypeReturnsNothing() {
+            when(workflowService.listWorkflows(TENANT_ID, null, null))
+                    .thenReturn(List.of(workflowUsing(UUID.randomUUID(), "Gmail digest", "gmail")));
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of("node_types", List.of("mcp:nope")), TENANT_ID, null)
+                    .get().data();
+
+            assertThat(data.get("total")).isEqualTo(0L);
+        }
+
+        @Test
+        @DisplayName("an empty node_types list is no filter at all")
+        @SuppressWarnings("unchecked")
+        void emptyNodeTypesIsNoFilter() {
+            when(workflowService.listWorkflows(TENANT_ID, null, null))
+                    .thenReturn(List.of(
+                            workflowUsing(UUID.randomUUID(), "Gmail digest", "gmail"),
+                            workflowUsing(UUID.randomUUID(), "Slack alerts", "slack")));
+            stubListEnrichment();
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of("node_types", List.of()), TENANT_ID, null).get().data();
+
+            assertThat(data.get("total")).isEqualTo(2L);
+        }
+
         @Test
         @DisplayName("drops tenantId from each summary (always equals caller, was noise)")
         @SuppressWarnings("unchecked")

@@ -24,7 +24,12 @@ function isLocale(value: string | undefined): value is Locale {
   return (locales as readonly string[]).includes(value ?? '');
 }
 
-export default function LandingLanguageSelect() {
+export default function LandingLanguageSelect({ label = 'Language' }: {
+  /** The control's accessible name. `LandingFooter` always passes one (the intl-free pages
+   *  pass the English default from DEFAULT_SHELL_LABELS), so this default is a safety net for
+   *  a direct render rather than a path the site takes. */
+  label?: string;
+} = {}) {
   const pathname = usePathname();
   const router = useRouter();
 
@@ -33,26 +38,35 @@ export default function LandingLanguageSelect() {
   // localePrefix is 'as-needed': the default-locale (en) landing is served at `/`
   // with no segment - it IS a localized page (its siblings are /fr, /de, …).
   const isRootLanding = (pathname ?? '/') === '/';
+  const pathWithoutLocale = pathLocale ? `/${segments.slice(2).join('/')}` : (pathname ?? '');
+  const isPersonaLanding = pathWithoutLocale.startsWith('/for/');
 
   // On the truly non-localized public pages (/about, /legal/*, …) there is no locale
   // segment and no localized sibling - fall back to the NEXT_LOCALE cookie for the
   // displayed value. Read in an effect (not during render) to stay hydration-safe.
   const [cookieLocale, setCookieLocale] = useState<Locale>('en');
+  const [isHydrated, setIsHydrated] = useState(false);
   useEffect(() => {
     const match = document.cookie.match(/(?:^|;\s*)NEXT_LOCALE=([^;]+)/);
     if (match && isLocale(match[1])) setCookieLocale(match[1]);
+    setIsHydrated(true);
   }, []);
 
   // `/` is always the default locale (a cookie for another locale would have been
   // middleware-redirected to its prefix), so don't let the cookie override it there.
-  const current: Locale = pathLocale ?? (isRootLanding ? 'en' : cookieLocale);
+  const current: Locale = pathLocale ?? (isRootLanding || isPersonaLanding ? 'en' : cookieLocale);
 
   const changeLanguage = (next: Locale) => {
     if (next === current) return;
     // Persist for the whole site (landing + app) - same cookie the app settings use.
     document.cookie = `NEXT_LOCALE=${next}; path=/; max-age=31536000; SameSite=Lax`;
     setCookieLocale(next);
-    if (pathLocale) {
+    if (isPersonaLanding) {
+      // A fresh document replaces persona metadata instead of retaining the
+      // previous locale's canonical alongside Next.js streamed metadata.
+      const prefix = next === 'en' ? '' : `/${next}`;
+      window.location.assign(`${prefix}${pathWithoutLocale}${window.location.search}${window.location.hash}`);
+    } else if (pathLocale) {
       const rest = segments.slice(2).join('/');
       router.push(`/${next}${rest ? `/${rest}` : ''}${window.location.search}${window.location.hash}`);
     } else if (isRootLanding) {
@@ -75,7 +89,8 @@ export default function LandingLanguageSelect() {
     >
       <Globe className="w-4 h-4" aria-hidden="true" />
       <select
-        aria-label="Language"
+        aria-label={label}
+        disabled={isPersonaLanding && !isHydrated}
         value={current}
         onChange={(e) => changeLanguage(e.target.value as Locale)}
         className="bg-transparent text-xs outline-none cursor-pointer"

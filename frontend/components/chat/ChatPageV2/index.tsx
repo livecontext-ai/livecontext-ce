@@ -38,9 +38,12 @@ import { useAnchorScrollToBottom } from '@/lib/hooks/useAnchorScrollToBottom';
 import { ChatPageLayout } from '@/app/shared/components/ChatPageLayout';
 import { ServiceApprovalCard } from '../ServiceApprovalCard';
 import { ModelSelectorDropdown } from '@/components/chat/ModelSelectorDropdown';
+import { modelFilterLabelsFrom } from '@/components/chat/modelFilterLabels';
 import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { UpgradeRequiredNotice } from '@/components/billing/UpgradeRequiredBadge';
+import { ComposerFreeTierBadge } from '@/components/billing/FreeTierBadge';
 import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
+import { usePreferFreeTierModel } from '@/lib/hooks/usePreferFreeTierModel';
 import { ComposerLeadingControl } from '@/components/chat/ComposerLeadingControl';
 import { resolveConversationAgentId } from '@/lib/chat/linkedAgent';
 import { useLinkedAgentLoader } from '@/hooks/chat/useLinkedAgentLoader';
@@ -70,7 +73,7 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
   const modelsResolvedEmpty = !modelsLoading && !modelsError;
   // Asked once for the whole menu: the answer is about the account, not
   // about any one model.
-  const { blocked: creditsCannotPay } = useMonthlyCreditsCannotPay();
+  const { blocked: creditsCannotPay, blockedForModel, freeTierForModel, prefersFreeTierModels } = useMonthlyCreditsCannotPay();
 
   // Models for the composer model selector. Spread the full AIModel (capability
   // flags, context window, rate limits, …) so ModelOptionDisplay renders the
@@ -90,6 +93,13 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
   const streaming = useStreaming();
 
   // Page state (no streaming state - it's in StreamingContext)
+  //
+  // This hook owns useMessages, whose effect records the conversation snapshot that the next
+  // mount paints from, while useMessageHandlersV2 below owns the effect that changes the route
+  // at the end of a stream. What guarantees the snapshot is written first is enqueue order: the
+  // reconciliation's state update is queued before the route sync is requested, because the
+  // request is chained onto it. Declaring this hook first also orders the two effects inside a
+  // shared commit, which is belt and braces on top, not the mechanism.
   const state = useChatPageStateV3({ conversationIdFromParams, enableDataSource });
 
 
@@ -119,6 +129,11 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
   // Prime the per-(user, workspace) chat defaults so a new conversation inherits them
   // even if the composer Options panel is never opened (V312).
   usePrimeUserChatDefaults();
+
+  // V494: open a fresh chat on a model the account can pay for. The selection
+  // starts empty, and an empty selection is sent against the catalogue default -
+  // the admin's global #1, which a free-tier allowance may not cover.
+  usePreferFreeTierModel({ models, selectedModel: state.selectedModel, setSelectedModel: state.setSelectedModel });
 
   // Message handlers using StreamingContext
   const handlers = useMessageHandlersV2({
@@ -290,8 +305,16 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
 
     currentStreaming.checkAndReconnect(conversationIdFromParams, {
       onStreamComplete: (convId) => {
-        // Load conversation and messages to get fresh pendingAction state
-        loadConversationAndMessages(convId);
+        // Reconcile the thread now that the reconnected stream has finished. Silent: the reader
+        // is watching this very conversation, so it must not repaint. (This also refreshes the
+        // conversation object, though loadConversationById serves it from the already-loaded
+        // sidebar list when it is there, so pendingAction is only truly refetched for a
+        // conversation the list does not know about.)
+        loadConversationAndMessages(convId, { silent: true }).catch((err) => {
+          // Silent reconciliation: nothing on screen changes, including on failure. The live
+          // stream content stays visible and the next explicit load reconciles.
+          console.warn('[ChatPageV2] Post-stream reconciliation failed:', err);
+        });
       },
     }).catch(err => {
       console.warn('[ChatPageV2] Reconnection check failed:', err);
@@ -620,11 +643,16 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
           noModelsLabel={modelsResolvedEmpty ? t('aiProviders.noProviderCta.noModels') : undefined}
           emptyState={modelsResolvedEmpty ? <NoProviderCta variant="menu" /> : undefined}
           upgradeRequired={creditsCannotPay}
+          blockedForModel={blockedForModel}
+          freeTierForModel={freeTierForModel}
+          prefersFreeTierModels={prefersFreeTierModels}
           upgradeNotice={<UpgradeRequiredNotice blocked={creditsCannotPay} />}
+          freeTierBadge={<ComposerFreeTierBadge />}
           reasoningEffort={state.reasoningEffort}
           onReasoningEffortChange={state.setReasoningEffort}
           reasoningEffortLabel={t('actions.reasoningEffort')}
           effortAutoLabel={t('actions.effortAuto')}
+          filterLabels={modelFilterLabelsFrom(t)}
         />
       }
     />

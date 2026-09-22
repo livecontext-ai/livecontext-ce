@@ -1,5 +1,13 @@
 package com.apimarketplace.orchestrator.domain.execution;
 
+import com.apimarketplace.common.security.token.EncryptedTokenConverter;
+import com.apimarketplace.common.security.token.HashedTokenEntity;
+import com.apimarketplace.common.security.token.HashedTokenListener;
+import com.apimarketplace.common.security.token.TokenSlot;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import jakarta.persistence.Convert;
+import jakarta.persistence.EntityListeners;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -30,12 +38,13 @@ import java.util.List;
  * message edited) or CANCELLED (signal cancelled, message edited).
  */
 @Entity
+@EntityListeners(HashedTokenListener.class)
 @Table(name = "approval_channel_deliveries", schema = "orchestrator",
     uniqueConstraints = {
         @UniqueConstraint(columnNames = {"callback_token"}),
         @UniqueConstraint(columnNames = {"signal_wait_id", "channel"})
     })
-public class ApprovalChannelDeliveryEntity {
+public class ApprovalChannelDeliveryEntity implements HashedTokenEntity {
 
     /** Delivery lifecycle status (mirrors chk_acd_status_v1). */
     public enum DeliveryStatus {
@@ -56,8 +65,18 @@ public class ApprovalChannelDeliveryEntity {
     @Column(name = "channel", nullable = false, length = 30)
     private String channel;
 
-    @Column(name = "callback_token", nullable = false, length = 64)
+    /**
+     * The token embedded in the Telegram inline-button callback_data.
+     * Stored encrypted (ENC:...) through {@link EncryptedTokenConverter}; the entity always holds
+     * the plaintext. Lookups go through {@link #getCallbackTokenHash()}, never through this column.
+     */
+    @Convert(converter = EncryptedTokenConverter.class)
+    @Column(name = "callback_token", nullable = false, length = 255)
     private String callbackToken;
+
+    /** HMAC-SHA256 of the plaintext, filled by {@link HashedTokenListener}; the only lookup key. */
+    @Column(name = "callback_token_hash", length = 64)
+    private String callbackTokenHash;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
@@ -316,5 +335,20 @@ public class ApprovalChannelDeliveryEntity {
             ", nodeId='" + nodeId + '\'' +
             ", epoch=" + epoch +
             '}';
+    }
+
+    @JsonIgnore
+    public String getCallbackTokenHash() {
+        return callbackTokenHash;
+    }
+
+    public void setCallbackTokenHash(String callbackTokenHash) {
+        this.callbackTokenHash = callbackTokenHash;
+    }
+
+    @Override
+    @JsonIgnore
+    public List<TokenSlot> tokenSlots() {
+        return List.of(new TokenSlot(this::getCallbackToken, this::setCallbackTokenHash));
     }
 }

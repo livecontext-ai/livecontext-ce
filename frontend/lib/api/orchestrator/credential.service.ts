@@ -417,6 +417,17 @@ export class CredentialService {
        * counted in seconds can be published per minute.
        */
       quantityUnit?: string | null;
+      /**
+       * What the call's own CHOICES do to the published rate, computed from the
+       * model's declared modifiers (`price.modifiers`) and what is in the form.
+       *
+       * <p>A quote is a display, never a charge: the amount billed is resolved
+       * again server-side from the real parameters, so a surface that sent a
+       * smaller factor would only misquote a price to itself. Omitted, or 1,
+       * quotes the published rate, which is what every caller sent before
+       * modifiers existed.
+       */
+      priceMultiplier?: number | null;
     },
   ): Promise<PlatformCredentialPublicInfo> {
     const params: Record<string, string> = {};
@@ -434,6 +445,16 @@ export class CredentialService {
     // question unasked, and it can only ever turn a quote OFF, so it is not a
     // channel for buying anything cheaply.
     if (quote?.quantityUnit) params.quantityUnit = quote.quantityUnit;
+    // Sent only when it changes something. A factor of 1 is the same statement
+    // as no factor, and leaving it out keeps an ordinary quote's request
+    // identical to the one it made before modifiers existed.
+    if (
+      quote?.priceMultiplier !== undefined && quote?.priceMultiplier !== null
+      && Number.isFinite(quote.priceMultiplier) && quote.priceMultiplier > 0
+      && quote.priceMultiplier !== 1
+    ) {
+      params.priceMultiplier = String(quote.priceMultiplier);
+    }
     return apiClient.get<PlatformCredentialPublicInfo>(
       `/platform-credentials/${encodeURIComponent(integrationName)}/public-info`,
       Object.keys(params).length > 0 ? { params } : undefined,
@@ -479,6 +500,19 @@ export class CredentialService {
   }
 
   /**
+   * The providers this install exposes at least one model for, lower-cased, CLI bridges never
+   * included. Open to any signed-in user, unlike the status call above.
+   *
+   * The own-keys panel cannot answer this from the model catalogue: that one drops every
+   * provider the caller holds no key for, which is exactly the set the panel is offering keys
+   * for. Without this, the panel would invite a key for a provider whose models an admin has
+   * switched off, and the key would be saved and serve nothing.
+   */
+  async getProvidersOfferingModels(): Promise<string[]> {
+    return apiClient.get<string[]>('/llm-providers/offering-models');
+  }
+
+  /**
    * Check the agent-bridge reachability AND per-CLI availability.
    *
    * @param options.cli   restrict the probe to a single CLI; without it the
@@ -502,6 +536,52 @@ export class CredentialService {
   async invalidateLlmCache(provider?: string): Promise<void> {
     const params = provider ? { provider } : undefined;
     await apiClient.post<void>('/llm-providers/invalidate-cache', {}, { params });
+  }
+
+  /**
+   * Invalidate the CALLER's own cached LLM key for one provider (after saving, removing or
+   * switching their own key). Self-scoped, so no admin role is needed; the platform-wide
+   * invalidateLlmCache above stays admin-only.
+   */
+  async invalidateMyLlmCache(provider: string): Promise<void> {
+    await apiClient.post<void>('/llm-providers/invalidate-cache/mine', {}, { params: { provider } });
+  }
+
+  /**
+   * Ask the provider whether a key is accepted BEFORE saving it. `valid` is false only when
+   * the provider rejected the key; `verified` false means the provider could not be asked,
+   * which never blocks saving. The key is sent once, to agent-service, and is not stored.
+   */
+  async validateLlmKey(provider: string, apiKey: string): Promise<{ valid: boolean; verified: boolean; error?: string }> {
+    return apiClient.post<{ valid: boolean; verified: boolean; error?: string }>(
+      '/llm-providers/validate', { provider, apiKey });
+  }
+
+  /**
+   * Switch whose key serves the caller's executions on one provider: `no_proxy` = the saved
+   * key (their billing), `proxy` = the LiveContext key. The key stays saved either way.
+   */
+  async setLlmKeyMode(id: number, mode: 'no_proxy' | 'proxy'): Promise<Credential> {
+    return apiClient.patch<Credential>(`/credentials/${id}/llm-mode`, { mode });
+  }
+
+  /**
+   * After the caller saved, removed, or changed the default of a credential: if it is an LLM
+   * key (integration `llm_<provider>`), drop their cached slot so the switch is not delayed by
+   * the resolver TTL. Best effort: a failed invalidation only means the cache expires on its
+   * own, so it never fails the operation that triggered it. No-op for any other credential.
+   * Reaches the replica that serves the call; others keep a cached key for at most the TTL,
+   * which only matters when switching the default from one saved key to another.
+   */
+  async invalidateMyLlmCacheIfLlmKey(integration: string | null | undefined): Promise<void> {
+    if (!integration || !integration.startsWith('llm_')) return;
+    const provider = integration.slice('llm_'.length);
+    if (!provider) return;
+    try {
+      await this.invalidateMyLlmCache(provider);
+    } catch (err) {
+      console.warn('LLM key cache invalidation failed (will expire on its own):', err);
+    }
   }
 }
 

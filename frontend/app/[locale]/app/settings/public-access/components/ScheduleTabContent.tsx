@@ -13,6 +13,7 @@ import { DeleteTriggerDialog } from './DeleteTriggerDialog';
 import { TriggerUsageGauge } from './TriggerUsageGauge';
 import { TriggerEmptyState } from './TriggerEmptyState';
 import { useAcquiredAppWorkflowIds } from '@/hooks/useAcquiredAppWorkflowIds';
+import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
 
 interface ScheduleTabContentProps {
@@ -25,6 +26,12 @@ export function ScheduleTabContent({ isAuthenticated, addToast }: ScheduleTabCon
 
   const [schedules, setSchedules] = useState<ScheduleOverview[]>([]);
   const [config, setConfig] = useState<ScheduleConfig | null>(null);
+  // Arming, disarming or deleting a schedule here changes what the notification bell lists as
+  // armed and what its imminent-fire ring pulses for. `fetchData` refreshes THIS page; that
+  // payload is invalidated by nothing, so it needs asking for separately. Same endpoint as the
+  // agenda's own toggle, which does the same.
+  const refreshAutomations = useRefreshHomeStatus();
+
   const [loading, setLoading] = useState(true);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState<ScheduleOverview | null>(null);
@@ -56,6 +63,7 @@ export function ScheduleTabContent({ isAuthenticated, addToast }: ScheduleTabCon
   const handleToggle = async (schedule: ScheduleOverview) => {
     try {
       await scheduleSettingsService.toggle(schedule.id, !schedule.enabled);
+      refreshAutomations();
       addToast({
         type: 'success',
         title: schedule.enabled ? t('scheduleDisabled') : t('scheduleEnabled'),
@@ -77,6 +85,7 @@ export function ScheduleTabContent({ isAuthenticated, addToast }: ScheduleTabCon
     setActionLoading(true);
     try {
       await scheduleSettingsService.delete(deleting.id);
+      refreshAutomations();
       addToast({ type: 'success', title: t('scheduleDeleted'), message: '' });
       setDeleteOpen(false);
       setDeleting(null);

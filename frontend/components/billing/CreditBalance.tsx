@@ -1,18 +1,17 @@
 'use client';
 
 /**
- * Credit-balance display kit: a progress RING (drawn around the sidebar avatar)
- * and the BALANCE PANEL at the top of the user menu it opens (Total / Remaining
- * + an allowance gauge).
+ * Credit-balance display kit: a progress RING (drawn around the sidebar avatar,
+ * where it sweeps to its position on arrival) and the BALANCE PANEL at the top
+ * of the user menu that avatar opens (Monthly grant / Remaining).
  *
  * Two states, one geometry:
  *
- *  - Under allowance - neutral ink fill, ring and bar both showing the consumed
- *    share of the cycle grant. "2%" on a 10,000-credit plan with 9,779 left.
+ *  - Under allowance - neutral ink arc showing the consumed share of the cycle
+ *    grant. "2%" on a 10,000-credit plan with 9,779 left.
  *  - Over allowance - carry-over or a PAYG top-up has pushed the wallet above
- *    the cycle grant. The bar turns gold across its full width and the bright
- *    fill measures the SURPLUS (capped at 100%, since a bar cannot draw past
- *    full), with the true figure spelled out as "+X%".
+ *    the cycle grant. The arc turns gold and measures the SURPLUS (capped at
+ *    100%, since a dial cannot draw past full).
  *
  * The two states must be distinguishable WITHOUT colour, because they are near
  * opposites: an exhausted wallet and a wallet at double its grant both fill the
@@ -23,11 +22,21 @@
  * The gold itself comes from `--credit-gold-*` in globals.css rather than a
  * literal, because it needs DIFFERENT values per theme: the bright metal that
  * reads on the dark ground sits at 1.8:1 on white and would fail WCAG AA for
- * the "+X% over your plan" label.
+ * the "+X% over your plan" sentence the wallet card prints in it.
+ *
+ * WHERE THE PERCENTAGE IS SPELT OUT. The panel used to carry a horizontal bar
+ * repeating the ring beneath the figures, with "X% of your plan used" under it.
+ * The menu is a place people pass through, and it was saying the same thing
+ * three ways in 200px; the sentence now lives on the wallet card
+ * (`BalanceBreakdown`'s `PlanShare`), which is the surface people open to READ
+ * their plan - stated there as a REMAINING share, on the same numerator this
+ * ring uses, and it is also the only place the gold "+" is spelt out in words.
+ * What stays here is what a menu is good at: the two figures, and a dial.
  */
 
-import React, { useId } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
+import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 // The app's locale-aware Link: it prefixes the URL for the reader's locale and
 // prefetches, both of which a hand-rolled anchor would have to redo by hand.
 import { Link } from '@/i18n/navigation';
@@ -183,7 +192,10 @@ export function CreditRing({
       </svg>
       {/* The percentage needs ~26px to be legible, but the gold state's single
           "+" does not - and dropping it at badge size is what would make gold
-          the ONLY signal on the sidebar, for the one reader who cannot use it. */}
+          the ONLY signal on the sidebar, for the one reader who cannot use it.
+          This is why the menu panel's 22px dial leaves `showLabel` at its
+          default: below 26px the ink percentage is dropped and only the gold
+          "+" survives, which is exactly the asymmetry wanted. */}
       {showLabel && (gold || size >= 26) && (
         <span
           data-testid="credit-ring-label"
@@ -208,7 +220,7 @@ export function CreditRing({
               means the wallet is empty and a gold "100%" would mean it holds
               double its grant. Same glyphs, opposite meanings, separated only by
               a hue - unreadable for anyone who cannot resolve it. The exact
-              surplus is in the panel, one hover away. */}
+              surplus is on the wallet card. */}
           {gold ? '+' : `${Math.round(safePercent)}%`}
         </span>
       )}
@@ -222,7 +234,7 @@ export function CreditRing({
  * This is the sidebar's whole indicator: there is no number beside it and
  * nothing in the top bar, so the ring carries the state on its own and is
  * always present - discreet while inside the grant, gold above it. The exact
- * figures live one hover away, in the card.
+ * figures live one click away, in the menu the avatar opens.
  *
  * It fills its positioned parent, which is sized to the avatar PLUS the gap,
  * so the ring lives inside normal layout instead of spilling out of it. The
@@ -238,25 +250,143 @@ export function CreditRing({
  * separate object orbiting the avatar rather than a border drawn on it, which
  * is the whole difference between "the user has a ring" and "the user's photo
  * has a coloured edge".
+ *
+ * IT DRAWS ITSELF ON ARRIVAL, in two stages, and the order is the point.
+ *
+ * First the TRACK draws itself all the way round the avatar; then the arc
+ * sweeps out to the wallet's position. The reveal has to be the track's,
+ * because the arc measures credits CONSUMED and a healthy account has consumed
+ * almost nothing: animating a 2% arc from zero travels two percent of a circle,
+ * which nobody sees. The full circle is the part that says "there is a gauge
+ * here", and it is the same length for everybody.
+ *
+ * The arc's own travel is not decoration either: an arc caught moving reads as
+ * a quantity being measured, where the same arc already at rest reads as a
+ * border drawn on a photo. It follows the track rather than racing it, so the
+ * eye reads one gesture (a dial appearing, then filling) instead of two things
+ * happening at once.
+ *
+ * It plays once per visit, and `animate={false}` is how a caller says so. It
+ * cannot be decided in here: `AppSidebar` mounts this from both arms of its
+ * collapsed/expanded ternary, so a sidebar toggle destroys any state the ring
+ * held and the reveal would replay on every toggle. `SidebarCreditRing` keeps
+ * that memory for the page load (see `lib/billing/credit-ring-reveal`).
+ *
+ * AFTER the reveal, the same mechanism carries a LATER change in the balance -
+ * a refetch on window focus, credits spent while the app is open - but on its
+ * own timing: a short glide with no delay, because the staggered opening delay
+ * would leave the arc sitting still for 620ms before acknowledging a number
+ * that already changed.
  */
+/*
+ * The reveal's timings, named because they are relative to each other rather
+ * than independent: the arc's delay is DERIVED, so that it starts just before
+ * the track lands (the overlap is what makes the two stages read as one
+ * gesture), and the whole thing has to stay short enough to be over before a
+ * reader has finished arriving. 1,300ms end to end.
+ */
+const START_DELAY_MS = 120; // let the sidebar paint first, so the ring is what moves
+const TRACK_MS = 620;
+const ARC_OVERLAP_MS = 120;
+const ARC_DELAY_MS = START_DELAY_MS + TRACK_MS - ARC_OVERLAP_MS;
+const ARC_MS = 680;
+const REVEAL_MS = ARC_DELAY_MS + ARC_MS;
+/** What carries a later change in the balance, once the reveal is behind us. */
+const UPDATE_MS = 420;
+const EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
+
 export function CreditAvatarRing({
   percent,
   gold = false,
   avatarSize,
   gap = 5,
   strokeWidth = 2,
+  animate = true,
 }: {
   percent: number;
   gold?: boolean;
   avatarSize: number;
   gap?: number;
   strokeWidth?: number;
+  /**
+   * False once the reveal has been seen this visit: draw the answer, no travel.
+   *
+   * Read at MOUNT only, and deliberately so - it seeds the phase and nothing
+   * watches it afterwards. Flipping it on a live ring would either restart a
+   * reveal halfway through the reader's attention or abort one mid-travel, and
+   * neither is a thing any caller wants. Its only caller fixes it for the
+   * lifetime of the mount too.
+   */
+  animate?: boolean;
 }) {
   const safePercent = Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0));
   const size = avatarSize + gap * 2;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const dash = (safePercent / 100) * circumference;
+
+  const reduceMotion = usePrefersReducedMotion();
+
+  /*
+   * Three phases, because two of them need different timings and the third has
+   * to exist before either can be painted.
+   *
+   *   'hidden'  - the arc is retracted and the track undrawn. One frame only.
+   *   'opening' - the staggered reveal is running.
+   *   'settled' - the reveal is behind us; a later change glides on UPDATE_MS.
+   *
+   * A ring told not to animate starts SETTLED, which is also the shape that
+   * makes `animate={false}` free of any flicker: nothing is ever retracted.
+   */
+  const [phase, setPhase] = useState<'hidden' | 'opening' | 'settled'>(
+    animate ? 'hidden' : 'settled',
+  );
+  const drawn = phase !== 'hidden';
+
+  /*
+   * TWO frames, not one, and never a first-render value.
+   *
+   * The browser only animates a property it has already painted at its starting
+   * value. A single `requestAnimationFrame` runs BEFORE that paint in some
+   * engines, so the offset would change in the same frame it was first set and
+   * the transition would have nothing to travel from - the ring would simply
+   * appear at its final position, which is the bug this whole block exists to
+   * avoid. The second frame is the reliable "the empty ring is on screen" signal.
+   *
+   * Reduced motion is handled by dropping the TRANSITION, not by starting at the
+   * final value: `usePrefersReducedMotion` answers `false` on the server, so a
+   * reader with the setting on would get one tree from the server and another on
+   * hydration. Starting empty for both and letting one of them skip the travel
+   * keeps the two renders identical. (Its only caller cannot server-render the
+   * ring today - the wallet is still loading at that point - so this is the
+   * shape being kept rather than a bug being fixed, and it costs one frame.)
+   */
+  useEffect(() => {
+    if (phase !== 'hidden') return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setPhase('opening'));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+    // Mount only: `phase` is what this drives, and re-running on it would
+    // schedule a second reveal the moment the first one starts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /*
+   * Hand over to the settled timings once the reveal has run its length. Timed
+   * rather than driven by `transitionend`, which fires per property and does not
+   * fire at all for a ring that was already at its position (0%, or a reader on
+   * reduced motion), leaving those two stuck on the opening timings forever.
+   */
+  useEffect(() => {
+    if (phase !== 'opening') return;
+    const done = setTimeout(() => setPhase('settled'), reduceMotion ? 0 : REVEAL_MS);
+    return () => clearTimeout(done);
+  }, [phase, reduceMotion]);
 
   // Colons are stripped: React's useId emits ":r0:", and a fragment reference
   // carrying them (`url(#:r0:)`) is not reliably resolved.
@@ -286,93 +416,63 @@ export function CreditAvatarRing({
         </defs>
       )}
       <circle
+        data-testid="credit-avatar-ring-track"
         cx={size / 2}
         cy={size / 2}
         r={radius}
         fill="none"
         strokeWidth={strokeWidth}
+        /* Stage one: the circle draws itself round the avatar. Same dash
+           technique as the arc below, so the two stages are one mechanism with
+           two timings rather than two ways of doing the same thing. */
+        strokeDasharray={circumference}
+        strokeDashoffset={drawn ? 0 : circumference}
+        style={{
+          transition:
+            reduceMotion || phase !== 'opening'
+              ? undefined
+              : `stroke-dashoffset ${TRACK_MS}ms ${EASE} ${START_DELAY_MS}ms`,
+        }}
         className={gold ? undefined : 'stroke-black/12 dark:stroke-white/15'}
         stroke={gold ? 'var(--credit-gold-arc-track)' : undefined}
       />
       <circle
+        data-testid="credit-avatar-ring-arc"
         cx={size / 2}
         cy={size / 2}
         r={radius}
         fill="none"
         strokeWidth={strokeWidth}
         strokeLinecap="round"
-        strokeDasharray={`${dash} ${circumference}`}
+        /* The dash pattern is the WHOLE circle and the offset is what moves.
+           Animating `stroke-dasharray` instead would have to interpolate a
+           two-value list, which engines do inconsistently; one length is a
+           number, and a number is what a transition is good at. */
+        strokeDasharray={circumference}
+        strokeDashoffset={drawn ? circumference - dash : circumference}
+        style={{
+          transition:
+            // No transition at all on the hidden frame. It has nothing to
+            // travel from yet, and advertising the settled timing there made
+            // the retracted frame indistinguishable from the finished one to
+            // anything reading the style.
+            reduceMotion || phase === 'hidden'
+              ? undefined
+              : phase === 'opening'
+              ? // Stage two, starting just BEFORE the track lands: a hard handover
+                // reads as two separate animations, a small overlap as one gesture.
+                // The ease decelerates hardest at the end, so the arc settles onto
+                // its figure rather than stopping dead on it.
+                `stroke-dashoffset ${ARC_MS}ms ${EASE} ${ARC_DELAY_MS}ms`
+              : // Settled: a later balance still glides rather than jumping, but
+                // with no delay - the opening's 620ms stagger would leave the arc
+                // motionless for two thirds of a second after a number changed.
+                `stroke-dashoffset ${UPDATE_MS}ms ${EASE}`,
+        }}
         className={gold ? undefined : 'stroke-black/55 dark:stroke-white/70'}
         stroke={gold ? `url(#${gradientId})` : undefined}
       />
     </svg>
-  );
-}
-
-/**
- * Horizontal allowance bar. Neutral under the grant, gold-on-gold above it,
- * and labelled in BOTH states with the quantity it is actually showing.
- *
- * DIRECTION, and why it differs from `SubscriptionGauge` in BalanceBreakdown:
- * this bar fills by credits CONSUMED, so it agrees with the ring beside it and
- * with the "X% of your plan used" sentence both surfaces state. The wallet
- * card's bar fills by credits REMAINING, and that is correct THERE, because the
- * figure printed directly beside it is "9,779 / 10,000" - a remaining count.
- * Each bar agrees with its own adjacent number, which is the pairing a reader
- * actually makes. Flipping either one to match the other would put it in
- * contradiction with the label it sits next to, so the divergence is kept
- * deliberately rather than unified into a single wrong direction.
- */
-export function CreditAllowanceGauge({ gauge }: { gauge: CreditGauge }) {
-  const t = useTranslations('billing.balance');
-  const locale = useLocale();
-
-  return (
-    <div>
-      <div
-        className="h-1.5 rounded-full overflow-hidden relative"
-        // The gold track replaces the neutral one in the over state so the whole
-        // bar reads as metal even when the surplus fill is short.
-        style={{ background: gauge.isOver ? 'var(--credit-gold-track)' : undefined }}
-      >
-        {!gauge.isOver && <span className="absolute inset-0 bg-theme-tertiary" aria-hidden="true" />}
-        <span
-          data-testid="balance-gauge-fill"
-          className={`absolute inset-y-0 left-0 rounded-full transition-all ${gauge.isOver ? '' : 'bg-gray-900 dark:bg-white'}`}
-          style={{
-            width: `${gauge.fillPct}%`,
-            background: gauge.isOver
-              ? 'linear-gradient(90deg, var(--credit-gold-fill-from) 0%, var(--credit-gold-fill-to) 100%)'
-              : undefined,
-          }}
-        />
-      </div>
-      {/*
-        * ALWAYS labelled, in both states. The bar fills by credits CONSUMED, and
-        * it sits directly under a row reading "Remaining 9,779" - so a reader
-        * pairing the bar with the number above it reads a 2% bar as "almost
-        * nothing left", which is exactly backwards. The sentence used to live
-        * only in the trigger's aria-label, i.e. nowhere a sighted user could
-        * find it, and the label was rendered only in the gold state. Naming the
-        * quantity is what lets the two directions coexist: this bar and the
-        * wallet card's (which fills by REMAINING) each now say which one it is.
-        */}
-      <div
-        // An EXPLICIT colour, not inheritance. Its current containers happen to
-        // set `text-theme-primary`, so this looked fine - but the component is exported,
-        // and rendered anywhere without one it produced dark-on-dark text that
-        // no test could see. The gold state's inline colour still wins over this.
-        className="mt-1.5 text-sm font-medium text-theme-secondary"
-        data-testid="balance-gauge-label"
-        style={gauge.isOver ? { color: 'var(--credit-gold-ink)' } : undefined}
-      >
-        {!gauge.isOver
-          ? t('usedPercent', { percent: gauge.fillPct.toLocaleString(locale) })
-          : gauge.overPct === 0
-            ? t('overAllowanceTiny')
-            : t('overAllowance', { percent: gauge.overPct.toLocaleString(locale) })}
-      </div>
-    </div>
   );
 }
 
@@ -385,15 +485,15 @@ export function CreditAllowanceGauge({ gauge }: { gauge: CreditGauge }) {
  * both: it is the sole Upgrade CTA in the cloud chrome, and the sole route to
  * the usage page from that menu.
  *
- * `viewUsage` makes the READOUT itself - the figures plus the gauge - that
- * route, rather than adding a "View usage" link underneath it. The gauge is
- * what a reader points at when they want to know where the credits went, so it
- * is the thing that should answer; a separate text link below it said the same
- * thing a second time, in a place nobody aimed at.
+ * `viewUsage` makes the READOUT itself - the figures - that route, rather than
+ * adding a "View usage" link underneath it. The figures are what a reader points
+ * at when they want to know where the credits went, so they are the thing that
+ * should answer; a separate text link below them said the same thing a second
+ * time, in a place nobody aimed at.
  *
  * A null `allowance` is a real state, not an error: the payer is someone else,
- * or the billing payload did not load. Total and the gauge simply do not render;
- * Remaining does, because it is still true.
+ * or the billing payload did not load. Monthly grant and the header dial simply
+ * do not render; Remaining does, because it is still true.
  */
 export function CreditBalancePanel({
   balance,
@@ -409,7 +509,7 @@ export function CreditBalancePanel({
   gauge: CreditGauge;
   /** Renewal-grant bucket - shown only alongside a non-zero top-up bucket. */
   subBalance?: number | null;
-  /** Top-up bucket. A non-zero one is usually WHY the gauge went gold. */
+  /** Top-up bucket. A non-zero one is usually WHY the ring went gold. */
   paygBalance?: number | null;
   onUpgrade?: () => void;
   /**
@@ -426,15 +526,22 @@ export function CreditBalancePanel({
   const locale = useLocale();
   // The split is only worth the two extra rows when a top-up actually exists:
   // otherwise "Subscription" would simply restate Remaining. This is also the
-  // answer to the gold gauge - a wallet above its grant is normally a top-up.
+  // answer to the gold ring - a wallet above its grant is normally a top-up.
   const showBuckets = subBalance !== null && paygBalance !== null && paygBalance > 0;
 
   return (
     <div className="w-full">
       <div className="flex items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2.5 min-w-0">
+          {/* `showLabel` is left at its default here. At 22px it draws NOTHING in
+              the ink state (a percentage needs 26px to be legible) and the gold
+              "+" in the over state. That asymmetry is the point: with the
+              labelled bar gone, this glyph is the only thing on any rendered
+              surface separating "over your plan" from "plan exhausted" without
+              asking the reader to resolve a hue. The exact figure is on the
+              wallet card and in the ring's accessible name. */}
           {allowance !== null && (
-            <CreditRing percent={gauge.fillPct} size={22} strokeWidth={2} gold={gauge.isOver} showLabel={false} />
+            <CreditRing percent={gauge.fillPct} size={22} strokeWidth={2} gold={gauge.isOver} />
           )}
           <span className="text-base font-semibold text-theme-primary truncate">
             {t('title')}
@@ -453,7 +560,7 @@ export function CreditBalancePanel({
       </div>
 
       <ReadoutFrame viewUsage={viewUsage} actionLabel={t('viewUsage')}>
-        <div className="space-y-1.5 mb-3">
+        <div className="space-y-1.5">
           {allowance !== null && (
             <div className="flex items-start justify-between gap-4 text-sm">
               {/* The number never breaks; the LABEL is what gives way, and it
@@ -482,8 +589,6 @@ export function CreditBalancePanel({
             </span>
           </div>
         </div>
-
-        {allowance !== null && <CreditAllowanceGauge gauge={gauge} />}
       </ReadoutFrame>
 
       {/* Outside the link on purpose: its own section below a rule, and the
@@ -510,7 +615,7 @@ export function CreditBalancePanel({
 }
 
 /**
- * The figures + gauge, made the route to the usage page when one is wired.
+ * The figures, made the route to the usage page when one is wired.
  *
  * A real link, not a div with `role="link"`: an anchor's content model is
  * transparent, so it may legally wrap these block rows, and it brings what a

@@ -29,6 +29,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -225,7 +226,7 @@ class AgentRemoteExecutionServiceTest {
         AgentExecutionRequestDto dto = request(Map.of(), executionId, "CHAT");
         String payload = new ObjectMapper().writeValueAsString(dto);
         when(bridgeDispatcher.shouldDispatch(any())).thenReturn(true);
-        when(bridgeDispatcher.dispatchRaw(any(AgentExecutionRequestDto.class), org.mockito.ArgumentMatchers.eq("ADMIN,USER")))
+        when(bridgeDispatcher.dispatchRaw(any(AgentExecutionRequestDto.class), org.mockito.ArgumentMatchers.eq("ADMIN,USER"), anyBoolean()))
             .thenReturn(new AgentExecutionResponseDto(
                 true, "done", "done", List.of(), 1, Map.of("totalTokens", 1),
                 null, 10, "claude-code", "claude-sonnet-4-6", List.of(),
@@ -233,7 +234,7 @@ class AgentRemoteExecutionServiceTest {
 
         service.executeByType(AgentExecutionTask.TYPE_AGENT, payload, "ADMIN,USER");
 
-        verify(bridgeDispatcher).dispatchRaw(any(AgentExecutionRequestDto.class), org.mockito.ArgumentMatchers.eq("ADMIN,USER"));
+        verify(bridgeDispatcher).dispatchRaw(any(AgentExecutionRequestDto.class), org.mockito.ArgumentMatchers.eq("ADMIN,USER"), anyBoolean());
     }
 
     @Test
@@ -244,7 +245,7 @@ class AgentRemoteExecutionServiceTest {
         when(bridgeDispatcher.shouldDispatch(any())).thenReturn(true);
         // Agent-service resolves the per-model admin default when the caller didn't set one.
         when(modelCatalogService.resolveEffortWithDefault(any(), any(), any())).thenReturn("medium");
-        when(bridgeDispatcher.dispatchRaw(any(AgentExecutionRequestDto.class), any()))
+        when(bridgeDispatcher.dispatchRaw(any(AgentExecutionRequestDto.class), any(), anyBoolean()))
             .thenReturn(new AgentExecutionResponseDto(
                 true, "done", "done", List.of(), 1, Map.of("totalTokens", 1),
                 null, 10, "claude-code", "claude-sonnet-4-6", List.of(),
@@ -253,7 +254,7 @@ class AgentRemoteExecutionServiceTest {
         service.executeAgent(dto, "USER");
 
         ArgumentCaptor<AgentExecutionRequestDto> captor = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-        verify(bridgeDispatcher).dispatchRaw(captor.capture(), org.mockito.ArgumentMatchers.eq("USER"));
+        verify(bridgeDispatcher).dispatchRaw(captor.capture(), org.mockito.ArgumentMatchers.eq("USER"), anyBoolean());
         assertThat(captor.getValue().reasoningEffort()).isEqualTo("medium");
     }
 
@@ -270,13 +271,17 @@ class AgentRemoteExecutionServiceTest {
             .thenReturn("claude-code");
         when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
         ArgumentCaptor<AgentExecutionRequestDto> captor = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-        when(bridgeDispatcher.dispatchRaw(captor.capture(), any()))
+        when(bridgeDispatcher.dispatchRaw(captor.capture(), any(), anyBoolean()))
             .thenReturn(new AgentExecutionResponseDto(
                 true, "done", "done", List.of(), 1, Map.of("totalTokens", 1),
                 null, 10, "claude-code", "claude-opus-4-7", List.of(),
                 "COMPLETED", Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
 
-        service.executeAgent(dto, "USER");
+        AgentExecutionResponseDto bridgeResponse = service.executeAgent(dto, "USER");
+        // DIRECT claude-code (no link): the flag must be false, so the access policy applies.
+        verify(bridgeDispatcher).dispatchRaw(any(), any(), org.mockito.ArgumentMatchers.eq(false));
+        // A bridge holds no API key: the run reports PLATFORM explicitly, never unpinned.
+        assertThat(bridgeResponse.metrics()).containsEntry(AgentRemoteExecutionService.KEY_ROUTE_METRIC, "PLATFORM");
 
         // The corrected slug propagated into the dispatched request, and the
         // stale 'anthropic' slug was never asked about (never fell to the
@@ -303,7 +308,54 @@ class AgentRemoteExecutionServiceTest {
         service.executeAgent(request(Map.of(), UUID.randomUUID().toString()), "USER");
 
         verify(agentLoopService).execute(any(), any(StreamingCallback.class));
-        verify(bridgeDispatcher, org.mockito.Mockito.never()).dispatchRaw(any(), any());
+        verify(bridgeDispatcher, org.mockito.Mockito.never()).dispatchRaw(any(), any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("BILLING-CRITICAL: a linked run re-stamped onto Anthropic also has its Claude Code token counts CONVERTED, or the cache is billed twice")
+    void executionLinkConvertsBridgeTokenCountsToTheBilledConvention() {
+        // The end-to-end wiring of the conversion, on the path the production incident was
+        // measured on. withBilledIdentity and TokenUsageConventions are each tested in
+        // isolation; this pins that they are actually connected here. Pre-fix, the label
+        // changed and the numbers did not, so billing read the bridge's inclusive prompt
+        // total as plain input and charged the cache again on its own line: 3.80x.
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("anthropic"),
+                org.mockito.ArgumentMatchers.eq("claude-fable-5"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute(
+                    "claude-code", "claude-fable-5")));
+        wireExecutionLinks(linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+
+        // Shape of a real production ledger row: 6 plain input under a 98,319 total.
+        java.util.Map<String, Object> bridgeUsage = new java.util.HashMap<>();
+        bridgeUsage.put("promptTokens", 98_319);
+        bridgeUsage.put("completionTokens", 1_915);
+        bridgeUsage.put("totalTokens", 100_234);
+        bridgeUsage.put("cacheCreationInputTokens", 18_945);
+        bridgeUsage.put("cacheReadInputTokens", 79_368);
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean()))
+            .thenReturn(new AgentExecutionResponseDto(
+                true, "done", "done", List.of(), 1, bridgeUsage,
+                null, 10, "claude-code", "claude-fable-5", List.of(),
+                "COMPLETED", Map.of(), List.of(bridgeUsage), List.of(), List.of(),
+                List.of(), List.of(), null));
+
+        AgentExecutionRequestDto dto = request(Map.of(), UUID.randomUUID().toString(), "CHAT")
+            .withExecutionTarget("anthropic", "claude-fable-5");
+        AgentExecutionResponseDto response = service.executeAgent(dto, "USER");
+
+        assertThat(response.provider()).isEqualTo("anthropic");
+        // The Anthropic API counts the cache BESIDE the prompt, so the billed prompt is the
+        // plain input alone. Left at 98,319 the cache would be paid for twice.
+        assertThat(response.totalUsage()).containsEntry("promptTokens", 6);
+        assertThat(response.totalUsage()).containsEntry("cacheCreationInputTokens", 18_945);
+        assertThat(response.totalUsage()).containsEntry("cacheReadInputTokens", 79_368);
+        // And the per-iteration rows, which feed the same observability the ledger is read beside.
+        assertThat(response.usagePerIteration()).hasSize(1);
+        assertThat(response.usagePerIteration().get(0)).containsEntry("promptTokens", 6);
     }
 
     @Test
@@ -327,7 +379,7 @@ class AgentRemoteExecutionServiceTest {
 
         ArgumentCaptor<AgentExecutionRequestDto> dispatched = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
         // The bridge echoes its OWN execution identity (codex) in the response.
-        when(bridgeDispatcher.dispatchRaw(dispatched.capture(), any()))
+        when(bridgeDispatcher.dispatchRaw(dispatched.capture(), any(), anyBoolean()))
             .thenReturn(new AgentExecutionResponseDto(
                 true, "done", "done", List.of(), 1, Map.of("totalTokens", 1),
                 null, 10, "codex", "gpt-5.3-codex", List.of(),
@@ -337,6 +389,10 @@ class AgentRemoteExecutionServiceTest {
         AgentExecutionRequestDto dto = request(Map.of(), UUID.randomUUID().toString(), "CHAT")
             .withExecutionTarget("anthropic", "claude-opus-4-8");
         AgentExecutionResponseDto response = service.executeAgent(dto, "USER");
+        // ROUTED by a link: the flag must be true. This is the production fix in one boolean -
+        // with anyBoolean() here, restoring the pre-fix `false` (Agenda Scout refused every
+        // 30 minutes) left the whole suite green.
+        verify(bridgeDispatcher).dispatchRaw(any(), any(), org.mockito.ArgumentMatchers.eq(true));
 
         // EXECUTION went to the bridge with the CODEX target so the CLI actually runs codex.
         // (dispatchRaw enforces BridgeAccessGuard on this provider, so the codex subscription
@@ -376,7 +432,7 @@ class AgentRemoteExecutionServiceTest {
 
         // The link was dropped: the BILLED model (deepseek) ran on the direct loop, NOT codex.
         verify(agentLoopService).execute(any(), any(StreamingCallback.class));
-        verify(bridgeDispatcher, never()).dispatchRaw(any(), any());
+        verify(bridgeDispatcher, never()).dispatchRaw(any(), any(), anyBoolean());
         assertThat(ctx.getValue().provider()).isEqualTo("deepseek");
         assertThat(ctx.getValue().model()).isEqualTo("deepseek-chat");
     }
@@ -408,7 +464,7 @@ class AgentRemoteExecutionServiceTest {
         assertThat(ctx.getValue().provider()).isEqualTo("openrouter");
         assertThat(ctx.getValue().model()).isEqualTo("anthropic/claude-3.5-sonnet");
         // The bridge was never used (non-bridge execution provider).
-        verify(bridgeDispatcher, never()).dispatchRaw(any(), any());
+        verify(bridgeDispatcher, never()).dispatchRaw(any(), any(), anyBoolean());
         // BILLING-CRITICAL: the response is re-stamped to the BILLED identity, so billing stays Anthropic.
         assertThat(response.provider()).isEqualTo("anthropic");
         assertThat(response.model()).isEqualTo("claude-opus-4-8");
@@ -494,8 +550,8 @@ class AgentRemoteExecutionServiceTest {
     }
 
     @Test
-    @DisplayName("BILLING-CRITICAL error path: a bridge FAILED response (success=false, stamped with the bridge identity) is still re-stamped with the BILLED identity")
-    void linkedRunBridgeFailureResponseIsReStampedBilled() {
+    @DisplayName("EXECUTION-LINK FALLBACK: a bridge FAILED response with NO visible output (empty content, no tool results) on a linked run silently retries on the billed pair's direct API and succeeds")
+    void linkedRunBridgeEmptyFailureFallsBackToDirectApiInvisibly() {
         ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
         when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
                 org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
@@ -504,25 +560,108 @@ class AgentRemoteExecutionServiceTest {
         wireExecutionLinks(linkService);
         when(bridgeDispatcher.isAvailable()).thenReturn(true);
         when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
-        // The bridge fails the run and stamps its OWN identity on the FAILED response.
-        when(bridgeDispatcher.dispatchRaw(any(), any()))
+        // The bridge fails BEFORE producing anything visible: no content, no tool results.
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean()))
             .thenReturn(new AgentExecutionResponseDto(
                 false, null, null, List.of(), 0, Map.of(),
                 "CLI crashed", 10, "codex", "gpt-5.3-codex", List.of(),
                 AgentStopReason.ERROR.name(), Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
+        ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
+        when(agentLoopService.execute(ctx.capture(), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+        String executionId = UUID.randomUUID().toString();
+
+        AgentExecutionResponseDto response =
+            service.executeAgent(request(Map.of(), executionId, "CHAT"), "USER");
+
+        // The fallback actually ran the direct loop, on the BILLED pair (not codex - the bridge
+        // is not retried, and the direct loop never receives a bridge-provider identity).
+        verify(agentLoopService).execute(any(AgentLoopContext.class), any(StreamingCallback.class));
+        assertThat(ctx.getValue().provider()).isEqualTo("deepseek");
+        assertThat(ctx.getValue().model()).isEqualTo("deepseek-chat");
+        // Invisible to the caller: the failed bridge attempt never surfaces, the run reads as a
+        // plain success on the billed pair.
+        assertThat(response.success()).isTrue();
+        assertThat(response.provider()).isEqualTo("deepseek");
+        assertThat(response.model()).isEqualTo("deepseek-chat");
+        // Fleet activity: exactly ONE "started" and ONE "completed" for this logical execution -
+        // no duplicate/blip from the aborted bridge attempt (executeAgentViaBridge published
+        // "started" once; the fallback's own "completed" must be the only completion event).
+        verify(agentActivityPublisher, org.mockito.Mockito.times(1)).publishExecutionStarted(
+            any(), org.mockito.ArgumentMatchers.eq(executionId), any(), any(), any());
+        verify(agentActivityPublisher, org.mockito.Mockito.times(1)).publishExecutionCompleted(
+            any(), org.mockito.ArgumentMatchers.eq(executionId), org.mockito.ArgumentMatchers.eq("COMPLETED"),
+            org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+            org.mockito.ArgumentMatchers.anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("A run the USER stopped does NOT fall back, even with nothing visible yet - retrying would bill a full direct-API turn for a chat that was just cancelled")
+    void linkedRunStoppedByUserDoesNotFallBack() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("codex", "gpt-5.3-codex")));
+        wireExecutionLinks(linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
+        // Stop pressed in the first seconds: no content, no tool results, nothing on screen -
+        // so this reads as "invisible" exactly like a crash, and only the STOP REASON separates
+        // a run worth retrying from one the user asked to end.
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean()))
+            .thenReturn(new AgentExecutionResponseDto(
+                false, null, null, List.of(), 0, Map.of(),
+                null, 8000, "codex", "gpt-5.3-codex", List.of(),
+                AgentStopReason.STOPPED_BY_USER.name(), Map.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), null));
 
         AgentExecutionResponseDto response =
             service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
 
+        // No direct-API retry: the user would have been charged a whole turn they cancelled.
+        verify(agentLoopService, org.mockito.Mockito.never())
+            .execute(any(AgentLoopContext.class), any(StreamingCallback.class));
         assertThat(response.success()).isFalse();
-        // Failure or not, the caller-visible identity is the billed pair.
+        assertThat(response.stopReason()).isEqualTo(AgentStopReason.STOPPED_BY_USER.name());
+    }
+
+    @Test
+    @DisplayName("A user-stopped linked run still reports what it spent, stamped with the BILLED pair - not retried, not free")
+    void linkedRunStoppedByUserKeepsItsUsageOnTheBilledIdentity() {
+        // The other half of the cancellation rule. Blocking the retry is only right if the
+        // turn is still charged for the work it did: otherwise a Stop would simply make a
+        // paid turn free, which is the bug this whole change exists to close.
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("codex", "gpt-5.3-codex")));
+        wireExecutionLinks(linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean()))
+            .thenReturn(new AgentExecutionResponseDto(
+                false, null, "partial", List.of(), 0,
+                Map.of("promptTokens", 15255, "completionTokens", 40, "totalTokens", 15295),
+                null, 8000, "codex", "gpt-5.3-codex", List.of(),
+                AgentStopReason.STOPPED_BY_USER.name(), Map.of(), List.of(), List.of(),
+                List.of(), List.of(), List.of(), null));
+
+        AgentExecutionResponseDto response =
+            service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
+
+        verify(agentLoopService, org.mockito.Mockito.never())
+            .execute(any(AgentLoopContext.class), any(StreamingCallback.class));
+        // The counters survive the failure, and they are stamped with the pair that pays.
+        assertThat(response.totalUsage()).containsEntry("promptTokens", 15255);
         assertThat(response.provider()).isEqualTo("deepseek");
         assertThat(response.model()).isEqualTo("deepseek-chat");
     }
 
     @Test
-    @DisplayName("BILLING-CRITICAL error path: a bridge dispatch EXCEPTION on a linked run builds the failure from the BILLED identity")
-    void linkedRunBridgeExceptionKeepsBilledIdentity() {
+    @DisplayName("A bridge FAILED response that already carries visible content (partial output shown to the user) on a linked run does NOT fall back - the retry would be visible, so it is unsafe")
+    void linkedRunBridgeFailureWithVisibleContentDoesNotFallBack() {
         ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
         when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
                 org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
@@ -531,14 +670,185 @@ class AgentRemoteExecutionServiceTest {
         wireExecutionLinks(linkService);
         when(bridgeDispatcher.isAvailable()).thenReturn(true);
         when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
-        when(bridgeDispatcher.dispatchRaw(any(), any())).thenThrow(new RuntimeException("bridge unreachable"));
+        // The CLI streamed a partial answer before crashing - it already reached the user.
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean()))
+            .thenReturn(new AgentExecutionResponseDto(
+                false, "Partial answer before the c", "Partial answer before the c", List.of(), 0, Map.of(),
+                "CLI crashed mid-stream", 10, "codex", "gpt-5.3-codex", List.of(),
+                AgentStopReason.ERROR.name(), Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
 
         AgentExecutionResponseDto response =
             service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
 
+        verify(agentLoopService, never()).execute(any(), any(StreamingCallback.class));
         assertThat(response.success()).isFalse();
+        assertThat(response.content()).isEqualTo("Partial answer before the c");
+        // Failure or not, the caller-visible identity is still re-stamped to the billed pair.
         assertThat(response.provider()).isEqualTo("deepseek");
         assertThat(response.model()).isEqualTo("deepseek-chat");
+    }
+
+    @Test
+    @DisplayName("EXECUTION-LINK FALLBACK: when the direct-API retry ALSO fails, the error surfaces normally on the billed identity (a single retry, never a loop)")
+    void linkedRunBridgeEmptyFailureFallbackAlsoFailsSurfacesError() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("codex", "gpt-5.3-codex")));
+        wireExecutionLinks(linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
+        // The bridge fails BEFORE producing anything visible: no content, no tool results.
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean()))
+            .thenReturn(new AgentExecutionResponseDto(
+                false, null, null, List.of(), 0, Map.of(),
+                "CLI crashed", 10, "codex", "gpt-5.3-codex", List.of(),
+                AgentStopReason.ERROR.name(), Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
+        // The fallback's own direct-API attempt ALSO fails.
+        when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class)))
+            .thenThrow(new RuntimeException("upstream 500"));
+        String executionId = UUID.randomUUID().toString();
+
+        AgentExecutionResponseDto response =
+            service.executeAgent(request(Map.of(), executionId, "CHAT"), "USER");
+
+        // Exactly one bridge attempt and one fallback attempt - never a second bridge try,
+        // never a second fallback try (no loop).
+        verify(bridgeDispatcher, org.mockito.Mockito.times(1)).dispatchRaw(any(), any(), anyBoolean());
+        verify(agentLoopService, org.mockito.Mockito.times(1)).execute(any(AgentLoopContext.class), any(StreamingCallback.class));
+        assertThat(response.success()).isFalse();
+        assertThat(response.error()).contains("upstream 500");
+        // The double failure still reports the BILLED identity, never codex.
+        assertThat(response.provider()).isEqualTo("deepseek");
+        assertThat(response.model()).isEqualTo("deepseek-chat");
+        // Exactly one completed event for this logical execution (the fallback's own failure
+        // outcome) - no stray FAILED blip from the aborted bridge attempt beforehand.
+        verify(agentActivityPublisher, org.mockito.Mockito.times(1)).publishExecutionCompleted(
+            any(), org.mockito.ArgumentMatchers.eq(executionId), org.mockito.ArgumentMatchers.eq("FAILED"),
+            org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+            org.mockito.ArgumentMatchers.anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("EXECUTION-LINK FALLBACK: a bridge dispatch EXCEPTION on a linked run silently retries on the billed pair's direct API and succeeds")
+    void linkedRunBridgeExceptionFallsBackToDirectApi() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("codex", "gpt-5.3-codex")));
+        wireExecutionLinks(linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean())).thenThrow(new RuntimeException("bridge unreachable"));
+        ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
+        when(agentLoopService.execute(ctx.capture(), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        AgentExecutionResponseDto response =
+            service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
+
+        verify(agentLoopService).execute(any(AgentLoopContext.class), any(StreamingCallback.class));
+        assertThat(ctx.getValue().provider()).isEqualTo("deepseek");
+        assertThat(response.success()).isTrue();
+        assertThat(response.provider()).isEqualTo("deepseek");
+        assertThat(response.model()).isEqualTo("deepseek-chat");
+    }
+
+    @Test
+    @DisplayName("EXECUTION-LINK FALLBACK: a null bridge response on a linked run silently retries on the billed pair's direct API")
+    void linkedRunBridgeNullResponseFallsBackToDirectApi() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("codex", "gpt-5.3-codex")));
+        wireExecutionLinks(linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean())).thenReturn(null);
+        when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        AgentExecutionResponseDto response =
+            service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
+
+        verify(agentLoopService).execute(any(AgentLoopContext.class), any(StreamingCallback.class));
+        assertThat(response.success()).isTrue();
+        assertThat(response.provider()).isEqualTo("deepseek");
+        assertThat(response.model()).isEqualTo("deepseek-chat");
+    }
+
+    @Test
+    @DisplayName("A non-linked (direct bridge selection) FAILED response with empty content does NOT fall back - the billed pair already IS the bridge, so there is nothing distinct to retry on")
+    void nonLinkedBridgeEmptyFailureDoesNotFallBack() {
+        // No execution link wired: executionLinkRouter stays null, so executionRoute is null
+        // and the billed pair IS the dispatched bridge provider (a direct claude-code/codex
+        // selection, not a link-redirected anthropic/openai pair).
+        when(bridgeDispatcher.shouldDispatch(any())).thenReturn(true);
+        AgentExecutionResponseDto bridgeFailure = new AgentExecutionResponseDto(
+            false, null, null, List.of(), 0, Map.of(),
+            "CLI crashed", 10, "deepseek", "deepseek-chat", List.of(),
+            AgentStopReason.ERROR.name(), Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null);
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean())).thenReturn(bridgeFailure);
+
+        AgentExecutionResponseDto response =
+            service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
+
+        verify(agentLoopService, never()).execute(any(), any(StreamingCallback.class));
+        // The bridge failure is returned as is (no fallback re-ran it): same outcome, same
+        // error, same identity. Only the PLATFORM route stamp is added, as on every bridge run.
+        assertThat(response.success()).isFalse();
+        assertThat(response.error()).isEqualTo("CLI crashed");
+        assertThat(response.provider()).isEqualTo("deepseek");
+        assertThat(response.model()).isEqualTo("deepseek-chat");
+        assertThat(response.metrics()).containsEntry(AgentRemoteExecutionService.KEY_ROUTE_METRIC, "PLATFORM");
+    }
+
+    @Test
+    @DisplayName("A BridgeAccessDeniedException on a LINKED run is still rethrown, never retried - it is a deliberate admin policy/quota decision, not a transport failure")
+    void linkedRunBridgeAccessDeniedDoesNotFallBack() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("codex", "gpt-5.3-codex")));
+        wireExecutionLinks(linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
+        com.apimarketplace.agent.bridge.BridgeAccessDeniedException denial =
+            new com.apimarketplace.agent.bridge.BridgeAccessDeniedException("codex", "quota_exhausted");
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean())).thenThrow(denial);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER"))
+            .isSameAs(denial);
+
+        verify(agentLoopService, never()).execute(any(), any(StreamingCallback.class));
+    }
+
+    @Test
+    @DisplayName("EXECUTION-LINK FALLBACK: a successful invisible fallback records a Prometheus counter for operators, even though nothing surfaces to the caller")
+    void executionLinkFallbackRecordsPrometheusMetric() {
+        com.apimarketplace.agent.metrics.AgentPrometheusMetrics metrics =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.metrics.AgentPrometheusMetrics.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "prometheusMetrics", metrics);
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("codex", "gpt-5.3-codex")));
+        wireExecutionLinks(linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean())).thenThrow(new RuntimeException("bridge unreachable"));
+        when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
+
+        verify(metrics).recordExecutionLinkFallback("deepseek", "deepseek-chat", "codex");
     }
 
     @Test
@@ -687,7 +997,7 @@ class AgentRemoteExecutionServiceTest {
         String executionId = UUID.randomUUID().toString();
         AgentExecutionRequestDto dto = request(Map.of(), executionId, "CHAT");
         when(bridgeDispatcher.shouldDispatch(any())).thenReturn(true);
-        when(bridgeDispatcher.dispatchRaw(any(AgentExecutionRequestDto.class), any()))
+        when(bridgeDispatcher.dispatchRaw(any(AgentExecutionRequestDto.class), any(), anyBoolean()))
             .thenReturn(null);
 
         AgentExecutionResponseDto response = service.executeAgent(dto, "USER");
@@ -715,7 +1025,7 @@ class AgentRemoteExecutionServiceTest {
         when(bridgeDispatcher.shouldDispatch(any())).thenReturn(true);
         com.apimarketplace.agent.bridge.BridgeAccessDeniedException denial =
             new com.apimarketplace.agent.bridge.BridgeAccessDeniedException("claude-code", "quota_exhausted");
-        when(bridgeDispatcher.dispatchRaw(any(AgentExecutionRequestDto.class), any()))
+        when(bridgeDispatcher.dispatchRaw(any(AgentExecutionRequestDto.class), any(), anyBoolean()))
             .thenThrow(denial);
 
         // The WHY: the typed denial must surface to GlobalExceptionHandler, NOT be squashed
@@ -749,6 +1059,139 @@ class AgentRemoteExecutionServiceTest {
         assertThat(contextCaptor.getValue().tenantId())
             .as("tenant isolation: the loop context must inherit the request tenantId")
             .isEqualTo("tenant-1");
+    }
+
+    @Test
+    @DisplayName("Key route: resolved ONCE for the request tenant + execution provider and pinned on the loop context")
+    void keyRouteIsResolvedOnceAndPinnedOnLoopContext() {
+        KeyRouteResolver keyRouteResolver = org.mockito.Mockito.mock(KeyRouteResolver.class);
+        when(keyRouteResolver.resolve(org.mockito.ArgumentMatchers.eq("tenant-1"), any()))
+            .thenReturn(com.apimarketplace.agent.domain.KeyRoute.OWN_KEY);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keyRouteResolver", keyRouteResolver);
+        ArgumentCaptor<AgentLoopContext> contextCaptor = ArgumentCaptor.forClass(AgentLoopContext.class);
+        when(agentLoopService.execute(contextCaptor.capture(), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+        AgentExecutionRequestDto dto = request(Map.of(), UUID.randomUUID().toString());
+
+        AgentExecutionResponseDto response = service.executeAgent(dto);
+
+        // The pin is reported on the response metrics: that is how the orchestrator (queued
+        // and inline paths) and conversation-service learn which route to bill the row under.
+        assertThat(response.metrics()).containsEntry(AgentRemoteExecutionService.KEY_ROUTE_METRIC, "OWN_KEY");
+
+        // The WHY: every LLM call of this execution reads this pin instead of asking the
+        // calling thread whose key to use; a queued execution and a sync one must agree.
+        assertThat(contextCaptor.getValue().keyRoute())
+            .isEqualTo(com.apimarketplace.agent.domain.KeyRoute.OWN_KEY);
+        verify(keyRouteResolver, org.mockito.Mockito.times(1)).resolve("tenant-1", dto.provider());
+        // And handed to the sub-agents this execution may spawn, through the same credentials
+        // channel that carries __executionId__: a child inherits the pin, it never re-resolves.
+        assertThat(contextCaptor.getValue().credentials())
+            .containsEntry(com.apimarketplace.agent.domain.KeyRoute.CREDENTIAL_KEY, "OWN_KEY")
+            // The provider the pin was resolved FOR travels with it: without it a child on
+            // another provider would inherit OWN_KEY verbatim (KeyRoute.inheritFor).
+            .containsEntry(com.apimarketplace.agent.domain.KeyRoute.PROVIDER_CREDENTIAL_KEY, dto.provider());
+    }
+
+    @Test
+    @DisplayName("Key route: resolved for the EXECUTION provider a link redirected to, not the billed one")
+    void keyRouteIsResolvedForTheExecutionProviderWhenALinkRedirects() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), any()))
+            .thenReturn(java.util.Optional.of(new ModelExecutionLinkService.ExecutionRoute("openrouter", "deepseek/deepseek-chat")));
+        wireExecutionLinks(linkService);
+        KeyRouteResolver keyRouteResolver = org.mockito.Mockito.mock(KeyRouteResolver.class);
+        when(keyRouteResolver.resolve(any(), any())).thenReturn(com.apimarketplace.agent.domain.KeyRoute.PLATFORM);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keyRouteResolver", keyRouteResolver);
+        when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        service.executeAgent(request(Map.of(), UUID.randomUUID().toString()));
+
+        // The key that serves the call belongs to the provider actually called (openrouter),
+        // so that is the provider the tenant's saved key is looked up for.
+        verify(keyRouteResolver).resolve("tenant-1", "openrouter");
+        verify(keyRouteResolver, never()).resolve("tenant-1", "deepseek");
+    }
+
+    @Test
+    @DisplayName("Key route: without a resolver wired the context stays unpinned (pre-pin behaviour)")
+    void keyRouteIsNullWhenNoResolverWired() {
+        ArgumentCaptor<AgentLoopContext> contextCaptor = ArgumentCaptor.forClass(AgentLoopContext.class);
+        when(agentLoopService.execute(contextCaptor.capture(), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        service.executeAgent(request(Map.of(), UUID.randomUUID().toString()));
+
+        assertThat(contextCaptor.getValue().keyRoute()).isNull();
+    }
+
+    /**
+     * What the caller MAY DO has to reach the CREDENTIALS, not only the request field.
+     *
+     * <p>Every permission check downstream reads it out of credentials: a workflow agent node
+     * arrives with the field set and the credential absent, and both AgentModuleResolver and
+     * ToolAccessControl read silence as ALLOWED. So the gap was an open gate, not a closed one,
+     * and deleting this mirror left 284 tests green.
+     */
+    @Test
+    @DisplayName("the caller's enabled modules are mirrored into the credentials the tools read")
+    void enabledModulesReachTheCredentials() {
+        ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
+        when(agentLoopService.execute(ctx.capture(), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+        when(coreToolsCache.getCoreTools(anySet())).thenReturn(List.of());
+
+        service.executeAgent(autoDiscoverRequest(List.of("table", "workflow")));
+
+        assertThat(ctx.getValue().credentials())
+                .containsEntry(com.apimarketplace.agent.config.AgentModuleResolver.ENABLED_MODULES_CREDENTIAL_KEY,
+                        List.of("table", "workflow"));
+    }
+
+    /**
+     * The EMPTY set is the one that matters most, and the one an earlier version skipped.
+     * It is the MOST restricted caller there is (mode=off, no tools at all); leaving the
+     * credential absent would make callerMayUse answer "allowed", so the caller permitted
+     * nothing would be the one permitted everything.
+     */
+    @Test
+    @DisplayName("an EMPTY module set is mirrored too, since absence would read as unrestricted")
+    void anEmptyModuleSetIsStillMirrored() {
+        ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
+        when(agentLoopService.execute(ctx.capture(), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+        when(coreToolsCache.getCoreTools(anySet())).thenReturn(List.of());
+
+        service.executeAgent(autoDiscoverRequest(List.of()));
+
+        assertThat(ctx.getValue().credentials())
+                .containsEntry(com.apimarketplace.agent.config.AgentModuleResolver.ENABLED_MODULES_CREDENTIAL_KEY,
+                        List.of());
+        assertThat(com.apimarketplace.agent.config.AgentModuleResolver.callerMayUse(
+                ctx.getValue().credentials(), "mailbox"))
+                .as("the whole point: a stated empty set must DENY, where silence allows")
+                .isFalse();
+    }
+
+    /**
+     * Null means "unstated", which this platform reads as unrestricted on purpose: it covers
+     * every path with no bound agent. Inventing an empty list here would turn that into a
+     * denial and break work that was always allowed.
+     */
+    @Test
+    @DisplayName("a null module set is left absent, so unstated keeps meaning unstated")
+    void aNullModuleSetIsNotInvented() {
+        ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
+        when(agentLoopService.execute(ctx.capture(), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+        when(coreToolsCache.getCoreTools(anySet())).thenReturn(List.of());
+
+        service.executeAgent(autoDiscoverRequest(null));
+
+        assertThat(ctx.getValue().credentials())
+                .doesNotContainKey(com.apimarketplace.agent.config.AgentModuleResolver.ENABLED_MODULES_CREDENTIAL_KEY);
     }
 
     private AgentExecutionRequestDto request(Map<String, Object> credentials, String executionId) {

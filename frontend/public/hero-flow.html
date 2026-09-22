@@ -86,9 +86,10 @@
   .cta-note{ margin:11px 0 0; font-size:12.5px; color:var(--faint); text-align:center; }
   /* persona switcher: a single segmented control floating on the card (not a row of buttons near the CTAs) */
   .ptabs{ position:absolute; top:14px; left:50%; transform:translateX(-50%); z-index:6; display:inline-flex; gap:2px; background:rgba(255,255,255,.9); backdrop-filter:blur(10px); border:1px solid var(--rule); border-radius:13px; padding:4px; box-shadow:0 8px 24px rgba(16,22,38,.14); max-width:calc(100% - 24px); }
-  .ptab{ display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--muted); background:transparent; border:0; border-radius:9px; padding:7px 12px; cursor:pointer; white-space:nowrap; transition:color .18s ease, background .18s ease; }
+  .ptab{ text-decoration:none; display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--muted); background:transparent; border:0; border-radius:9px; padding:7px 12px; cursor:pointer; white-space:nowrap; transition:color .18s ease, background .18s ease; }
   .ptab svg{ width:15px; height:15px; }
   .ptab:hover{ color:var(--ink); }
+  .ptab:focus-visible{ outline:2px solid var(--ink); outline-offset:3px; }
   .ptab.active{ color:#fff; background:var(--ink); }
   @media (max-width:720px){ .ptab .pl{ display:none; } .ptab{ padding:5px 7px; } .ptab svg{ width:14px; height:14px; } .ptabs{ top:8px; gap:1px; padding:3px; border-radius:11px; } }
   /* central panel visualizations (dashboard / post preview / scorecard) */
@@ -470,7 +471,7 @@
   <div class="hero" id="top">
   <span class="eyebrow">The AI Automation platform</span>
   <h1>One message <u>in</u>.<br>A working automation <u>out</u>.</h1>
-  <p class="sub">700+ integrations and every major LLM, cloud or self-hosted. Build, deploy, and run your agents visually, in chat, or with code, and add a human in the loop wherever you want.</p>
+  <p class="sub">1000+ integrations and every major LLM, cloud or self-hosted. Build, deploy, and run your agents visually, in chat, or with code, and add a human in the loop wherever you want.</p>
   <div class="cta-row">
     <button type="button" class="btn primary">Start free</button>
     <button type="button" class="btn ghost"><span data-i="github"></span> Self-host</button>
@@ -478,13 +479,14 @@
   <p class="cta-note">Free tier &middot; No credit card &middot; Cancel any time</p>
 
   <div class="fit">
-    <div class="ptabs" id="ptabs" role="tablist" aria-label="Choose a team">
-      <button class="ptab active" role="tab" aria-selected="true" data-p="0"><span data-i="headphones"></span><span class="pl">Support</span></button>
-      <button class="ptab" role="tab" aria-selected="false" data-p="1"><span data-i="video"></span><span class="pl">Creator</span></button>
-      <button class="ptab" role="tab" aria-selected="false" data-p="2"><span data-i="chart"></span><span class="pl">Sales</span></button>
-      <button class="ptab" role="tab" aria-selected="false" data-p="3"><span data-i="megaphone"></span><span class="pl">Marketing</span></button>
-      <button class="ptab" role="tab" aria-selected="false" data-p="4"><span data-i="users"></span><span class="pl">Recruiting</span></button>
-    </div>
+    <nav class="ptabs" id="ptabs" aria-label="Choose a team">
+      <a class="ptab" href="/for/ops" target="_top" data-persona="ops"><span data-i="chart"></span><span class="pl">Operations</span></a>
+      <a class="ptab" href="/for/support" target="_top" data-persona="support"><span data-i="headphones"></span><span class="pl">Support</span></a>
+      <a class="ptab" href="/for/creator" target="_top" data-persona="creator"><span data-i="video"></span><span class="pl">Creator</span></a>
+      <a class="ptab" href="/for/sales" target="_top" data-persona="sales"><span data-i="chart"></span><span class="pl">Sales</span></a>
+      <a class="ptab" href="/for/marketing" target="_top" data-persona="marketing"><span data-i="megaphone"></span><span class="pl">Marketing</span></a>
+      <a class="ptab" href="/for/recruiting" target="_top" data-persona="recruiting"><span data-i="users"></span><span class="pl">Recruiting</span></a>
+    </nav>
     <div class="panel" id="panel">
     <div class="stage" id="stage">
       <div class="browser" id="win">
@@ -563,7 +565,7 @@
         <span class="clogo" data-brand="instagram"></span>
         <span class="clogo" data-brand="tiktok"></span>
         <span class="clogo" data-brand="youtube"></span>
-        <span class="connect-more">+ 14,000 tools</span>
+        <span class="connect-more">+ 30,000 tools</span>
       </div>
     </div>
   </section>
@@ -1062,7 +1064,10 @@
 
   var REDUCED=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var start=null;
-  applyPersona(0); // build the initial persona graph
+  var query = new URLSearchParams(location.search);
+  var requestedPersona = query.get('persona');
+  var initialPersona = PERSONAS.findIndex(function(p){ return p.key === requestedPersona; });
+  applyPersona(initialPersona < 0 ? 0 : initialPersona);
   function tick(now){
     if(start===null) start=now;
     // Loop starts at the workflow-construction moment (panel opening + nodes dropping), not the typing intro.
@@ -1089,22 +1094,22 @@
   }
   new ResizeObserver(resize).observe(fit); resize();
 
-  // ---- Persona tab switcher ----
-  var ptabs=Array.prototype.slice.call(document.querySelectorAll('#ptabs .ptab'));
-  function selectPersona(i){
-    ptabs.forEach(function(b,k){ var on=k===i; b.classList.toggle('active',on); b.setAttribute('aria-selected',on?'true':'false'); b.tabIndex=on?0:-1; });
-    applyPersona(i);
-  }
-  ptabs.forEach(function(b,k){
-    b.tabIndex = k===0?0:-1;
-    b.addEventListener('click', function(){ selectPersona(k); });
-    b.addEventListener('keydown', function(e){
-      var n=null;
-      if(e.key==='ArrowRight'||e.key==='ArrowDown') n=(k+1)%ptabs.length;
-      else if(e.key==='ArrowLeft'||e.key==='ArrowUp') n=(k-1+ptabs.length)%ptabs.length;
-      else if(e.key==='Home') n=0; else if(e.key==='End') n=ptabs.length-1;
-      if(n!==null){ e.preventDefault(); selectPersona(n); ptabs[n].focus(); }
-    });
+  // Actual parent-page links preserve native keyboard and modified-click behavior.
+  var locale = query.get('locale');
+  if (['en','fr','es','de','pt','zh'].indexOf(locale) < 0) locale = 'en';
+  var localePrefix = locale === 'en' ? '' : '/' + locale;
+  var navigation = document.getElementById('ptabs');
+  var navigationLabel = query.get('navigationLabel');
+  if (navigationLabel) navigation.setAttribute('aria-label', navigationLabel);
+  document.querySelectorAll('#ptabs .ptab').forEach(function(link){
+    var key = link.getAttribute('data-persona');
+    link.setAttribute('href', localePrefix + '/for/' + key);
+    var label = query.get('label-' + key) || link.textContent.trim();
+    link.querySelector('.pl').textContent = label;
+    link.setAttribute('aria-label', label);
+    var active = key === requestedPersona;
+    link.classList.toggle('active', active);
+    if (active) link.setAttribute('aria-current', 'page');
   });
 })();
 </script>

@@ -1,9 +1,9 @@
 # Third-Party Notices
 
-LiveContext Community Edition is licensed under AGPL-3.0 (see LICENSE). It
-bundles and depends on third-party components that remain under their own
-licenses, listed below. This file is informational and does not modify the
-LICENSE terms.
+LiveContext Community Edition is licensed under the LiveContext Sustainable Use
+License 1.0 (see LICENSE). It bundles and depends on third-party components that
+remain under their own licenses, listed below. This file is informational and
+does not modify the LICENSE terms.
 
 ## Bundled assets
 
@@ -17,8 +17,9 @@ LICENSE terms.
 ## Notable runtime dependencies
 
 Resolved through package managers (Maven, npm, pip) and not vendored into this
-repository. Each keeps its own license; all listed here are permissive and
-compatible with AGPL-3.0 distribution.
+repository. Each keeps its own license; all listed here are
+permissive and compatible with redistributing LiveContext CE under its own
+license.
 
 - Spring Boot and the Spring ecosystem - Apache-2.0
 - Next.js and React - MIT

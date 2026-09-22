@@ -41,6 +41,16 @@ const mocks = vi.hoisted(() => ({
   deleteOverride: vi.fn(),
   resetAll: vi.fn(),
   clearModelsCache: vi.fn(),
+  // The panel reads the execution links once so each row can show its routing
+  // badge; unrouted catalogs answer with an empty list.
+  listExecutionLinks: vi.fn().mockResolvedValue([]),
+  saveExecutionLink: vi.fn(),
+  deleteExecutionLink: vi.fn(),
+}));
+
+// The per-model execution-link badge translates its own labels.
+vi.mock('next-intl', () => ({
+  useTranslations: (ns?: string) => (k: string) => (ns ? `${ns}.${k}` : k),
 }));
 
 vi.mock('@/lib/api/model-config.service', () => ({
@@ -51,6 +61,9 @@ vi.mock('@/lib/api/model-config.service', () => ({
     bulkUpdateRankings: mocks.bulkUpdateRankings,
     deleteOverride: mocks.deleteOverride,
     resetAll: mocks.resetAll,
+    listExecutionLinks: mocks.listExecutionLinks,
+    saveExecutionLink: mocks.saveExecutionLink,
+    deleteExecutionLink: mocks.deleteExecutionLink,
   },
 }));
 vi.mock('@/hooks/useModels', () => ({ clearModelsCache: mocks.clearModelsCache }));

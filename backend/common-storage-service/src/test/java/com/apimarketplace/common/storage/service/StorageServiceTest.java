@@ -28,6 +28,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.Instant;
 import java.util.*;
 
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
@@ -1240,6 +1243,124 @@ class StorageServiceTest {
     }
 
     // ========== Helper methods ==========
+
+    @Nested
+    @DisplayName("credit/debit symmetry - a row is debited from the bucket it was credited to")
+    class CreditDebitSymmetryTests {
+
+        /**
+         * The asymmetry this pins was real and permanent. {@code saveS3FileIndex} credited every
+         * object-storage row to FILES, while the delete path derived the bucket from the SOURCE
+         * type alone and so debited STEP_OUTPUTS for a STEP_OUTPUT / INTERFACE_VIDEO / screenshot
+         * row. Debiting the wrong bucket does not error: it leaves the original FILES credit
+         * standing for good, on a dimension the customer is billed on.
+         */
+        @ParameterizedTest(name = "an S3-backed {0} row")
+        @ValueSource(strings = {"STEP_OUTPUT", "INTERFACE_VIDEO", "INTERFACE_SCREENSHOT", "INTERFACE_PDF", "S3_FILE"})
+        @DisplayName("is credited to FILES on save and debited from FILES on delete")
+        void s3RowIsCreditedAndDebitedToTheSameBucket(String sourceType) {
+            UUID savedId = UUID.randomUUID();
+            when(storageUtils.extractFileExtension(anyString())).thenReturn("bin");
+            when(storageRepository.save(any(StorageEntity.class))).thenAnswer(inv -> {
+                StorageEntity saved = inv.getArgument(0);
+                saved.setId(savedId);
+                return saved;
+            });
+
+            storageService.saveS3FileIndex(TENANT_ID, "wf-1", "run-1", "step-1", "1/general/clip.bin",
+                    "clip.bin", "application/octet-stream", 4096L, 0, 0, null, sourceType);
+
+            verify(breakdownService).trackSave(eq(TENANT_ID), eq("FILES"), eq(4096L), nullable(String.class));
+
+            // Now delete the row that was just written, exactly as it would come back from the DB.
+            StorageEntity stored = new StorageEntity();
+            stored.setId(savedId);
+            stored.setTenantId(TENANT_ID);
+            stored.setStatus(StorageStatus.ACTIVE);
+            stored.setStorageType("S3_FILE");
+            stored.setSourceType(sourceType);
+            stored.setSizeBytes(4096);
+            when(storageRepository.findByIdAndTenantId(savedId, TENANT_ID)).thenReturn(Optional.of(stored));
+
+            storageService.deleteById(savedId, TENANT_ID);
+
+            verify(breakdownService).trackDelete(TENANT_ID, "FILES", 4096L);
+            verify(breakdownService, never()).trackDelete(eq(TENANT_ID), eq("STEP_OUTPUTS"), anyLong());
+        }
+
+        @Test
+        @DisplayName("the ORG-scoped delete debits FILES too, on the table with no CHECK constraint")
+        void orgScopedDeleteDebitsTheSameBucket() {
+            // This is the path that writes org_storage_breakdown, the counter that shipped without
+            // the zero clamp its tenant twin has. Debiting the wrong bucket there drove a row
+            // negative with nothing to stop it.
+            UUID id = UUID.randomUUID();
+            StorageEntity stored = new StorageEntity();
+            stored.setId(id);
+            stored.setTenantId(TENANT_ID);
+            stored.setOrganizationId(ORG_ID);
+            stored.setStatus(StorageStatus.ACTIVE);
+            stored.setStorageType("S3_FILE");
+            stored.setSourceType("INTERFACE_VIDEO");
+            stored.setSizeBytes(8192);
+            when(storageRepository.findByIdAndOrganizationIdStrict(id, ORG_ID)).thenReturn(Optional.of(stored));
+
+            storageService.deleteByIdForScope(id, TENANT_ID, ORG_ID);
+
+            verify(breakdownService).trackDelete(TENANT_ID, "FILES", 8192L, ORG_ID);
+            verify(breakdownService, never()).trackDelete(eq(TENANT_ID), eq("STEP_OUTPUTS"), anyLong(), anyString());
+        }
+
+        @Test
+        @DisplayName("a size change on a TEXT row moves FILES, not STEP_OUTPUTS")
+        void updateOfAFileRowMovesTheFileBucket() {
+            // updateJson used to derive the bucket from the source type alone, so growing a TEXT
+            // or S3-backed row credited FILES at save and then moved STEP_OUTPUTS on every edit.
+            UUID id = UUID.randomUUID();
+            StorageEntity stored = createActiveEntity(id);
+            stored.setStorageType("TEXT");
+            stored.setSourceType(null);
+            stored.setSizeBytes(100);
+            when(storageRepository.findByIdAndTenantId(id, TENANT_ID)).thenReturn(Optional.of(stored));
+            when(storageUtils.calculateSize(any())).thenReturn(350);
+
+            storageService.updateJson(id, TENANT_ID, Map.of("k", "v"), null);
+
+            verify(breakdownService).trackSizeChange(TENANT_ID, "FILES", 250L);
+            verify(breakdownService, never()).trackSizeChange(eq(TENANT_ID), eq("STEP_OUTPUTS"), anyLong());
+        }
+
+        @Test
+        @DisplayName("the org-scoped size change picks the same bucket")
+        void orgScopedUpdateOfAFileRowMovesTheFileBucket() {
+            UUID id = UUID.randomUUID();
+            StorageEntity stored = createActiveEntity(id);
+            stored.setOrganizationId(ORG_ID);
+            stored.setStorageType("S3_FILE");
+            stored.setSourceType("STEP_OUTPUT");
+            stored.setSizeBytes(1000);
+            when(storageRepository.findByIdAndOrganizationIdStrict(id, ORG_ID)).thenReturn(Optional.of(stored));
+            when(storageUtils.calculateSize(any())).thenReturn(400);
+
+            storageService.updateJsonForScope(id, TENANT_ID, ORG_ID, Map.of("k", "v"), null);
+
+            verify(breakdownService).trackSizeChange(TENANT_ID, "FILES", -600L, ORG_ID);
+        }
+
+        @Test
+        @DisplayName("a JSON step output stays in STEP_OUTPUTS on both sides")
+        void jsonStepOutputStaysJournal() {
+            UUID id = UUID.randomUUID();
+            StorageEntity stored = createActiveEntity(id);
+            stored.setStorageType("JSON");
+            stored.setSourceType("STEP_OUTPUT");
+            when(storageRepository.findByIdAndTenantId(id, TENANT_ID)).thenReturn(Optional.of(stored));
+
+            storageService.deleteById(id, TENANT_ID);
+
+            verify(breakdownService).trackDelete(TENANT_ID, "STEP_OUTPUTS", 100L);
+        }
+    }
 
     private StorageEntity createActiveEntity(UUID id) {
         StorageEntity entity = new StorageEntity();

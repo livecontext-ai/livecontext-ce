@@ -49,6 +49,10 @@ public class CreditController {
             throw new IllegalArgumentException("sourceType must not be null");
         }
 
+        // A turn that ran on the tenant's OWN provider key is billed a flat fee per turn
+        // (the provider bills them the tokens), whatever kind of turn it was. The route was
+        // decided once per execution by agent-service and rides on the request.
+        boolean ownKey = CreditService.KEY_ROUTE_OWN_KEY.equals(request.keyRoute());
         CreditService.CreditConsumeResult result = switch (request.sourceType()) {
             case "AGENT_EXECUTION", "CLASSIFY_EXECUTION", "GUARDRAIL_EXECUTION",
                  "COMPACTION_SUMMARY", "BROWSER_AGENT_EXECUTION",
@@ -56,8 +60,11 @@ public class CreditController {
                  // external CLI pays its own provider), so consumeForAgent computes ~0 credits
                  // and writes a clean CLI_SESSION ledger row. Must be allow-listed here, else
                  // every CLI/bridge observability write would 500 → rejection + dead-letter spam.
-                 "CLI_SESSION" ->
-                    creditService.consumeForAgent(
+                 "CLI_SESSION" -> ownKey
+                    ? creditService.consumeForOwnKeyTurn(
+                            userId, request.sourceId(), request.provider(), request.model(),
+                            request.toTokenBreakdown(), request.sourceType())
+                    : creditService.consumeForAgent(
                             userId, request.sourceId(), request.provider(), request.model(),
                             request.toTokenBreakdown(),
                             request.sourceType());
@@ -70,9 +77,13 @@ public class CreditController {
                     userId, request.sourceId(), request.provider(), request.model(),
                     request.toTokenBreakdown());
             case "WORKFLOW_NODE" -> creditService.consumeForWorkflowNode(userId, request.sourceId());
-            case "CHAT_CONVERSATION" -> creditService.consumeForChat(
-                    userId, request.sourceId(), request.provider(), request.model(),
-                    request.toTokenBreakdown());
+            case "CHAT_CONVERSATION" -> ownKey
+                    ? creditService.consumeForOwnKeyTurn(
+                            userId, request.sourceId(), request.provider(), request.model(),
+                            request.toTokenBreakdown(), request.sourceType())
+                    : creditService.consumeForChat(
+                            userId, request.sourceId(), request.provider(), request.model(),
+                            request.toTokenBreakdown());
             case "MARKETPLACE_PURCHASE" -> creditService.consumeForMarketplacePurchase(
                     userId, request.sourceId(), request.cost() != null ? request.cost() : 0);
             case "WEB_SEARCH" -> creditService.consumeForWebSearch(userId, request.sourceId());
@@ -102,18 +113,39 @@ public class CreditController {
      */
     @GetMapping("/balance")
     public ResponseEntity<Map<String, Object>> getBalance(
-            @RequestHeader("X-User-ID") Long userId) {
+            @RequestHeader("X-User-ID") Long userId,
+            // V494: optional, and only read by the LLM budget guards. With them the
+            // response states whether the AI allowance is spendable ON THIS MODEL, which
+            // the caller cannot work out for itself - the free-tier flag lives in the
+            // billing mirror. Without them the field is simply absent and the caller
+            // falls back to the wallet, which is the pre-V494 answer.
+            @RequestParam(value = "provider", required = false) String provider,
+            @RequestParam(value = "model", required = false) String model) {
         CreditService.BalanceBreakdown breakdown = creditService.getBalanceBreakdown(userId);
-        return ResponseEntity.ok(Map.of(
+        Map<String, Object> body = new java.util.HashMap<>(Map.of(
                 "balance", breakdown.balance(),
                 "subBalance", breakdown.subBalance(),
                 "paygBalance", breakdown.paygBalance(),
+                // V494: the monthly AI allowance, kept OUT of `balance` because it
+                // only funds agent/chat turns on free-tier models. A wallet surface
+                // shows it as its own line, never added to the headline figure.
+                "aiBalance", breakdown.aiBalance(),
                 "delinquent", breakdown.delinquent(),
                 // Whether the monthly bucket is workflow-scoped on this plan, so
                 // a surface can warn BEFORE a platform-key purchase instead of
                 // deriving the rule from the two balances and getting it wrong
                 // for the ordinary paid account.
                 "monthlyCreditsAreWorkflowOnly", breakdown.monthlyCreditsAreWorkflowOnly()));
+        if (provider != null && !provider.isBlank() && model != null && !model.isBlank()) {
+            // The allowance counts toward an LLM budget only on a model an admin opened;
+            // on any other model it is money no debit for this turn can draw, and a guard
+            // that budgeted against it would let a loop run on credits it cannot spend.
+            boolean allowanceApplies = creditService.isAiAllowanceSpendableOn(provider, model);
+            body.put("llmSpendableBalance", allowanceApplies
+                    ? breakdown.balance().add(breakdown.aiBalance())
+                    : breakdown.balance());
+        }
+        return ResponseEntity.ok(body);
     }
 
     /**
@@ -129,7 +161,21 @@ public class CreditController {
     @GetMapping("/check")
     public ResponseEntity<Map<String, Object>> checkCredits(
             @RequestHeader("X-User-ID") Long userId,
-            @RequestParam(value = "sourceType", required = false) String sourceType) {
+            @RequestParam(value = "sourceType", required = false) String sourceType,
+            // V494: optional, and only meaningful together with an LLM sourceType.
+            // With them, a Free account's AI allowance counts toward this gate exactly
+            // as the debit will draw it; without them the gate keeps its pre-V494
+            // answer, which refuses a turn the pot would have paid for. Callers that
+            // know the model MUST send it.
+            //
+            // These are CALLER-SUPPLIED and not verified against what is actually run:
+            // this endpoint is reachable through the gateway, so a caller can ask about
+            // a model it will not use. That is deliberate and bounded - the answer is
+            // advisory, and the DEBIT re-resolves the real (provider, model) and its
+            // free-tier flag server-side, so a lie here buys nothing but a wrong
+            // prediction of one's own balance.
+            @RequestParam(value = "provider", required = false) String provider,
+            @RequestParam(value = "model", required = false) String model) {
         // Blank == absent: `?sourceType=` must not silently apply the FREE
         // PAYG scoping (a blank string is not in the workflow allow-list, so
         // it would scope) - keep it symmetric with the client, which sends no
@@ -137,7 +183,7 @@ public class CreditController {
         if (sourceType != null && sourceType.isBlank()) {
             sourceType = null;
         }
-        boolean sufficient = creditService.hasSufficientCredits(userId, sourceType);
+        boolean sufficient = creditService.hasSufficientCredits(userId, sourceType, provider, model);
         BigDecimal balance = creditService.getBalance(userId);
         if (!sufficient) {
             return ResponseEntity.status(402).body(Map.of("allowed", false, "balance", balance));
@@ -200,7 +246,17 @@ public class CreditController {
         // non-workflow source, so on the FREE plan it is gated against the PAYG
         // bucket alone (mirrors the post-flight debit routing). No-op on CE
         // (unlimited) and paid plans, where eligible balance == total balance.
-        boolean allowed = creditService.canAfford(userId, estimatedCost, "CHAT_CONVERSATION");
+        // V494: passing the model lets the AI allowance count toward this gate when
+        // the turn runs on a free-tier model, exactly as the post-flight debit will
+        // draw it. Without it a Free account with a full AI pot but an empty PAYG
+        // bucket would be refused a turn its own allowance was created to pay for.
+        // The source type the CALLER will debit as, not an assumption. Absent reads as
+        // CHAT_CONVERSATION, which is what every pre-V494 caller meant.
+        String gateSourceType = request.sourceType() == null || request.sourceType().isBlank()
+                ? "CHAT_CONVERSATION"
+                : request.sourceType();
+        boolean allowed = creditService.canAfford(userId, estimatedCost, gateSourceType,
+                request.provider(), request.model());
         Map<String, Object> body = Map.of(
                 "allowed", allowed,
                 "balance", balance,
@@ -322,8 +378,9 @@ public class CreditController {
      * why the multiplier is folded into the coefficients rather than named.
      */
     @GetMapping("/estimate-basis")
-    public ResponseEntity<Map<String, Object>> getEstimateBasis() {
-        return ResponseEntity.ok(estimateService.buildBasis());
+    public ResponseEntity<Map<String, Object>> getEstimateBasis(
+            @RequestHeader(value = "X-User-ID", required = false) String tenantId) {
+        return ResponseEntity.ok(estimateService.buildBasis(tenantId));
     }
 
     @GetMapping("/pricing")
@@ -458,12 +515,27 @@ public class CreditController {
     ) {
     }
 
+    /**
+     * @param sourceType what the caller will DEBIT this turn as, so the gate scopes the
+     *                   balance the same way the debit will. Optional for back-compat;
+     *                   absent means {@code CHAT_CONVERSATION}. It matters because the
+     *                   AI allowance funds some LLM source types and not others: a CE
+     *                   relay turn debits {@code CE_LLM_RELAY}, which the pot may not
+     *                   pay for, so gating it as a chat turn would count money the
+     *                   debit cannot reach and let the tokens run against nothing.
+     */
     public record ChatBudgetRequest(
             String provider,
             String model,
             Integer estimatedPromptTokens,
-            Integer estimatedCompletionTokens
+            Integer estimatedCompletionTokens,
+            String sourceType
     ) {
+        /** Pre-V494 shape: no source type, which reads as CHAT_CONVERSATION. */
+        public ChatBudgetRequest(String provider, String model,
+                                 Integer estimatedPromptTokens, Integer estimatedCompletionTokens) {
+            this(provider, model, estimatedPromptTokens, estimatedCompletionTokens, null);
+        }
     }
 
     public record CreditConsumeRequest(
@@ -478,8 +550,19 @@ public class CreditController {
             Integer cacheCreationTokens,
             Integer cacheReadTokens,
             Integer cachedTokens,
-            Integer reasoningTokens
+            Integer reasoningTokens,
+            /** V506: {@code OWN_KEY} when the turn ran on the tenant's own provider key; null/PLATFORM otherwise. */
+            String keyRoute
     ) {
+        /** Pre-V506 shape (no key route = platform route). */
+        public CreditConsumeRequest(String sourceType, String sourceId, String provider,
+                                     String model, Integer promptTokens, Integer completionTokens,
+                                     Integer cost, Integer imageCount,
+                                     Integer cacheCreationTokens, Integer cacheReadTokens,
+                                     Integer cachedTokens, Integer reasoningTokens) {
+            this(sourceType, sourceId, provider, model, promptTokens, completionTokens, cost, imageCount,
+                    cacheCreationTokens, cacheReadTokens, cachedTokens, reasoningTokens, null);
+        }
         /** Backward-compatible 6-arg constructor (cost + imageCount default to null). */
         public CreditConsumeRequest(String sourceType, String sourceId, String provider,
                                      String model, Integer promptTokens, Integer completionTokens) {

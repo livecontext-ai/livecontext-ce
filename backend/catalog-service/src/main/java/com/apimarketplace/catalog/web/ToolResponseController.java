@@ -273,6 +273,18 @@ public class ToolResponseController {
             @RequestBody MappingRequest request,
             @RequestHeader(value = "X-User-ID", required = false) String userId) {
 
+        // This endpoint read the header and never used it, so it was reachable by any caller, and
+        // anonymously in CE where the monolith does not decide authentication at the filter. It
+        // resolves a GLOBAL mapping row, which its mapping/create sibling guards with the internal
+        // admin token. The token is NOT required here on purpose: create WRITES the global row
+        // while this only reads one back, and no production caller holds that token, so demanding
+        // it would silently retire an endpoint rather than protect it. Requiring an authenticated
+        // caller is the proportionate floor, and it is the part that was actually missing.
+        if (userId == null || userId.isBlank()) {
+            log.warn("Refused unauthenticated POST /api/tool-responses/mapping/resolve");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
+        }
+
         try {
             if (request == null || request.getToolId() == null) {
                 log.error("Invalid request: request={}, toolId={}", request != null, request != null ? request.getToolId() : "null");

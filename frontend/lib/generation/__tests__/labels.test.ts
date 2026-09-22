@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assetRoleLabel, paramLabel, readableRefusal } from '../labels';
+import { assetRoleHint, assetRoleLabel, paramLabel, readableRefusal } from '../labels';
 import type { StudioField } from '../paramSpec';
 
 /**
@@ -26,6 +26,8 @@ function field(overrides: Partial<StudioField> = {}): StudioField {
     kind: 'asset',
     required: false,
     slots: 1,
+    requiresFields: [],
+    excludesFields: [],
     choices: [],
     optionsMustBeFetched: false,
     choicesAreSuggestions: false,
@@ -42,6 +44,23 @@ describe('paramLabel', () => {
     // The catalogue ships new parameters without the app being rebuilt. An unguarded lookup would
     // render the raw key path, or throw, the first time a provider declares one.
     expect(paramLabel('cfg_scale', translator({}))).toBe('cfg_scale');
+  });
+});
+
+describe('assetRoleHint', () => {
+  it('says what the model DOES with the file, which the name of the slot does not', () => {
+    const t = translator({ 'assetRoleHints.last_frame': 'The clip ends on this image.' });
+    expect(assetRoleHint(field({ role: 'last_frame' }), t)).toBe('The clip ends on this image.');
+  });
+
+  it('says nothing at all for a role this build has no sentence for', () => {
+    // Null, not a key path: an unguarded lookup would print "assetRoleHints.depth_map" under the
+    // field the first time the catalogue ships a role this build predates.
+    expect(assetRoleHint(field({ role: 'depth_map' }), translator({}))).toBeNull();
+  });
+
+  it('says nothing when the model declares no role, since there is nothing to explain', () => {
+    expect(assetRoleHint(field({ role: undefined }), translator({}))).toBeNull();
   });
 });
 

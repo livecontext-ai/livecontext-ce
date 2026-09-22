@@ -89,4 +89,34 @@ public class PlatformCredentialStatusDto {
                 || Boolean.TRUE.equals(hasBasicAuth)
                 || Boolean.TRUE.equals(hasCustomFields);
     }
+
+    /**
+     * True when this row holds an OAuth <b>client</b> (a client_id/secret pair) rather
+     * than a bare secret, which is what makes it substitutable by the user.
+     *
+     * <p>Callers that hide admin-disabled variants from end users use this to leave the
+     * OAuth2 entry visible: disabling the row withdraws the platform's own app, and the
+     * user can still register theirs and connect BYOK. Removing the entry instead would
+     * take away a path that works, which the credentials wizard already implements and
+     * documents for exactly this case.
+     *
+     * <p>Two clauses, because the variant literal alone does not cover the table. It is
+     * what the catalog seeds use ({@code oauth2} is their sole OAuth2 key), but
+     * {@code auth.platform_credentials} also carries rows saved without a variant, stored
+     * under the {@code primary} default, and those would slip through. The second clause
+     * catches exactly those, and only those.
+     *
+     * <p>It is deliberately NOT "any row with a client secret". The admin dialog routes a
+     * field literally named {@code client_id}/{@code client_secret} into those columns
+     * whatever the variant's auth type, and three {@code custom} variants (tidio, personio,
+     * box) declare precisely those field names, so a bare {@code hasClientSecret} test
+     * would quietly widen the carve-out to them. They are not OAuth clients: the wizard's
+     * BYOK branch is gated on {@code authType === "oauth2"}, so they land on the
+     * custom-fields form instead, and they must keep the ordinary hide-when-disabled
+     * behaviour like every other user-supplied-secret variant.
+     */
+    public boolean holdsOAuthClient() {
+        return "oauth2".equals(variant)
+                || ("primary".equals(variant) && Boolean.TRUE.equals(hasClientSecret));
+    }
 }

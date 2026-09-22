@@ -51,6 +51,7 @@ class PublicationListSelectMappingInvariantTest {
      */
     private static final Map<String, String> EXPRESSION_COLUMNS = Map.of(
             "CAST(p.node_icons AS TEXT)", "nodeIcons",
+            "CAST(p.node_types AS TEXT)", "nodeTypes",
             "CAST(p.ce_exclusive_features AS TEXT)", "ceExclusiveFeatures",
             "p.agent_snapshot->'agent'->>'avatarUrl'", "agentAvatarUrl",
             "p.agent_snapshot->'agent'->>'modelProvider'", "agentModelProvider",

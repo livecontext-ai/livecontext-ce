@@ -15,7 +15,7 @@ const shellSrc = readFileSync(path.resolve(__dirname, '../LandingShell.tsx'), 'u
 
 /** Just the Product column, so a match cannot come from Resources or Compare. */
 const productColumn = (() => {
-  const start = shellSrc.indexOf('>Product</p>');
+  const start = shellSrc.indexOf('>{labels.product}</p>');
   expect(start).toBeGreaterThan(-1);
   const end = shellSrc.indexOf('</ul>', start);
   expect(end).toBeGreaterThan(start);
@@ -23,12 +23,15 @@ const productColumn = (() => {
 })();
 
 describe('landing footer Product column', () => {
+  // The anchor text is a label prop now, not a literal: the chrome renders on the localised
+  // pages too, so its copy is handed in (see shellLabels.ts). What this file guards is the
+  // link and its destination, and both still live in the source.
   const docsEntries = [
-    { page: 'workflows', label: 'Workflows' },
-    { page: 'agents', label: 'Agents' },
-    { page: 'interfaces', label: 'Interfaces &amp; apps' },
-    { page: 'tables', label: 'Tables &amp; data' },
-    { page: 'integrations', label: 'Integrations' },
+    { page: 'workflows', label: '{labels.workflows}' },
+    { page: 'agents', label: '{labels.agents}' },
+    { page: 'interfaces', label: '{labels.interfaces}' },
+    { page: 'tables', label: '{labels.tables}' },
+    { page: 'integrations', label: '{labels.integrations}' },
   ];
 
   for (const { page, label } of docsEntries) {

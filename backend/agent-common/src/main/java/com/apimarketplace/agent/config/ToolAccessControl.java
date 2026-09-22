@@ -31,13 +31,42 @@ public final class ToolAccessControl {
         // mock_suggest is a pure read: it proposes a mock output and mutates nothing.
         Map.entry("workflow",    Set.of("load", "get", "list", "describe", "validate", "runs", "get_run", "wait_run", "get_node_output", "search", "help", "get_plan", "read_rows", "find_rows", "mock_suggest")),
         Map.entry("interface",   Set.of("get", "list", "help")),
-        Map.entry("agent",       Set.of("get", "list", "help", "inbox", "outbox", "review_inbox", "backlog", "recurrence_list", "get_history", "search_messages")),
-        Map.entry("application", Set.of("search", "my", "get", "visualize", "help")),
+        // budgets is a pure read - it reports what capped agents have spent and mutates
+        // nothing. Omitting it would make the action PERMISSION_DENIED for every agent
+        // created with agentAccessMode=read, while the tool help advertises it to all of
+        // them: an action visible to a caller that cannot call it.
+        Map.entry("agent",       Set.of("get", "list", "help", "budgets", "inbox", "outbox", "review_inbox", "backlog", "recurrence_list", "get_history", "search_messages")),
+        // runs / get_run / get_node_output are the SAME three read actions the "workflow"
+        // entry above already lists, and ApplicationCrudModule handles all three. Omitting
+        // them here made an applicationAccessMode='read' agent be told it needs write access
+        // to look at a run it is allowed to see (a fail-CLOSED misclassification).
+        Map.entry("application", Set.of("search", "my", "get", "visualize", "help", "runs", "get_run", "get_node_output")),
         Map.entry("skill",       Set.of("get", "list", "list_folders", "help")),
         // Memory: save and delete are the only writes. `search` is a READ and is
         // listed as one - denying recall to a read-only agent would leave it with
         // a memory index in its context and no way to open anything in it.
         Map.entry("memory",      Set.of("get", "list", "search", "help")),
+        // Mailbox: reading a folder, naming its folders and marking a message seen change
+        // nothing outside the mailbox and nothing a reader would mind. Everything else is a
+        // write, and two of them are irreversible: send reaches a person, delete removes what
+        // only the provider still holds. mark_read is deliberately a READ even though it sets
+        // a flag - a read-only inbox scanner that cannot mark what it processed re-reads the
+        // same messages forever, which is the shape of agent this mode exists to allow. That
+        // argument covers mark_read ONLY: mark_unread undoes a marker a person may have set,
+        // so it changes what someone sees in their own inbox and stays a write. The same list
+        // also gates the workspace VIEWER role, and a VIEWER is read-only everywhere else.
+        Map.entry("mailbox",     Set.of("read", "folders", "mark_read", "help")),
+        // WARNING - these two entries are INERT today, and the enforcement they imply does
+        // not exist. checkWriteAccess derives its key as category + "AccessMode", so they would
+        // need a "catalogAccessMode" / "web_searchAccessMode" credential to do anything, and NO
+        // producer emits either: neither the ToolsConfig record, nor any relay's access-mode
+        // list, nor the agent tool schema, nor the frontend payload builder. CatalogExecuteModule
+        // does call checkWriteAccess(credentials, "catalog", ...), and that call always returns
+        // "allowed" because the key is absent. Nothing is currently exposed by this: the catalog
+        // family is gated by toolsConfig.mode instead, and web_search by its boolean toggle.
+        // Left in place rather than deleted so that removing a permission check is a deliberate
+        // decision rather than a side effect. Wiring a real axis means the full producer chain
+        // (record + parser + every relay list + schema + help + frontend), not just a key here.
         Map.entry("catalog",     Set.of("search", "response_schema", "help")),
         Map.entry("web_search",  Set.of("search", "fetch")),
         // Files: read actions. Write actions (create_folder / move_to_folder) are NOT
@@ -46,6 +75,60 @@ public final class ToolAccessControl {
         // "fileAccessMode" credential key (checkWriteAccess derives category+"AccessMode").
         Map.entry("file",        Set.of("list", "get", "view", "visualize", "help"))
     );
+
+    /**
+     * Categories whose {@code <category>AccessMode} credential is actually PRODUCED, in the
+     * order the relays emit it. Every hop that forwards access modes MUST iterate this list
+     * instead of repeating a literal, because a hand-copied list is how an axis goes inert:
+     * the tool keeps calling {@link #checkWriteAccess}, the relay never carries the key, and
+     * the tool then sees a caller with no stated permissions, which reads as ALLOWED. That is
+     * silent, and it fails OPEN.
+     *
+     * <p>Adding a category here is what turns its axis on everywhere at once, so it belongs
+     * here only once the rest of the chain exists: the {@code ToolsConfig} record and its
+     * parser, the agent tool schema and help, and the frontend payload builder. Those four
+     * cannot be derived from this list (typed record components and TS literals), so
+     * {@code AccessModeProducerChainTest} pins them instead.
+     *
+     * <p>Deliberately NOT the key set of {@link #READ_ACTIONS}: {@code catalog} and
+     * {@code web_search} are classified there but intentionally have no axis (see the WARNING
+     * on those entries), and deriving from the key set would silently start enforcing catalog.
+     */
+    public static final List<String> ENFORCED_ACCESS_MODE_CATEGORIES = List.of(
+        "table", "workflow", "interface", "agent", "application", "skill", "file", "memory", "mailbox");
+
+    /**
+     * The categories classified in {@link #READ_ACTIONS} that deliberately have NO access-mode
+     * axis. Kept explicit so {@code AccessModeRegistryParityTest} can require every category to
+     * be one or the other: a new tool category that is neither is a category whose read/write
+     * switch nobody wired, which is exactly the omission this pair exists to make loud.
+     */
+    public static final Set<String> AXIS_LESS_CATEGORIES = Set.of("catalog", "web_search");
+
+    /** Plain credential keys, as the tool controllers receive them. */
+    public static final List<String> ACCESS_MODE_KEYS =
+        ENFORCED_ACCESS_MODE_CATEGORIES.stream().map(c -> c + "AccessMode").toList();
+
+    /** The same keys in the in-process agent-loop namespace ({@code __<key>__}). */
+    public static final List<String> INTERNAL_ACCESS_MODE_KEYS =
+        ACCESS_MODE_KEYS.stream().map(k -> "__" + k + "__").toList();
+
+    /**
+     * Every category this class classifies reads for.
+     *
+     * <p>Exposed so the registry test can require each one to be either enforced or
+     * explicitly axis-less. Without it that test can only compare the two public lists
+     * against each other, which is true by construction: a new {@code READ_ACTIONS} entry
+     * with no axis would slip through the very check meant to catch it.
+     */
+    public static Set<String> classifiedCategories() {
+        return READ_ACTIONS.keySet();
+    }
+
+    /** The READ actions of one category, empty when the category is not classified. */
+    public static Set<String> readActions(String category) {
+        return READ_ACTIONS.getOrDefault(category, Set.of());
+    }
 
     /**
      * Check if an action is a READ action for the given tool category.

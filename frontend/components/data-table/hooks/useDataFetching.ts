@@ -36,6 +36,16 @@ export interface UseDataFetchingParams {
   showIdColumn?: boolean;
   addToast: (toast: { type: 'error' | 'success' | 'warning' | 'info'; title: string; message: string }) => void;
   setPagination: Dispatch<SetStateAction<PaginationState>>;
+  /**
+   * The grid's column-order state, owned by `useColumnManagement`.
+   *
+   * It is a PARAMETER, not a state of this hook: the saved order is read here
+   * (from the data-source payload) but rendered from there, so a local copy makes
+   * every fetched order a write nobody reads. That is exactly what it was, and it
+   * cost the feature: a reordered table came back in its old order after a reload,
+   * and a new column landed wherever its name sorted rather than at the end.
+   */
+  setColumnOrder: Dispatch<SetStateAction<ColumnOrder[]>>;
   /** Marketplace preview snapshot - skips all HTTP fetches when provided. */
   snapshotData?: SnapshotTableData;
 }
@@ -60,9 +70,6 @@ export interface UseDataFetchingReturn {
   // Actions
   fetchColumns: (force?: boolean) => Promise<void>;
   fetchData: (page?: number, pageSize?: number, sortConfig?: SortConfig | null, cursor?: string | null, serverFilters?: ServerFilters | null, append?: boolean) => Promise<void>;
-
-  // Column order management (passed down for coordination)
-  setColumnOrder: (order: ColumnOrder[]) => void;
 }
 
 const ORCHESTRATOR_URL = '/api/proxy';
@@ -84,6 +91,31 @@ function mapBackendType(backendType: string): 'text' | 'number' | 'date' | 'bool
     default:
       return 'text';
   }
+}
+
+/**
+ * Union of two column lists that are both subsequences of ONE canonical order (the
+ * backend's FIELD_ORDER), keeping that order.
+ *
+ * Appending the newcomers at the end would be wrong, not just untidy: a page whose
+ * rows are all successes declares no `errorMessage`, so the failure that arrives on
+ * the next page would put its error column to the right of everything instead of
+ * beside `output` where every other view shows it. Each new column therefore lands
+ * just after the last field the two lists agree on.
+ */
+function mergeInOrder<T extends { field: string }>(existing: T[], incoming: T[]): T[] {
+  const merged = [...existing];
+  let insertAt = 0;
+  for (const col of incoming) {
+    const found = merged.findIndex((c) => c.field === col.field);
+    if (found >= 0) {
+      insertAt = found + 1;
+      continue;
+    }
+    merged.splice(insertAt, 0, col);
+    insertAt += 1;
+  }
+  return merged.length === existing.length ? existing : merged;
 }
 
 /**
@@ -139,15 +171,12 @@ export function useDataFetching({
   showIdColumn = false,
   addToast,
   setPagination,
+  setColumnOrder,
   snapshotData,
 }: UseDataFetchingParams): UseDataFetchingReturn {
   const isSnapshot = !!snapshotData;
   const [rows, setRows] = useState<DataSourceItemRow[]>(() => snapshotData?.rows ?? []);
   const [columns, setColumns] = useState<ColumnDefinition[]>(() => snapshotData?.columns ?? []);
-  const [columnOrder, setColumnOrder] = useState<ColumnOrder[]>(() => (
-    snapshotData?.columnOrder
-      ?? (snapshotData?.columns ?? []).map((c, i) => ({ field: c.field, order: i }))
-  ));
   const [backendColumns, setBackendColumns] = useState<BackendColumnDefinition[] | null>(null);
   const [nodeType, setNodeType] = useState<NodeType | null>(null);
   const [tableLoading, setTableLoading] = useState(false);
@@ -179,12 +208,27 @@ export function useDataFetching({
     dataSourceId,
   }), [jsonPath, workflowContext, dataSourceId]);
 
-  // Helper to initialize column order
+  // Helper to initialize column order. Seeds the SHARED state the grid renders
+  // from, so a view with no saved order still has one to drag against.
+  //
+  // Idempotent on purpose: a workflow table re-seeds this on every page fetch,
+  // and handing the grid a brand-new array of identical content would re-render
+  // it for nothing now that the state is the one it reads.
   const initializeColumnOrder = useCallback((dynamicColumns: ColumnDefinition[], fixedCols: string[]) => {
     const allCols = [...fixedCols, ...dynamicColumns.map(col => col.field)];
     const order = allCols.map((field, index) => ({ field, order: index }));
-    setColumnOrder(order);
-  }, []);
+    setColumnOrder(previous => (
+      // `previous` can be the raw JSONB array the server sent, so read it as
+      // defensively as buildColumnOrderRank does: an entry that is null or has
+      // no field must make this a no-match, never a TypeError inside a state
+      // updater (which the caller's try/catch would report as "columns failed
+      // to load").
+      previous.length === order.length
+        && previous.every((entry, i) => (entry as { field?: unknown } | null)?.field === order[i].field)
+        ? previous
+        : order
+    ));
+  }, [setColumnOrder]);
 
   // Helper to transform API columns to ColumnDefinition
   const transformApiColumns = useCallback((apiColumns: any[]): ColumnDefinition[] => {
@@ -248,6 +292,54 @@ export function useDataFetching({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataSourceId, jsonPath, workflowContext, addToast]);
 
+  /**
+   * Publish the columns carried by a `/output/detailed` response.
+   *
+   * Shared so the ROOT view can be served by ONE request: that endpoint returns the
+   * columns and the rows together, and the row fetch runs on every mount anyway - so
+   * the column fetch would be a second call for a payload we already have. Returns
+   * false when the response carries no columns, leaving the caller to decide.
+   *
+   * `merge` is for an infinite-scroll append. The backend derives these columns from
+   * the ROWS of that page (a field is a column when at least one row has a non-null
+   * value for it), so page 2 legitimately declares fewer of them than page 1 - and
+   * page 1's rows are still on screen. Replacing would take the `errorMessage`
+   * column away from a failed row the user is looking at. The grid shows the union
+   * of the pages, so its columns are the union too.
+   */
+  const applyDetailedColumns = useCallback((detailed: DetailedStepDataResponse, merge = false): boolean => {
+    if (!detailed.columns || detailed.columns.length === 0) return false;
+
+    const incoming: ColumnDefinition[] = detailed.columns.map((col) => ({
+      col_id: col.field,
+      field: col.field,
+      header_name: col.header,
+      type: mapBackendType(col.type),
+      editable: false,
+      sortable: col.sortable,
+      filterable: col.filterable,
+      isNavigable: col.renderType === 'JSON_NAVIGABLE',
+      renderType: col.renderType,
+      width: col.width,
+      expandable: col.expandable,
+    }));
+
+    if (merge) {
+      setBackendColumns((prev) => (prev ? mergeInOrder(prev, detailed.columns) : detailed.columns));
+      setColumns((prev) => mergeInOrder(prev, incoming));
+      // A first page with no columns leaves the node type unresolved, so take it
+      // from whichever page does declare one.
+      setNodeType((prev) => prev ?? detailed.nodeType);
+      return true;
+    }
+
+    setBackendColumns(detailed.columns);
+    setNodeType(detailed.nodeType);
+    setColumns(incoming);
+    initializeColumnOrder(incoming, incoming.map((c) => c.field));
+    return true;
+  }, [initializeColumnOrder]);
+
   // Fetch columns for workflow context
   const fetchWorkflowColumns = useCallback(async () => {
     if (!workflowContext) return;
@@ -291,94 +383,10 @@ export function useDataFetching({
       }
     }
 
-    // Case 3: Step alias - always use detailed endpoint (columns + rows from same source)
-    if (stepAlias) {
-      const detailedResponse = await authenticatedFetch(
-        `${ORCHESTRATOR_URL}/workflows/${workflowId}/runs/${runId}/steps/alias/${encodeStepAliasForUrl(stepAlias)}/output/detailed?limit=${jsonPath ? 100 : 1}`
-      );
-
-      if (!detailedResponse.ok) {
-        console.warn(`[useDataFetching] Detailed endpoint failed for stepAlias=${stepAlias}`);
-        setColumns([]);
-        return;
-      }
-
-      const detailed: DetailedStepDataResponse = await detailedResponse.json();
-
-      if (jsonPath) {
-        // Navigate into jsonPath within each row and infer columns
-        const rows = detailed.rows || [];
-
-        // Context fields (epoch, split, iteration) are already visible at root level.
-        // No need to repeat them during nested navigation - just show the data + id.
-
-        // Collect data keys from navigated content
-        const allKeys = new Set<string>();
-        rows.forEach((rowData: Record<string, any>) => {
-          const nestedData = navigateToPath(rowData, jsonPath);
-          if (nestedData === undefined) return;
-
-          if (Array.isArray(nestedData)) {
-            nestedData.forEach((item: any) => {
-              if (item && typeof item === 'object' && !Array.isArray(item)) {
-                Object.keys(item).forEach(key => allKeys.add(key));
-              } else {
-                allKeys.add('value');
-              }
-            });
-          } else if (typeof nestedData === 'object' && nestedData !== null) {
-            Object.keys(nestedData).forEach(key => allKeys.add(key));
-          } else {
-            allKeys.add('value');
-          }
-        });
-
-        // Filter out internal _ prefixed keys (context injection markers)
-        const dataColumns: ColumnDefinition[] = Array.from(allKeys)
-          .filter(key => !key.startsWith('_'))
-          .map(key => ({
-            col_id: key,
-            field: key,
-            header_name: key,
-            type: 'text' as const,
-            editable: false,
-            sortable: true,
-            filterable: true,
-            isNavigable: false,
-          }));
-
-        setColumns(dataColumns);
-        initializeColumnOrder(dataColumns, showIdColumn ? ['id'] : []);
-        return;
-      }
-
-      // No jsonPath - use backend columns directly
-      if (detailed.columns && detailed.columns.length > 0) {
-        setBackendColumns(detailed.columns);
-        setNodeType(detailed.nodeType);
-
-        const dynamicColumns: ColumnDefinition[] = detailed.columns.map((col) => ({
-          col_id: col.field,
-          field: col.field,
-          header_name: col.header,
-          type: mapBackendType(col.type),
-          editable: false,
-          sortable: col.sortable,
-          filterable: col.filterable,
-          isNavigable: col.renderType === 'JSON_NAVIGABLE',
-          renderType: col.renderType,
-          width: col.width,
-          expandable: col.expandable,
-        }));
-
-        setColumns(dynamicColumns);
-        initializeColumnOrder(dynamicColumns, dynamicColumns.map(c => c.field));
-        return;
-      }
-
-      console.warn(`[useDataFetching] No columns from detailed endpoint for stepAlias=${stepAlias}`);
-      setColumns([]);
-    }
+    // Step-alias responses carry both rows and columns. Infer nested columns from the
+    // same filtered page too: an unfiltered 100-call sample can miss the selected
+    // epoch's id field or replace its schema with another epoch's columns.
+    if (stepAlias) return;
 
     // Fallback: empty columns
     setColumns([]);
@@ -580,6 +588,16 @@ export function useDataFetching({
       }
     }
 
+    // KNOWN GAP: this branch never learns the SAVED column order. The per-id
+    // columns endpoint answers with column definitions only, and the per-id
+    // data-source endpoint that does carry `column_order` is org-STRICT, which
+    // is the very scoping that sent us down this branch. So a table reached
+    // this way renders in payload order and a drag on it is persisted but not
+    // read back on reload. Closing it means widening what one of those two
+    // endpoints returns, which is a backend contract change, not a change here.
+    // Seeding a default below is a no-op for the layout (it names every column
+    // in the order they already have) and only exists so a drag has a baseline.
+    //
     // Publish the result unconditionally (empty included) so a forced refetch that
     // finds no user columns clears any stale ones - matching the semantics the
     // primary branch had before it gained an early return.
@@ -587,7 +605,7 @@ export function useDataFetching({
     if (fallbackColumns.length > 0) {
       initializeColumnOrder(fallbackColumns, fixedCols);
     }
-  }, [dataSourceId, jsonPath, showIdColumn, transformApiColumns, initializeColumnOrder]);
+  }, [dataSourceId, jsonPath, showIdColumn, transformApiColumns, initializeColumnOrder, setColumnOrder]);
 
   /**
    * Unified data fetch function - handles both sorted and unsorted queries
@@ -742,6 +760,48 @@ export function useDataFetching({
       const detailedRows = detailed.rows || [];
 
       if (jsonPath) {
+        // Collect data keys from navigated content
+        const allKeys = new Set<string>();
+        detailedRows.forEach((rowData: Record<string, any>) => {
+          const nestedData = navigateToPath(rowData, jsonPath);
+          if (nestedData === undefined) return;
+
+          if (Array.isArray(nestedData)) {
+            nestedData.forEach((item: any) => {
+              if (item && typeof item === 'object' && !Array.isArray(item)) {
+                Object.keys(item).forEach(key => allKeys.add(key));
+              } else {
+                allKeys.add('value');
+              }
+            });
+          } else if (typeof nestedData === 'object' && nestedData !== null) {
+            Object.keys(nestedData).forEach(key => allKeys.add(key));
+          } else {
+            allKeys.add('value');
+          }
+        });
+
+        // Filter out internal _ prefixed keys (context injection markers)
+        const dataColumns: ColumnDefinition[] = Array.from(allKeys)
+          .filter(key => !key.startsWith('_'))
+          .map(key => ({
+            col_id: key,
+            field: key,
+            header_name: key,
+            type: 'text' as const,
+            editable: false,
+            sortable: true,
+            filterable: true,
+            isNavigable: false,
+          }));
+
+        if (append && page > 1) {
+          setColumns(previous => mergeInOrder(previous, dataColumns));
+        } else {
+          setColumns(dataColumns);
+          initializeColumnOrder(dataColumns, showIdColumn ? ['id'] : []);
+        }
+
         // Navigate into jsonPath within each row from ALL rows
         const normalizedRows: DataSourceItemRow[] = [];
         // Sequential ID for sub-table rows. In append mode, offset by page so the synthetic
@@ -827,7 +887,12 @@ export function useDataFetching({
         return;
       }
 
-      // No jsonPath - use rows directly
+      // No jsonPath - use rows directly. This response also carries the columns, and
+      // at root it is the ONLY request that asks for them (see fetchWorkflowColumns).
+      // An append adds its columns to the ones already on screen instead of replacing
+      // them, because the rows already on screen are staying.
+      applyDetailedColumns(detailed, append && page > 1);
+
       const normalizedRows: DataSourceItemRow[] = detailedRows.map((rowData: Record<string, any>, rowIndex: number) => ({
         id: rowData.id || rowIndex + 1,
         data_source_id: 0,
@@ -860,7 +925,7 @@ export function useDataFetching({
     console.warn('[useDataFetching] No stepAlias provided for workflow context');
     setRows([]);
     setPagination(prev => ({ ...prev, ...createEmptyPaginationUpdate() }));
-  }, [workflowContext, jsonPath]);
+  }, [workflowContext, jsonPath, applyDetailedColumns, initializeColumnOrder, showIdColumn]);
 
   // Fetch data for DataSource context
   const fetchDataSourceData = useCallback(async (
@@ -1042,8 +1107,5 @@ export function useDataFetching({
     // Actions
     fetchColumns,
     fetchData,
-
-    // For coordination
-    setColumnOrder,
   };
 }

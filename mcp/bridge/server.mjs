@@ -43,8 +43,10 @@ import { AgentBudgetGuard, TenantBudgetGuard, chainBudgetGuards } from './lib/bu
 import { internalSignedHeaders } from './lib/gatewayAuth.mjs';
 import { resolveInactivityMs } from './lib/inactivityResolver.mjs';
 import { createInactivityWatchdog } from './lib/inactivityWatchdog.mjs';
+import { applyRecoveredUsage as applyRecoveredUsageToRun } from './lib/usageRecovery.mjs';
 import { maxToolHoldSecondsFor } from './lib/toolHold.mjs';
 import { detectAll, detectOne, invalidateCache, CLI_IDS } from './cli-detector.mjs';
+import { collectCliHealthMetrics, createCliSnapshotCache } from './lib/cliHealth.mjs';
 import { extractToolResultAndMetadata } from './lib/toolContent.mjs';
 
 // Per-process secret that authenticates the trusted `__BRIDGE_META__` channel. Minted ONCE
@@ -268,10 +270,25 @@ app.get('/cli-status', async (req, res) => {
   }
 });
 
-// Minimal Prometheus metrics endpoint
+// Where refresh-token.sh / codex-refresh-token.sh / cli-update.sh drop their
+// state files. server.mjs runs from <bridge root>/bridge, and those scripts are
+// installed at <bridge root>, so "../state" is the same directory on both sides.
+const CLI_STATE_DIR = process.env.CLI_HEALTH_STATE_DIR || resolve(__dirname, '..', 'state');
+
+// The CLI probe is served from a snapshot refreshed in the BACKGROUND, never
+// awaited by the scrape. Awaiting it would spawn four `--version` processes on
+// essentially every 30s scrape (cli-detector's own cache is 30s, the same as
+// the scrape interval), and a slow spawn on a loaded host would push /metrics
+// past its scrape timeout - which reports a perfectly healthy bridge as
+// `up == 0` and takes bridge_up, the series ServiceDown watches, with it.
+const cliSnapshot = createCliSnapshotCache({ detect: () => detectAll({ force: true }) });
+
+// Minimal Prometheus metrics endpoint. Fully synchronous on purpose.
 app.get('/metrics', (_req, res) => {
   const uptime = process.uptime();
   const mem = process.memoryUsage();
+  const clis = cliSnapshot.get();
+
   res.set('Content-Type', 'text/plain; version=0.0.4');
   res.send([
     '# HELP bridge_up Whether the bridge is running',
@@ -286,6 +303,11 @@ app.get('/metrics', (_req, res) => {
     '# HELP bridge_memory_heap_used_bytes Heap used in bytes',
     '# TYPE bridge_memory_heap_used_bytes gauge',
     `bridge_memory_heap_used_bytes ${mem.heapUsed}`,
+    ...collectCliHealthMetrics({
+      clis,
+      stateDir: CLI_STATE_DIR,
+      probeAgeSeconds: cliSnapshot.ageSeconds(),
+    }),
     '',
   ].join('\n'));
 });
@@ -1021,9 +1043,32 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
       console.log(`[BRIDGE:stderr] ${text.trim()}`);
     });
 
+    /**
+     * Record what a killed CLI already spent, when it never got to report it.
+     *
+     * MUST run before the temp dir is deleted: it is that CLI's HOME for this run, and
+     * holds the only record left. The rules live in lib/usageRecovery.mjs, where they are
+     * tested; here we only apply the result to the two fields the response is built from.
+     *
+     * Deliberately NOT via recordCallUsage: that one also stamps an iteration timestamp
+     * (which would fabricate an iteration duration for a turn that never completed) and
+     * re-runs the budget guard on a child that is already dead.
+     */
+    const applyRecoveredUsage = () => {
+      const applied = applyRecoveredUsageToRun(adapter, tmpDir, perCallUsages);
+      if (!applied) return;
+      usage = applied.usage;
+      console.log(`[BRIDGE] recovered unreported usage after kill: prompt=${applied.entry.promptTokens}, `
+        + `completion=${applied.entry.completionTokens}, cached=${applied.entry.cachedTokens}`);
+    };
+
     child.on('close', async (code, signal) => {
       clearInterval(cancelInterval);
       clearIdleTimer();
+
+      // Recover usage BEFORE the temp dir goes away - it is the CLI's HOME for
+      // this run and holds the only record of what a killed turn already spent.
+      applyRecoveredUsage();
 
       // Cleanup temp directory
       try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
@@ -1082,6 +1127,7 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
     child.on('error', async (err) => {
       clearInterval(cancelInterval);
       clearIdleTimer();
+      applyRecoveredUsage();
       try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
       if (restrictedCwd) { try { rmSync(restrictedCwd, { recursive: true, force: true }); } catch {} }
 

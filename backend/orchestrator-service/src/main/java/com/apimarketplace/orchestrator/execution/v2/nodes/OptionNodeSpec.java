@@ -63,7 +63,7 @@ public class OptionNodeSpec implements NodeSpec {
                 OutputFieldDef.builder()
                     .key("evaluations")
                     .type("array")
-                    .description("Detailed evaluation results for each choice (choice_id, choice_label, expression, resolved_expression, result, error?)")
+                    .description("Detailed evaluation results for each choice (index, branch=choice_N, choice_id, choice_label, condition, resolved, result, selected, outcome, error?, unresolved?)")
                     .defaultValue(List.of())
                     .build()
             ))

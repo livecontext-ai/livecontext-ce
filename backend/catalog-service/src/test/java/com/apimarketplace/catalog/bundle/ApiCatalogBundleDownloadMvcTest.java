@@ -61,7 +61,7 @@ class ApiCatalogBundleDownloadMvcTest {
 
     private static ApiCatalogBundleService.RawBundle raw() {
         return new ApiCatalogBundleService.RawBundle(7L, 1, CHECKSUM, "sig", "k1", "cloud",
-                600, 2400, 5_000_000L, PAYLOAD);
+                600, 2400, 5_000_000L, PAYLOAD.length, () -> new java.io.ByteArrayInputStream(PAYLOAD));
     }
 
     private static ApiCatalogBundleRepository.ActiveBundleMeta meta(int servable) {

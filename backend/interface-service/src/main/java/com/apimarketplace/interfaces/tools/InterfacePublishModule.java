@@ -1,5 +1,6 @@
 package com.apimarketplace.interfaces.tools;
 
+import com.apimarketplace.agent.config.ToolAccessControl;
 import com.apimarketplace.agent.registry.AgentToolDefinition;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
@@ -52,6 +53,20 @@ public class InterfacePublishModule implements ToolModule {
     public Optional<ToolExecutionResult> execute(String action, Map<String, Object> parameters,
                                                   String tenantId, ToolExecutionContext context) {
         if (!canHandle(action)) return Optional.empty();
+
+        // publish/unpublish are WRITE actions: a read-only agent (interfaceAccessMode='read')
+        // must be denied. They were ungated entirely before, so a read-only or scoped agent
+        // could publish any reachable interface to the marketplace. The sibling table module
+        // already gates both the mode and the allow-list; interfaces were not carried along.
+        var accessDenied = ToolAccessControl.checkWriteAccess(
+                context != null ? context.credentials() : null, "interface", action);
+        if (accessDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
+
+        // Allow-list check: an interfaces=custom agent may only publish/unpublish its approved ids.
+        var notAllowed = InterfaceToolAccess.denyIfNotAllowed(
+                context, getStringParam(mergeParams(parameters), "interface_id"));
+        if (notAllowed.isPresent()) return notAllowed;
+
         return Optional.of(switch (action) {
             case "publish" -> executePublish(parameters, tenantId, context);
             case "unpublish" -> executeUnpublish(parameters, tenantId, context);

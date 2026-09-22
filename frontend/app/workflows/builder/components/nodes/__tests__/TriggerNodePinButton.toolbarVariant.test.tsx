@@ -28,6 +28,14 @@ vi.mock('@/lib/api', () => ({
   },
 }));
 
+// Pinning is what puts a workflow in the bell's Triggers rows and imminent-fire ring, so the
+// button asks for them again. The real hook reaches for a QueryClient this suite has no
+// provider for; what it does with the cache is pinned in useRefreshHomeStatus.freshness.test.tsx.
+const refreshHomeStatusMock = vi.fn();
+vi.mock('@/hooks/useHomeStatus', () => ({
+  useRefreshHomeStatus: () => refreshHomeStatusMock,
+}));
+
 import { TriggerNodePinButton } from '../TriggerNodePinButton';
 import { canvasChromeCompactButtonClass } from '@/components/ui/canvas-chrome';
 
@@ -38,6 +46,7 @@ beforeEach(() => {
   mockPinVersion.mockReset().mockResolvedValue({ success: true, pinnedVersion: 3, productionRunIdPublic: null });
   // Run mode viewing plan v3, nothing pinned yet - the offer to pin applies.
   mockMode = { isRunMode: true, runId: 'run-1', currentVersion: 3, activeVersion: 3, pinnedVersion: null, workflowDirty: false };
+  refreshHomeStatusMock.mockReset();
 });
 
 describe('TriggerNodePinButton - toolbar variant', () => {
@@ -102,6 +111,31 @@ describe('TriggerNodePinButton - toolbar variant', () => {
     } finally {
       window.removeEventListener('workflowPinnedVersionChange', listener);
     }
+  });
+
+  it('asks for the bell automation rows again after pinning (regression: the Triggers tab read one step behind)', async () => {
+    // The event above resyncs the builder. It reaches nothing in the bell, whose rows and
+    // imminent-fire ring come from a cache no pin invalidates - so without this ask the user
+    // pins, opens the bell, and reads state from before the action.
+    render(<TriggerNodePinButton workflowId="wf1" variant="toolbar" />);
+    fireEvent.click(toolbarButton());
+    fireEvent.click(await screen.findByText('versionHistory.pin', { selector: 'button' }));
+
+    await waitFor(() => expect(refreshHomeStatusMock).toHaveBeenCalledTimes(1));
+    // No bound: the caller just changed the data, so how fresh the copy is says nothing.
+    expect(refreshHomeStatusMock).toHaveBeenCalledWith();
+  });
+
+  it('does not ask for the automation rows when the pin call reports failure', async () => {
+    // Nothing changed, so asking would only spend a request.
+    mockPinVersion.mockResolvedValue({ success: false });
+
+    render(<TriggerNodePinButton workflowId="wf1" variant="toolbar" />);
+    fireEvent.click(toolbarButton());
+    fireEvent.click(await screen.findByText('versionHistory.pin', { selector: 'button' }));
+
+    await waitFor(() => expect(mockPinVersion).toHaveBeenCalledTimes(1));
+    expect(refreshHomeStatusMock).not.toHaveBeenCalled();
   });
 
   it('offers nothing once the run is already the pinned production one', () => {

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   collectTableColumns,
   detectUnresolvedValue,
+  expandedRowCount,
+  FILE_REF_DISPLAY_PROPS,
   formatCellValue,
   formatJson,
   hasTableView,
@@ -212,14 +214,79 @@ describe('table view selection', () => {
     expect(pickTabularValue(payload)).toEqual([{ a: 1 }]);
   });
 
-  it('declines when TWO fields could be the rows - picking one would be an arbitrary choice', () => {
+  it('still offers the table when SEVERAL fields could be the rows, defaulting to the first', () => {
+    // It used to decline here, on the reasoning that choosing between two would be
+    // arbitrary. The reader lost the table entirely for a reason nothing on screen
+    // explained; now the choice is theirs, through a selector, and the default is
+    // stated rather than hidden.
     const payload = { items: [{ a: 1 }], others: [{ b: 2 }] };
     expect(tabularFields(payload)).toEqual(['items', 'others']);
-    expect(hasTableView(payload)).toBe(false);
-    expect(pickTabularValue(payload)).toBe(payload);
+    expect(hasTableView(payload)).toBe(true);
+    expect(pickTabularValue(payload)).toEqual([{ a: 1 }]);
+  });
+
+  it('lays out the field it is ASKED for, not just the first one', () => {
+    const payload = { items: [{ a: 1 }], others: [{ b: 2 }] };
+    expect(pickTabularValue(payload, 'others')).toEqual([{ b: 2 }]);
+    // An unknown field falls back to the default rather than rendering nothing.
+    expect(pickTabularValue(payload, 'nope')).toEqual([{ a: 1 }]);
+  });
+
+  it('returns undefined when nothing is tabular, so no caller mistakes it for the payload', () => {
+    // The old contract returned the payload itself here, which let a caller lay out
+    // a flat object as if it were rows.
+    expect(pickTabularValue({ a: 1, b: 'x' })).toBeUndefined();
   });
 
   it('declines a flat payload', () => {
     expect(hasTableView({ a: 1, b: 'x' })).toBe(false);
+  });
+});
+
+/**
+ * The rule every {n} marker in the tree goes through. Pinned here because it is the
+ * single source of truth: three markers used to apply three different rules, and the
+ * component tests could only ever see the disagreement one shape at a time.
+ */
+describe('expandedRowCount', () => {
+  it('counts every key of a plain object, discriminator included', () => {
+    // Nothing is hidden: on a malformed ref, `_type` is the only thing on screen
+    // saying it was MEANT to be a file, and a user's own `_type` is their data.
+    expect(expandedRowCount({ a: 1, b: 2 }, false)).toBe(2);
+    expect(expandedRowCount({ _type: 'media', url: 'u' }, false)).toBe(2);
+    expect(expandedRowCount({ _type: 'media' }, false)).toBe(1);
+  });
+
+  it('counts an array by its length', () => {
+    expect(expandedRowCount([1, 2, 3], false)).toBe(3);
+    expect(expandedRowCount([], false)).toBe(0);
+  });
+
+  it('counts a recognised file reference as the fields its view draws', () => {
+    // The file view renders a FIXED set whatever else the ref carries, so counting
+    // raw keys made a string row say {5} above a file row saying {4}.
+    const ref = { _type: 'file', path: '/a.png', name: 'a.png', mimeType: 'image/png', size: 10 };
+    // A literal 4, not FILE_REF_DISPLAY_PROPS.length: restating the implementation
+    // would pass whatever that constant became.
+    expect(expandedRowCount(ref, true)).toBe(4);
+    expect(expandedRowCount({ ...ref, id: 'abc', url: 'u', key: 'k' }, true)).toBe(4);
+  });
+
+  it('pins the fields a file view draws, and their order', () => {
+    // FileObjectNode now derives its rows from this constant, so the order is
+    // load-bearing: it is the order the reader sees and the order drag paths follow.
+    expect([...FILE_REF_DISPLAY_PROPS]).toEqual(['path', 'name', 'mimeType', 'size']);
+  });
+
+  it('counts an UNrecognised file-shaped object as the plain object it is drawn as', () => {
+    // isFileRef rejects it (no mimeType, no size), so it is drawn as ordinary rows.
+    expect(expandedRowCount({ _type: 'file', path: '/a.png' }, false)).toBe(2);
+  });
+
+  it('counts a value that does not expand as nothing', () => {
+    expect(expandedRowCount('text', false)).toBe(0);
+    expect(expandedRowCount(42, false)).toBe(0);
+    expect(expandedRowCount(null, false)).toBe(0);
+    expect(expandedRowCount(undefined, false)).toBe(0);
   });
 });

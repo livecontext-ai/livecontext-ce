@@ -49,7 +49,7 @@ import static org.mockito.Mockito.when;
  *   <li>Error envelopes: both feeds failing, individual schema errors.</li>
  *   <li>Count-floor guard: per-feed baselines (V3.1 fix #2), override switch,
  *       first-ever baseline skip.</li>
- *   <li>Price-sanity guard: flag + non-applied vs. overridden + applied.</li>
+ *   <li>Price-sanity guard: the flagged row is withheld while the rest applies, vs. overridden + everything applied.</li>
  *   <li>Diff classification: rowEquals across every V125-era field (V3.1 fix
  *       #1), excluded providers, bridge-derived rows round-trip.</li>
  *   <li>Sync-log plumbing: delegated to {@link ModelCatalogSyncLogWriter} so
@@ -108,7 +108,7 @@ class ModelCatalogSyncServiceTest {
 
         // Discovery defaults to "asked nobody" - the vendor-endpoint pass is a
         // separate source with its own test; tests that care stub it.
-        when(discoveryService.discover(any(), any(), any()))
+        when(discoveryService.discover(any(), any(), any(), any()))
                 .thenReturn(NativeModelDiscoveryService.DiscoveryResult.empty());
 
         // Log writer echoes back a populated entity so the service can extract
@@ -144,7 +144,7 @@ class ModelCatalogSyncServiceTest {
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("openai", "gpt-5.4", "2.500000", "15.000000"),
                         feedRow("anthropic", "claude-opus-4-7", "5.000000", "25.000000")
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
 
@@ -166,12 +166,56 @@ class ModelCatalogSyncServiceTest {
     }
 
     @Test
+    @DisplayName("The feed's rejections reach discovery, so the two sources cannot disagree on what is publishable")
+    void handsTheFeedsRejectionsToDiscovery() {
+        // The only seam between the parser's declined-id index and the filter
+        // that consumes it. Untested, passing Set.of() here would break
+        // nothing visible: discovery would silently re-admit every model the
+        // feed rejected, and every other test would stay green.
+        Set<String> declined = Set.of(
+                NativeModelDiscoveryService.key("openai", "text-embedding-3-large"),
+                NativeModelDiscoveryService.key("openai", "gpt-5-chat"));
+
+        when(liteLlmParser.parse(any(), any(), any())).thenReturn(
+                LiteLlmFeedParser.ParseResult.success(List.of(
+                        feedRow("openai", "gpt-5.4", "2.500000", "15.000000")
+                ), declined, 0, 0, 0, 0, 0));
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+
+        syncService.sync(ModelCatalogSyncService.SyncRequest.dryRun("tester"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Set<String>> declinedArg = ArgumentCaptor.forClass(Set.class);
+        verify(discoveryService).discover(any(), any(), any(), declinedArg.capture());
+        assertThat(declinedArg.getValue()).isEqualTo(declined);
+    }
+
+    @Test
+    @DisplayName("A LiteLLM outage leaves discovery with no rejections to honour, not a null")
+    void passesAnEmptyRejectionSetWhenTheFeedIsDown() {
+        // LiteLLM is the only source of declined ids. When it fails the sync
+        // still runs on OpenRouter alone, and discovery must get an empty set
+        // rather than a null it would have to defend against.
+        doReturn(feedErr("litellm down")).when(syncService).fetchLiteLlm();
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+
+        syncService.sync(ModelCatalogSyncService.SyncRequest.dryRun("tester"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Set<String>> declinedArg = ArgumentCaptor.forClass(Set.class);
+        verify(discoveryService).discover(any(), any(), any(), declinedArg.capture());
+        assertThat(declinedArg.getValue()).isNotNull().isEmpty();
+    }
+
+    @Test
     @DisplayName("Apply path: invokes mergeService.merge with MergeOptions.forSync + logs inserted/updated/deprecated counts")
     void applyPathInvokesMergeWithSyncOptions() {
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("openai", "gpt-5.4", "2.500000", "15.000000")
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
 
@@ -252,7 +296,7 @@ class ModelCatalogSyncServiceTest {
             rows.add(feedRow("openai", "model-" + i, "1.0", "2.0"));
         }
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
-                LiteLlmFeedParser.ParseResult.success(rows, 0, 0, 0, 0, 0));
+                LiteLlmFeedParser.ParseResult.success(rows, Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
 
@@ -289,7 +333,7 @@ class ModelCatalogSyncServiceTest {
         List<Map<String, Object>> orRows = new java.util.ArrayList<>();
         for (int i = 0; i < 10; i++) orRows.add(feedRow("mistral", "or-" + i, "1.0", "2.0"));
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
-                LiteLlmFeedParser.ParseResult.success(liteRows, 0, 0, 0, 0, 0));
+                LiteLlmFeedParser.ParseResult.success(liteRows, Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(orRows, 0, 0, 0, 0));
 
@@ -303,6 +347,48 @@ class ModelCatalogSyncServiceTest {
     }
 
     @Test
+    @DisplayName("An aborted run still records how many rows WOULD have been withheld")
+    void abortedRunRecordsTheWithheldCountItNeverApplied() {
+        // flaggedWithheld is asserted on the two OK paths, and its own javadoc
+        // singles out the aborted ones as where it "reads most misleadingly":
+        // nothing was applied at all, so the count means "would have been
+        // withheld" and only dry_run + outcome say so. Pinning it here is what
+        // stops a later reader treating the number as rows actually held back
+        // from a run that happened.
+        ModelConfigOverrideEntity baseline = entity("openai", "gpt-5.4",
+                new BigDecimal("2.000000"), new BigDecimal("15.000000"));
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(baseline));
+
+        // A prior OK run where LiteLLM returned 100 rows; this run returns one,
+        // so count-floor blocks the whole apply while the price move is still
+        // flagged. That combination is exactly the state being pinned.
+        ModelCatalogSyncLogEntity priorRun = new ModelCatalogSyncLogEntity();
+        priorRun.setLiteLlmCount(100);
+        when(syncLogRepo.findFirstByOutcomeAndDryRunAndLiteLlmCountIsNotNullOrderByCreatedAtDesc(
+                eq(ModelCatalogSyncLogEntity.Outcome.OK), eq(Boolean.FALSE)))
+                .thenReturn(Optional.of(priorRun));
+
+        when(liteLlmParser.parse(any(), any(), any())).thenReturn(
+                LiteLlmFeedParser.ParseResult.success(List.of(
+                        feedRow("openai", "gpt-5.4", "10.000000", "15.000000")
+                ), Set.of(), 0, 0, 0, 0, 0));
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+
+        var result = syncService.sync(ModelCatalogSyncService.SyncRequest.apply("ops", Set.of()));
+
+        assertThat(result.applied()).isFalse();
+        verify(mergeService, never()).merge(any(), any());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> logPayload = ArgumentCaptor.forClass(Map.class);
+        verify(syncLogWriter).write(any(), any(), anyInt(), any(), eq("ops"), eq(false),
+                eq(ModelCatalogSyncLogEntity.Outcome.ABORTED_GUARD), any(), logPayload.capture(),
+                anyInt(), anyInt(), anyInt(), eq(1), any(), any());
+        assertThat(logPayload.getValue()).containsEntry("flaggedWithheld", 1);
+    }
+
+    @Test
     @DisplayName("Count-floor override: overrideGuards=count-floor lets an otherwise-breaching feed apply")
     void countFloorOverrideSkipsGuard() {
         ModelCatalogSyncLogEntity baseline = new ModelCatalogSyncLogEntity();
@@ -313,7 +399,7 @@ class ModelCatalogSyncServiceTest {
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("openai", "gpt-5.4", "2.5", "15.0")
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
         when(mergeService.merge(any(), any()))
@@ -338,7 +424,7 @@ class ModelCatalogSyncServiceTest {
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("openai", "gpt-5.4", "2.5", "15.0")
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
         when(mergeService.merge(any(), any()))
@@ -355,28 +441,204 @@ class ModelCatalogSyncServiceTest {
     // ────────────────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("Price-sanity: >50% drift flags the row, trips ABORTED_GUARD, row excluded from apply")
-    void priceSanityBlocksApplyByDefault() {
-        ModelConfigOverrideEntity existing = entity("openai", "gpt-5.4",
+    @DisplayName("Regression: a flagged price holds back only its own row, the rest of the refresh still applies")
+    void priceSanityHoldsBackOnlyTheFlaggedRow() {
+        // Pre-fix this asserted the opposite: an aggregate price-sanity
+        // GuardFailure made sync() return before the apply, so ONE moved price
+        // cancelled the entire refresh. Because nothing was written, the stored
+        // baseline never advanced, so the identical row flagged again on the
+        // next run and the next, and the operator's only exit was the blanket
+        // override that accepts every flagged price unread.
+        ModelConfigOverrideEntity flaggedBaseline = entity("openai", "gpt-5.4",
                 new BigDecimal("2.000000"), new BigDecimal("15.000000"));
-        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(existing));
+        ModelConfigOverrideEntity steadyBaseline = entity("mistral", "mistral-medium",
+                new BigDecimal("1.000000"), new BigDecimal("3.000000"));
+        when(modelRepo.findAllByOrderByRankingAsc())
+                .thenReturn(List.of(flaggedBaseline, steadyBaseline));
 
-        // New price 10 (quintupled - huge drift).
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
                 LiteLlmFeedParser.ParseResult.success(List.of(
-                        feedRow("openai", "gpt-5.4", "10.000000", "15.000000")
-                ), 0, 0, 0, 0, 0));
+                        feedRow("openai", "gpt-5.4", "10.000000", "15.000000"),        // 5x -> flagged
+                        feedRow("mistral", "mistral-medium", "1.100000", "3.000000"),  // +10% -> clean
+                        feedRow("anthropic", "claude-opus-4-7", "5.0", "25.0")         // new -> no baseline
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+        when(mergeService.merge(any(), any()))
+                .thenReturn(new CatalogMergeService.MergeResult(1, 1, 0, 0, 0, 2));
 
         var result = syncService.sync(ModelCatalogSyncService.SyncRequest.apply("ops", Set.of()));
 
-        assertThat(result.applied()).isFalse();
-        assertThat(result.plan().flagged()).hasSize(1);
-        assertThat(result.plan().flagged().get(0).modelId()).isEqualTo("gpt-5.4");
-        assertThat(result.plan().guardFailures()).anyMatch(g ->
-                ModelCatalogSyncService.GUARD_PRICE_SANITY.equals(g.guard()));
-        verify(mergeService, never()).merge(any(), any());
+        assertThat(result.applied()).isTrue();
+
+        // Only the flagged row is withheld. The clean update and the brand-new
+        // model both land, which is the whole difference: a refresh that used
+        // to be all-or-nothing now delivers everything it can vouch for.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Map<String, Object>>> payload = ArgumentCaptor.forClass(List.class);
+        verify(mergeService).merge(payload.capture(), any());
+        assertThat(payload.getValue()).extracting(m -> m.get("modelId"))
+                .containsExactlyInAnyOrder("mistral-medium", "claude-opus-4-7");
+
+        assertThat(result.plan().flagged())
+                .extracting(ModelCatalogSyncService.FlaggedRow::modelId)
+                .containsExactly("gpt-5.4");
+
+        // The flag is a review queue, not a stop sign. guardFailures means
+        // "this run must not apply", and the REST layer turns exactly that into
+        // a 412 - so a held-back row must leave it empty, or the caller is told
+        // nothing happened when almost everything did.
+        assertThat(result.plan().guardFailures()).isEmpty();
+
+        // And the sync-log row has to agree with that story, because it is the
+        // only record left once the response is gone: OK rather than
+        // ABORTED_GUARD, with the withheld row still counted so the audit trail
+        // shows the run was partial. An OK row with flagged=0 would claim a
+        // clean refresh that did not happen.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> logPayload = ArgumentCaptor.forClass(Map.class);
+        verify(syncLogWriter).write(any(), any(), anyInt(), any(), eq("ops"), eq(false),
+                eq(ModelCatalogSyncLogEntity.Outcome.OK), any(), logPayload.capture(),
+                anyInt(), anyInt(), anyInt(), eq(1), any(), any());
+
+        // flagged_count alone can no longer tell the two price-sanity outcomes
+        // apart. A withheld run and an overridden run both write OK with the
+        // same count and the same rows; while the guard still aborted, OK plus
+        // flags could only mean "overridden", so the row was unambiguous by
+        // accident. flaggedWithheld is what replaces that accident.
+        assertThat(logPayload.getValue()).containsEntry("flaggedWithheld", 1);
+    }
+
+    @Test
+    @DisplayName("A move of EXACTLY 50% is not a >50% move, so it does not flag")
+    void priceSanityRatioBoundaryIsExclusive() {
+        // The absolute floor's boundary is pinned meticulously next door while
+        // the ratio's was not, so `> ratio` could have become `>= ratio` with
+        // nothing to notice. 1.00 -> 1.50 is exactly 50% and clears the
+        // absolute floor by a wide margin, which is what isolates the ratio
+        // comparison as the only thing under test here.
+        ModelConfigOverrideEntity baseline = entity("zai", "glm-tiny",
+                new BigDecimal("1.000000"), new BigDecimal("3.000000"));
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(baseline));
+
+        when(liteLlmParser.parse(any(), any(), any())).thenReturn(
+                LiteLlmFeedParser.ParseResult.success(List.of(
+                        feedRow("zai", "glm-tiny", "1.500000", "3.000000")
+                ), Set.of(), 0, 0, 0, 0, 0));
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+
+        var result = syncService.sync(ModelCatalogSyncService.SyncRequest.dryRun("tester"));
+
+        assertThat(result.plan().flagged()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Price-sanity ignores a >50% move worth less than $0.10 per million tokens")
+    void priceSanityIgnoresEconomicallyTrivialMoves() {
+        // Measured on a real refresh: tencent/hy3 moved 0.0825 to 0.1320. That
+        // is +60% and five cents per million tokens. Asking an operator to rule
+        // on it is how a list of flags gets waved through, taking the one real
+        // anomaly with it.
+        ModelConfigOverrideEntity baseline = entity("zai", "glm-tiny",
+                new BigDecimal("0.082500"), new BigDecimal("0.330000"));
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(baseline));
+
+        when(liteLlmParser.parse(any(), any(), any())).thenReturn(
+                LiteLlmFeedParser.ParseResult.success(List.of(
+                        feedRow("zai", "glm-tiny", "0.132000", "0.330000")
+                ), Set.of(), 0, 0, 0, 0, 0));
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+
+        var result = syncService.sync(ModelCatalogSyncService.SyncRequest.dryRun("tester"));
+
+        assertThat(result.plan().flagged()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Price-sanity still flags a >50% move the moment it is worth $0.10 per million tokens")
+    void priceSanityFlagsAtTheAbsoluteFloorBoundary() {
+        // 0.100000 -> 0.200000 is a delta of exactly the floor. The floor is
+        // inclusive on purpose: a rule that needed strictly more would leave a
+        // silent dead band at its own threshold, and the boundary is the one
+        // value a reader of the constant will assume is covered.
+        ModelConfigOverrideEntity baseline = entity("zai", "glm-tiny",
+                new BigDecimal("0.100000"), new BigDecimal("0.330000"));
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(baseline));
+
+        when(liteLlmParser.parse(any(), any(), any())).thenReturn(
+                LiteLlmFeedParser.ParseResult.success(List.of(
+                        feedRow("zai", "glm-tiny", "0.200000", "0.330000")
+                ), Set.of(), 0, 0, 0, 0, 0));
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+
+        var result = syncService.sync(ModelCatalogSyncService.SyncRequest.dryRun("tester"));
+
+        assertThat(result.plan().flagged())
+                .extracting(ModelCatalogSyncService.FlaggedRow::modelId)
+                .containsExactly("glm-tiny");
+        // Both thresholds are named, and both are derived from the constants
+        // rather than typed out. Naming only the ratio was not merely imprecise:
+        // two rows can move by the same percentage with only one flagged, and an
+        // operator reading ">50%" on one and nothing on the other cannot see why.
+        assertThat(result.plan().flagged().get(0).reason())
+                .contains(">50%")
+                .contains(">=0.1/M");
+    }
+
+    @Test
+    @DisplayName("The output price is judged by the same two-part rule as the input price")
+    void priceOutputDriftIsFlaggedOnItsOwn()  {
+        // Only the priceInput arm was ever asserted, so the output arm could
+        // have been given a different threshold, a different message, or no
+        // check at all without a single test noticing - on the side of the
+        // bill that is usually the larger one.
+        ModelConfigOverrideEntity baseline = entity("zai", "glm-tiny",
+                new BigDecimal("1.000000"), new BigDecimal("2.000000"));
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(baseline));
+
+        when(liteLlmParser.parse(any(), any(), any())).thenReturn(
+                LiteLlmFeedParser.ParseResult.success(List.of(
+                        feedRow("zai", "glm-tiny", "1.000000", "8.000000")
+                ), Set.of(), 0, 0, 0, 0, 0));
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+
+        var result = syncService.sync(ModelCatalogSyncService.SyncRequest.dryRun("tester"));
+
+        assertThat(result.plan().flagged())
+                .extracting(ModelCatalogSyncService.FlaggedRow::reason)
+                .singleElement().asString()
+                .startsWith("priceOutput ")
+                .contains(">50%")
+                .contains(">=0.1/M");
+    }
+
+    @Test
+    @DisplayName("A zero-price anomaly is flagged whatever the amount, the absolute floor does not apply to it")
+    void zeroPriceAnomalyIgnoresTheAbsoluteFloor() {
+        // A price falling to 0 is not a repricing, it is a broken feed row, and
+        // an unpriced model bills at the platform default rather than the
+        // vendor's. The floor exists to silence trivial MOVES and must never
+        // silence this: at 0.050000 -> 0 the delta is under the floor.
+        ModelConfigOverrideEntity baseline = entity("zai", "glm-tiny",
+                new BigDecimal("0.050000"), new BigDecimal("0.330000"));
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(baseline));
+
+        when(liteLlmParser.parse(any(), any(), any())).thenReturn(
+                LiteLlmFeedParser.ParseResult.success(List.of(
+                        feedRow("zai", "glm-tiny", "0.000000", "0.330000")
+                ), Set.of(), 0, 0, 0, 0, 0));
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+
+        var result = syncService.sync(ModelCatalogSyncService.SyncRequest.dryRun("tester"));
+
+        assertThat(result.plan().flagged())
+                .extracting(ModelCatalogSyncService.FlaggedRow::reason)
+                .singleElement().asString().contains("dropped to 0");
     }
 
     @Test
@@ -391,7 +653,7 @@ class ModelCatalogSyncServiceTest {
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("openai", "gpt-5.4", "10.000000", "15.000000"),       // flagged (5x)
                         feedRow("anthropic", "claude-opus-4-7", "5.0", "25.0")        // clean (new)
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
         when(mergeService.merge(any(), any()))
@@ -416,6 +678,18 @@ class ModelCatalogSyncServiceTest {
         // the sync-log row keeps an auditable record of "what was overridden".
         assertThat(result.plan().flagged()).hasSize(1);
         assertThat(result.plan().guardFailures()).isEmpty();
+
+        // The other half of the distinction, and the reason this assertion
+        // belongs in BOTH tests: the same flagged row, the same OK outcome, the
+        // same flagged_count as the withheld case - and zero withheld, because
+        // the operator let it through. One test alone would pin a number
+        // without proving it discriminates.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> logPayload = ArgumentCaptor.forClass(Map.class);
+        verify(syncLogWriter).write(any(), any(), anyInt(), any(), eq("ops"), eq(false),
+                eq(ModelCatalogSyncLogEntity.Outcome.OK), any(), logPayload.capture(),
+                anyInt(), anyInt(), anyInt(), eq(1), any(), any());
+        assertThat(logPayload.getValue()).containsEntry("flaggedWithheld", 0);
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -434,7 +708,7 @@ class ModelCatalogSyncServiceTest {
         incoming.put("contextWindow", 500_000);
 
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
-                LiteLlmFeedParser.ParseResult.success(List.of(incoming), 0, 0, 0, 0, 0));
+                LiteLlmFeedParser.ParseResult.success(List.of(incoming), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
 
@@ -451,7 +725,7 @@ class ModelCatalogSyncServiceTest {
         when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(existing));
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
                 LiteLlmFeedParser.ParseResult.success(
-                        List.of(fullyPopulatedFeedRow()), 0, 0, 0, 0, 0));
+                        List.of(fullyPopulatedFeedRow()), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
 
@@ -479,7 +753,7 @@ class ModelCatalogSyncServiceTest {
         incoming.put(field, changedValue);
 
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
-                LiteLlmFeedParser.ParseResult.success(List.of(incoming), 0, 0, 0, 0, 0));
+                LiteLlmFeedParser.ParseResult.success(List.of(incoming), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
 
@@ -515,7 +789,7 @@ class ModelCatalogSyncServiceTest {
                         feedRow("openai", "gpt-5.4", "2.5", "15.0"),
                         feedRow("claude-code", "claude-opus-4-7", "5.0", "25.0"),
                         feedRow("mistral-vibe", "devstral-2", "0.4", "2.0")
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
         when(mergeService.merge(any(), any()))
@@ -541,7 +815,7 @@ class ModelCatalogSyncServiceTest {
                         feedRow("zai", "glm-5.1", "1.4", "4.4"),
                         feedRow("moonshot", "kimi-k2.6", "0.95", "4.0"),
                         feedRow("qwen", "qwen-max", "1.6", "6.4")
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
         when(mergeService.merge(any(), any()))
@@ -571,7 +845,7 @@ class ModelCatalogSyncServiceTest {
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("zai", "glm-5.1", "1.400000", "4.400000")
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
 
@@ -599,7 +873,7 @@ class ModelCatalogSyncServiceTest {
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("zai", "glm-5.1", "14.000000", "44.000000")   // 10x
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
 
@@ -628,7 +902,7 @@ class ModelCatalogSyncServiceTest {
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("openai", "gpt-5.4", "2.5", "15.0"),
                         nullProviderRow
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
 
@@ -657,7 +931,7 @@ class ModelCatalogSyncServiceTest {
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("openai", "gpt-5.4", "2.500000", "15.000000")
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
 
@@ -682,7 +956,7 @@ class ModelCatalogSyncServiceTest {
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("openai", "gpt-5.4", "2.5", "15.0"),
                         nullProviderRow
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
         when(mergeService.merge(any(), any()))
@@ -706,7 +980,7 @@ class ModelCatalogSyncServiceTest {
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("anthropic", "claude-opus-4-7", "5.0", "25.0")
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
 
@@ -734,7 +1008,7 @@ class ModelCatalogSyncServiceTest {
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(
                 LiteLlmFeedParser.ParseResult.success(List.of(
                         feedRow("openai", "gpt-5.4", "2.5", "15.0")
-                ), 0, 0, 0, 0, 0));
+                ), Set.of(), 0, 0, 0, 0, 0));
         when(openRouterParser.parse(any(), any(), any())).thenReturn(
                 OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
         when(mergeService.merge(any(), any()))

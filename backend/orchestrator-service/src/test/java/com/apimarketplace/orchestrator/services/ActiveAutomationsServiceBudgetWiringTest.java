@@ -177,6 +177,77 @@ class ActiveAutomationsServiceBudgetWiringTest {
         assertThat(agentRow.schedule().budgetBlockedUntil()).isNull();
     }
 
+    private void stubAgentOnly(AgentDto agent) {
+        when(triggerClient.getSchedulesByOrganization(eq(ORG_ID)))
+                .thenReturn(List.of(schedule(null, AGENT_ID)));
+        when(workflowRepository.findByOrganizationIdStrictAndIsActiveTrueOrderByCreatedAtDesc(eq(ORG_ID)))
+                .thenReturn(List.of());
+        when(agentClient.getAgents(eq(TENANT_ID), eq(ORG_ID), eq(ORG_ROLE))).thenReturn(List.of(agent));
+    }
+
+    private ActiveAutomationDto.ScheduleInfo onlyAgentSchedule() {
+        List<ActiveAutomationDto> rows = service.getActiveAutomations(TENANT_ID, ORG_ID, ORG_ROLE);
+        return rows.stream()
+                .filter(r -> r.resourceType() == ResourceType.AGENT && r.schedule() != null)
+                .findFirst()
+                .orElseThrow()
+                .schedule();
+    }
+
+    private static AgentDto agentWithVerdict(Boolean blocked, Instant until) {
+        AgentDto agent = new AgentDto();
+        agent.setId(AGENT_ID);
+        agent.setName("Researcher");
+        agent.setCreditBudget(new BigDecimal("1"));
+        agent.setCreditsConsumed(new BigDecimal("3"));
+        agent.setBudgetBlocked(blocked);
+        agent.setBudgetBlockedUntil(until);
+        return agent;
+    }
+
+    @Test
+    @DisplayName("an agent over its OWN cap marks its schedule blocked, so the calendar greys it")
+    void agentOverItsOwnCapMarksTheScheduleBlocked() {
+        // The other half of the join, added with the schedule gate: the engine now refuses
+        // these fires, so a calendar that still drew them would be promising runs the
+        // product has already decided not to make.
+        Instant lifts = Instant.parse("2026-10-01T00:00:00Z");
+        stubAgentOnly(agentWithVerdict(true, lifts));
+
+        ActiveAutomationDto.ScheduleInfo info = onlyAgentSchedule();
+
+        assertThat(info.budgetBlocked()).isTrue();
+        assertThat(info.budgetBlockedUntil()).isEqualTo(lifts);
+        // The schedule itself is untouched, exactly as on the workflow side: still armed,
+        // still on its cron, resting until the cap lifts.
+        assertThat(info.armed()).isTrue();
+        assertThat(info.pausedReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("an agent blocked by a cap that never resets carries NO date")
+    void agentCumulativeBlockCarriesNoDate() {
+        // Null "until" beside a true "blocked" is what tells the agenda to grey the WHOLE
+        // future rather than a window of it. Same contract as the workflow side, so nothing
+        // downstream has to know which kind of resource it is looking at.
+        stubAgentOnly(agentWithVerdict(true, null));
+
+        ActiveAutomationDto.ScheduleInfo info = onlyAgentSchedule();
+
+        assertThat(info.budgetBlocked()).isTrue();
+        assertThat(info.budgetBlockedUntil()).isNull();
+    }
+
+    @Test
+    @DisplayName("an agent whose payload carries no verdict is drawn as normal")
+    void agentWithNoVerdictIsNotBlocked() {
+        // Null arrives from a build that predates the field, which is every payload during
+        // a rolling deploy. Reading it as blocked would grey the whole fleet's calendar.
+        stubAgentOnly(agentWithVerdict(null, null));
+
+        assertThat(onlyAgentSchedule().budgetBlocked()).isFalse();
+    }
+
     @Test
     @DisplayName("a spend from an EXPIRED period does not block: the allowance already restarted")
     void rolledOverSpendDoesNotBlock() {

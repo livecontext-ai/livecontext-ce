@@ -6,6 +6,7 @@ import com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataK
 import com.apimarketplace.orchestrator.execution.v2.nodes.ExecutionNode;
 import com.apimarketplace.orchestrator.execution.v2.nodes.NodeExecutionResult;
 import com.apimarketplace.orchestrator.execution.v2.nodes.StepNode;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.services.impl.CatalogMockClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -181,7 +182,10 @@ public class MockNodeResultFactory {
                 && stepNode.getStepConfig().params() != null) {
             // Raw params, templates UNRESOLVED - input resolution is exactly what a
             // mock skips; the inspector still shows what the node would have sent.
-            output.put("resolved_params", stepNode.getStepConfig().params());
+            // Through the same gate a real run uses: a plan param can hold a LITERAL
+            // credential (an author typing the key instead of `{{$vars.x}}`) and an
+            // unbounded literal body, and a mocked row is persisted like any other.
+            output.put("resolved_params", ReportedParams.forReport(stepNode.getStepConfig().params()));
         }
     }
 

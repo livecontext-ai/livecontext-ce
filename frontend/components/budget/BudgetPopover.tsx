@@ -37,6 +37,15 @@ export interface BudgetPopoverContentProps {
    * is dead when it is not.
    */
   spendIsCurrent?: boolean;
+  /**
+   * The server's own verdict: is this cap refusing runs right now?
+   *
+   * <p>Supersedes the `over && spendIsCurrent` guess when supplied, and it is supplied
+   * wherever the server can answer. The guess exists because a spend figure alone cannot
+   * decide it for an agent, whose counter is reset lazily; the verdict is resolved with
+   * that pending reset applied, so it can say STOPPED where the figure may not.
+   */
+  blocked?: boolean;
 }
 
 /**
@@ -68,6 +77,7 @@ export function BudgetPopoverContent({
   fallbackPeriod = 'monthly',
   resetsAt,
   spendIsCurrent = true,
+  blocked,
 }: BudgetPopoverContentProps) {
   const t = useTranslations();
 
@@ -191,8 +201,10 @@ export function BudgetPopoverContent({
         </p>
       )}
 
-      {/* Only claimed on a figure we know is current: see spendIsCurrent. */}
-      {over && spendIsCurrent && (
+      {/* The server's verdict when there is one, the figure-based guess otherwise -
+          and the guess stays silent on a figure that may be stale, because telling an
+          owner their automation is dead when it is not is the worse error. */}
+      {(blocked ?? (over && spendIsCurrent)) && (
         <p className="font-medium text-red-600 dark:text-red-400 leading-relaxed">
           {neverResets ? t('budget.popoverStoppedForGood') : t('budget.popoverStopped')}
         </p>

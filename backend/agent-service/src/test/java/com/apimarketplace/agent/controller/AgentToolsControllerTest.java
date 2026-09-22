@@ -113,6 +113,12 @@ class AgentToolsControllerTest {
         AgentToolsController controller = new AgentToolsController(registry, registrationService);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-User-ID", "tenant-1");
+        // The role travels as a HEADER, which is how every internal caller already sends it
+        // (RemoteToolExecutionService.applyOrgHeaders). This test used to put it in the body and
+        // assert it arrived, which pinned the body fallback that let a gateway-routed caller
+        // assert its own role. The test's subject is that the context is forwarded, not which
+        // channel the role uses, so it keeps its meaning on the honest channel.
+        request.addHeader("X-Organization-Role", "MEMBER");
 
         when(registry.hasTool("agent")).thenReturn(true);
         ArgumentCaptor<ToolsProvider.ToolExecutionContext> contextCaptor =
@@ -132,8 +138,7 @@ class AgentToolsControllerTest {
             Map.entry("approvedServices", List.of("deepseek")),
             Map.entry("viewingWorkflowId", "workflow-1"),
             Map.entry("viewingWorkflowName", "Workflow One"),
-            Map.entry("orgId", "org-1"),
-            Map.entry("orgRole", "MEMBER")
+            Map.entry("orgId", "org-1")
         )).join();
 
         ToolsProvider.ToolExecutionContext context = contextCaptor.getValue();
@@ -148,5 +153,89 @@ class AgentToolsControllerTest {
         assertThat(context.credentials()).containsEntry("__agentId__", "agent-1");
         assertThat(context.credentials()).containsEntry("allowedAgentIds", List.of("child-1"));
         assertThat(context.credentials()).containsEntry("agentAccessMode", "read");
+    }
+
+    @Test
+    @DisplayName("an orgRole in the request BODY is ignored - the role comes from the header or not at all")
+    void bodyOrgRoleIsIgnored() {
+        // Regression. This endpoint is gateway-routed and the gateway strips the caller's own
+        // identity headers, but NOT the body. When the gateway resolved no active org it sent no
+        // X-Organization-Role, and the controller then read "orgRole" from the body: a user could
+        // name a workspace AND assert OWNER in it in the same request. Every legitimate internal
+        // caller already sends the header from the same source it filled the body with, so the
+        // body read was a duplicate, not a channel.
+        AgentToolsController controller = new AgentToolsController(registry, registrationService);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-User-ID", "tenant-1");
+        // deliberately NO X-Organization-Role header: this is the reachable state
+
+        when(registry.hasTool("agent")).thenReturn(true);
+        ArgumentCaptor<ToolsProvider.ToolExecutionContext> contextCaptor =
+            ArgumentCaptor.forClass(ToolsProvider.ToolExecutionContext.class);
+        when(registrationService.executeTool(eq("agent"), any(), contextCaptor.capture()))
+            .thenReturn(ToolsProvider.ToolExecutionResult.success(Map.of("ok", true)));
+
+        controller.executeTool(request, Map.of(
+            "tool", "agent",
+            "parameters", Map.of("action", "update"),
+            "orgId", "victim-org",
+            "orgRole", "OWNER"
+        ));
+
+        ToolsProvider.ToolExecutionContext context = contextCaptor.getValue();
+        assertThat(context.orgRole())
+            .as("a body-supplied role must never reach the execution context")
+            .isNull();
+        // orgId still comes from the body on purpose: it is how an internal caller names the
+        // workspace, and it is not the privilege axis. Pinned so the two are not conflated.
+        assertThat(context.orgId()).isEqualTo("victim-org");
+    }
+
+    @Test
+    @DisplayName("the HEADER role is still honoured, and wins over a body value")
+    void headerOrgRoleIsStillHonoured() {
+        AgentToolsController controller = new AgentToolsController(registry, registrationService);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-User-ID", "tenant-1");
+        request.addHeader("X-Organization-Role", "MEMBER");
+
+        when(registry.hasTool("agent")).thenReturn(true);
+        ArgumentCaptor<ToolsProvider.ToolExecutionContext> contextCaptor =
+            ArgumentCaptor.forClass(ToolsProvider.ToolExecutionContext.class);
+        when(registrationService.executeTool(eq("agent"), any(), contextCaptor.capture()))
+            .thenReturn(ToolsProvider.ToolExecutionResult.success(Map.of("ok", true)));
+
+        controller.executeTool(request, Map.of(
+            "tool", "agent",
+            "parameters", Map.of("action", "update"),
+            "orgRole", "OWNER"
+        ));
+
+        assertThat(contextCaptor.getValue().orgRole()).isEqualTo("MEMBER");
+    }
+
+    @Test
+    @DisplayName("execute-async ignores a body orgRole too - both entry points read it, both are closed")
+    void bodyOrgRoleIsIgnoredOnAsyncToo() {
+        AgentToolsController controller = new AgentToolsController(registry, registrationService);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-User-ID", "tenant-1");
+
+        when(registry.hasTool("agent")).thenReturn(true);
+        ArgumentCaptor<ToolsProvider.ToolExecutionContext> contextCaptor =
+            ArgumentCaptor.forClass(ToolsProvider.ToolExecutionContext.class);
+        when(registrationService.executeToolAsync(eq("agent"), any(), contextCaptor.capture()))
+            .thenReturn(CompletableFuture.completedFuture(
+                ToolsProvider.ToolExecutionResult.success(Map.of("ok", true))));
+
+        controller.executeToolAsync(request, Map.of(
+            "tool", "agent",
+            "parameters", Map.of("action", "backlog"),
+            "orgId", "victim-org",
+            "orgRole", "OWNER"
+        )).join();
+
+        assertThat(contextCaptor.getValue().orgRole()).isNull();
+        assertThat(contextCaptor.getValue().orgId()).isEqualTo("victim-org");
     }
 }

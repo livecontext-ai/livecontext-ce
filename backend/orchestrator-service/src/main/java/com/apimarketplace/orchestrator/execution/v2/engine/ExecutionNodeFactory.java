@@ -356,6 +356,11 @@ public class ExecutionNodeFactory {
                 iface.videoMaxDurationSeconds(),
                 iface.videoMode(),
                 iface.videoFps());
+            // What the page's variables are wired to. The node never resolves them to
+            // render - the render API does that per viewer - but it reports them, and an
+            // interface whose mapping is not on the node reports nothing about the one
+            // thing between the workflow's data and the screen.
+            interfaceNode.setVariableMapping(iface.variableMapping());
             nodeMap.put(interfaceKey, interfaceNode);
             logger.info("Added interface: key={}, id={}, label={}",
                 interfaceKey, iface.id(), iface.label());

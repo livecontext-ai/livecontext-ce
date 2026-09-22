@@ -9,6 +9,14 @@ import { isPublicMarketingPath } from '../publicMarketingPath';
 // execute JavaScript see the page). Paths returning false keep the blocking
 // auth UI exactly as before.
 describe('isPublicMarketingPath', () => {
+  it('server-renders all persona landings without waiting for authentication', () => {
+    for (const locale of ['', '/en', '/fr', '/de', '/es', '/pt', '/zh']) {
+      for (const persona of ['support', 'creator', 'sales', 'marketing', 'recruiting']) {
+        expect(isPublicMarketingPath(`${locale}/for/${persona}`)).toBe(true);
+      }
+    }
+    expect(isPublicMarketingPath('/foreign/creator')).toBe(false);
+  });
   it('covers the landing page, bare and under every locale prefix', () => {
     expect(isPublicMarketingPath('/')).toBe(true);
     for (const locale of ['en', 'fr', 'es', 'de', 'pt', 'zh']) {
@@ -26,8 +34,6 @@ describe('isPublicMarketingPath', () => {
       '/changelog',
       '/docs',
       '/docs/agents',
-      '/blog',
-      '/blog/the-niche-data-advantage',
     ]) {
       expect(isPublicMarketingPath(path), path).toBe(true);
     }
@@ -61,10 +67,17 @@ describe('isPublicMarketingPath', () => {
     }
   });
 
+  it('no longer covers the deleted blog', () => {
+    // The blog routes, their content and their assets were removed, so /blog
+    // 404s. Leaving it listed here would only skip the auth UI on a 404.
+    for (const path of ['/blog', '/blog/the-niche-data-advantage', '/fr/blog']) {
+      expect(isPublicMarketingPath(path), path).toBe(false);
+    }
+  });
+
   it('does not treat lookalike prefixes as public', () => {
     expect(isPublicMarketingPath('/aboutus')).toBe(false);
     expect(isPublicMarketingPath('/comparetool')).toBe(false);
-    expect(isPublicMarketingPath('/blogger')).toBe(false);
     expect(isPublicMarketingPath('/modelsomething')).toBe(false);
     expect(isPublicMarketingPath('/integrationshub')).toBe(false);
   });

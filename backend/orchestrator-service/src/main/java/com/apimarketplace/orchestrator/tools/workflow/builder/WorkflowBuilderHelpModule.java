@@ -107,7 +107,7 @@ public class WorkflowBuilderHelpModule implements ToolModule {
         Map<String, String> sessionMgmt = new LinkedHashMap<>();
         sessionMgmt.put("init", "Start a new workflow session. Params: name (optional), description (optional), force (boolean, override existing)");
         sessionMgmt.put("load", "Load existing workflow for editing. Params: id (UUID, auto-detected from context if omitted)");
-        sessionMgmt.put("list", "List all workflows. Params: limit, offset");
+        sessionMgmt.put("list", "List all workflows. Params: limit, offset, query (name/description substring), node_types (keep only workflows containing one of these node types, ANY-of). Each item reports its own node_types, so list once without the filter to read the exact tokens.");
         sessionMgmt.put("save", "Save current session as a draft. Params: name (optional override), description (optional)");
         sessionMgmt.put("discard", "Abandon current session without saving");
         sessionMgmt.put("finish", "Finalize and save the workflow as ACTIVE. Validates first, then persists. " +

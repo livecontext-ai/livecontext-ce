@@ -76,6 +76,27 @@ class WebSocketClient {
   private static readonly TOKEN_SUBPROTOCOL_PREFIX = 'lc.jwt.';
   private static readonly ORG_SUBPROTOCOL_PREFIX = 'lc.org.';
 
+  // Subscribe frames whose answer has not arrived yet, keyed by frame id. A subscription
+  // is only real once the server acknowledges it; see sendSubscribe.
+  private pendingSubscribeAcks: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  /**
+   * Unanswered subscribes since the last answered one. Survives reconnects on purpose:
+   * the whole point is to notice that rebuilding the connection is not helping, and every
+   * reconnect resets the attempt counter this would otherwise rely on.
+   */
+  private consecutiveAckTimeouts = 0;
+  /**
+   * How long to wait for the server's answer to a subscribe.
+   *
+   * Generous on purpose: the gateway authorizes a conversation channel with an HTTP call
+   * to another service, so a slow answer is a slow service, not a dead socket. This cannot
+   * be set above every plausible latency (the gateway's own client allows two minutes) and
+   * still be useful, so it is sized to beat the heartbeat watchdog - the only thing that
+   * used to notice - by a wide margin, and a false positive costs one backoff-governed
+   * reconnect rather than a loop. See forceReconnect.
+   */
+  private static readonly SUBSCRIBE_ACK_TIMEOUT_MS = 30000;
+
   // Deduplication
   private messageDedup: Set<string> = new Set();
   private dedupMaxSize = 5000;
@@ -157,9 +178,35 @@ class WebSocketClient {
 
     console.log(`[WS:client] subscribe ch=${channel} new=${isNewChannel} status=${this._status} snapshot=${!!requestSnapshot} handlers=${handlers.size}`);
 
-    // Send subscribe message to server if connected and this is the first handler
-    if (isNewChannel && this._status === 'connected') {
-      this.sendSubscribe(channel, requestSnapshot);
+    // Announce the channel if this is the first handler for it.
+    //
+    // A subscription that never reaches the gateway is invisible: the server keeps
+    // publishing to a channel with no subscriber and the page just sits there. In prod on
+    // 2026-09-17 a chat turn published 80 seconds of content, tool events and a question
+    // card into an empty channel because the tab that sent the message never got its
+    // subscribe frame to the server; a manual reload was the only thing that fixed it.
+    //
+    // Three states, three different right answers. The previous single test
+    // (`this._status === 'connected'`) got the third one wrong - it is the one that
+    // matters, and the one it was silently wrong about:
+    //  - socket OPEN and the session established: send now.
+    //  - socket OPEN but no `hello` yet: send NOTHING. `resubscribeAll()` announces every
+    //    tracked channel on hello, and sending here too would double the frame AND the
+    //    snapshot replay the gateway performs for it.
+    //  - socket not OPEN: the frame cannot leave. The status may still say 'connected'
+    //    (a throttled or frozen tab processes `onclose` late), so this is also the moment
+    //    the belief is proven wrong: rebuild the connection instead of dropping the frame
+    //    silently and waiting up to 75 s for the heartbeat watchdog to notice.
+    //
+    // A frame that DOES leave is not yet a subscription - see the ack watchdog in
+    // `sendSubscribe`, which covers the case where the socket is OPEN and the connection
+    // is nevertheless dead.
+    if (isNewChannel) {
+      if (this.isSocketOpen) {
+        if (this._status === 'connected') this.sendSubscribe(channel, requestSnapshot);
+      } else {
+        this.recoverStaleConnection();
+      }
     }
 
     return () => {
@@ -178,10 +225,10 @@ class WebSocketClient {
 
     if (handlers.size === 0) {
       this.channelHandlers.delete(channel);
-      // Send unsubscribe message to server
-      if (this._status === 'connected') {
-        this.sendUnsubscribe(channel);
-      }
+      // Send unsubscribe message to server. Unlike subscribe, a lost frame here is
+      // harmless (a reconnect re-subscribes only what is still tracked), so this one
+      // does not force a reconnect - it just uses the socket rather than the belief.
+      this.sendUnsubscribe(channel);
     }
   }
 
@@ -200,7 +247,15 @@ class WebSocketClient {
 
     return new Promise((resolve, reject) => {
       this.pendingActions.set(id, { resolve, reject });
-      this.send(envelope);
+      if (!this.send(envelope)) {
+        // The frame never left, so no ack can ever arrive. Fail now with the real reason
+        // instead of making the caller wait 30 s for a timeout that blames the server,
+        // and take the dropped frame as the signal to rebuild the connection.
+        this.pendingActions.delete(id);
+        this.recoverStaleConnection();
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
 
       // Timeout after 30s
       setTimeout(() => {
@@ -216,7 +271,11 @@ class WebSocketClient {
    * Refresh the auth token on an existing connection.
    */
   async refreshToken(): Promise<void> {
-    if (!this.tokenProvider || this._status !== 'connected') return;
+    // Socket state, not `_status`: with no open socket there is nothing to refresh ON,
+    // and fetching a token to write into a dead one is pure waste. Returning here does
+    // not repair anything - whatever reconnect eventually happens re-authenticates with a
+    // fresh token, and until then this call is simply a no-op instead of a wasted fetch.
+    if (!this.tokenProvider || !this.isSocketOpen) return;
 
     const token = await this.tokenProvider();
     const envelope: WsEnvelope = {
@@ -257,7 +316,9 @@ class WebSocketClient {
   }
 
   private handleOnline = (): void => {
-    if (this.intentionalClose || this._status === 'connected') return;
+    // Guard on the REAL socket, never on `_status`: a zombie 'connected' is exactly the
+    // state these listeners exist to rescue, and reading the belief made them refuse to.
+    if (this.intentionalClose || this.isSocketOpen) return;
     this.reconnectAttempt = 0; // network is back - recover at full speed
     this.reconnectNow();
   };
@@ -266,7 +327,7 @@ class WebSocketClient {
     if (this.intentionalClose) return;
     if (typeof document !== 'undefined'
         && document.visibilityState === 'visible'
-        && this._status !== 'connected') {
+        && !this.isSocketOpen) {
       this.reconnectAttempt = 0;
       this.reconnectNow();
     }
@@ -292,6 +353,24 @@ class WebSocketClient {
     // We're connecting now - cancel any pending backoff timer so it can't fire a
     // duplicate attempt on top of this one.
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+
+    // Detach whatever socket we are replacing. A CLOSING socket still delivers its
+    // `onclose` later, and by then `this.ws` is the NEW socket - so handleDisconnect
+    // would cleanup() the connection we just opened and fall back into backoff, which
+    // is slower than doing nothing. Dropping the handlers first makes the old socket's
+    // last breath a no-op.
+    if (this.ws) {
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws = null;
+      // An answer can only ever arrive on the socket being replaced, so its watchdogs go
+      // with it. Leaving them armed means one fires minutes later and tears down the
+      // connection that replaced it - the healthy one - which is worse than the silence
+      // they exist to break. (cleanup() does this too, and this path bypasses cleanup.)
+      this.clearSubscribeAckWatchdogs();
+    }
 
     this.connecting = true;
     this.setStatus(this.reconnectAttempt > 0 ? 'reconnecting' : 'connecting');
@@ -369,7 +448,8 @@ class WebSocketClient {
         this.handlePing();
         break;
       case 'subscribed':
-        // Subscription confirmed - no action needed
+        // The only proof a subscription actually landed - see sendSubscribe's watchdog.
+        this.settleSubscribeAck(envelope.ref);
         break;
       case 'unsubscribed':
         // Unsubscription confirmed - no action needed
@@ -390,6 +470,9 @@ class WebSocketClient {
         this.disconnect();
         break;
       case 'error':
+        // A refusal is an ANSWER: the connection is alive and the server decided. Settle
+        // the watchdog so a channel this user may not read cannot drive a reconnect loop.
+        this.settleSubscribeAck(envelope.ref);
         console.warn('[WS] Server error:', envelope.payload);
         break;
     }
@@ -397,7 +480,6 @@ class WebSocketClient {
 
   private handleHello(payload: HelloPayload): void {
     this.sessionId = payload.sessionId;
-    this.reconnectAttempt = 0;
     // 2026-05-04 hot-fix (audit MEGA #3): capture server's expected heartbeat
     // interval. Used by handlePing to arm a watchdog - if the server stops
     // pinging (zombie TCP), the watchdog triggers handleDisconnect → reconnect.
@@ -412,8 +494,16 @@ class WebSocketClient {
     // within heartbeatMs; if not, we treat the connection as zombie.
     this.armPongWatchdog();
 
-    // Re-subscribe all channels after (re)connect
-    this.resubscribeAll();
+    // Re-subscribe all channels after (re)connect.
+    //
+    // The backoff counter is reset HERE, and only if that succeeded, rather than on the
+    // handshake above. A session whose very first frames cannot leave never worked, and
+    // treating it as a success is what turns a socket dying mid-handshake into a fast
+    // loop: reset, fail, reconnect at attempt 0, reset again. Resetting on the first
+    // thing the session actually carried makes the backoff mean what it says.
+    if (this.resubscribeAll()) {
+      this.reconnectAttempt = 0;
+    }
   }
 
   private armPongWatchdog(): void {
@@ -540,22 +630,124 @@ class WebSocketClient {
     }, baseDelay + jitter);
   }
 
-  private resubscribeAll(): void {
+  /**
+   * Re-announce every tracked channel on a fresh session. This is the safety net the
+   * subscribe path relies on, so it must not become the next silent drop: if the socket
+   * dies part-way through the loop, the channels after it would never be announced and
+   * nothing would notice. Stop at the first frame that cannot leave and rebuild instead.
+   *
+   * @returns whether every channel was announced - i.e. whether this session carried
+   *          anything at all, which is what the caller uses to decide if it counts as a
+   *          successful connection for backoff purposes.
+   */
+  private resubscribeAll(): boolean {
     for (const channel of this.channelHandlers.keys()) {
-      this.sendSubscribe(channel, true);
+      if (!this.sendSubscribe(channel, true)) {
+        console.warn('[WS:client] socket died while re-announcing channels - reconnecting');
+        // handleDisconnect, NOT recoverStaleConnection. This runs inside handleHello,
+        // which has just set the status to 'connected' and reset the backoff counter, so
+        // the "was it believed live" test there is true by construction and would
+        // reconnect with NO delay - and since doConnect detaches the dead socket's
+        // handlers, the onclose that would normally arm the backoff never fires either.
+        // A socket that dies during its own handshake would then loop as fast as the
+        // network allows, straight into the gateway's per-user connection cap, whose
+        // goaway latches this client off entirely. Measured at 42 sockets with zero
+        // elapsed time before this line said handleDisconnect.
+        this.handleDisconnect();
+        return false;
+      }
     }
+    return true;
   }
 
-  private sendSubscribe(channel: string, requestSnapshot?: boolean): void {
+  /**
+   * Announce one channel and WATCH FOR THE ANSWER.
+   *
+   * A frame leaving the socket does not mean it arrived. The worst version of a dead
+   * connection is the one where `readyState` is still OPEN - the peer is gone but nothing
+   * has told the browser, so `send()` writes into a void and reports success. Nothing
+   * else in this client would notice for up to 75 s (heartbeatMs * 2.5).
+   *
+   * The server always answers a subscribe, and the answer is unambiguous: `subscribed`
+   * on success, `error` when access is denied (WsProtocolHandler). Both carry `ref` =
+   * this frame's id. So an id that gets NO answer at all is proof the connection is not
+   * carrying traffic, and is the only signal that distinguishes that from a channel the
+   * user may not read - which must NOT trigger a reconnect, or a denied channel would
+   * loop forever.
+   */
+  private sendSubscribe(channel: string, requestSnapshot?: boolean): boolean {
+    const id = crypto.randomUUID();
     const envelope: WsEnvelope = {
       v: 1,
       type: 'subscribe',
-      id: crypto.randomUUID(),
+      id,
       channel,
       ts: Date.now(),
       payload: requestSnapshot ? { requestSnapshot: true } : undefined,
     };
-    this.send(envelope);
+    const sent = this.send(envelope);
+    if (sent) this.armSubscribeAckWatchdog(id, channel);
+    return sent;
+  }
+
+  private armSubscribeAckWatchdog(id: string, channel: string): void {
+    const timer = setTimeout(() => {
+      this.pendingSubscribeAcks.delete(id);
+      if (this.intentionalClose) return;
+      console.warn(`[WS:client] no answer to subscribe ch=${channel} after `
+        + `${WebSocketClient.SUBSCRIBE_ACK_TIMEOUT_MS}ms - the connection is not carrying traffic`);
+      this.forceReconnect();
+    }, WebSocketClient.SUBSCRIBE_ACK_TIMEOUT_MS);
+    this.pendingSubscribeAcks.set(id, timer);
+  }
+
+  /** An answer arrived for a frame we were watching - `subscribed` or a refusal alike. */
+  private settleSubscribeAck(ref: string | undefined): void {
+    if (!ref) return;
+    const timer = this.pendingSubscribeAcks.get(ref);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.pendingSubscribeAcks.delete(ref);
+    // An answer of any kind means the server is talking to us again.
+    this.consecutiveAckTimeouts = 0;
+  }
+
+  private clearSubscribeAckWatchdogs(): void {
+    for (const timer of this.pendingSubscribeAcks.values()) clearTimeout(timer);
+    this.pendingSubscribeAcks.clear();
+  }
+
+  /**
+   * Rebuild the connection even though the socket claims to be usable. Used when the
+   * socket is OPEN but demonstrably not carrying traffic, which `doConnect` alone cannot
+   * act on: it guards on the real readyState and would treat this socket as healthy.
+   *
+   * Silence is evidence, not proof. The gateway authorizes a conversation channel with an
+   * HTTP call to another service, so a degraded one leaves a subscribe unanswered on a
+   * perfectly live connection - and each reconnect then re-asks that same slow service for
+   * every tracked channel AND re-triggers a snapshot re-broadcast to everyone on the
+   * conversation. Repeating that against a struggling service is how a slowdown becomes an
+   * outage.
+   *
+   * The ordinary exponential backoff cannot bound that, and it would be comfortable to
+   * assume it does: every successful handshake resets the attempt counter, and this path
+   * always gets one (the connection is fine, it is the ANSWER that never comes). So the
+   * repetition is bounded explicitly instead - after this many unanswered sessions in a
+   * row, stop rebuilding. The connection is not the problem, and a truly dead socket is
+   * still caught by the heartbeat watchdog.
+   */
+  private static readonly MAX_CONSECUTIVE_ACK_TIMEOUTS = 3;
+
+  private forceReconnect(): void {
+    if (this.intentionalClose) return;
+    this.consecutiveAckTimeouts += 1;
+    if (this.consecutiveAckTimeouts > WebSocketClient.MAX_CONSECUTIVE_ACK_TIMEOUTS) {
+      console.warn(`[WS:client] ${this.consecutiveAckTimeouts} subscribes in a row went `
+        + 'unanswered - the server is not answering, not unreachable. Leaving the connection '
+        + 'alone rather than rebuilding it again.');
+      return;
+    }
+    this.handleDisconnect();
   }
 
   private sendUnsubscribe(channel: string): void {
@@ -569,9 +761,62 @@ class WebSocketClient {
     this.send(envelope);
   }
 
-  private send(envelope: WsEnvelope): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify(envelope));
+  /** True when a real, open socket exists - the only trustworthy readiness signal. */
+  private get isSocketOpen(): boolean {
+    return !!this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Send one frame. Returns whether it actually left, so a caller that cannot afford a
+   * silent drop (subscribe) can react instead of assuming success.
+   */
+  private send(envelope: WsEnvelope): boolean {
+    const socket = this.ws;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify(envelope));
+    return true;
+  }
+
+  /**
+   * Called when a frame could not leave because the socket is not OPEN. Reconnect now
+   * rather than waiting for the heartbeat watchdog (75 s by default) or for the user to
+   * reload the page.
+   *
+   * Four states where doing nothing is the right answer, in the order they are checked:
+   * after an intentional teardown; before the app has ever asked to connect; while a
+   * socket is already coming up; and while a backoff reconnect is already scheduled.
+   * Only the last case can repeat, which is why it is a hard return rather than a
+   * shorter delay: a component that mounts in a loop must not translate into one
+   * connection attempt per mount against a server that is already down.
+   */
+  private recoverStaleConnection(): void {
+    if (this.intentionalClose) return;
+    // Nobody has asked for a connection yet. The provider calls `connect()` only AFTER
+    // awaiting the gateway's runtime config (ws-provider), so the window is a network
+    // round trip, not one React commit - every subscription mounted in it lands here.
+    // Attempting a connection would fail on the missing token provider and leave the
+    // client in 'reconnecting' with a backoff running before the app has tried once. The
+    // channel is registered, and the `hello` that follows the real connect announces it.
+    if (!this.tokenProvider) return;
+    // A connection is already coming up: `hello` will resubscribe every tracked channel.
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) return;
+    // A backoff reconnect is already scheduled. Jumping the queue here would let a
+    // component that mounts and unmounts in a loop hammer an unreachable gateway once
+    // per mount, which is exactly what the backoff exists to prevent.
+    if (this.reconnectTimer) return;
+
+    // Only a connection we BELIEVED was live earns a fresh, full-speed attempt: that is
+    // the zombie case, where the backoff never started because nothing reported a drop.
+    // In any other state the existing backoff is the honest pace.
+    const wasBelievedLive = this._status === 'connected';
+    if (wasBelievedLive) {
+      // Worth a line: the client reported a healthy connection and it was not true.
+      // Every other state here is an ordinary reconnect, and warning about those would
+      // bury this one - the same noise problem the placeholder-channel fix removes.
+      console.warn('[WS:client] frame dropped on a socket reported as connected - reconnecting now');
+      this.reconnectAttempt = 0;
+    }
+    this.reconnectNow();
   }
 
   private setStatus(status: WsConnectionStatus): void {
@@ -583,6 +828,10 @@ class WebSocketClient {
   }
 
   private cleanup(): void {
+    // Answers can only arrive on the socket being torn down, so the watchdogs armed for
+    // it must go with it - otherwise they fire later and force a reconnect on a
+    // connection that has already been replaced.
+    this.clearSubscribeAckWatchdogs();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

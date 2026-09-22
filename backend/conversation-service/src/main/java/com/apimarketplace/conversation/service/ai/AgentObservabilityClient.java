@@ -71,6 +71,13 @@ public class AgentObservabilityClient {
             if (source != null && !source.isBlank()) {
                 body.put("source", source);
             }
+            // Whose key the execution ran on, pinned by agent-service and carried on the
+            // response metrics: the debit this report triggers bills an OWN_KEY turn a flat
+            // fee per turn instead of the token rate.
+            Object keyRoute = response.metrics() != null ? response.metrics().get("keyRoute") : null;
+            if (keyRoute instanceof String route && !route.isBlank()) {
+                body.put("keyRoute", route);
+            }
             if (taskId != null && !taskId.isBlank()) {
                 body.put("taskId", taskId);
             }

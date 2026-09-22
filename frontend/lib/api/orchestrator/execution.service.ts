@@ -538,14 +538,16 @@ export class ExecutionService {
     workflowId: string,
     runId: string,
     stepId: number,
-    path: string
+    path: string,
+    options?: { throwOnError?: boolean },
   ): Promise<any | null> {
     try {
       return await apiClient.get<any>(
         `/workflows/${workflowId}/runs/${runId}/steps/${stepId}/output/object`,
         { params: { path } }
       );
-    } catch {
+    } catch (error) {
+      if (options?.throwOnError) throw error;
       return null;
     }
   }

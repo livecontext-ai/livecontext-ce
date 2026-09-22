@@ -1,5 +1,6 @@
 package com.apimarketplace.publication.domain;
 
+import com.apimarketplace.publication.utils.WorkflowNodeTypeExtractor;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -129,6 +130,20 @@ public class WorkflowPublicationEntity {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "node_icons", columnDefinition = "jsonb")
     private List<Map<String, Object>> nodeIcons;
+
+    /**
+     * Denormalized node-type tokens of {@link #planSnapshot} ({@code mcp:gmail},
+     * {@code core:loop}, ...), so the applications list can filter by node type.
+     *
+     * <p>This column is what makes the filter possible at all here: the list
+     * queries deliberately never select {@code plan_snapshot} (~200KB a row), so
+     * without it there is no way to know a publication's node types at list time.
+     *
+     * <p>Derived, never set by callers - see {@link #setPlanSnapshot(Map)}.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "node_types", columnDefinition = "jsonb", nullable = false)
+    private List<String> nodeTypes = List.of();
 
     /**
      * True when the snapshot uses a feature that only exists on a self-hosted
@@ -274,7 +289,21 @@ public class WorkflowPublicationEntity {
     // highlight-bucket key for publication_highlights (the curated row that drives
     // the public landing page). Its bucket holds APPLICATION-type publications -
     // see PublicationHighlightService.requiredPublicationMode.
-    public enum DisplayMode { WORKFLOW, INTERFACE, APPLICATION, AGENT, TABLE, SKILL, LANDING }
+    /**
+     * Publication type, and highlight-bucket key.
+     *
+     * <p>The first six are real types, one per resource strategy. Everything from LANDING on
+     * is a BUCKET only: no publication is ever of that type, and each holds APPLICATION
+     * publications (see PublicationHighlightService.requiredPublicationMode). LANDING drives
+     * the home page's curated row; the six LANDING_* keys drive one /for/&lt;persona&gt; page
+     * each, so a persona can show its own apps. The list must match the
+     * pub_highlights_displaymode_check constraint (V347, extended by V490).
+     */
+    public enum DisplayMode {
+        WORKFLOW, INTERFACE, APPLICATION, AGENT, TABLE, SKILL,
+        LANDING,
+        LANDING_OPS, LANDING_CREATOR, LANDING_SUPPORT, LANDING_SALES, LANDING_MARKETING, LANDING_RECRUITING
+    }
     /** V223 / #151 - publication ownership scope: USER (personal) or ORG (team workspace). */
     public enum OwnerType { USER, ORG }
 
@@ -525,8 +554,22 @@ public class WorkflowPublicationEntity {
         return planSnapshot;
     }
 
+    /**
+     * Sets the plan snapshot AND the node-type tokens derived from it, so the two
+     * can never disagree.
+     *
+     * <p>Derived here rather than in a {@code @PreUpdate} callback on purpose.
+     * Hibernate computes the dirty field set before invoking that callback, so a
+     * column a callback writes is not reliably included in the UPDATE - and the
+     * failure would be invisible: the publication would simply stop matching a
+     * node-type filter it should match. Assigning both fields in the same setter
+     * marks both dirty, which is guaranteed to persist. This entity uses FIELD
+     * access ({@code @Id} is on the field), so Hibernate hydrates the columns
+     * directly and never calls this setter on load - no recomputation on read.
+     */
     public void setPlanSnapshot(Map<String, Object> planSnapshot) {
         this.planSnapshot = planSnapshot;
+        this.nodeTypes = WorkflowNodeTypeExtractor.extractNodeTypes(planSnapshot);
     }
 
     public Integer getPlanVersion() {
@@ -547,6 +590,20 @@ public class WorkflowPublicationEntity {
 
     public List<Map<String, Object>> getNodeIcons() {
         return nodeIcons;
+    }
+
+    /**
+     * Node-type tokens of the current plan snapshot. Never null; empty for a
+     * plan with no nodes.
+     *
+     * <p>No derive-from-snapshot fallback here: the column is NOT NULL, was
+     * backfilled for every existing row, and {@link #setPlanSnapshot(Map)} is
+     * the only way to change the snapshot. A fallback would be code that can
+     * never run, and it would quietly hide the day one of those three stops
+     * being true.
+     */
+    public List<String> getNodeTypes() {
+        return nodeTypes == null ? List.of() : nodeTypes;
     }
 
     public void setNodeIcons(List<Map<String, Object>> nodeIcons) {

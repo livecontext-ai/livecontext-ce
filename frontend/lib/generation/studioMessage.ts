@@ -82,6 +82,36 @@ export interface StudioResultEnvelope {
   /** What was charged, in the unit it was counted in. */
   billedQuantity?: number;
   billedUnit?: string;
+  /**
+   * What this call's own choices did to the model's published rate.
+   *
+   * <p>Beside the size, never folded into it: the size is what was PRODUCED (ten seconds stays ten
+   * seconds however much the render cost), and the amount is then rate x size x this. Without the
+   * third number on the card, a charge that is not rate x size reads as an arithmetic mistake, and
+   * the only way to check it is to spend again.
+   *
+   * <p>Absent for a call at the published rate. A factor of exactly 1 is not carried: writing it
+   * would fill every ordinary turn with a reason the price did not change. A factor BELOW 1 is
+   * carried, because a cheaper tier is a fact about the charge just as much as a dearer one, and
+   * the composer's badge announces it: dropping it here showed the reader "x0.5" before the run
+   * and nothing after it.
+   */
+  billedMultiplier?: number;
+  /**
+   * One line per factor that moved it, as the SERVER named them, e.g. `resolution x2`.
+   *
+   * <p>Kept verbatim in the envelope and worded at render time by `describeBilledFactors`, which
+   * puts them through the same dictionary the estimate uses. Stored translated instead, a turn
+   * would keep the words of whatever locale it was run in for the life of the thread.
+   */
+  billedMultiplierReasons?: string[];
+  /**
+   * Credits the platform charged for this turn.
+   *
+   * <p>Absent when it charged nothing, which is a different fact from a charge of zero: a
+   * generation on a provider key the reader configured themselves is paid for at that provider.
+   */
+  billedCredits?: number;
   /** The endpoint's own words, verbatim, when the turn did not produce an asset. */
   error?: string;
   /**
@@ -210,6 +240,27 @@ export function buildStudioResult(
     ...(data?.file ? { file: data.file as StudioAssetRef } : {}),
     ...(data?.billed_quantity != null ? { billedQuantity: data.billed_quantity } : {}),
     ...(data?.billed_unit ? { billedUnit: data.billed_unit } : {}),
+    // Only when it actually moved the price, in EITHER direction. `!== 1` rather than `> 1`: a
+    // factor of 1 is the published rate and needs no explaining, but a model declaring a cheaper
+    // tier (the descriptor parser refuses only factors <= 0, so 0.5 is legal) was dropped here
+    // while the composer's badge still announced it. The reader was shown "x0.5" before the run
+    // and nothing after it, on a card stating a size and an amount that are off by half with no
+    // third number to reconcile them.
+    ...(typeof data?.billed_multiplier === 'number' && data.billed_multiplier > 0
+      && data.billed_multiplier !== 1
+      ? {
+        billedMultiplier: data.billed_multiplier,
+        ...(data.billed_multiplier_reasons?.length
+          ? { billedMultiplierReasons: data.billed_multiplier_reasons }
+          : {}),
+      }
+      : {}),
+    // What it cost, carried on the turn so the thread can state it the way the history below does.
+    // Conditional like its siblings: a turn the platform did not charge for carries no amount, and
+    // writing a zero would make an unbilled generation read as a free one.
+    ...(typeof data?.billed_credits === 'number' && data.billed_credits > 0
+      ? { billedCredits: data.billed_credits }
+      : {}),
     ...(result.error ? { error: result.error } : {}),
     ...(charged ? { chargedAnyway: true } : {}),
     ...(charged && typeof data?.asset_url === 'string' && data.asset_url

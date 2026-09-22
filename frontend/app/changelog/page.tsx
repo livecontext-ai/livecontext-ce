@@ -7,6 +7,7 @@ import { changelogStyles } from '@/app/changelog/_components/changelogStyles';
 import { fetchReleases, formatReleaseDate } from '@/lib/changelog/githubReleases';
 import { SELF_HOSTED_GITHUB_URL } from '@/lib/billing/pricing-constants';
 import { IS_CE } from '@/lib/edition/edition';
+import { socialCard } from '@/lib/seo/socialCard';
 
 /**
  * Public changelog, rendered from the GitHub Releases of the public CE repo as
@@ -26,9 +27,10 @@ import { IS_CE } from '@/lib/edition/edition';
 export const revalidate = 1800;
 
 export const metadata = {
-  title: 'Changelog - LiveContext',
+  title: 'Changelog',
   description: 'What we shipped, when. Product updates and release notes.',
   alternates: { canonical: '/changelog' },
+  ...socialCard({ title: 'Changelog', description: 'What we shipped, when. Product updates and release notes.', path: '/changelog' }),
   robots: IS_CE ? { index: false, follow: false } : undefined,
 };
 

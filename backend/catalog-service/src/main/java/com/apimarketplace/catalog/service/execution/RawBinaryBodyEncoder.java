@@ -39,8 +39,10 @@ public class RawBinaryBodyEncoder {
 
     public static final String DEFAULT_CONTENT_TYPE = "application/octet-stream";
     /** Warn when a FileRef-backed body exceeds this size (bytes). Current implementation
-     *  buffers the full file in memory; true streaming upload is a follow-up. */
-    public static final long LARGE_FILE_WARN_BYTES = 50L * 1024 * 1024; // 50 MB
+     *  buffers the full file in memory; true streaming upload is a follow-up. One value,
+     *  kept where the byte-range concern lives, because a ranged upload is what makes a
+     *  large file travel this path repeatedly. */
+    public static final long LARGE_FILE_WARN_BYTES = ByteRangeSlicer.LARGE_FILE_WARN_BYTES;
 
     @Autowired(required = false)
     private StorageClient storageClient;
@@ -52,6 +54,8 @@ public class RawBinaryBodyEncoder {
      *
      * @return the bytes to send, or an empty array when the param is missing/unresolvable
      *         (the calling HttpExecutionService decides whether to fail or continue)
+     * @throws ByteRangeException when the endpoint declares a byte range and this call cannot
+     *                            satisfy it
      */
     public byte[] encode(JsonNode requestSpec, Map<String, Object> parameters, String tenantId) {
         String rawBodyParam = requestSpec.path("rawBodyParam").asText("body");
@@ -63,7 +67,7 @@ public class RawBinaryBodyEncoder {
 
         // byte[] direct
         if (value instanceof byte[] arr) {
-            return arr;
+            return applyByteRange(arr, requestSpec, parameters);
         }
 
         // FileRef map → fetch from MinIO
@@ -86,24 +90,52 @@ public class RawBinaryBodyEncoder {
                     + "Streaming upload not yet implemented - watch for heap pressure on concurrent large uploads.",
                     bytes.length, storageKey);
             }
-            return bytes;
+            return applyByteRange(bytes, requestSpec, parameters);
         }
 
-        // String: optional base64: prefix, else literal UTF-8
+        // String: optional base64: prefix, else literal UTF-8. The byte range applies here too:
+        // a declared range that only worked for some body shapes would send the whole payload to
+        // every part's URL, which is the corruption this mechanism exists to prevent.
         if (value instanceof String s) {
             if (s.startsWith("base64:")) {
                 try {
-                    return Base64.getDecoder().decode(s.substring("base64:".length()));
+                    return applyByteRange(Base64.getDecoder().decode(s.substring("base64:".length())),
+                            requestSpec, parameters);
                 } catch (IllegalArgumentException e) {
                     log.error("RawBinaryBodyEncoder: invalid base64 payload - {}", e.getMessage());
                     return new byte[0];
                 }
             }
-            return s.getBytes(StandardCharsets.UTF_8);
+            return applyByteRange(s.getBytes(StandardCharsets.UTF_8), requestSpec, parameters);
         }
 
         log.error("RawBinaryBodyEncoder: unsupported rawBodyParam type {}", value.getClass().getSimpleName());
         return new byte[0];
+    }
+
+    /**
+     * Send only part of the file when the endpoint declares a byte range.
+     *
+     * <p>Generic multipart-upload support, declared per endpoint rather than per provider:
+     * {@code execution.request.rangeFirstByteParam} and {@code rangeLastByteParam} name two
+     * request parameters holding the INCLUSIVE first and last byte of the slice to send. Declare
+     * neither and the whole file is sent, exactly as before, so every existing raw_binary endpoint
+     * (TikTok, WhatsApp) is untouched.
+     *
+     * <p>Why it exists: several providers hand back a LIST of pre-signed URLs, one per fixed-size
+     * chunk, and expect each chunk's own bytes at its own URL. LinkedIn's Videos API is the first
+     * consumer here - it splits at 4 MB, so a 20 MB video is five parts and sending the whole file
+     * to the first URL corrupts the upload while every individual call still answers 2xx.
+     *
+     * <p>A range that cannot be honoured FAILS THE CALL, by throwing {@link ByteRangeException}:
+     * uploading the wrong bytes succeeds at the transport level and fails much later, at finalize
+     * time or on playback. See {@link ByteRangeSlicer} for why an empty body was rejected as the
+     * alternative.
+     *
+     * @throws ByteRangeException when a declared range cannot be honoured
+     */
+    byte[] applyByteRange(byte[] bytes, JsonNode requestSpec, Map<String, Object> parameters) {
+        return ByteRangeSlicer.slice(bytes, requestSpec, parameters, "RawBinaryBodyEncoder");
     }
 
     /**

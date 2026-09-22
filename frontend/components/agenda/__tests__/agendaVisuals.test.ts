@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { isActionable, isMovable, occurrenceHref } from '../agendaVisuals';
+import {
+  STATUS_ACCENT,
+  isActionable,
+  isMovable,
+  occurrenceAccent,
+  occurrenceHref,
+} from '../agendaVisuals';
 import type { AgendaOccurrence } from '@/lib/api/orchestrator/agenda.service';
 
 /**
@@ -60,10 +66,50 @@ describe('occurrenceHref', () => {
       .toBe('/app/workflow/wf-1');
   });
 
-  it('routes an AGENT to the agent page, ignoring any run id', () => {
-    // Agents have no pinning and no production run; a run route would 404.
+  it('routes an AGENT to the agent-panel deep link, ignoring any run id', () => {
+    // Agents have no pinning and no production run, and no per-agent page either:
+    // `/app/agent/<id>` 404s, so the row opens the panel via `?openAgent=`.
     expect(occurrenceHref({ resourceType: 'AGENT', resourceId: 'ag-1', runIdPublic: 'run_7' }))
-      .toBe('/app/agent/ag-1');
+      .toBe('/app/agent?openAgent=ag-1');
+  });
+
+  it('routes a past AGENT RUN to the conversation it happened in', () => {
+    // That is where the prompt, the answer and the tool calls are. The agent panel only
+    // says the agent exists, which answers nothing about the run that was clicked.
+    expect(occurrenceHref({ resourceType: 'AGENT', resourceId: 'ag-1', conversationId: 'conv-5' }))
+      .toBe('/app/c/conv-5');
+  });
+
+  it('falls back to the agent panel for a run with no conversation', () => {
+    // A workflow agent node runs inside a workflow run and has no conversation of its own.
+    expect(occurrenceHref({ resourceType: 'AGENT', resourceId: 'ag-1', conversationId: undefined }))
+      .toBe('/app/agent?openAgent=ag-1');
+  });
+
+  it('never sends a workflow to a conversation, whatever it carries', () => {
+    expect(occurrenceHref({ resourceType: 'WORKFLOW', resourceId: 'wf-1', conversationId: 'conv-5' }))
+      .toBe('/app/workflow/wf-1');
+  });
+});
+
+describe('occurrenceAccent', () => {
+  it('draws a stopped agent run in its own colour, not the failure red', () => {
+    // CANCELLED reaches the calendar from agent runs only. Painting it red would send
+    // someone looking for a fault in a run a person chose to end.
+    const stopped = occurrenceAccent(occurrence({ kind: 'PAST', status: 'CANCELLED' }));
+    const failed = occurrenceAccent(occurrence({ kind: 'PAST', status: 'FAILED' }));
+
+    expect(stopped.chip).toBeTruthy();
+    expect(stopped.chip).not.toBe(failed.chip);
+    expect(stopped.chip).not.toContain('red');
+  });
+
+  it('gives every past outcome the calendar can report an accent of its own', () => {
+    // A status with no entry falls back to the RESOURCE colour, which silently reads as
+    // "planned" on a past chip.
+    for (const status of ['RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED', 'FIRED'] as const) {
+      expect(STATUS_ACCENT[status], status).toBeTruthy();
+    }
   });
 });
 
@@ -81,6 +127,10 @@ describe('isActionable', () => {
 
   it('is false when there is no schedule id to act on', () => {
     expect(isActionable(occurrence({ scheduleId: undefined }))).toBe(false);
+  });
+
+  it('is false while the production resource is paused', () => {
+    expect(isActionable(occurrence({ resourcePaused: true }))).toBe(false);
   });
 });
 

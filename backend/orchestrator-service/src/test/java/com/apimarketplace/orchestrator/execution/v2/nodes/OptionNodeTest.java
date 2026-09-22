@@ -366,9 +366,14 @@ class OptionNodeTest {
             assertEquals("c1", emptyEval.get("choice_id"));
             assertEquals(false, emptyEval.get("result"));
             assertEquals("No expression defined", emptyEval.get("error"));
-            assertEquals("(no expression)", emptyEval.get("resolved_expression"));
+            assertEquals("error", emptyEval.get("outcome"),
+                    "a choice with no expression matches nothing: an option has no else");
+            // Canonical keys, shared with every other branching node. This entry used to
+            // be re-keyed into `resolved_expression` / `expression`, one of three private
+            // spellings the repo had for one idea.
+            assertEquals("(no expression)", emptyEval.get("resolved"));
             // A null expression is normalized to an empty string in the persisted evaluation detail.
-            assertEquals("", emptyEval.get("expression"));
+            assertEquals("", emptyEval.get("condition"));
 
             // The template engine must never be invoked for the null-expression choice.
             verify(mockTemplateEngine, never())
@@ -466,14 +471,21 @@ class OptionNodeTest {
             List<String> skippedBranches = (List<String>) persistedOutput.get("skipped_branches");
             assertEquals(List.of("Beta"), skippedBranches);
 
-            // evaluations must not contain the internal 'index' field
+            // Every branching node reports the same keys, index included: it is what
+            // orders the entries, and hiding it here was one of three private spellings
+            // this repo had for one idea.
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> evaluations = (List<Map<String, Object>>) persistedOutput.get("evaluations");
             assertNotNull(evaluations);
             assertEquals(2, evaluations.size());
             for (Map<String, Object> eval : evaluations) {
-                assertFalse(eval.containsKey("index"), "evaluations must not expose internal 'index' field");
+                assertTrue(eval.keySet().containsAll(BranchEvaluationReport.REQUIRED_KEYS),
+                        "an option evaluation reports the canonical branch keys: " + eval.keySet());
             }
+            assertEquals("choice_0", evaluations.get(0).get("branch"),
+                    "branch is the PORT, the same string the edge carries");
+            assertEquals(true, evaluations.get(0).get("selected"));
+            assertEquals(false, evaluations.get(1).get("selected"));
         }
     }
 }

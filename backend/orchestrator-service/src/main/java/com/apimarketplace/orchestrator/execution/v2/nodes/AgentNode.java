@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.agent.config.AgentModuleResolver;
+import com.apimarketplace.agent.config.ToolAccessControl;
 import com.apimarketplace.agent.domain.Message;
 import com.apimarketplace.agent.prompt.DefaultSystemPrompts;
 import com.apimarketplace.orchestrator.domain.workflow.Agent;
@@ -9,6 +10,7 @@ import com.apimarketplace.orchestrator.execution.v2.async.PendingAgentRegistry;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
 import com.apimarketplace.orchestrator.execution.v2.split.SplitContextManager;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.services.agent.AgentConfigResolver;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
@@ -644,13 +646,19 @@ public class AgentNode extends BaseNode {
                     agentClient.checkAndResetBudget(agentEntityId);
                     // Re-fetch after potential reset
                     agentDto = agentClient.resolveAgentConfig(agentEntityId, context.tenantId(), context.organizationId());
-                    if (agentDto != null && agentDto.getCreditBudget() != null
-                            && agentDto.getCreditsConsumed() != null
-                            && agentDto.getCreditsConsumed().compareTo(agentDto.getCreditBudget()) >= 0) {
+                    if (isOverItsOwnCap(agentDto)) {
                         long duration = System.currentTimeMillis() - startTime;
-                        String budgetError = "BUDGET_EXHAUSTED: Agent '" + agentConfig.label()
-                                + "' has reached its credit budget of " + agentDto.getCreditBudget() + " credits"
-                                + " (consumed: " + agentDto.getCreditsConsumed() + ")";
+                        // The token stays, because it is what a reader greps a failed node
+                        // for. The sentence after it is the shared one, so this stops being
+                        // a fourth wording for the single condition this change unifies -
+                        // and it prints the COMMITTED figure, which is what the webhook and
+                        // the schedule print for the same agent.
+                        java.math.BigDecimal committed = agentDto.getBudgetCommitted() != null
+                                ? agentDto.getBudgetCommitted() : agentDto.getCreditsConsumed();
+                        String budgetError = "BUDGET_EXHAUSTED: Agent '" + agentConfig.label() + "' - "
+                                + com.apimarketplace.common.credit.AgentBudgetRefusal.message(
+                                        agentDto.getCreditBudget(), committed,
+                                        agentDto.getBudgetBlockedUntil());
                         Map<String, Object> budgetOutput = new HashMap<>();
                         budgetOutput.put("resolved_params", buildResolvedInputForInspector(context, Map.of()));
                         budgetOutput.put("error", budgetError);
@@ -1296,10 +1304,17 @@ public class AgentNode extends BaseNode {
             try {
                 var obsRequest = buildMinimalObservabilityRequest(agentConfig, context, nodeId, "classify",
                     result.success() ? "COMPLETED" : "FAILED", result.error());
+                obsRequest.setKeyRoute(result.keyRoute());
+                stampBilledPair(obsRequest, result.provider(), result.model());
                 obsRequest.setDurationMs(result.durationMs());
                 obsRequest.setTotalTokens(result.tokensUsed());
                 obsRequest.setPromptTokens(result.promptTokens());
                 obsRequest.setCompletionTokens(result.completionTokens());
+                // The cache counters this node is billed on. Without them the cached part
+                // of the context was charged at full input rate over a model execution
+                // link (6.1x its cost) and was free without one - the same missing
+                // transport, in both directions.
+                applyCacheUsage(obsRequest, result.cacheUsage());
                 obsRequest.setIterationCount(1);
                 obsRequest.setTemperature(agentConfig.temperature());
                 obsRequest.setMaxTokensConfig(agentConfig.maxTokens());
@@ -1454,10 +1469,17 @@ public class AgentNode extends BaseNode {
             try {
                 var obsRequest = buildMinimalObservabilityRequest(agentConfig, context, nodeId, "guardrail",
                     result.success() ? "COMPLETED" : "FAILED", result.error());
+                obsRequest.setKeyRoute(result.keyRoute());
+                stampBilledPair(obsRequest, result.provider(), result.model());
                 obsRequest.setDurationMs(result.durationMs());
                 obsRequest.setTotalTokens(result.tokensUsed());
                 obsRequest.setPromptTokens(result.promptTokens());
                 obsRequest.setCompletionTokens(result.completionTokens());
+                // The cache counters this node is billed on. Without them the cached part
+                // of the context was charged at full input rate over a model execution
+                // link (6.1x its cost) and was free without one - the same missing
+                // transport, in both directions.
+                applyCacheUsage(obsRequest, result.cacheUsage());
                 obsRequest.setIterationCount(1);
                 obsRequest.setTemperature(agentConfig.temperature());
                 obsRequest.setMaxTokensConfig(agentConfig.maxTokens());
@@ -1566,6 +1588,12 @@ public class AgentNode extends BaseNode {
         output.put("provider", result.provider());
         output.put("tokens_used", result.tokensUsed());
         output.put("durationMs", result.durationMs());
+        // Only a decision model reports these. Omitted rather than written empty when the
+        // engine has none, so a template reading it on the LLM path resolves to nothing
+        // instead of to an empty object that looks like a real, unanimous result.
+        if (result.probabilities() != null && !result.probabilities().isEmpty()) {
+            output.put("probabilities", result.probabilities());
+        }
 
         // Find the selected category index for branch routing
         int selectedCategoryIndex = findCategoryIndex(result.selectedCategory());
@@ -1924,14 +1952,9 @@ public class AgentNode extends BaseNode {
         // (FilesToolsProvider treats an empty allow-list as unrestricted), so existing
         // agents keep their access; a non-empty list scopes the agent to those files only.
         passAllowedIds(credentials, tc, "files", "allowedFileIds");
-        passAccessMode(credentials, tc, "tableAccessMode");
-        passAccessMode(credentials, tc, "workflowAccessMode");
-        passAccessMode(credentials, tc, "interfaceAccessMode");
-        passAccessMode(credentials, tc, "agentAccessMode");
-        passAccessMode(credentials, tc, "applicationAccessMode");
-        passAccessMode(credentials, tc, "skillAccessMode");
-        passAccessMode(credentials, tc, "fileAccessMode");
-        passAccessMode(credentials, tc, "memoryAccessMode");
+        for (String accessModeKey : ToolAccessControl.ACCESS_MODE_KEYS) {
+            passAccessMode(credentials, tc, accessModeKey);
+        }
     }
 
     private void passAllowedIds(Map<String, Object> credentials, Map<String, Object> toolsConfig,
@@ -2261,11 +2284,24 @@ public class AgentNode extends BaseNode {
     }
 
     /**
-     * Builds a clean resolved input map for the inspector panel.
-     * Instead of dumping the entire context (trigger + all steps), this extracts
-     * only the specific resolved parameters relevant to each agent type.
+     * What the agent ran with, for the Params column.
+     *
+     * <p>Everything leaves through {@link ReportedParams#forReport}: the default branch
+     * below copies the author's own template params, and a `credentials` entry among them
+     * went into the persisted row verbatim. The prompts are the other half - a system
+     * prompt has no size limit and is copied onto the row of every item of every split -
+     * so an oversized one is described rather than reproduced.
      */
     private Map<String, Object> buildResolvedInputForInspector(ExecutionContext context, Map<String, Object> inputData) {
+        return ReportedParams.forReport(collectResolvedInputForInspector(context, inputData));
+    }
+
+    /**
+     * Collects the resolved input, ungated: the map {@link #buildResolvedInputForInspector}
+     * puts through the gate. Instead of dumping the entire context (trigger + all steps), it
+     * extracts only the parameters relevant to each agent type.
+     */
+    private Map<String, Object> collectResolvedInputForInspector(ExecutionContext context, Map<String, Object> inputData) {
         Map<String, Object> resolved = new LinkedHashMap<>();
 
         // Common params for all agent types
@@ -2439,6 +2475,20 @@ public class AgentNode extends BaseNode {
     /**
      * Build an AgentObservabilityRequest from a full agent execution result.
      */
+    /**
+     * The key route agent-service pinned for this execution, read off the response metrics
+     * (the {@code keyRoute} entry the execution service writes). Null when the caller ran
+     * against an older agent-service or the result carries no metrics: the debit then bills
+     * the platform route, the pre-route behaviour.
+     */
+    static String keyRouteOf(AgentExecutionResult agentResult) {
+        if (agentResult == null || agentResult.getMetrics() == null) {
+            return null;
+        }
+        Object route = agentResult.getMetrics().get("keyRoute");
+        return route instanceof String s && !s.isBlank() ? s : null;
+    }
+
     private com.apimarketplace.agent.client.dto.AgentObservabilityRequest buildObservabilityRequest(
             AgentExecutionResult agentResult, Agent agentConfig, ExecutionContext context,
             String nodeId, String agentType,
@@ -2450,6 +2500,9 @@ public class AgentNode extends BaseNode {
         req.setOrganizationId(context.organizationId());
         req.setAgentType(agentType);
         req.setNodeId(nodeId);
+        // Whose key the execution ran on, decided by agent-service and carried on the
+        // response metrics: the debit this report triggers bills an OWN_KEY turn a flat fee.
+        req.setKeyRoute(keyRouteOf(agentResult));
 
         // Agent entity reference
         if (agentConfig.agentConfigId() != null) {
@@ -2710,11 +2763,41 @@ public class AgentNode extends BaseNode {
         req.setSpawn(context.spawn());
         req.setItemIndex(context.itemIndex());
 
-        // LLM config from agent plan
+        // LLM config from agent plan. The caller overrides this with the pair the run
+        // actually reported, via stampBilledPair - see there for why the plan alone is
+        // not enough.
         req.setProvider(agentConfig.provider());
         req.setModel(agentConfig.model());
 
         return req;
+    }
+
+    /**
+     * Replace the observability row's provider/model with the pair the run REPORTED,
+     * keeping the plan's values only where the run named none.
+     *
+     * <p><b>This row is what charges the node, so an absent provider is money.</b> The plan
+     * may legitimately carry none: {@code provider} is optional on classify and guardrail,
+     * and a node that names only a model resolves through a catalogue that does not
+     * contain it, leaving the field null. The ledger then records {@code unknown/unknown},
+     * {@code ModelPricingService} finds no row and falls back to its default 1.0 / 4.0
+     * rates, and the per-provider margin lever resolves to the global one. That is the
+     * shape of the "unknown/unknown 793/150" production incident the agent path carries a
+     * comment about; it reached classify and guardrail too, and the run always knows the
+     * answer the plan omitted.
+     *
+     * <p>The run's value WINS rather than merely filling a gap, matching the agent path:
+     * on a model execution link the service re-stamps the billed pair deliberately, and
+     * reading the plan over it would charge the run as its execution target.
+     */
+    private void stampBilledPair(com.apimarketplace.agent.client.dto.AgentObservabilityRequest req,
+                                  String reportedProvider, String reportedModel) {
+        if (reportedProvider != null && !reportedProvider.isBlank()) {
+            req.setProvider(reportedProvider);
+        }
+        if (reportedModel != null && !reportedModel.isBlank()) {
+            req.setModel(reportedModel);
+        }
     }
 
     /**
@@ -3064,7 +3147,8 @@ public class AgentNode extends BaseNode {
                     response.durationMs(), response.provider(), response.model(),
                     response.tokensUsed(), response.promptTokens(), response.completionTokens(),
                     response.systemPrompt(), response.conversationMessages(),
-                    response.userPrompt());
+                    response.userPrompt(), response.cacheUsage(), response.probabilities(),
+                    response.keyRoute());
             } else {
                 return ClassifyResult.failure(response.error(), response.durationMs(), response.provider());
             }
@@ -3112,7 +3196,7 @@ public class AgentNode extends BaseNode {
                     response.model(), response.tokensUsed(),
                     response.promptTokens(), response.completionTokens(),
                     response.systemPrompt(), response.conversationMessages(),
-                    response.userPrompt());
+                    response.userPrompt(), response.cacheUsage(), response.keyRoute());
             } else {
                 return GuardrailResult.failure(response.error(), response.durationMs(), response.provider());
             }
@@ -3121,5 +3205,63 @@ public class AgentNode extends BaseNode {
             logger.error("Remote guardrail execution failed: {}", e.getMessage(), e);
             return GuardrailResult.failure("Remote guardrail error: " + e.getMessage(), 0, request.provider());
         }
+    }
+    /**
+     * Copy a classify/guardrail turn's cache counters onto the row billing reads.
+     *
+     * <p>{@code null} leaves them at zero, which is what a provider that reported none
+     * means - never a reason to refuse the row.
+     */
+    /**
+     * Copies the four counters the agent path above copies, and deliberately the same four.
+     * Gemini's {@code cachedContentTokenCount} is not among them because
+     * {@code AgentObservabilityRequest} has no slot for it, so no surface bills it - the
+     * agent path included. Adding it is a billing decision for every surface at once, not
+     * something to slip in on the classify/guardrail twins alone.
+     */
+    private static void applyCacheUsage(
+            com.apimarketplace.agent.client.dto.AgentObservabilityRequest req,
+            com.apimarketplace.agent.domain.UsageInfo usage) {
+        if (usage == null) {
+            return;
+        }
+        if (usage.cacheCreationInputTokens() != null) req.setCacheCreationTokens(usage.cacheCreationInputTokens());
+        if (usage.cacheReadInputTokens() != null) req.setCacheReadTokens(usage.cacheReadInputTokens());
+        if (usage.cachedTokens() != null) req.setCachedTokens(usage.cachedTokens());
+        if (usage.reasoningTokens() != null) req.setReasoningTokens(usage.reasoningTokens());
+    }
+
+
+    /**
+     * Whether this agent own cap refuses the run this node is about to start.
+     *
+     * <p>Package-private and static so the decision can be tested: the branch that consumes
+     * it sits inside a method with a dozen collaborators, and this rule has never had a test
+     * in the years it has been gating workflow agent nodes.
+     *
+     * <p><b>The verdict first.</b> {@code budgetBlocked} is resolved by agent-service through
+     * the rule every other surface uses ({@code AgentBudgetRule}), which applies the pending
+     * lazy reset AND counts {@code credits_reserved}. This node used to compare
+     * {@code consumed >= budget} itself and was the only one of the four deciders that
+     * ignored the reservation, so a parent whose in-flight sub-agent had committed the rest
+     * of the budget was started here and denied one iteration later by the guard that does
+     * count it. Same question, two answers, inside one run.
+     *
+     * <p><b>The old comparison stays as the fallback, and that is load-bearing.</b> During a
+     * rolling deploy this service can be new while agent-service is still old, and an absent
+     * verdict has to keep the behaviour this node has always had. Reading a missing field as
+     * "not blocked" would quietly stop gating workflow agent nodes for the length of the
+     * rollout - the one direction a cap must never fail.
+     */
+    static boolean isOverItsOwnCap(com.apimarketplace.agent.client.dto.AgentDto agentDto) {
+        if (agentDto == null) {
+            return false;
+        }
+        if (agentDto.getBudgetBlocked() != null) {
+            return agentDto.budgetBlockedOrFalse();
+        }
+        return agentDto.getCreditBudget() != null
+                && agentDto.getCreditsConsumed() != null
+                && agentDto.getCreditsConsumed().compareTo(agentDto.getCreditBudget()) >= 0;
     }
 }

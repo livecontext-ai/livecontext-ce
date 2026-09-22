@@ -179,17 +179,26 @@ public class SubscriptionService {
             Plan plan = planRepository.findById(planId)
                                       .orElseThrow(() -> new IllegalArgumentException("Plan not found id=" + planId));
 
-            // 3.5) Resolve the local Price if stripePriceId provided
+            // 3.5) Resolve the local Price if stripePriceId provided. The cadence is load-bearing
+            // since V498 (a yearly row is granted its pack MONTHLY by YearlyCreditCycleScheduler),
+            // so it is never guessed: the local price row first, else the Stripe item's recurring
+            // interval (the retrieve above expanded it), and when neither knows the row KEEPS the
+            // cadence it has (see the write below). A yearly customer relabelled monthly would
+            // silently receive one pack a year again, the exact defect V498 closes.
             Price price = null;
-            String cadence = "monthly"; // Default
+            String cadence = null;
             if (stripePriceId != null && !stripePriceId.isBlank()) {
                 Optional<Price> priceOpt = priceRepository.findByProviderPriceId(stripePriceId);
                 if (priceOpt.isPresent()) {
                     price = priceOpt.get();
                     cadence = price.getCadence();
                 } else {
-                    log.warn("Price not found for stripePriceId={}, using monthly as default", stripePriceId);
+                    log.warn("Price not found for stripePriceId={}, cadence taken from the Stripe interval", stripePriceId);
                 }
+            }
+            if (cadence == null) {
+                // The pack item shares the base item's interval, so no pack predicate is needed.
+                cadence = StripeSubscriptionPeriod.cadenceOf(stripeSub, id -> false);
             }
 
             // 4) Quantity & cancelAtPeriodEnd
@@ -226,13 +235,37 @@ public class SubscriptionService {
             int oldCreditQuantity = (local.getCreditQuantity() != null) ? local.getCreditQuantity() : 0;
             String oldStatus = local.getStatus();
 
+            // 6.1) One active subscription per billing customer. V423 backs this with a partial
+            // unique index on (billing_customer_id) WHERE status IN ('active','trialing'), so the
+            // siblings (typically the internal FREE row every user starts with) must be retired
+            // and FLUSHED before this row reaches the database. Until 2026-09 this ran AFTER
+            // the save and could not work once the index existed: for a new row the id is
+            // IDENTITY, so save() issues the INSERT immediately and it met the still-active FREE
+            // row; for a managed row (incomplete -> active) Hibernate orders the UPDATE of this
+            // entity before the sibling's at flush time, same outcome. Every FREE -> paid Stripe
+            // checkout therefore died with "Unable to handle the subscription conflict" (charged,
+            // never provisioned). Runs while `local` is still clean so the flush carries only the
+            // sibling updates. A failure here propagates (it used to be swallowed): the insert
+            // below would hit the index anyway, so failing loudly is the honest outcome.
+            String targetStatus = status != null ? status : "active";
+            retireSiblingActiveSubscriptions(bc, local, providerSubscriptionId, targetStatus);
+
             local.setBillingCustomer(bc);
             local.setPlan(plan);
             local.setPrice(price); // Set the price if found
-            local.setCadence(cadence);
+            if (cadence != null) {
+                local.setCadence(cadence);
+            } else if (local.getCadence() == null) {
+                // Neither source knows and the row is new: monthly, the historical default. An
+                // existing row keeps what it has: an upsert that carries no price id (the
+                // multi-item retrieve failed, or every item read as a pack) used to overwrite a
+                // yearly row with "monthly", which since V498 would drop it from the monthly
+                // credit cycle with nothing in the log.
+                local.setCadence("monthly");
+            }
             local.setProvider("stripe");
             local.setProviderSubscriptionId(providerSubscriptionId);
-            local.setStatus(status != null ? status : "active");
+            local.setStatus(targetStatus);
             local.setQuantity(quantity);
             if (currentPeriodStart != null) local.setCurrentPeriodStart(currentPeriodStart);
             if (currentPeriodEnd != null) local.setCurrentPeriodEnd(currentPeriodEnd);
@@ -249,49 +282,20 @@ public class SubscriptionService {
             try {
                 subscriptionRepository.save(local);
             } catch (DataIntegrityViolationException dup) {
-                // 🔁 Race lost: another thread/process inserted the same sub in between
-                log.warn("Uniqueness conflict on provider_subscription_id={}, switching to idempotent UPDATE.",
-                         providerSubscriptionId);
-                isNewSubscription = false; // Prevent duplicate credit attribution
-
-                // Use a new session to avoid Hibernate issues
-                try {
-                    Subscription already = subscriptionRepository.findByProviderSubscriptionId(providerSubscriptionId)
-                                                                 .orElseThrow(() -> new IllegalStateException("Sub inserted but not found afterwards: " + providerSubscriptionId));
-
-                    // copy the computed state and save
-                    String alreadyOldPlanCode = (already.getPlan() != null) ? already.getPlan().getCode() : null;
-                    int alreadyOldCreditQuantity = (already.getCreditQuantity() != null) ? already.getCreditQuantity() : 0;
-
-                    already.setBillingCustomer(bc);
-                    already.setPlan(plan);
-                    already.setPrice(price); // Set the price if found
-                    already.setCadence(cadence);
-                    already.setProvider("stripe");
-                    already.setStatus(status != null ? status : "active");
-                    already.setQuantity(quantity);
-                    if (currentPeriodStart != null) already.setCurrentPeriodStart(currentPeriodStart);
-                    if (currentPeriodEnd != null) already.setCurrentPeriodEnd(currentPeriodEnd);
-                    already.setCancelAtPeriodEnd(cancelAtPeriodEnd);
-                    already.setCreditQuantity(creditQuantity);
-                    if (creditStripePriceId != null) {
-                        priceRepository.findByProviderPriceId(creditStripePriceId).ifPresent(already::setCreditPrice);
-                    } else {
-                        already.setCreditPrice(null);
-                    }
-                    already.setUpdatedAt(LocalDateTime.now());
-                    if (already.getCreatedAt() == null) already.setCreatedAt(LocalDateTime.now());
-
-                    subscriptionRepository.save(already);
-
-                    // for the rest (logs / quota transition), we work with 'already'
-                    local = already;
-                    oldPlanCode = alreadyOldPlanCode;
-                    oldCreditQuantity = alreadyOldCreditQuantity;
-                } catch (Exception e) {
-                    log.error("Error retrieving/updating the existing subscription: {}", e.getMessage(), e);
-                    throw new RuntimeException("Unable to handle the subscription conflict", e);
-                }
+                // A unique constraint rejected the row: provider_subscription_id (a concurrent
+                // delivery of the same subscription won the insert) or the V423 index (a second
+                // active row for this customer raced past 6.1). The transaction is already
+                // aborted on Postgres, so nothing can be re-read or re-saved here: the former
+                // "idempotent UPDATE" fallback ran in this same aborted session and always died
+                // with a Hibernate AssertionFailure, which is the error production showed.
+                // Rethrow: the outer catch logs it, the webhook acknowledges the event, and the
+                // next Stripe event for this subscription (invoice.paid, subscription.updated)
+                // finds the committed row through findByProviderSubscriptionId and takes the
+                // update path. No credits are attributed for a row that was not written.
+                log.warn("Unique constraint rejected subscription {} for billing customer {} ({}); " +
+                         "the next Stripe event for it will take the update path.",
+                         providerSubscriptionId, bc.getId(), dup.getMostSpecificCause().getMessage());
+                throw dup;
             }
 
             log.info("Local subscription upserted id={}, providerSub={}, user={}, plan={}",
@@ -305,7 +309,7 @@ public class SubscriptionService {
             subscriptionEventPayload.put("planCode", plan.getCode());
             subscriptionEventPayload.put("planId", planId);
             subscriptionEventPayload.put("status", local.getStatus());
-            subscriptionEventPayload.put("cadence", cadence);
+            subscriptionEventPayload.put("cadence", local.getCadence());
             subscriptionEventPayload.put("quantity", quantity);
             subscriptionEventPayload.put("cancelAtPeriodEnd", cancelAtPeriodEnd);
             subscriptionEventPayload.put("creditQuantity", creditQuantity);
@@ -363,73 +367,7 @@ public class SubscriptionService {
                 }
             }
 
-            // 7.5) Enforce local uniqueness: cancel all other active subscriptions
-            // MUST happen before credit attribution to avoid "2 active subscriptions" errors
-            try {
-                if ("active".equalsIgnoreCase(local.getStatus()) || "trialing".equalsIgnoreCase(local.getStatus())) {
-                    Long currentUserId = bc.getUser().getId();
-                    var statuses = java.util.List.of("active", "trialing", "past_due", "incomplete");
-                    var siblings = subscriptionRepository
-                            .findByBillingCustomer_User_IdAndStatusInOrderByCreatedAtDesc(currentUserId, statuses);
-
-                    boolean changed = false;
-                    BigDecimal carryOverCredits = BigDecimal.ZERO;
-                    BigDecimal carryOverPaygCredits = BigDecimal.ZERO;
-                    for (var s : siblings) {
-                        if (!s.getId().equals(local.getId())) {
-                            // Transfer sub-bucket credits to the new subscription
-                            if (s.getRemainingCredits() != null && s.getRemainingCredits().compareTo(BigDecimal.ZERO) > 0) {
-                                carryOverCredits = carryOverCredits.add(s.getRemainingCredits());
-                                log.info("Carrying over {} sub credits from subscription {} to {}",
-                                        s.getRemainingCredits(), s.getId(), local.getId());
-                                s.setRemainingCredits(BigDecimal.ZERO);
-                            }
-                            // Transfer PAYG-bucket credits. Without this branch a user who
-                            // bought a PAYG top-up then upgraded their plan would silently
-                            // lose every paid PAYG dollar, because the old subscription row
-                            // gets canceled here but its payg_remaining_credits column is
-                            // never read by the new active row.
-                            if (s.getPaygRemainingCredits() != null && s.getPaygRemainingCredits().compareTo(BigDecimal.ZERO) > 0) {
-                                carryOverPaygCredits = carryOverPaygCredits.add(s.getPaygRemainingCredits());
-                                log.info("Carrying over {} PAYG credits from subscription {} to {}",
-                                        s.getPaygRemainingCredits(), s.getId(), local.getId());
-                                s.setPaygRemainingCredits(BigDecimal.ZERO);
-                            }
-                            s.setStatus("canceled");
-                            s.setCancelAtPeriodEnd(true);
-                            s.setUpdatedAt(LocalDateTime.now());
-                            changed = true;
-                            log.info("Subscription {} set to 'canceled' (new active/trialing: {}).",
-                                     s.getProviderSubscriptionId(), local.getProviderSubscriptionId());
-                        }
-                    }
-                    if (changed) subscriptionRepository.saveAll(siblings);
-                    // Apply carried-over credits to the new subscription. Sub + PAYG are
-                    // tracked separately to preserve the V250 two-bucket invariant - a
-                    // PAYG dollar must never silently become a sub-cycle credit (it would
-                    // be wiped on the next renewal).
-                    boolean balanceChanged = false;
-                    if (carryOverCredits.compareTo(BigDecimal.ZERO) > 0) {
-                        BigDecimal currentBalance = local.getRemainingCredits() != null ? local.getRemainingCredits() : BigDecimal.ZERO;
-                        local.setRemainingCredits(currentBalance.add(carryOverCredits));
-                        balanceChanged = true;
-                    }
-                    if (carryOverPaygCredits.compareTo(BigDecimal.ZERO) > 0) {
-                        BigDecimal currentPayg = local.getPaygRemainingCredits() != null ? local.getPaygRemainingCredits() : BigDecimal.ZERO;
-                        local.setPaygRemainingCredits(currentPayg.add(carryOverPaygCredits));
-                        balanceChanged = true;
-                    }
-                    if (balanceChanged) {
-                        subscriptionRepository.save(local);
-                        log.info("Transferred sub={} + PAYG={} credits to new subscription {} (sub balance: {}, PAYG balance: {})",
-                                carryOverCredits, carryOverPaygCredits, local.getId(),
-                                local.getRemainingCredits(), local.getPaygRemainingCredits());
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("uniqueness enforcement failed (single active subscription) for user {}: {}",
-                         bc.getUser().getId(), e.getMessage());
-            }
+            // 7.5) Sibling retirement moved to 6.1 (before the insert) - see the comment there.
 
             // 8) Credit attribution (after siblings are canceled to ensure single active subscription)
             try {
@@ -493,6 +431,86 @@ public class SubscriptionService {
     }
 
     /**
+     * Retires every other live subscription of the user ({@code active}, {@code trialing},
+     * {@code past_due}, {@code incomplete}) and carries their sub + PAYG balances onto
+     * {@code local}, then FLUSHES the retirements so the V423 partial unique index (one
+     * active/trialing row per billing customer) sees them before the caller inserts or
+     * re-activates {@code local}. Sub and PAYG buckets are carried separately: a PAYG dollar
+     * must never become a sub-cycle credit (it would be wiped on the next renewal).
+     *
+     * <p>No-op unless {@code targetStatus} is active/trialing. {@code local} itself is never
+     * retired (matched by id or by provider subscription id) and is NOT saved here: the caller
+     * owns its persistence, and {@code local} must stay clean during the flush.
+     */
+    private void retireSiblingActiveSubscriptions(BillingCustomer bc,
+                                                  Subscription local,
+                                                  String providerSubscriptionId,
+                                                  String targetStatus) {
+        if (!("active".equalsIgnoreCase(targetStatus) || "trialing".equalsIgnoreCase(targetStatus))) {
+            return;
+        }
+        Long currentUserId = bc.getUser().getId();
+        var statuses = java.util.List.of("active", "trialing", "past_due", "incomplete");
+        var candidates = subscriptionRepository
+                .findByBillingCustomer_User_IdAndStatusInOrderByCreatedAtDesc(currentUserId, statuses);
+
+        java.util.List<Subscription> retired = new java.util.ArrayList<>();
+        BigDecimal carryOverCredits = BigDecimal.ZERO;
+        BigDecimal carryOverPaygCredits = BigDecimal.ZERO;
+        for (var s : candidates) {
+            boolean sameRow = (local.getId() != null && local.getId().equals(s.getId()))
+                    || (providerSubscriptionId != null && providerSubscriptionId.equals(s.getProviderSubscriptionId()));
+            if (sameRow) continue;
+
+            if (s.getRemainingCredits() != null && s.getRemainingCredits().compareTo(BigDecimal.ZERO) > 0) {
+                carryOverCredits = carryOverCredits.add(s.getRemainingCredits());
+                log.info("Carrying over {} sub credits from subscription {} to {}",
+                        s.getRemainingCredits(), s.getId(), providerSubscriptionId);
+                s.setRemainingCredits(BigDecimal.ZERO);
+            }
+            if (s.getPaygRemainingCredits() != null && s.getPaygRemainingCredits().compareTo(BigDecimal.ZERO) > 0) {
+                carryOverPaygCredits = carryOverPaygCredits.add(s.getPaygRemainingCredits());
+                log.info("Carrying over {} PAYG credits from subscription {} to {}",
+                        s.getPaygRemainingCredits(), s.getId(), providerSubscriptionId);
+                s.setPaygRemainingCredits(BigDecimal.ZERO);
+            }
+            // V494: ai_remaining_credits is deliberately NOT carried over, unlike the
+            // two buckets above. It is an entitlement of the plan, not money the user
+            // holds: carrying it onto a paid row would hand a paying account a pot its
+            // plan does not grant, and the reverse case loses nothing because a paid row
+            // never had one. Coming back the other way, a cancelled paid account is given
+            // a NEW internal FREE row, and that row's first credit attribution seeds the
+            // pot along with the monthly credits, so it does not depend on anything here
+            // carrying it over.
+            s.setStatus("canceled");
+            s.setCancelAtPeriodEnd(true);
+            s.setUpdatedAt(LocalDateTime.now());
+            retired.add(s);
+            log.info("Subscription {} (provider sub {}) set to 'canceled' (new active/trialing: {}).",
+                     s.getId(), s.getProviderSubscriptionId(), providerSubscriptionId);
+        }
+        if (retired.isEmpty()) {
+            return;
+        }
+        // Flush, not just save: the caller's INSERT must not meet a still-active sibling.
+        subscriptionRepository.saveAllAndFlush(retired);
+
+        if (carryOverCredits.signum() > 0) {
+            BigDecimal current = local.getRemainingCredits() != null ? local.getRemainingCredits() : BigDecimal.ZERO;
+            local.setRemainingCredits(current.add(carryOverCredits));
+        }
+        if (carryOverPaygCredits.signum() > 0) {
+            BigDecimal current = local.getPaygRemainingCredits() != null ? local.getPaygRemainingCredits() : BigDecimal.ZERO;
+            local.setPaygRemainingCredits(current.add(carryOverPaygCredits));
+        }
+        if (carryOverCredits.signum() > 0 || carryOverPaygCredits.signum() > 0) {
+            log.info("Transferred sub={} + PAYG={} credits to subscription {} (sub balance: {}, PAYG balance: {})",
+                    carryOverCredits, carryOverPaygCredits, providerSubscriptionId,
+                    local.getRemainingCredits(), local.getPaygRemainingCredits());
+        }
+    }
+
+    /**
      * Cancels a subscription locally (used on customer.subscription.deleted).
      * Idempotent: if already canceled, we simply set the expected state.
      */
@@ -541,8 +559,14 @@ public class SubscriptionService {
 
     /**
      * Finds the BillingCustomer by cus_...; creates it if needed by looking up the user via metadata.userId.
-     * (This method is safe for most cases. In case of extreme races,
-     * the unique constraint on the DB side will protect and the caller will re-read the existing entity.)
+     *
+     * <p>This used to say that under an extreme race "the unique constraint on the DB side will
+     * protect and the caller will re-read the existing entity". The first half is true and the
+     * second is not, which is the whole trap: once the constraint rejects the insert, PostgreSQL
+     * has put this transaction in ERROR state and Spring has flagged it rollback-only, so the
+     * caller re-reads nothing and the commit throws where no catch can intercept it. Two webhook
+     * deliveries for the same customer are not an extreme race either, they are a Stripe retry.
+     * The creation now goes through findOrCreate, which cannot raise.
      */
     private BillingCustomer resolveOrCreateBillingCustomer(String customerId) throws StripeException {
         return billingCustomerRepository.findByProviderCustomerId(customerId).orElseGet(() -> {
@@ -561,7 +585,18 @@ public class SubscriptionService {
                 final Long finalUserId = userId;
                 User user = userRepository.findById(userId)
                                           .orElseThrow(() -> new IllegalStateException("User " + finalUserId + " not found"));
-                BillingCustomer bc = new BillingCustomer(user, "stripe");
+                BillingCustomer bc = billingCustomerRepository.findOrCreate(user.getId(), "stripe");
+                // There is one billing customer per user, so when they already had one under a
+                // different Stripe id this REPOINTS it, taking every subscription hanging off it
+                // along. That is the only resolution the user_id constraint leaves, and it beats
+                // the webhook loop this path used to produce, but it is a durable change to a
+                // billing row and it should be visible when it happens.
+                String previous = bc.getProviderCustomerId();
+                if (previous != null && !previous.equals(customerId)) {
+                    log.warn("Repointing billing customer {} for user {} from {} to {}: one "
+                                    + "billing_customer per user, and Stripe sent a new id.",
+                            bc.getId(), user.getId(), previous, customerId);
+                }
                 bc.setProviderCustomerId(customerId);
                 return billingCustomerRepository.save(bc);
             } catch (StripeException se) {

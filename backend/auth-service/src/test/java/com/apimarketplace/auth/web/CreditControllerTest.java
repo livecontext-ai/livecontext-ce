@@ -58,6 +58,99 @@ class CreditControllerTest {
     class ConsumeTests {
 
         @Test
+        @DisplayName("keyRoute OWN_KEY routes an agent turn to the flat-fee path, never the token-rate one")
+        void ownKeyAgentTurnTakesTheFlatFeePath() {
+            var request = new CreditController.CreditConsumeRequest(
+                    "AGENT_EXECUTION", "agent-run-1", "openai", "gpt-4", 100, 50,
+                    null, null, null, null, null, null, "OWN_KEY");
+            var expected = CreditConsumeResult.success(new BigDecimal("8"), new BigDecimal("92"))
+                    .withConsumption(new BigDecimal("60"));
+            when(creditService.consumeForOwnKeyTurn(USER_ID, "agent-run-1", "openai", "gpt-4",
+                    LlmTokenBreakdown.of(100, 50), "AGENT_EXECUTION")).thenReturn(expected);
+
+            ResponseEntity<CreditConsumeResult> response = controller.consume(USER_ID, request);
+
+            assertThat(response.getStatusCode().value()).isEqualTo(200);
+            assertThat(response.getBody().creditsUsed()).isEqualByComparingTo("8");
+            assertThat(response.getBody().consumptionCredits()).isEqualByComparingTo("60");
+            verify(creditService, never()).consumeForAgent(any(), any(), any(), any(), any(LlmTokenBreakdown.class), any());
+        }
+
+        @Test
+        @DisplayName("keyRoute OWN_KEY routes a chat turn to the flat-fee path too")
+        void ownKeyChatTurnTakesTheFlatFeePath() {
+            var request = new CreditController.CreditConsumeRequest(
+                    "CHAT_CONVERSATION", "conv-1", "anthropic", "claude-3", 500, 200,
+                    null, null, null, null, null, null, "OWN_KEY");
+            when(creditService.consumeForOwnKeyTurn(USER_ID, "conv-1", "anthropic", "claude-3",
+                    LlmTokenBreakdown.of(500, 200), "CHAT_CONVERSATION"))
+                    .thenReturn(CreditConsumeResult.success(new BigDecimal("3"), new BigDecimal("97")));
+
+            controller.consume(USER_ID, request);
+
+            verify(creditService, never()).consumeForChat(any(), any(), any(), any(), any(LlmTokenBreakdown.class));
+        }
+
+        @Test
+        @DisplayName("a PLATFORM or absent keyRoute keeps the token-rate path (every pre-V506 caller)")
+        void platformRouteKeepsTheTokenRatePath() {
+            var explicit = new CreditController.CreditConsumeRequest(
+                    "AGENT_EXECUTION", "agent-run-2", "openai", "gpt-4", 100, 50,
+                    null, null, null, null, null, null, "PLATFORM");
+            var legacy = new CreditController.CreditConsumeRequest(
+                    "AGENT_EXECUTION", "agent-run-3", "openai", "gpt-4", 100, 50);
+            when(creditService.consumeForAgent(eq(USER_ID), any(), eq("openai"), eq("gpt-4"),
+                    eq(LlmTokenBreakdown.of(100, 50)), eq("AGENT_EXECUTION")))
+                    .thenReturn(CreditConsumeResult.success(new BigDecimal("2.50"), new BigDecimal("97.50")));
+
+            controller.consume(USER_ID, explicit);
+            controller.consume(USER_ID, legacy);
+
+            verify(creditService, times(2)).consumeForAgent(eq(USER_ID), any(), eq("openai"), eq("gpt-4"),
+                    eq(LlmTokenBreakdown.of(100, 50)), eq("AGENT_EXECUTION"));
+            verify(creditService, never()).consumeForOwnKeyTurn(any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("keyRoute OWN_KEY routes every LLM execution kind of the agent family (classify, guardrail, browser agent) to the flat-fee path")
+        void ownKeyRoutesEveryAgentFamilyKind() {
+            for (String kind : List.of("CLASSIFY_EXECUTION", "GUARDRAIL_EXECUTION", "BROWSER_AGENT_EXECUTION")) {
+                var request = new CreditController.CreditConsumeRequest(
+                        kind, "src-" + kind, "openai", "gpt-4", 10, 5,
+                        null, null, null, null, null, null, "OWN_KEY");
+                when(creditService.consumeForOwnKeyTurn(USER_ID, "src-" + kind, "openai", "gpt-4",
+                        LlmTokenBreakdown.of(10, 5), kind))
+                        .thenReturn(CreditConsumeResult.success(new BigDecimal("1"), new BigDecimal("99")));
+
+                ResponseEntity<CreditConsumeResult> response = controller.consume(USER_ID, request);
+
+                assertThat(response.getStatusCode().value()).as(kind).isEqualTo(200);
+                verify(creditService).consumeForOwnKeyTurn(USER_ID, "src-" + kind, "openai", "gpt-4",
+                        LlmTokenBreakdown.of(10, 5), kind);
+            }
+            verify(creditService, never()).consumeForAgent(any(), any(), any(), any(), any(LlmTokenBreakdown.class), any());
+        }
+
+        @Test
+        @DisplayName("wire shape: keyRoute deserialises from the JSON body the agent services post, and its absence is the platform route")
+        void keyRouteRoundTripsThroughJson() throws Exception {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+            CreditController.CreditConsumeRequest ownKey = mapper.readValue(
+                    "{\"sourceType\":\"AGENT_EXECUTION\",\"sourceId\":\"exec-1\",\"provider\":\"openai\","
+                    + "\"model\":\"gpt-4\",\"promptTokens\":10,\"completionTokens\":5,\"keyRoute\":\"OWN_KEY\"}",
+                    CreditController.CreditConsumeRequest.class);
+            CreditController.CreditConsumeRequest legacy = mapper.readValue(
+                    "{\"sourceType\":\"AGENT_EXECUTION\",\"sourceId\":\"exec-2\",\"provider\":\"openai\","
+                    + "\"model\":\"gpt-4\",\"promptTokens\":10,\"completionTokens\":5}",
+                    CreditController.CreditConsumeRequest.class);
+
+            assertThat(ownKey.keyRoute()).isEqualTo("OWN_KEY");
+            assertThat(ownKey.promptTokens()).isEqualTo(10);
+            assertThat(legacy.keyRoute()).isNull();
+        }
+
+        @Test
         @DisplayName("should consume credits for AGENT_EXECUTION with valid payload and return 200")
         void shouldConsumeForAgentExecution() {
             var request = new CreditController.CreditConsumeRequest(
@@ -538,9 +631,9 @@ class CreditControllerTest {
         @DisplayName("serves the basis the estimate service builds, verbatim")
         void servesTheBasis() {
             Map<String, Object> basis = Map.of("enabled", true, "profiles", Map.of());
-            when(estimateService.buildBasis()).thenReturn(basis);
+            when(estimateService.buildBasis("42")).thenReturn(basis);
 
-            ResponseEntity<Map<String, Object>> response = controller.getEstimateBasis();
+            ResponseEntity<Map<String, Object>> response = controller.getEstimateBasis("42");
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).isSameAs(basis);
@@ -552,16 +645,30 @@ class CreditControllerTest {
             // The estimate is honest about the PRICE (it is the figure the ledger
             // debits) without publishing a field a reader could read as the
             // platform's margin. Nothing else in this response may reintroduce one.
-            when(estimateService.buildBasis()).thenReturn(Map.of(
+            when(estimateService.buildBasis("42")).thenReturn(Map.of(
                     "enabled", true,
-                    "profiles", Map.of("agentConversation", Map.of(
+                    "profiles", Map.of("chatConversation", Map.of(
                             "inputCoefficient", new BigDecimal("114.33"),
                             "outputCoefficient", new BigDecimal("5.55")))));
 
-            ResponseEntity<Map<String, Object>> response = controller.getEstimateBasis();
+            ResponseEntity<Map<String, Object>> response = controller.getEstimateBasis("42");
 
             assertThat(response.getBody()).doesNotContainKey("multiplier");
             assertThat(response.getBody().toString()).doesNotContain("multiplier");
+        }
+
+        @Test
+        @DisplayName("an unidentified caller still gets the estimate: the header is optional and is passed through as absent")
+        void servesAnUnidentifiedCaller() {
+            // The own-key half of the basis needs a caller; the coefficients do not. A
+            // missing header must therefore reach the service as null and come back with
+            // the platform estimate, never as a 4xx or a NullPointerException.
+            when(estimateService.buildBasis((String) null)).thenReturn(Map.of("enabled", true, "profiles", Map.of()));
+
+            ResponseEntity<Map<String, Object>> response = controller.getEstimateBasis(null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody()).containsEntry("enabled", true).doesNotContainKey("ownKey");
         }
     }
 
@@ -578,13 +685,32 @@ class CreditControllerTest {
             // 4-tuple total/sub/payg/delinquent) instead of getBalance().
             BigDecimal balance = new BigDecimal("150.75");
             when(creditService.getBalanceBreakdown(USER_ID)).thenReturn(
-                new CreditService.BalanceBreakdown(balance, balance, BigDecimal.ZERO, false, false));
+                new CreditService.BalanceBreakdown(balance, balance, BigDecimal.ZERO, BigDecimal.ZERO, false, false));
 
-            ResponseEntity<Map<String, Object>> response = controller.getBalance(USER_ID);
+            ResponseEntity<Map<String, Object>> response = controller.getBalance(USER_ID, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).isNotNull();
             assertThat(response.getBody()).containsEntry("balance", balance);
+        }
+
+        @Test
+        @DisplayName("V494: carries the AI allowance on its own key, and NOT folded into the balance")
+        void shouldCarryTheAiAllowanceSeparately() {
+            // The wallet widget draws it as its own line. Summing it into `balance`
+            // would claim spending power the wallet does not have: the allowance only
+            // pays for agent/chat turns on the models opened to the free tier.
+            BigDecimal wallet = new BigDecimal("1000.00");
+            BigDecimal allowance = new BigDecimal("100.00");
+            when(creditService.getBalanceBreakdown(USER_ID)).thenReturn(
+                new CreditService.BalanceBreakdown(wallet, wallet, BigDecimal.ZERO, allowance, false, true));
+
+            ResponseEntity<Map<String, Object>> response = controller.getBalance(USER_ID, null, null);
+
+            assertThat(response.getBody()).containsEntry("aiBalance", allowance);
+            assertThat(response.getBody())
+                    .as("the headline figure must not absorb a restricted pot")
+                    .containsEntry("balance", wallet);
         }
 
         @Test
@@ -598,9 +724,9 @@ class CreditControllerTest {
             // with every other test still green.
             when(creditService.getBalanceBreakdown(USER_ID)).thenReturn(
                 new CreditService.BalanceBreakdown(
-                    new BigDecimal("800"), new BigDecimal("800"), BigDecimal.ZERO, false, true));
+                    new BigDecimal("800"), new BigDecimal("800"), BigDecimal.ZERO, BigDecimal.ZERO, false, true));
 
-            ResponseEntity<Map<String, Object>> response = controller.getBalance(USER_ID);
+            ResponseEntity<Map<String, Object>> response = controller.getBalance(USER_ID, null, null);
 
             assertThat(response.getBody()).containsEntry("monthlyCreditsAreWorkflowOnly", true);
         }
@@ -610,9 +736,9 @@ class CreditControllerTest {
         void shouldReportFalseForAPaidAccount() {
             when(creditService.getBalanceBreakdown(USER_ID)).thenReturn(
                 new CreditService.BalanceBreakdown(
-                    new BigDecimal("800"), new BigDecimal("800"), BigDecimal.ZERO, false, false));
+                    new BigDecimal("800"), new BigDecimal("800"), BigDecimal.ZERO, BigDecimal.ZERO, false, false));
 
-            ResponseEntity<Map<String, Object>> response = controller.getBalance(USER_ID);
+            ResponseEntity<Map<String, Object>> response = controller.getBalance(USER_ID, null, null);
 
             assertThat(response.getBody()).containsEntry("monthlyCreditsAreWorkflowOnly", false);
         }
@@ -621,9 +747,9 @@ class CreditControllerTest {
         @DisplayName("should return zero balance")
         void shouldReturnZeroBalance() {
             when(creditService.getBalanceBreakdown(USER_ID)).thenReturn(
-                new CreditService.BalanceBreakdown(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, false));
+                new CreditService.BalanceBreakdown(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, false));
 
-            ResponseEntity<Map<String, Object>> response = controller.getBalance(USER_ID);
+            ResponseEntity<Map<String, Object>> response = controller.getBalance(USER_ID, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).isNotNull();
@@ -643,25 +769,25 @@ class CreditControllerTest {
             // Regression: pre-fix the endpoint had no sourceType parameter, so the
             // internal/scheduled chat gate could only ask the total-balance question
             // and a Free user with monthly workflow-only credits passed it.
-            when(creditService.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION")).thenReturn(false);
+            when(creditService.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION", null, null)).thenReturn(false);
             when(creditService.getBalance(USER_ID)).thenReturn(new BigDecimal("1000.00"));
 
             ResponseEntity<Map<String, Object>> response =
-                    controller.checkCredits(USER_ID, "CHAT_CONVERSATION");
+                    controller.checkCredits(USER_ID, "CHAT_CONVERSATION", null, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(402);
             assertThat(response.getBody()).containsEntry("allowed", false);
-            verify(creditService).hasSufficientCredits(USER_ID, "CHAT_CONVERSATION");
+            verify(creditService).hasSufficientCredits(USER_ID, "CHAT_CONVERSATION", null, null);
         }
 
         @Test
         @DisplayName("returns 200 allowed=true when the scoped check passes")
         void returns200WhenScopedCheckPasses() {
-            when(creditService.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION")).thenReturn(true);
+            when(creditService.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION", null, null)).thenReturn(true);
             when(creditService.getBalance(USER_ID)).thenReturn(new BigDecimal("15.00"));
 
             ResponseEntity<Map<String, Object>> response =
-                    controller.checkCredits(USER_ID, "CHAT_CONVERSATION");
+                    controller.checkCredits(USER_ID, "CHAT_CONVERSATION", null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody())
@@ -672,26 +798,60 @@ class CreditControllerTest {
         @Test
         @DisplayName("blank sourceType (?sourceType=) is normalized to null - must not silently apply the FREE PAYG scoping")
         void blankSourceTypeNormalizedToNull() {
-            when(creditService.hasSufficientCredits(USER_ID, null)).thenReturn(true);
+            when(creditService.hasSufficientCredits(USER_ID, null, null, null)).thenReturn(true);
             when(creditService.getBalance(USER_ID)).thenReturn(new BigDecimal("1000.00"));
 
-            ResponseEntity<Map<String, Object>> response = controller.checkCredits(USER_ID, "  ");
+            ResponseEntity<Map<String, Object>> response = controller.checkCredits(USER_ID, "  ", null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            verify(creditService).hasSufficientCredits(USER_ID, null);
+            verify(creditService).hasSufficientCredits(USER_ID, null, null, null);
         }
 
         @Test
         @DisplayName("omitted sourceType keeps the legacy total-balance semantics (null forwarded to the service)")
         void nullSourceTypeKeepsLegacySemantics() {
-            when(creditService.hasSufficientCredits(USER_ID, null)).thenReturn(true);
+            when(creditService.hasSufficientCredits(USER_ID, null, null, null)).thenReturn(true);
             when(creditService.getBalance(USER_ID)).thenReturn(new BigDecimal("1000.00"));
 
-            ResponseEntity<Map<String, Object>> response = controller.checkCredits(USER_ID, null);
+            ResponseEntity<Map<String, Object>> response = controller.checkCredits(USER_ID, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).containsEntry("allowed", true);
-            verify(creditService).hasSufficientCredits(USER_ID, null);
+            verify(creditService).hasSufficientCredits(USER_ID, null, null, null);
+        }
+
+        @Test
+        @DisplayName("V494: provider and model are forwarded verbatim - they decide whether the AI allowance counts")
+        void providerAndModelAreForwarded() {
+            // Every other case here passes nulls, so the controller could drop these two
+            // parameters entirely and this class would stay green - while a Free account
+            // was refused a turn its allowance would have paid for, because the gate was
+            // answering the pre-V494 question.
+            when(creditService.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION",
+                    "anthropic", "claude-haiku-4-5")).thenReturn(true);
+            when(creditService.getBalance(USER_ID)).thenReturn(new BigDecimal("0.00"));
+
+            ResponseEntity<Map<String, Object>> response = controller.checkCredits(
+                    USER_ID, "CHAT_CONVERSATION", "anthropic", "claude-haiku-4-5");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody()).containsEntry("allowed", true);
+            verify(creditService).hasSufficientCredits(USER_ID, "CHAT_CONVERSATION",
+                    "anthropic", "claude-haiku-4-5");
+        }
+
+        @Test
+        @DisplayName("V494: a blank model is forwarded as-is, not silently turned into a different question")
+        void blankModelIsForwardedUnchanged() {
+            when(creditService.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION", "anthropic", ""))
+                    .thenReturn(false);
+            when(creditService.getBalance(USER_ID)).thenReturn(new BigDecimal("0.00"));
+
+            ResponseEntity<Map<String, Object>> response = controller.checkCredits(
+                    USER_ID, "CHAT_CONVERSATION", "anthropic", "");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYMENT_REQUIRED);
+            verify(creditService).hasSufficientCredits(USER_ID, "CHAT_CONVERSATION", "anthropic", "");
         }
     }
 
@@ -710,7 +870,7 @@ class CreditControllerTest {
             when(pricingService.hasPricing("claude-code", "claude-sonnet-4-6")).thenReturn(true);
             when(pricingService.calculateCost("claude-code", "claude-sonnet-4-6", 4100, 8192))
                     .thenReturn(projected);
-            when(creditService.canAfford(USER_ID, projected, "CHAT_CONVERSATION")).thenReturn(true);
+            when(creditService.canAfford(USER_ID, projected, "CHAT_CONVERSATION", "claude-code", "claude-sonnet-4-6")).thenReturn(true);
 
             var request = new CreditController.ChatBudgetRequest(
                     "claude-code", "claude-sonnet-4-6", 4100, 8192);
@@ -773,7 +933,7 @@ class CreditControllerTest {
             when(pricingService.hasPricing("claude-code", "claude-sonnet-4-6")).thenReturn(true);
             when(pricingService.calculateCost("claude-code", "claude-sonnet-4-6", 4100, 8192))
                     .thenReturn(projected);
-            when(creditService.canAfford(USER_ID, projected, "CHAT_CONVERSATION")).thenReturn(false);
+            when(creditService.canAfford(USER_ID, projected, "CHAT_CONVERSATION", "claude-code", "claude-sonnet-4-6")).thenReturn(false);
 
             var request = new CreditController.ChatBudgetRequest(
                     "claude-code", "claude-sonnet-4-6", 4100, 8192);
@@ -793,7 +953,7 @@ class CreditControllerTest {
             when(pricingService.hasPricing("openai", "gpt-4")).thenReturn(true);
             when(pricingService.calculateCost("openai", "gpt-4", 0, 0))
                     .thenReturn(BigDecimal.ZERO);
-            when(creditService.canAfford(USER_ID, BigDecimal.ZERO, "CHAT_CONVERSATION")).thenReturn(true);
+            when(creditService.canAfford(USER_ID, BigDecimal.ZERO, "CHAT_CONVERSATION", "openai", "gpt-4")).thenReturn(true);
 
             var request = new CreditController.ChatBudgetRequest("openai", "gpt-4", null, null);
             ResponseEntity<Map<String, Object>> response = controller.checkChatBudget(USER_ID, request);
@@ -1235,9 +1395,9 @@ class CreditControllerTest {
             // Step 2: check balance - should match the remaining credits returned by consume.
             // V250: controller now reads getBalanceBreakdown (4-tuple total/sub/payg/delinquent).
             when(creditService.getBalanceBreakdown(USER_ID)).thenReturn(
-                new CreditService.BalanceBreakdown(balanceAfterConsume, balanceAfterConsume, BigDecimal.ZERO, false, false));
+                new CreditService.BalanceBreakdown(balanceAfterConsume, balanceAfterConsume, BigDecimal.ZERO, BigDecimal.ZERO, false, false));
 
-            ResponseEntity<Map<String, Object>> balanceResponse = controller.getBalance(USER_ID);
+            ResponseEntity<Map<String, Object>> balanceResponse = controller.getBalance(USER_ID, null, null);
 
             assertThat(balanceResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(balanceResponse.getBody()).isNotNull();

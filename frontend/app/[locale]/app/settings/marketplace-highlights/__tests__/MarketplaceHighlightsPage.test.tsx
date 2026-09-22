@@ -9,7 +9,7 @@
  */
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next-intl', () => ({
@@ -48,7 +48,8 @@ vi.mock('@/components/marketplace/PublicationCard', () => ({
   StandardFallback: () => <div data-testid="std-fallback" />,
 }));
 
-import MarketplaceHighlightsPage from '../page';
+import MarketplaceHighlightsPage, { PUBLIC_PAGE_MODES } from '../page';
+import { PERSONA_KEYS } from '@/components/landing/personas/personas';
 
 const APP_CURATED = { id: 'app-curated', title: 'Curated App', displayMode: 'APPLICATION', publisherName: 'Pub A' };
 const APP_CANDIDATE = { id: 'app-candidate', title: 'Candidate App', displayMode: 'APPLICATION', publisherName: 'Pub B' };
@@ -99,5 +100,48 @@ describe('MarketplaceHighlightsPage - row thumbnails', () => {
     // ...but it gets the placeholder, NOT a PublicationPreview - so exactly 2 thumbs
     // (curated app + candidate), never 3. Guards against passing null to RowThumbnail.
     expect(screen.getAllByTestId('row-thumb')).toHaveLength(2);
+  });
+
+  /**
+   * The six persona rows are what an admin curates to give each /for/<persona> page its
+   * own apps. They are bucket keys, not publication types: their candidate list is
+   * APPLICATION, like the home page's row, or the tab would open with nothing to pick.
+   * (useTranslations is mocked to echo the key, so the tabs read "modes.LANDING_OPS".)
+   */
+  it('offers one tab per public page, persona rows included, before the resource rows', async () => {
+    render(<MarketplaceHighlightsPage />);
+    for (const key of ['LANDING', 'LANDING_OPS', 'LANDING_CREATOR', 'LANDING_SUPPORT',
+      'LANDING_SALES', 'LANDING_MARKETING', 'LANDING_RECRUITING']) {
+      expect(await screen.findByRole('button', { name: `modes.${key}` })).toBeInTheDocument();
+    }
+    const tabs = screen.getAllByRole('button').map((b) => b.textContent);
+    expect(tabs.indexOf('modes.LANDING_RECRUITING')).toBeLessThan(tabs.indexOf('modes.APPLICATION'));
+  });
+
+  it('offers exactly the buckets the persona pages ask for, in PERSONA_KEYS order', () => {
+    // MarketplacePreview builds its bucket from the persona key at runtime; this list, the
+    // Java enum and V490 each spell the six out. Adding a seventh persona without touching
+    // them gives a page that requests LANDING_<NEW>, gets a 400 on the unknown enum value,
+    // silently falls back to the home page's row, and has no tab here to curate. This is
+    // the cheap half of that guard; the Java test names the same six on its side.
+    expect(PUBLIC_PAGE_MODES).toEqual(['LANDING', ...PERSONA_KEYS.map((p) => `LANDING_${p.toUpperCase()}`)]);
+  });
+
+  it('fills a persona tab with APPLICATION candidates, since no publication is of type LANDING_OPS', async () => {
+    // What the test above only claimed. A persona bucket asks the API for its own row
+    // (LANDING_OPS) but offers APPLICATION apps to put in it: filtering candidates on the
+    // bucket key would match nothing published, and the tab would open empty with no error
+    // to explain why. That is candidatePublicationMode, and this is where it is exercised.
+    render(<MarketplaceHighlightsPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'modes.LANDING_OPS' }));
+
+    await waitFor(() => {
+      expect(publicationServiceMock.getAdminHighlights).toHaveBeenCalledWith('LANDING_OPS');
+    });
+    await waitFor(() => {
+      const pubIds = screen.getAllByTestId('row-thumb').map(el => el.getAttribute('data-pub'));
+      expect(pubIds).toContain('app-candidate');
+      expect(pubIds).not.toContain('agent-x');
+    });
   });
 });

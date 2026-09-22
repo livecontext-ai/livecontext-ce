@@ -22,6 +22,8 @@ export interface ModelConfigEntry {
   available?: boolean;
   /** Cloud-admin bundle override (V381): what the CE bundle ships. null/undefined = inherits enabled. */
   bundleEnabled?: boolean | null;
+  /** Cloud-admin only (V493): whether a Free-plan grant may fund a turn on this model. */
+  freeTierEnabled?: boolean;
   rateLimitTpm?: number | null;
   rateLimitRpm?: number | null;
   rateLimitTpmPerTenant?: number | null;
@@ -42,6 +44,26 @@ export interface ModelConfigEntry {
   supportsComputerUse?: boolean;
   supportsResponseSchema?: boolean;
   supportsWebSearch?: boolean;
+  /**
+   * Admin panel only (`getEffectiveModelList`): the CLI bridge slug that could
+   * EXECUTE this billed model verbatim (`anthropic` -> `claude-code`, `openai` ->
+   * `codex`, `google` -> `gemini-cli`; `mistral` -> `mistral-vibe` is in the map but
+   * matches nothing today, since that CLI's ids are local config aliases rather than
+   * Mistral API ids). Present ONLY when that CLI routes this
+   * model's family, so the Models panel can offer a one-click execution link the CLI
+   * understands. Absent for every other model. It does not promise the binary on the
+   * bridge host is new enough for a just-released id.
+   */
+  cliBridgeProvider?: string;
+  /**
+   * Could that CLI RUN on the bridge host right now? It is the strict signal: installed
+   * AND logged in, since a logged-out CLI runs nothing. `null`/undefined = unknown
+   * (bridge unreachable or URL unset). `false` is a warning, not a nuance: only an
+   * entirely unwired bridge transport makes a linked run fall back to the billed
+   * provider, so with the bridge up and the CLI unusable the run is dispatched and
+   * fails.
+   */
+  cliBridgeAvailable?: boolean | null;
   /**
    * Per-model admin default reasoning effort for CLI/bridge providers
    * (minimal|low|medium|high|xhigh). Lowest-precedence fallback below the
@@ -97,6 +119,8 @@ export interface ModelConfigOverrideInput {
   provider: string;
   /** Cloud-admin only (V381): what the CE bundle ships for this model. null resets to inherit. */
   bundleEnabled?: boolean | null;
+  /** Cloud-admin only (V493): open/close this model to Free-plan grants. */
+  freeTierEnabled?: boolean;
   modelId: string;
   enabled?: boolean;
   displayName?: string;
@@ -184,6 +208,29 @@ class ModelConfigService {
     return apiClient.put(
       `/model-config/overrides/${encodeURIComponent(provider)}/${encodeURIComponent(modelId)}/category-enabled`,
       { category, enabled },
+    );
+  }
+
+  /**
+   * The providers switched off entirely. Only the exceptions: anything absent is on.
+   *
+   * The panel already knows which providers exist from the model list it just rendered, so
+   * asking for the short list keeps one source for "which providers are there" and another
+   * for "which are off", instead of two that can disagree.
+   */
+  async getDisabledProviders(): Promise<string[]> {
+    return apiClient.get<string[]>('/model-config/providers-disabled');
+  }
+
+  /**
+   * Switch a whole provider on or off. Every model it serves leaves the pickers at once, and
+   * each model's own flag is left untouched, so switching it back on restores the curated
+   * selection rather than turning everything on.
+   */
+  async setProviderEnabled(provider: string, enabled: boolean): Promise<void> {
+    await apiClient.put(
+      `/model-config/providers/${encodeURIComponent(provider)}/enabled`,
+      { enabled },
     );
   }
 
@@ -307,12 +354,18 @@ export interface CatalogSyncFeedStats {
  * rate, not the vendor's. They stay disabled until priced.
  *
  * `skippedProviders` are the ones with no usable API key (or whose endpoint
- * errored) - nothing could be asked of them this run.
+ * errored) - they WERE asked and could not answer.
+ *
+ * `notAskedProviders` are the ones the pass never reached, because its time
+ * budget ran out first. Deliberately separate from `skippedProviders`: a
+ * vendor nobody called has not failed, and showing it as failed sends an admin
+ * to debug a healthy provider. They go first on the next run.
  */
 export interface CatalogSyncDiscovery {
   models: Array<Record<string, unknown>>;
   discoveredByProvider: Record<string, number>;
   skippedProviders: string[];
+  notAskedProviders: string[];
 }
 
 export interface CatalogSyncPlan {

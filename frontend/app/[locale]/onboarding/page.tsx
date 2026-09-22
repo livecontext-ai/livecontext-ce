@@ -24,11 +24,30 @@ import {
   Mail
 } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
-import {
-  buildFirstBuildPrompt,
-  clearFirstBuildPrompt,
-  storeFirstBuildPrompt,
-} from '@/lib/onboarding/firstBuildPrompt';
+import { APP_SUGGESTIONS_FLAG, armWelcomeGift } from '@/lib/onboarding/welcomeGiftHandoff';
+
+/**
+ * Ask the app tree to show the suggested applications on the next screen.
+ *
+ * <p>Guarded on its own, like {@link armWelcomeGift}, and that is the point:
+ * a tab with site data blocked throws on write, and two unguarded writes in one
+ * `try` are a package. A store that rejects the first key would skip the second
+ * in silence, so a reader who completed onboarding correctly would get neither
+ * modal with nothing anywhere to say why. Guarded separately, one refused write
+ * costs exactly one modal.
+ *
+ * <p>Neither write can strand the user: the completion has already set
+ * `pageState = 'completed'`, and the effect watching that state is what
+ * redirects to chat.
+ */
+function armAppSuggestions(): void {
+  try {
+    sessionStorage.setItem(APP_SUGGESTIONS_FLAG, '1');
+  } catch {
+    // No suggestions in this tab. Nothing downstream waits on a flag that was
+    // never written.
+  }
+}
 
 // Types
 interface OnboardingData {
@@ -614,36 +633,7 @@ export default function OnboardingPage() {
         // Also invalidate to trigger a background refetch with complete server data
         queryClient.invalidateQueries({ queryKey: ['user', 'profile'] });
         setPageState('completed');
-        // Propose the first build in the chat composer. Null (and nothing
-        // written) when the answers were too generic to write a useful
-        // sentence, e.g. the "Something else" goal.
-        //
-        // Wrapped on its own because the completion has ALREADY succeeded, both
-        // server-side and on screen: `setPageState('completed')` ran a line
-        // above, which swaps the form for a spinner, and a separate effect
-        // redirects to chat on that state. So a throw here strands nobody and
-        // shows no error - it silently skips every statement below it, losing
-        // the `onboarding_completed` event, the proposal, and the
-        // suggested-apps hand-off on an account that finished correctly. A
-        // missing nicety must not take the rest of the hand-off with it.
-        let firstBuildPrompt: string | null = null;
-        try {
-          firstBuildPrompt = buildFirstBuildPrompt({
-            primaryGoal: data.primaryGoal,
-            toolsUsed: data.toolsUsed,
-            locale,
-            t,
-          });
-        } catch {
-          firstBuildPrompt = null;
-        }
         track('onboarding_completed', {
-          // Whether this account lands on a proposed first message or an empty
-          // composer - the one number that says whether the proposal reaches
-          // anybody, and the denominator for whatever they do with it.
-          // Same predicate `storeFirstBuildPrompt` applies, so the event and
-          // the slot cannot disagree about what counts as a proposal.
-          first_build_prompt_proposed: Boolean(firstBuildPrompt?.trim()),
           // Bounded option values only ('other' when the role is custom) - never
           // the free-text role the user typed.
           profession: data.profession || null,
@@ -652,8 +642,13 @@ export default function OnboardingPage() {
           previous_tool: data.previousTool || null,
           referral_source: data.referralSource || null,
         });
-        storeFirstBuildPrompt(firstBuildPrompt);
-        sessionStorage.setItem('lc_show_app_suggestions', '1');
+        // What a new account sees first: the two figures it already has
+        // (monthly workflow credits, and the separate AI allowance that funds
+        // chat and agent turns), then the applications it can start from. The
+        // order matters and is enforced by the hand-off, not by luck - see
+        // welcomeGiftHandoff.
+        armWelcomeGift();
+        armAppSuggestions();
         navigateToChat();
       }
     } catch (err: any) {
@@ -693,12 +688,11 @@ export default function OnboardingPage() {
       queryClient.invalidateQueries({ queryKey: ['user', 'profile'] });
       setPageState('completed');
       track('onboarding_skipped', { skipped_at_step: currentStep });
-      // No prompt on the skip path on purpose: the user told us nothing beyond
-      // a display name, so there is nothing to propose. Actively CLEAR instead
-      // of merely not writing: a proposal parked by an earlier completion in
-      // this tab would otherwise greet a user who just declined to answer.
-      clearFirstBuildPrompt();
-      sessionStorage.setItem('lc_show_app_suggestions', '1');
+      // Shown on the skip path too, and deliberately: what the plan grants does
+      // not depend on how much the user chose to tell us, and someone who
+      // skipped the questions is if anything likelier not to know it yet.
+      armWelcomeGift();
+      armAppSuggestions();
       navigateToChat();
     } catch (err: any) {
       setError(err?.message || t('skipError'));

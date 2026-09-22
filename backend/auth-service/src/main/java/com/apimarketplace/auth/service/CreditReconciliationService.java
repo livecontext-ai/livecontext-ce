@@ -114,12 +114,20 @@ public class CreditReconciliationService {
 
                 // Sum all ledger entries in current billing period
                 // Includes: PLAN_GRANT (positive) + PLAN_RESET + PAYG_TOPUP grants + consumptions (negative)
-                BigDecimal periodLedgerSum = ledgerRepository.sumAmountByUserIdSince(userId, periodStart);
+                BigDecimal periodLedgerSum = zeroIfNull(ledgerRepository.sumAmountByUserIdSince(userId, periodStart));
                 // V250 two-bucket: compare against the SUM of both buckets so a PAYG
                 // top-up that lands mid-period doesn't appear as drift (the grant
                 // inflates the ledger sum but only the PAYG column moves on the sub).
                 BigDecimal balance = sub.getTotalBalance();
-                BigDecimal drift = balance.subtract(periodLedgerSum);
+                // V494: an AI-funded row records what the buckets gave up in `amount`,
+                // and the monthly AI allowance is a third bucket getTotalBalance()
+                // excludes - that part of the movement never touched the balance
+                // compared here.
+                // Adding it back is what keeps a free-tier turn from reading as a lost
+                // movement; without it drift grows by the cost of every such turn.
+                BigDecimal aiFundedInPeriod = zeroIfNull(
+                        ledgerRepository.sumAiPortionByUserIdSince(userId, periodStart));
+                BigDecimal drift = balance.subtract(periodLedgerSum.add(aiFundedInPeriod));
 
                 if (drift.abs().compareTo(DRIFT_THRESHOLD) > 0) {
                     int pendingDl = countPendingDeadLetters(String.valueOf(userId));
@@ -136,14 +144,23 @@ public class CreditReconciliationService {
                     // their -reserved amount as an audit trail while the release
                     // refunded the balance - balance-neutral but sum-visible (see the
                     // repository method's javadoc).
+                    // Same AI add-back as the period sum above: the lifetime invariant
+                    // has to net out the allowance-funded movements too, or a free-tier
+                    // account never balances and every drift reads as unexplained.
                     BigDecimal lifetimeDrift = balance.subtract(
-                            ledgerRepository.sumAmountByUserIdExcludingReleasedReserves(userId));
+                            zeroIfNull(ledgerRepository.sumAmountByUserIdExcludingReleasedReserves(userId))
+                                    .add(zeroIfNull(ledgerRepository.sumAiPortionByUserId(userId))));
                     boolean lifetimeBalanced = lifetimeDrift.abs().compareTo(DRIFT_THRESHOLD) <= 0;
 
                     boolean isExplained = pendingDl > 0 || lifetimeBalanced;
 
+                    // Persist the sum that `drift` was actually computed against, not the
+                    // raw one: an operator reading credit_reconciliation_log must be able
+                    // to recompute drift = balance - ledger_sum. Logging the raw sum would
+                    // make every free-tier account appear off by exactly its ai_portion,
+                    // which is the confusion the add-back exists to remove.
                     reconciliationLogRepository.save(new CreditReconciliationLog(
-                            userId, balance, periodLedgerSum, drift, pendingDl, isExplained));
+                            userId, balance, periodLedgerSum.add(aiFundedInPeriod), drift, pendingDl, isExplained));
 
                     if (isExplained) {
                         log.info("CREDIT DRIFT (explained): user={}, drift={}, pending_dead_letters={}, lifetime_balanced={}, period_start={}",
@@ -184,5 +201,15 @@ public class CreditReconciliationService {
     public List<CreditReconciliationLog> getRecentDrifts(int days) {
         Instant since = Instant.now().minus(days, ChronoUnit.DAYS);
         return reconciliationLogRepository.findByCreatedAtAfterOrderByDriftDesc(since);
+    }
+
+    /**
+     * A COALESCE-backed sum still returns null through a mocked repository, and a
+     * reconciliation pass must not die on one user because one aggregate came back
+     * empty. Treating absent as zero is also the arithmetically correct reading: no
+     * rows summed means no movement to account for.
+     */
+    private static BigDecimal zeroIfNull(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 }

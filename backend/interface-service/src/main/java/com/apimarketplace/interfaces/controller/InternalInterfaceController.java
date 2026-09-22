@@ -7,6 +7,7 @@ import com.apimarketplace.interfaces.client.InterfaceFormat;
 import com.apimarketplace.interfaces.client.dto.*;
 import com.apimarketplace.interfaces.domain.InterfaceEntity;
 import com.apimarketplace.interfaces.domain.InterfaceRunSnapshotEntity;
+import com.apimarketplace.interfaces.repository.InterfaceRecentActivityView;
 import com.apimarketplace.interfaces.repository.InterfaceRepository;
 import com.apimarketplace.interfaces.service.InterfaceDtoMapper;
 import com.apimarketplace.interfaces.service.InterfaceService;
@@ -519,7 +520,7 @@ public class InternalInterfaceController {
         // therefore dead code and have been removed. Peer-scope cross-org
         // aggregation stays at 0 - same shape as the prior personal branch
         // (deferred "All workspaces" feature per RecentActivityScopeResultDto).
-        List<InterfaceEntity> rows = interfaceRepository.findRecentByOrganizationIdStrict(
+        List<InterfaceRecentActivityView> rows = interfaceRepository.findRecentByOrganizationIdStrict(
                 orgId, PageRequest.of(0, RECENT_LIMIT));
         int peerScopeCount = 0;
 

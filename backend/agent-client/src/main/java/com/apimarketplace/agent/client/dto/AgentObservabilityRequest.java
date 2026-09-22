@@ -48,6 +48,12 @@ public class AgentObservabilityRequest {
     // LLM config snapshot
     private String provider;
     private String model;
+    /**
+     * Whose API key the execution ran on: {@code OWN_KEY} (the tenant's own provider key,
+     * billed a flat fee per turn) or {@code PLATFORM}; null = unpinned (pre-route caller).
+     * Decided once per execution by agent-service and carried here to the debit.
+     */
+    private String keyRoute;
     private Double temperature;
     private Integer maxTokensConfig;
     private Integer maxIterationsConfig;
@@ -165,6 +171,8 @@ public class AgentObservabilityRequest {
     public void setStopReason(String stopReason) { this.stopReason = stopReason; }
     public String getBudgetScope() { return budgetScope; }
     public void setBudgetScope(String budgetScope) { this.budgetScope = budgetScope; }
+    public String getKeyRoute() { return keyRoute; }
+    public void setKeyRoute(String keyRoute) { this.keyRoute = keyRoute; }
 
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }

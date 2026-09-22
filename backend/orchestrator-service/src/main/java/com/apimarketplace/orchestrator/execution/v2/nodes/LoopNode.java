@@ -60,18 +60,27 @@ public class LoopNode extends BaseNode {
         logger.debug("Loop node executing: nodeId={}, condition={}, maxIterations={}, itemId={}",
             nodeId, loopCondition, maxIterations, context.itemId());
 
-        // Determine if we should enter the loop body
-        boolean enterBody = false;
+        // Determine if we should enter the loop body. The detailed result is KEPT:
+        // it was computed and discarded, so a loop reported nothing at all about the
+        // condition that decided its path - not the expression, not what it resolved
+        // to, not the answer. "Why did my loop exit immediately" had no evidence.
+        ConditionOutcome outcome = maxIterations > 0
+            ? evaluateConditionDetailed(context)
+            : ConditionOutcome.notEvaluated("maxIterations is " + maxIterations);
+        boolean enterBody = outcome.result();
 
-        if (maxIterations > 0) {
-            // Evaluate condition
-            enterBody = evaluateCondition(context);
-        }
+        String port = enterBody ? "body" : "exit";
+        List<Map<String, Object>> evaluations = List.of(hasCondition()
+            ? BranchEvaluationReport.evaluated(0, port, loopCondition, outcome.resolved(),
+                outcome.result(), true, outcome.error(), outcome.unresolved())
+            : BranchEvaluationReport.fallback(0, port, true));
 
-        // Build resolved_params snapshot for inspector visibility (resolved values)
+        // Params come from that same evaluation, never from a second resolution pass.
         Map<String, Object> resolvedParams = new LinkedHashMap<>();
-        String resolvedCondition = loopCondition != null ? resolveTemplateString(loopCondition, context) : "(none)";
-        resolvedParams.put("loopCondition", resolvedCondition);
+        // "(no condition)", the same words the evaluation entry uses. Params saying
+        // "(none)" while Output said "(no condition)" is a smaller version of exactly the
+        // two-panel disagreement this work removes.
+        resolvedParams.put("loopCondition", hasCondition() ? outcome.resolved() : "(no condition)");
         resolvedParams.put("maxIterations", maxIterations);
 
         // Build output
@@ -84,7 +93,15 @@ public class LoopNode extends BaseNode {
         // If we don't enter the body, the loop is immediately terminated
         output.put("terminated", !enterBody);
         output.put("enter_body", enterBody);
-        output.put("selected_path", enterBody ? "body" : "exit");
+        output.put("selected_path", port);
+        // Read by StepDataPersistenceService and the inspector's Condition / Resolved /
+        // Result columns. Nothing wrote them, so those columns were empty on every loop.
+        output.put("loop_condition", loopCondition);
+        output.put("max_iterations", maxIterations);
+        output.put("condition_expression", loopCondition);
+        output.put("condition_resolved", hasCondition() ? outcome.resolved() : "(no condition)");
+        output.put("condition_result", enterBody);
+        output.put("evaluations", evaluations);
 
         logger.info("Loop node evaluated: nodeId={}, enterBody={}, maxIterations={}, condition={}",
             nodeId, enterBody, maxIterations, loopCondition);
@@ -189,10 +206,33 @@ public class LoopNode extends BaseNode {
         return maxIterations;
     }
 
-    private boolean evaluateCondition(ExecutionContext context) {
+    /** Whether this loop has anything to evaluate, or is a plain counted loop. */
+    private boolean hasCondition() {
+        return loopCondition != null && !loopCondition.isBlank();
+    }
+
+    /**
+     * What the loop condition evaluated to, and what it resolved to on the way.
+     *
+     * @param result whether the body is entered
+     * @param resolved the expression with its references substituted
+     * @param error evaluation error, null when there was none
+     * @param unresolved references that pointed at nothing
+     */
+    private record ConditionOutcome(boolean result,
+                                    String resolved,
+                                    String error,
+                                    List<TemplateEngine.UnresolvedReference> unresolved) {
+
+        static ConditionOutcome notEvaluated(String why) {
+            return new ConditionOutcome(false, "(not evaluated: " + why + ")", null, List.of());
+        }
+    }
+
+    private ConditionOutcome evaluateConditionDetailed(ExecutionContext context) {
         // No condition or blank means always enter body (controlled by maxIterations only)
-        if (loopCondition == null || loopCondition.isBlank()) {
-            return true;
+        if (!hasCondition()) {
+            return new ConditionOutcome(true, "(no condition)", null, List.of());
         }
 
         try {
@@ -209,13 +249,14 @@ public class LoopNode extends BaseNode {
             }
 
             var evalResult = templateEngine.evaluateConditionWithDetailsWithMap(loopCondition, evalContext);
-            logger.debug("Loop condition evaluated: nodeId={}, condition={}, result={}",
-                nodeId, loopCondition, evalResult.result());
-            return evalResult.result();
+            logger.debug("Loop condition evaluated: nodeId={}, condition={}, resolved={}, result={}",
+                nodeId, loopCondition, evalResult.resolvedExpression(), evalResult.result());
+            return new ConditionOutcome(evalResult.result(), evalResult.resolvedExpression(),
+                evalResult.errorMessage(), evalResult.unresolvedReferences());
         } catch (Exception e) {
             logger.error("Loop condition evaluation failed: nodeId={}, condition={}, error={}",
                 nodeId, loopCondition, e.getMessage());
-            return false;
+            return new ConditionOutcome(false, loopCondition, e.getMessage(), List.of());
         }
     }
 

@@ -5,6 +5,9 @@ import org.junit.jupiter.api.Test;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
+import java.util.HashSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -75,7 +78,55 @@ class BridgeProvidersHavePricingTest {
     private static final List<String> SEED_MIGRATION_RELS = List.of(
             "migration-service/src/main/resources/db/migration/V128__bridge_catalog_allowlist_v1.sql",
             "migration-service/src/main/resources/db/migration/V378__bridge_catalog_sync_fable_5.sql",
-            "migration-service/src/main/resources/db/migration/V399__bridge_catalog_sync_gpt56_tiers.sql");
+            "migration-service/src/main/resources/db/migration/V399__bridge_catalog_sync_gpt56_tiers.sql",
+            "migration-service/src/main/resources/db/migration/V484__bridge_catalog_sync_gpt6_astra.sql");
+
+    /**
+     * A reconciling migration deletes every codex row NOT named in a hand-written
+     * {@code NOT IN (...)} list. That list is a fourth copy of the allowlist, and the
+     * parity assertions below never read it: they count INSERT tuples. An id left out
+     * of it is DELETED on every fresh install, with this suite otherwise green.
+     *
+     * <p>Only the LAST seed migration is checked, and that is the whole rule. Applied
+     * migrations are immutable, so an older file's list is a snapshot of the allowlist
+     * on its own date and is correct as history: V399 legitimately omits ids that did
+     * not exist then, and on a fresh install it runs BEFORE the migration inserting
+     * them, so it deletes nothing. What must hold is that whoever adds a model writes a
+     * migration whose list is the FULL current set, or their own reconcile drops every
+     * id added before them.
+     */
+    @Test
+    @DisplayName("the newest codex reconciliation list equals BridgeAllowlist MODELS[codex]")
+    void codexReconciliationListsMatchTheAllowlist() throws IOException {
+        Set<String> allowlist = readBridgeAllowlistFromJava().get("codex");
+        assertThat(allowlist).as("codex must be allow-listed").isNotEmpty();
+
+        String rel = SEED_MIGRATION_RELS.get(SEED_MIGRATION_RELS.size() - 1);
+        {
+            String sql = Files.readString(resolveBackendFile(rel));
+            Matcher m = Pattern
+                    .compile("provider[ ]*=[ ]*'codex'[^;]*?NOT IN[ ]*[(]([^)]*)[)]",
+                             Pattern.DOTALL)
+                    .matcher(sql);
+            int found = 0;
+            while (m.find()) {
+                found++;
+                Set<String> listed = new HashSet<>();
+                Matcher ids = Pattern.compile("'([^']+)'").matcher(m.group(1));
+                while (ids.find()) listed.add(ids.group(1));
+                assertThat(listed)
+                        .as("%s: a codex NOT IN list that omits an allow-listed id deletes "
+                            + "that row on every install", rel)
+                        .isEqualTo(allowlist);
+            }
+            // Both reconcile blocks (model_config_overrides, auth.model_pricing) must be
+            // present: a migration that seeds without reconciling leaves the previous
+            // generation's phantom rows behind, the state V399 had to clean up.
+            assertThat(found)
+                    .as("%s must reconcile BOTH codex tables with a NOT IN list", rel)
+                    .isEqualTo(2);
+        }
+    }
 
     @Test
     @DisplayName("application.yml bridge models == BridgeAllowlist MODELS")

@@ -89,7 +89,7 @@ class CredentialSelectorDiscoverabilityTest {
                     .isTrue();
         }
         assertThat(ONLY_DEFAULTS_ARE_USED.matcher(
-                "Executing a tool directly always uses the default one, and the others are selectable.").find())
+                "Executing a tool directly uses the default one unless the call names another with credential_name. The others are selectable.").find())
                 .as("the corrected wording must NOT trip the scan, or it can never go green")
                 .isFalse();
     }
@@ -170,7 +170,7 @@ class CredentialSelectorDiscoverabilityTest {
         // The example must show the shape the code produces, or it teaches a response no
         // call returns. Both of these sentences are appended unconditionally.
         assertThat(documentedHint)
-                .contains("Executing a tool directly always uses the default one")
+                .contains("Executing a tool directly uses the default one unless the call names another with credential_name.")
                 .contains("This is what YOUR workspace holds")
                 .contains("credential_selector (active only)");
         // And the quoting the offer applies to every name, which is the reason the

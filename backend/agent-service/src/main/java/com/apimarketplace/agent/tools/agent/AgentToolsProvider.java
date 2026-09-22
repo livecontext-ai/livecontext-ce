@@ -43,7 +43,7 @@ public class AgentToolsProvider implements ToolsProvider {
     private final AgentTaskContextModule taskContextModule;
 
     private static final List<String> VALID_ACTIONS = List.of(
-        "create", "get", "list", "update", "delete", "execute", "help", "help_models",
+        "create", "get", "list", "update", "delete", "execute", "help", "help_models", "budgets",
         // Memory & sharing
         "get_history", "search_messages", "share", "unshare", "refresh_share",
         // Marketplace publication lifecycle
@@ -146,6 +146,7 @@ public class AgentToolsProvider implements ToolsProvider {
                 .description("""
                     Action to perform. Groups:
                     - Agent CRUD: create, get, list, update, delete
+                    - Spending: budgets (which capped agents are near or past their own credit cap)
                     - Execution: execute
                     - Memory & sharing: get_history, search_messages, share, unshare, refresh_share
                     - Marketplace publication: publish (requires title + interface_id landing page), unpublish
@@ -219,7 +220,22 @@ public class AgentToolsProvider implements ToolsProvider {
                 + "generation tool (default: false) (for: create, update). Off unless you pass true: every "
                 + "asset it produces spends the account's credits, at the rate the chosen model sets. Turn it "
                 + "on for an agent whose job is to make assets, and leave it off for one that only reads and "
-                + "writes.", false, false),
+                + "writes. If YOU are an agent, you can only switch it on for another agent when you "
+                + "have it yourself; if you do not, create the agent without this parameter and "
+                + "ask the user to enable it.", false, false),
+            boolParam("mailbox", "Let the agent read and send email on the account's connected mailbox with "
+                + "the mailbox tool (default: false) (for: create, update). Off unless you pass true: it "
+                + "reaches a real mailbox and can send from its address, to a person, with no undo. Turn it "
+                + "on for an agent whose job is triage or correspondence, and pair it with "
+                + "mailbox_access_mode='read' unless it genuinely has to send. You can only switch "
+                + "this on for another agent when you have it yourself. If YOUR mailbox is "
+                + "read-only you must also pass mailbox_access_mode='read': a mailbox granted "
+                + "without a mode means FULL access. Both rules apply only when YOU are an agent.", false, false),
+            enumParam("mailbox_access_mode", "Mailbox access: 'write' (default) or 'read' (mailbox read, "
+                + "folders, mark_read and help only, no send, delete, move, flag or mark_unread). Only "
+                + "meaningful when mailbox=true. If your own mailbox is read-only you cannot pass "
+                + "'write' here, and you cannot omit this parameter while granting a mailbox. "
+                + "(for: create, update)", false, List.of("read", "write")),
             stringParam("workflow_id", "Single workflow ID to link agent to (legacy, prefer 'workflows' array)", false),
             ToolParameter.builder()
                 .name("datasource_id")
@@ -260,7 +276,8 @@ public class AgentToolsProvider implements ToolsProvider {
             enumParam("memory_access_mode", "Long-term memory access: 'write' (default) or 'read' (get/list/search/help only, no save or delete). What this agent saves is injected into every agent in the workspace, so use 'read' for an agent that should consult the workspace's facts without changing them. (for: create, update)", false, List.of("read", "write")),
             // Per-resource GRANT scope (none/all/custom). Authoritative when set: 'all' grants EVERY
             // resource of that family (the matching id list is ignored). Omit to derive from the list
-            // (empty=none, non-empty=custom) - so existing callers keep working unchanged.
+            // (empty=none, non-empty=custom) ON CREATE - so existing callers keep working
+            // unchanged. On UPDATE the stored grant is kept; see the RESOURCE GRANTS block.
             enumParam("workflows_grant", "GRANT scope for 'workflows': 'none' | 'all' | 'custom' - see RESOURCE GRANTS. (for: create, update)", false, List.of("none", "all", "custom")),
             enumParam("applications_grant", "GRANT scope for 'applications': 'none' | 'all' | 'custom' - see RESOURCE GRANTS. (for: create, update)", false, List.of("none", "all", "custom")),
             enumParam("tables_grant", "GRANT scope for 'tables': 'none' | 'all' | 'custom' - see RESOURCE GRANTS. (for: create, update)", false, List.of("none", "all", "custom")),
@@ -272,7 +289,8 @@ public class AgentToolsProvider implements ToolsProvider {
             boolParam("webhook_memory", "Webhook uses conversation memory - agent sees previous messages (for: create, update)", false, false),
 
             // Schedule configuration (for: create, update)
-            stringParam("schedule_cron", "Cron expression for scheduled execution, e.g. '0 9 * * *' = daily 9AM. Pass empty string '' to REMOVE the schedule (for: create, update)", false),
+            stringParam("schedule_cron", "Cron expression for scheduled execution, e.g. '0 9 * * *' = daily 9AM. Pass empty string '' to REMOVE the schedule (for: create, update). "
+                + "Passing a non-empty cron needs the user's authorization in an interactive chat, because it arms an agent that wakes up on its own and spends credit with nobody watching: the ask happens inside your call, so it may take longer to answer - do not stop, do not announce that you are waiting, do not re-call, read the response. executed:false means NOTHING happened, no agent was created and no schedule was changed. Removing a schedule ('') is not gated.", false),
             stringParam("schedule_timezone", "Timezone for schedule, e.g. 'Europe/Paris' (default: UTC) (for: create, update)", false),
             intParam("schedule_max_executions", "Max number of scheduled executions (null=unlimited) (for: create, update)", false, null),
             stringParam("schedule_prompt", "Message sent to the agent at each scheduled run. If the agent has pending delegated tasks at fire time, a dynamic task-inbox prompt replaces it (this value is the no-task fallback). (for: create, update)", false),
@@ -357,7 +375,13 @@ public class AgentToolsProvider implements ToolsProvider {
             stringParam("interface_id", "Landing interface UUID - REQUIRED for publish (the public-facing page presented to acquirers before they install the agent).", false),
             enumParam("visibility", "Marketplace visibility: 'PRIVATE' (default, only you), 'PUBLIC' (anyone), 'UNLISTED' (link only) (for: publish)", false,
                 List.of("PRIVATE", "PUBLIC", "UNLISTED")),
-            intParam("credits_per_use", "Credits charged to acquirers per execution. Default 0 (free). Required > 0 for some PUBLIC publications. (for: publish)", false, 0)
+            intParam("credits_per_use", "Credits charged to acquirers per execution. Default 0 (free). Required > 0 for some PUBLIC publications. (for: publish)", false, 0),
+            ToolParameter.builder()
+                .name("threshold")
+                .type("number")
+                .description("OPTIONAL (for: budgets). How much of its own cap an agent must have committed to count as 'near', as a fraction greater than 0 and at most 1. Default 0.8. Agents already past their cap are reported as 'blocked' whatever this is set to.")
+                .required(false)
+                .build()
         );
 
         return AgentToolDefinition.builder()
@@ -368,9 +392,9 @@ public class AgentToolsProvider implements ToolsProvider {
                 execute: run a sub-agent with a prompt synchronously. Requires agent_id + prompt. Memory on by default.
                 RESOURCE GRANTS (create/update) - the five families workflows, applications, tables, interfaces, agents all use the same 3-param pattern:
                 - '<family>' list: IDs to grant. Default [] = NO access. Pass [] to revoke. Omitting or null = [].
-                - '<family>_grant': 'none'=no access, 'all'=EVERY resource of that family (the list is then ignored), 'custom'=only the listed IDs. Omit to derive from the list (empty=none, non-empty=custom).
+                - '<family>_grant': 'none'=no access, 'all'=EVERY resource of that family (the list is then ignored), 'custom'=only the listed IDs. On CREATE, omitting it derives the grant from the list (empty=none, non-empty=custom). On UPDATE the stored grant is KEPT, so a list sent without its grant is discarded: send both, and read '<family>Grant' back from the response.
                 - '<family>_access_mode': 'write' (default) or 'read' (view/query only, no create/edit/delete/execute).
-                Webhook: webhook_enabled=true returns a POST URL + curl example. Schedule: schedule_cron enables recurring execution.
+                Webhook: webhook_enabled=true returns a POST URL + curl example. Schedule: schedule_cron enables recurring execution (needs the user's authorization in an interactive chat - see the schedule_cron parameter).
                 Memory: get_history fetches another agent's conversation history. share returns a shareable conversation link.
                 Task delegation (async agent-to-agent work): assign creates a task for a target agent (or NULL agent_id = backlog anyone can claim). inbox/outbox list your pending/sent tasks. task_complete/task_reject/task_cancel close tasks. task_delete permanently removes a terminal task. claim picks a backlog item. Recurrences create cron-driven task templates (recurrence_create/list/update/delete). Review verbs: see the ROLE RULE on the 'action' parameter.
                 Call agent(action='help') for the full docs, examples, and lifecycle diagrams.

@@ -28,7 +28,7 @@ vi.mock('@/lib/hooks/useModelCostBasis', () => ({
   useModelCostBasis: () => ({ basis: null, isLoading: false }),
 }));
 vi.mock('@/lib/hooks/useMonthlyCreditsCannotPay', () => ({
-  useMonthlyCreditsCannotPay: () => ({ blocked: false, isLoading: false }),
+  useMonthlyCreditsCannotPay: () => ({ blocked: false, blockedForModel: () => false, freeTierForModel: () => false, prefersFreeTierModels: false, isLoading: false }),
 }));
 vi.mock('next/image', () => ({ default: () => null }));
 // Radix Select renders options in a portal only when open - inline them so the

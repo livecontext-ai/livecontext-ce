@@ -623,4 +623,163 @@ class WorkflowPlanNodePolicyParsingTest {
                 .isEqualTo(new NodePolicy(0, 0L, true));
         }
     }
+
+    // =====================================================================
+    // providerRetryMaxWaitSec - the one field where absent and 0 differ
+    // =====================================================================
+
+    @Nested
+    @DisplayName("providerRetryMaxWaitSec")
+    class ProviderRetryBudget {
+
+        private Map<String, Object> mcpWithBudget(Object budget) {
+            Map<String, Object> block = new HashMap<>();
+            if (budget != null) {
+                block.put("providerRetryMaxWaitSec", budget);
+            }
+            Map<String, Object> entry = new HashMap<>(Map.of(
+                "id", "instagram/publish", "label", "Publish", "nodePolicy", block));
+            return entry;
+        }
+
+        @Test
+        @DisplayName("absent leaves it null, which means 'the platform decides'")
+        void absentIsNull() {
+            Map<String, Object> entry = new HashMap<>(Map.of(
+                "id", "instagram/publish", "label", "Publish",
+                "nodePolicy", policyBlock(2, 1000, false)));
+
+            WorkflowPlan parsed = WorkflowPlan.fromMap(planWith("mcps", entry), "tenant-1");
+
+            assertThat(parsed.getNodePolicy("mcp:publish").providerRetryMaxWaitSec())
+                .as("a plan written before this field existed must keep meaning exactly what it meant")
+                .isNull();
+        }
+
+        @Test
+        @DisplayName("zero is preserved as zero, NOT collapsed into absent")
+        void zeroIsPreserved() {
+            // The distinction this whole field rests on: 0 says "the author owns the pacing, add
+            // no requests underneath them", and absent says "platform, do your job". A parser that
+            // treated a missing key as 0 would silently disable the platform retry for every
+            // workflow ever written; one that treated 0 as missing would make "off" unexpressible.
+            WorkflowPlan parsed = WorkflowPlan.fromMap(planWith("mcps", mcpWithBudget(0)), "tenant-1");
+
+            assertThat(parsed.getNodePolicy("mcp:publish").providerRetryMaxWaitSec()).isZero();
+        }
+
+        @Test
+        @DisplayName("a policy carrying ONLY a zero budget is not the default policy, so it is stored")
+        void zeroBudgetAloneIsStored() {
+            // isDefault() decides whether the block survives the parse at all. If a zero budget
+            // read as default, this node's "do not retry underneath me" would be dropped on the
+            // floor and the run would look exactly like one that never said it.
+            WorkflowPlan parsed = WorkflowPlan.fromMap(planWith("mcps", mcpWithBudget(0)), "tenant-1");
+
+            assertThat(parsed.getNodePolicies()).containsKey("mcp:publish");
+            assertThat(parsed.getNodePolicy("mcp:publish")).isNotEqualTo(NodePolicy.DEFAULT);
+        }
+
+        @Test
+        @DisplayName("a numeric string is coerced, like every other field of the block")
+        void numericStringIsCoerced() {
+            WorkflowPlan parsed = WorkflowPlan.fromMap(planWith("mcps", mcpWithBudget("45")), "tenant-1");
+
+            assertThat(parsed.getNodePolicy("mcp:publish").providerRetryMaxWaitSec()).isEqualTo(45);
+        }
+
+        @Test
+        @DisplayName("a negative budget is rejected at parse time, naming the field")
+        void negativeIsRejected() {
+            assertThatThrownBy(() ->
+                    WorkflowPlan.fromMap(planWith("mcps", mcpWithBudget(-1)), "tenant-1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("providerRetryMaxWaitSec");
+        }
+
+        @Test
+        @DisplayName("a non-numeric budget is rejected rather than silently ignored")
+        void nonNumericIsRejected() {
+            assertThatThrownBy(() ->
+                    WorkflowPlan.fromMap(planWith("mcps", mcpWithBudget("never")), "tenant-1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("providerRetryMaxWaitSec");
+        }
+
+        @Test
+        @DisplayName("a policy carrying only the budget is not DEFAULT, so the engine takes the "
+                + "policy path for it")
+        void aBudgetOnlyPolicyIsNotDefault() {
+            // isDefault() is what NodePolicyRunner keys its passthrough off, so widening the record
+            // widened that decision: such a node now runs through the attempt pipeline and gets
+            // policy_attempt 1/1 stamped on its result. Harmless, and worth pinning because it is a
+            // behaviour change nobody asked for and nothing else records.
+            WorkflowPlan parsed = WorkflowPlan.fromMap(planWith("mcps", mcpWithBudget(0)), "tenant-1");
+            NodePolicy policy = parsed.getNodePolicy("mcp:publish");
+
+            assertThat(policy.isDefault()).isFalse();
+            assertThat(policy.maxAttempts())
+                    .as("one attempt still, so the retry semantics are unchanged")
+                    .isEqualTo(1);
+            assertThat(policy.hasTimeout()).isFalse();
+            assertThat(policy.continueOnFailure()).isFalse();
+        }
+
+        @Test
+        @DisplayName("the budget is DROPPED off a tool step, so the parsed policy cannot claim "
+                + "something the engine will not do")
+        void droppedOffAToolStep() {
+            // Only `mcps` entries become StepNodes, and StepNode is the only node that carries this
+            // to the provider. A parsed policy that kept the field would have describe/get_plan tell
+            // a reader the workflow paces itself while the platform went on re-sending.
+            Map<String, Object> block = new HashMap<>();
+            block.put("providerRetryMaxWaitSec", 0);
+            block.put("retryCount", 2);
+            Map<String, Object> entry = new HashMap<>(Map.of(
+                "id", "core-1", "type", "transform", "label", "Format Data", "nodePolicy", block));
+
+            WorkflowPlan parsed = WorkflowPlan.fromMap(planWith("cores", entry), "tenant-1");
+
+            assertThat(parsed.getNodePolicy("core:format_data").providerRetryMaxWaitSec())
+                .as("dropped, not honoured")
+                .isNull();
+            assertThat(parsed.getNodePolicy("core:format_data").retryCount())
+                .as("and the rest of the policy is untouched")
+                .isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("dropping it is not a throw, so a plan already carrying one stays OPENABLE")
+        void droppingItDoesNotBreakThePlan() {
+            // The tool actions refuse it up front, so a plan that reaches the parser with one was
+            // hand-written or stored before that refusal existed. Throwing here would make that
+            // workflow impossible to open and therefore impossible to repair.
+            Map<String, Object> entry = new HashMap<>(Map.of(
+                "label", "Analyst", "type", "agent",
+                "nodePolicy", Map.of("providerRetryMaxWaitSec", 30)));
+
+            WorkflowPlan parsed = WorkflowPlan.fromMap(planWith("agents", entry), "tenant-1");
+
+            assertThat(parsed.getNodePolicy("agent:analyst")).isEqualTo(NodePolicy.DEFAULT);
+            assertThat(parsed.getNodePolicies())
+                .as("a policy whose only field was dropped is no policy, so nothing is stored")
+                .isEmpty();
+        }
+
+        @Test
+        @DisplayName("an mcps entry KEEPS it, which is what makes the drop meaningful")
+        void keptOnAToolStep() {
+            WorkflowPlan parsed = WorkflowPlan.fromMap(planWith("mcps", mcpWithBudget(0)), "tenant-1");
+
+            assertThat(parsed.getNodePolicy("mcp:publish").providerRetryMaxWaitSec()).isZero();
+        }
+
+        @Test
+        @DisplayName("the pre-existing 3-arg and 5-arg policies still mean 'the platform decides'")
+        void backCompatConstructorsLeaveItAbsent() {
+            assertThat(new NodePolicy(2, 1000L, false).providerRetryMaxWaitSec()).isNull();
+            assertThat(new NodePolicy(2, 1000L, false, 30_000L, true).providerRetryMaxWaitSec()).isNull();
+            assertThat(NodePolicy.DEFAULT.providerRetryMaxWaitSec()).isNull();
+        }
+    }
 }

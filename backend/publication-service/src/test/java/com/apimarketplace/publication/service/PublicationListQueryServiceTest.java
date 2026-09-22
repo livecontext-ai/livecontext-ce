@@ -116,7 +116,8 @@ class PublicationListQueryServiceTest {
                 "john-doe",                     // 43 publisher_handle
                 false,                          // 44 ce_exclusive
                 null,                           // 45 ce_exclusive_features (jsonb CAST to TEXT)
-                false                           // 46 studio
+                false,                          // 46 studio
+                "[\"mcp:gmail\"]"               // 47 node_types (jsonb CAST to TEXT)
         };
     }
 

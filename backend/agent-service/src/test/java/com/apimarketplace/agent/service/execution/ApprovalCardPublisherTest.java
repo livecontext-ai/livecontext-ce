@@ -188,4 +188,37 @@ class ApprovalCardPublisherTest {
 
         verify(redisTemplate).expire(StreamRedisKeys.toolsKey(STREAM_ID), StreamRedisKeys.STREAM_TTL);
     }
+
+    @Test
+    @DisplayName("The card carries its SUBJECT, so the user is told which workflow goes live")
+    void authorizationCardCarriesTheSubject() {
+        // Without this the card reaches the screen saying "run this action?" about a pin,
+        // which is a question nobody can answer. The publisher relays the subject opaquely,
+        // so this also pins that a rule it has never heard of needs no change here.
+        Map<String, Object> metadata = Map.of("rule", "workflow:pin", "toolName", "workflow",
+                "action", "pin", "toolCallId", "call-11",
+                "subject", Map.of("kind", "workflow", "id", "w-1", "version", 12));
+
+        publisher.publishToolAuthorization(STREAM_ID, CONVERSATION_ID, metadata, true, "call-11");
+
+        ArgumentCaptor<String> buffered = ArgumentCaptor.forClass(String.class);
+        verify(listOps).rightPush(eq(StreamRedisKeys.toolsKey(STREAM_ID)), buffered.capture());
+        assertThat(buffered.getValue())
+                .contains("\"subject\"").contains("\"id\":\"w-1\"").contains("\"version\":12");
+    }
+
+    @Test
+    @DisplayName("A rule with no subject OMITS the key, which is the shape the bridge also sends")
+    void aCardWithoutASubjectOmitsTheKey() {
+        // Every rule that shipped before the subject existed goes through this same hop, and
+        // both routes have to put the same thing on the wire: the bridge omits the key
+        // (asserted in redisPublisherToolAuthorization.test.mjs) and so does this one. The
+        // frontend type declares `subject?:`, i.e. undefined, and tsconfig has strict:false -
+        // a null arriving from one route only would not be caught where it is read.
+        publisher.publishToolAuthorization(STREAM_ID, CONVERSATION_ID, authorizationMetadata(), true, "call-9");
+
+        ArgumentCaptor<String> buffered = ArgumentCaptor.forClass(String.class);
+        verify(listOps).rightPush(eq(StreamRedisKeys.toolsKey(STREAM_ID)), buffered.capture());
+        assertThat(buffered.getValue()).contains("workflow:execute").doesNotContain("subject");
+    }
 }

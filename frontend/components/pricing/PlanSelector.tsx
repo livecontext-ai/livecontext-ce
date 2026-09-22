@@ -175,9 +175,12 @@ const PlanSelector = React.memo(function PlanSelector({
         <ul className="space-y-3 text-sm inline-flex flex-col">
           <DeploymentBadge />
           {plan.features.map((feature, featureIndex) => (
-            <li key={featureIndex} className="flex items-center gap-2">
-              <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
-              <span className="text-theme-secondary transition-colors duration-300">
+            <li key={featureIndex} className="flex items-start gap-2">
+              <Check className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
+              {/* `flex-1` so FeatureLabel owns the rest of the row and can pin
+                  its "i" to the right edge; `items-start` so a label that wraps
+                  keeps the check and the "i" on its first line. */}
+              <span className="flex flex-1 min-w-0 text-theme-secondary transition-colors duration-300">
                 <FeatureLabel feature={feature} />
               </span>
             </li>

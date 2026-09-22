@@ -1,24 +1,19 @@
 import { integrationIconSrc, type PublicIntegration } from '@/lib/integrations/integrations';
-import { isMonoDarkIconSlug } from '@/lib/credentials/monoIconSlugs';
+import { BrandMark } from './BrandMark';
 
 /**
- * An integration's brand mark on the PUBLIC site.
+ * An integration's brand mark, for callers that hold a whole catalogue record.
  *
- * <p>A plain `<img>`, not `components/ui/service-icon.tsx`. That one is a client
- * component (it keeps an error flag in state) and renders through `next/image`;
- * this one has to render inside server components on pages that ship no
- * JavaScript for it, and 700 marks on the directory page is exactly the case
- * where the optimizer costs more than it saves on a 1 KB SVG that is already
- * served statically.
+ * <p>A thin binding over {@link BrandMark}, which owns the markup, the mono-dark decision
+ * and the empty-`alt` contract. The only thing this adds is the `iconUrl` override: an
+ * integration may declare its own artwork URL in the catalogue, and `integrationIconSrc`
+ * prefers it over the icon-key path. That override is the real reason two entry points
+ * exist, and it is why the landing's curated bands cannot use this one: they hold a
+ * `{slug, name, iconSlug}` and no catalogue record, so calling this would mean fabricating
+ * a `PublicIntegration` to satisfy a type.
  *
- * <p>`logo-mono` is the landing chrome's class (defined in `landingChromeStyles`,
- * so it exists on every page that uses `LandingShell`): it flips a near-black
- * brand mark to white when the public theme is dark, where it would otherwise
- * disappear into the background.
- *
- * <p>`alt` is empty on purpose. Every call site puts the integration's name in
- * adjacent text, so a real alt would make a screen reader announce the name
- * twice, once as an image.
+ * <p>Keep them one `<img>`. When this file carried its own copy, Zendesk rendered as a black
+ * mark on the dark theme because the two copies had drifted on which slugs need `logo-mono`.
  */
 export function IntegrationLogo({
   integration,
@@ -30,15 +25,11 @@ export function IntegrationLogo({
   className?: string;
 }) {
   return (
-    <img
+    <BrandMark
+      iconSlug={integration.iconSlug}
       src={integrationIconSrc(integration)}
-      alt=""
-      width={size}
-      height={size}
-      loading="lazy"
-      decoding="async"
-      className={`${isMonoDarkIconSlug(integration.iconSlug) ? 'logo-mono' : ''} ${className}`}
-      style={{ width: size, height: size, objectFit: 'contain' }}
+      size={size}
+      className={className}
     />
   );
 }

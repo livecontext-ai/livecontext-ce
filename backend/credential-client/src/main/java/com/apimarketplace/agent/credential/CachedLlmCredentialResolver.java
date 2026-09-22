@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -49,7 +50,7 @@ public class CachedLlmCredentialResolver implements LlmCredentialResolver {
     private static final long CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
     private final LlmCredentialRepository repository;
-    private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<CacheKey, CacheEntry> cache = new ConcurrentHashMap<>();
 
     public CachedLlmCredentialResolver(LlmCredentialRepository repository) {
         this.repository = repository;
@@ -62,11 +63,9 @@ public class CachedLlmCredentialResolver implements LlmCredentialResolver {
 
     @Override
     public Optional<String> resolveApiKey(String userId, String providerName) {
-        // Cache is keyed by (userId, provider) so userA's saved key does not
-        // leak into userB's resolution within the 5-minute window. The same
-        // userId is threaded to the repository so the underlying user-then-
-        // platform chain agrees with the cache slot we landed on.
-        String cacheKey = cacheKeyFor(userId, providerName);
+        // Shared credentials depend on the workspace as well as the user.
+        // Match the organization context forwarded by the repository's HTTP client.
+        CacheKey cacheKey = cacheKeyFor(userId, providerName, false);
         CacheEntry entry = cache.get(cacheKey);
         if (entry != null && !entry.isExpired()) {
             return entry.value;
@@ -87,15 +86,46 @@ public class CachedLlmCredentialResolver implements LlmCredentialResolver {
     }
 
     @Override
+    public Optional<String> resolveUserApiKey(String userId, String providerName) {
+        if (userId == null || userId.isBlank()) {
+            return Optional.empty();
+        }
+        // Its own slot: the user-first slot may legitimately hold the PLATFORM key (a
+        // user with no saved key), which must never be served to an OWN_KEY-pinned call.
+        CacheKey cacheKey = cacheKeyFor(userId, providerName, true);
+        CacheEntry entry = cache.get(cacheKey);
+        if (entry != null && !entry.isExpired()) {
+            return entry.value;
+        }
+        Optional<String> key = repository.findUserApiKeyByProviderName(userId, providerName);
+        if (key.isPresent()) {
+            cache.put(cacheKey, new CacheEntry(key));
+        } else {
+            // Same rule as the user-first slot: never cache a miss.
+            cache.remove(cacheKey);
+        }
+        return key;
+    }
+
+    @Override
+    public void invalidate(String userId, String providerName) {
+        if (userId == null || providerName == null) {
+            return;
+        }
+        // An edit may arrive without an organization context. Evict both routes
+        // across every workspace for this user and provider.
+        cache.keySet().removeIf(k -> Objects.equals(k.userId(), userId)
+                && Objects.equals(k.providerName(), providerName));
+        log.debug("Invalidated cached {} key for user {}", providerName, userId);
+    }
+
+    @Override
     public void invalidate(String providerName) {
-        // Drop every user slot for this provider - a platform-credential edit
-        // or a per-user credential save both want every cached entry for the
-        // provider re-resolved on next read.
+        // Drop both routes and all workspace/user slots for this provider.
         if (providerName == null) {
             return;
         }
-        String suffix = ":" + providerName;
-        cache.keySet().removeIf(k -> k.endsWith(suffix));
+        cache.keySet().removeIf(k -> Objects.equals(k.providerName(), providerName));
         log.debug("Invalidated cache for provider: {}", providerName);
     }
 
@@ -105,9 +135,11 @@ public class CachedLlmCredentialResolver implements LlmCredentialResolver {
         log.debug("Invalidated all cached LLM credentials");
     }
 
-    private static String cacheKeyFor(String userId, String providerName) {
-        return (userId == null ? "__platform__" : userId) + ":" + providerName;
+    private static CacheKey cacheKeyFor(String userId, String providerName, boolean userOnly) {
+        return new CacheKey(userId, TenantResolver.currentRequestOrganizationId(), providerName, userOnly);
     }
+
+    private record CacheKey(String userId, String organizationId, String providerName, boolean userOnly) {}
 
     /**
      * Source of the in-flight user id. Production reads from

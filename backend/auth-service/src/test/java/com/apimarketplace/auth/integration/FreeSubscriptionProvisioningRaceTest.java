@@ -15,7 +15,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -48,6 +52,7 @@ class FreeSubscriptionProvisioningRaceTest extends AuthPostgresIntegrationTest {
     @Autowired private UserRepository userRepository;
     @Autowired private PlanRepository planRepository;
     @Autowired private CreditLedgerRepository ledgerRepository;
+    @Autowired private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
     private static final int RACERS = 8;
 
@@ -174,5 +179,112 @@ class FreeSubscriptionProvisioningRaceTest extends AuthPostgresIntegrationTest {
         }
 
         assertThat(subscriptionRepository.findAll()).hasSize(2);
+    }
+
+    /**
+     * The shape production actually runs, and the one this suite used to leave out.
+     *
+     * <p>A brand new account has NO billing customer: the very first resolutions of a signup all
+     * arrive within milliseconds, on two replicas, and each of them has to create one. The
+     * fixture above seeds it deliberately, because with the racers creating it the unique index
+     * rejects all but one and a single subscription appears even with the mutex removed, which
+     * would make this class blind to the lock it exists to prove. That reasoning was sound and
+     * its conclusion was not: what it dismissed as a fixture nuisance ("their transactions are
+     * marked rollback-only") was the production defect itself. The losing racers did not merely
+     * fail to provision, they died at the commit with an UnexpectedRollbackException that
+     * resolveUser could only read as "this user cannot be resolved", and their owner was shown a
+     * login failure. Roughly four of every ten new accounts hit it.
+     *
+     * <p>So the assertion that matters here is not the row count. It is that NOBODY THROWS.
+     */
+    @Test
+    @DisplayName("racers that must also create the billing customer all return, none of them throws")
+    void concurrentFirstLoginWithoutABillingCustomerNeverThrows() throws Exception {
+        User user = newUser("cold-start@test.local");
+        assertThat(billingCustomerRepository.findAll())
+                .as("the point of this test: a signup starts with no billing customer")
+                .isEmpty();
+
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(RACERS);
+        AtomicInteger created = new AtomicInteger();
+        List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
+        ExecutorService pool = Executors.newFixedThreadPool(RACERS);
+        try {
+            for (int i = 0; i < RACERS; i++) {
+                pool.submit(() -> {
+                    try {
+                        start.await();
+                        provisioner.provisionIfMissing(user).ifPresent(id -> created.incrementAndGet());
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } catch (Throwable t) {
+                        failures.add(t);
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            }
+            start.countDown();
+            assertThat(done.await(60, TimeUnit.SECONDS)).as("all racers finished").isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(failures)
+                .as("pre-fix every racer but one died here, and each death was one failed login")
+                .isEmpty();
+        assertThat(subscriptionRepository.findAll()).hasSize(1);
+        assertThat(billingCustomerRepository.findAll()).hasSize(1);
+        assertThat(created.get()).as("exactly one racer may claim the creation").isEqualTo(1);
+    }
+
+    /**
+     * The same race on the primitive itself, because four call sites now depend on it.
+     *
+     * <p>{@code findOrCreate} replaced a {@code findByUserId().orElseGet(() -> save(new ...))}
+     * that was spelled out separately in admin plan assignment, two Stripe paths and the free
+     * subscription controller. Each copy was a check-then-act on a uniquely constrained column,
+     * and losing that race does not cost a row, it costs the caller's transaction. Testing the
+     * provisioner alone would leave the other three resting on a method nothing exercises.
+     */
+    @Test
+    @DisplayName("findOrCreate under contention yields one row and no casualties")
+    void findOrCreateIsRaceFree() throws Exception {
+        User user = newUser("find-or-create@test.local");
+
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(RACERS);
+        List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
+        Set<Long> seen = Collections.synchronizedSet(new HashSet<>());
+        ExecutorService pool = Executors.newFixedThreadPool(RACERS);
+        try {
+            for (int i = 0; i < RACERS; i++) {
+                pool.submit(() -> {
+                    try {
+                        start.await();
+                        // Each racer in its own transaction, which is how the four call sites
+                        // reach it: insertIfAbsent is @Modifying and needs one.
+                        Long id = transactionTemplate.execute(status ->
+                                billingCustomerRepository.findOrCreate(user.getId(), "internal").getId());
+                        seen.add(id);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } catch (Throwable t) {
+                        failures.add(t);
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            }
+            start.countDown();
+            assertThat(done.await(60, TimeUnit.SECONDS)).as("all racers finished").isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(failures).as("nobody may lose their transaction to this").isEmpty();
+        assertThat(billingCustomerRepository.findAll()).hasSize(1);
+        assertThat(seen).as("every racer must be handed the SAME row").hasSize(1);
     }
 }

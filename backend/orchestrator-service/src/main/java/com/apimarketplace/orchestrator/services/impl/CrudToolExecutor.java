@@ -266,6 +266,18 @@ public class CrudToolExecutor {
             if (data.createdColumns() != null) {
                 output.put("createdColumns", data.createdColumns());
             }
+            // What the column types reported about the values this step wrote. A step can succeed and
+            // still have stored something the platform diagnosed as unusable - a file reference with
+            // nothing to display it by, a value it could not read.
+            //
+            // These sentences were never entirely lost: the service appends them to `message` too,
+            // and `message` has always been a declared output. But nothing NAMED them, so no help,
+            // example or prompt ever pointed a reader at that tail, and a downstream step cannot
+            // branch on prose. This key is the addressable channel; `message` remains the legacy one,
+            // which is why the same text appears twice.
+            if (data.warnings() != null && !data.warnings().isEmpty()) {
+                output.put("warnings", data.warnings());
+            }
         }
 
         if (result.success()) {

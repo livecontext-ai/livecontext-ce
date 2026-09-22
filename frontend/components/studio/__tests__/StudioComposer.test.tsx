@@ -39,6 +39,9 @@ vi.mock('@/lib/api/orchestrator/file.service', async (importOriginal) => ({
 const priceWords = vi.hoisted(() => ({ value: '12 credits' as string | null }));
 vi.mock('@/lib/generation/price', () => ({
   describeQuotedPrice: () => priceWords.value,
+  // The composer also states WHY a price is not the published rate, and formats the factor.
+  describePriceFactors: () => '',
+  formatCredits: (value: number) => String(value),
 }));
 const quoteState = vi.hoisted(() => ({
   value: { quote: undefined as unknown, quantity: null as number | null, settled: true, stale: false },
@@ -100,12 +103,23 @@ function renderComposer(selected: GenerationModel | null, props: Record<string, 
 /** The attachment control, by its accessible name. Absent means the model takes no file. */
 function addFileControl() {
   return screen.queryByTitle('composer.addFile')
-    ?? screen.queryByTitle('composer.allSlotsFull')
-    // A single-slot model labels the control with what the file IS to it, which with the stub
-    // translator falls back to the parameter name.
-    ?? screen.queryByTitle('input_image')
-    ?? screen.queryByTitle('input_audio')
-    ?? screen.queryByTitle('input_video');
+    ?? screen.queryByTitle('composer.allSlotsFull');
+}
+
+/**
+ * Attach a file the way a reader does: open the control, say what the file is FOR, then pick it.
+ *
+ * <p>The middle step is not ceremony. The control used to open the picker straight away whenever
+ * the model had one slot, so the reader chose a file without ever being told what the model would
+ * do with it - and "first frame", "last frame" and "reference" are three different videos from the
+ * same image.
+ *
+ * @param slot the label the menu gives the slot. With the stub translator a role falls back to the
+ *        parameter's own name, which is what these tests match on.
+ */
+function chooseSlot(slot = 'input_image') {
+  fireEvent.click(addFileControl()!);
+  fireEvent.click(screen.getByText(slot));
 }
 
 afterEach(() => {
@@ -138,6 +152,136 @@ describe('StudioComposer - the attachment control follows the model', () => {
     // The stub translator has no dictionary, so the guarded lookup falls back to the parameter
     // name. What is pinned here is that the label goes through the ROLE path at all.
     expect(addFileControl()).not.toBeNull();
+  });
+});
+
+describe('StudioComposer - the attachment menu says what each file is for', () => {
+  beforeEach(() => { uploadGeneric.mockReset(); });
+
+  /** xAI 1.5: one call, three images, three different jobs. */
+  const threeSlots = () => model({
+    accepts: ['prompt', 'input_image', 'last_frame_image', 'reference_image'],
+    inputs: {
+      input_image: { role: 'first_frame', maxItems: 1 },
+      last_frame_image: { role: 'last_frame', maxItems: 1 },
+      reference_image: { role: 'reference', maxItems: 3 },
+    },
+  });
+
+  it('names every slot the model takes, so the reader picks the job before the file', () => {
+    renderComposer(threeSlots());
+
+    fireEvent.click(addFileControl()!);
+
+    expect(screen.getByText('composer.chooseRole')).toBeInTheDocument();
+    expect(screen.getByText('input_image')).toBeInTheDocument();
+    expect(screen.getByText('last_frame_image')).toBeInTheDocument();
+    expect(screen.getByText('reference_image')).toBeInTheDocument();
+  });
+
+  it('asks even when there is only ONE slot, which is the case that used to go unsaid', () => {
+    // The old control opened the picker directly here, and the slot's meaning was in a tooltip a
+    // phone cannot open.
+    renderComposer(model({
+      accepts: ['prompt', 'input_image'],
+      inputs: { input_image: { role: 'first_frame', maxItems: 1 } },
+    }));
+
+    fireEvent.click(addFileControl()!);
+
+    expect(screen.getByText('composer.chooseRole')).toBeInTheDocument();
+    expect(screen.getByText('input_image')).toBeInTheDocument();
+  });
+
+  it('says what a slot must be sent WITH, where the choice is made', () => {
+    // The call is refused for free when the pair is half-complete, but a menu that offers the
+    // closing frame like any other entry lets the reader find that out by pressing Generate.
+    renderComposer(model({
+      accepts: ['prompt', 'first_frame_image', 'last_frame_image'],
+      inputs: {
+        first_frame_image: { role: 'first_frame', maxItems: 1 },
+        last_frame_image: {
+          role: 'last_frame', maxItems: 1, requires: ['first_frame_image'],
+        },
+      },
+    }));
+
+    fireEvent.click(addFileControl()!);
+
+    expect(screen.getByText('composer.goesWith')).toBeInTheDocument();
+  });
+
+  it('marks the attachment control when the turn is held for a file, and says which', async () => {
+    // The send goes dead when half a pair is attached. The parameter pills carry that mark for
+    // a value; an unmarked file slot left a dead Send button, a tooltip about highlighted
+    // settings, and nothing highlighted.
+    uploadGeneric.mockResolvedValue({
+      id: 'f1', storageKey: 't/1/f1.png', fileName: 'f1.png', mimeType: 'image/png', size: 10,
+    });
+    const { container } = renderComposer(model({
+      accepts: ['prompt', 'first_frame_image', 'last_frame_image'],
+      inputs: {
+        first_frame_image: { role: 'first_frame', maxItems: 1 },
+        last_frame_image: { role: 'last_frame', maxItems: 1, requires: ['first_frame_image'] },
+      },
+    }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'a dolly shot' } });
+
+    fireEvent.click(addFileControl()!);
+    fireEvent.click(screen.getByText('last_frame_image'));
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(input, 'files', {
+      value: [new File(['x'], 'a.png', { type: 'image/png' })], configurable: true,
+    });
+    fireEvent.change(input);
+    await waitFor(() => expect(uploadGeneric).toHaveBeenCalled());
+
+    // The control that opens the picker is what says a file is wanted, and the send is held.
+    await waitFor(() => expect(screen.getByTitle('composer.fileWanted')).toBeInTheDocument());
+    expect(screen.getByTitle(/composer\.(send|missingRequired)/)).toBeDisabled();
+  });
+
+  it('closes a slot the attached file forbids, with the reason on it', async () => {
+    // Pinning a frame and lending a reference are two different kinds of request for some
+    // providers, and mixing them can come back as a finished asset that used half the files.
+    uploadGeneric.mockResolvedValue({
+      id: 'f1', storageKey: 't/1/f1.png', fileName: 'f1.png', mimeType: 'image/png', size: 10,
+    });
+    const { container } = renderComposer(model({
+      accepts: ['prompt', 'first_frame_image', 'input_image'],
+      // Both sides carry the rule, which is what a model listing returns: the descriptor
+      // declares it once and the server completes it (GenerationInputsTest pins that).
+      inputs: {
+        first_frame_image: { role: 'first_frame', maxItems: 1, excludes: ['input_image'] },
+        input_image: { role: 'reference', maxItems: 2, excludes: ['first_frame_image'] },
+      },
+    }));
+
+    // Attach the frame, then reopen the menu.
+    fireEvent.click(addFileControl()!);
+    fireEvent.click(screen.getByText('first_frame_image'));
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(input, 'files', {
+      value: [new File(['x'], 'a.png', { type: 'image/png' })], configurable: true,
+    });
+    fireEvent.change(input);
+    await waitFor(() => expect(uploadGeneric).toHaveBeenCalled());
+
+    fireEvent.click(addFileControl()!);
+
+    // Declared on the FRAME, read from the reference side: the rule holds whichever slot the
+    // reader started from.
+    expect(screen.getByText('composer.notWith')).toBeInTheDocument();
+    expect(screen.getByText('input_image').closest('button')).toBeDisabled();
+  });
+
+  it('counts the slots of a parameter that takes several, so the reader knows how many are left', () => {
+    renderComposer(threeSlots());
+
+    fireEvent.click(addFileControl()!);
+
+    // The reference slot takes three; the two frames take one each and are not numbered.
+    expect(screen.getByText('1/3')).toBeInTheDocument();
   });
 });
 
@@ -430,7 +574,7 @@ describe('StudioComposer - uploading files', () => {
 
     const { container } = renderComposer(twoSlots());
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'animate this' } });
-    fireEvent.click(screen.getByTitle('input_image'));
+    chooseSlot();
     pickFile(container);
 
     await waitFor(() => expect(uploadGeneric).toHaveBeenCalled());
@@ -444,7 +588,7 @@ describe('StudioComposer - uploading files', () => {
     uploadGeneric.mockRejectedValue(new Error('storage down'));
 
     const { container } = renderComposer(twoSlots());
-    fireEvent.click(screen.getByTitle('input_image'));
+    chooseSlot();
     pickFile(container);
 
     expect(await screen.findByText('composer.uploadFailed')).toBeInTheDocument();
@@ -478,8 +622,26 @@ describe('StudioComposer - the price beside the button that spends it', () => {
 
     // Dimmed AND announced: a sighted reader sees it is being re-checked, and a screen reader is
     // told rather than reading out a number that is about to change.
+    //
+    // `aria-busy` is asserted together with the LIVE REGION it applies to, which this test used to
+    // check on its own. The attribute is consumed on a live region or a widget; on the bare span
+    // this was, it named a state nothing would ever read, so the assertion passed while the
+    // staleness was visual only. An attribute is not an announcement until something announces it.
     expect(priceLabel()).toHaveAttribute('aria-busy', 'true');
+    expect(priceLabel()).toHaveAttribute('role', 'status');
+    expect(priceLabel()).toHaveAttribute('aria-live', 'polite');
     expect(priceLabel().className).toContain('opacity-50');
+  });
+
+  it('keeps the live region when the amount is current, so the next change is announced', () => {
+    // A region added only while stale would be created at the moment the value changes, and a
+    // region that appears with its content is not reliably announced: the reader is told nothing
+    // on the one update they were waiting for.
+    quoteState.value = { quote: undefined, quantity: 50, settled: true, stale: false };
+    renderComposer(model());
+
+    expect(priceLabel()).toHaveAttribute('role', 'status');
+    expect(priceLabel()).toHaveAttribute('aria-live', 'polite');
   });
 
   it('says nothing about the platform rate while the reader’s OWN key pays', () => {

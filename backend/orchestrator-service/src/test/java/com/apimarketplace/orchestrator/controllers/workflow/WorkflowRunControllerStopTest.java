@@ -42,6 +42,7 @@ class WorkflowRunControllerStopTest {
 
     private static final String RUN_ID = "run_<id>";
     private static final String TENANT = "user-stop-1";
+    private static final String ORG = "org-stop-1";
 
     private WorkflowRunEntity runEntityWith(RunStatus status) {
         WorkflowRunEntity entity = mock(WorkflowRunEntity.class);
@@ -186,6 +187,24 @@ class WorkflowRunControllerStopTest {
     @Nested
     @DisplayName("Not-found and server-error paths")
     class OtherPaths {
+
+        @Test
+        @DisplayName("VIEWER cannot cancel a production run")
+        void viewerCannotCancel() {
+            ResponseEntity<?> response = controller.cancelWorkflow(RUN_ID, TENANT, ORG, "VIEWER");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            verifyNoInteractions(workflowRunRepository, resumeService);
+        }
+
+        @Test
+        @DisplayName("VIEWER cannot reactivate a production run")
+        void viewerCannotReactivate() {
+            ResponseEntity<?> response = controller.reactivateWorkflow(RUN_ID, TENANT, ORG, "viewer");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            verifyNoInteractions(workflowRunRepository, resumeService);
+        }
 
         @Test
         @DisplayName("Maps IllegalArgumentException to HTTP 404")

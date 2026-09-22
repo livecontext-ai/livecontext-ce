@@ -4,7 +4,7 @@ package com.apimarketplace.catalog.bundle;
  * Signed API-catalog bundle envelope delivered to CE instances.
  *
  * <p>Unlike the LLM model bundle ({@code agent-service SignedBundle}), the API
- * catalog payload is large (700+ APIs with tools/parameters/responses), so the
+ * catalog payload is large (1000+ APIs with tools/parameters/responses), so the
  * canonical JSON is <b>gzipped before signing</b>: {@code payloadBase64} is the
  * base64 of the GZIP bytes, and {@code checksum}/{@code signature} were
  * computed over those same GZIP bytes. CE must therefore:

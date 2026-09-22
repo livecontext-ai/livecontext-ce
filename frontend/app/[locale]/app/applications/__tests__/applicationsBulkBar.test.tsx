@@ -53,6 +53,10 @@ vi.mock('@/lib/api/orchestrator/workflow.service', () => ({
 }));
 vi.mock('@/components/marketplace/ShowcasePreview', () => ({ ShowcasePreview: () => null }));
 vi.mock('@/components/WorkflowNodeIcons', () => ({ WorkflowNodeIcons: () => null }));
+// Stubbed for the same reason as WorkflowNodeIcons above: it renders NodeIcon,
+// which pulls the whole builder module graph (and with it the real API facade)
+// into a test that only mocks a few workflow-service methods.
+vi.mock('@/components/NodeTypeFilter', () => ({ NodeTypeFilter: () => null }));
 vi.mock('@/components/marketplace/PublisherAvatar', () => ({ PublisherAvatar: () => null }));
 vi.mock('@/components/sharing/ShareLinkDialog', () => ({ ShareLinkDialog: () => null }));
 vi.mock('@/components/workflow', () => ({

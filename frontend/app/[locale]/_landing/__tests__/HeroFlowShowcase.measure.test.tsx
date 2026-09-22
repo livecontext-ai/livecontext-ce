@@ -4,10 +4,17 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import LandingThemeProvider from '@/components/landing/LandingThemeProvider';
 import HeroFlowShowcase from '../HeroFlowShowcase';
+
+vi.mock('next-intl', () => ({
+  useLocale: () => 'en',
+  useTranslations: () => (key: string) => key === 'common.iframeTitle'
+    ? 'Watch an automation build itself and run'
+    : key,
+}));
 
 // Regression: "gros blanc" under the hero on mobile.
 //

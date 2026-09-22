@@ -73,9 +73,53 @@ describe('BalanceBreakdownCard - spells its numbers for the APP locale', () => {
   });
 
   it('would flag an English card as English, so the check above is not vacuous', () => {
-    const { container } = renderCard('en', { monthlyPlan: { allowance: 10_000 }, paygBalance: 1_400 });
+    const { container } = renderCard('en', {
+      monthlyPlan: { allowance: 10_000 },
+      paygBalance: 1_400,
+      aiBalance: 1_200,
+    });
 
     expect(container.textContent).toMatch(/\d+\.\d[KM]/);
+  });
+});
+
+describe('BalanceBreakdownCard - the AI allowance row (V494)', () => {
+  it('draws the allowance as its own row, outside the wallet figure', () => {
+    // The pot cannot pay for anything but agent and chat turns on the free-tier
+    // models, so it is shown beside the wallet and never added into it. A reader
+    // who saw it summed would plan spending they cannot do.
+    renderCard('en', { balance: 9_779, subBalance: 9_779, paygBalance: 0, aiBalance: 100 });
+
+    expect(screen.getByText(messages.billing.payg.breakdown.ai)).toBeTruthy();
+    // One decimal, like every other figure on this card (formatCreditsCompact).
+    expect(screen.getByText('100.0')).toBeTruthy();
+    // The headline balance is untouched by the pot.
+    expect(screen.getAllByText('9.8K').length).toBeGreaterThan(0);
+  });
+
+  it('omits the row on a plan that has no allowance at all', () => {
+    // Every paid plan: an empty row would advertise a bucket the account does not
+    // have. Zero alone does not decide it, which is what the next case is about.
+    renderCard('en', { aiBalance: 0, hasAiAllowance: false });
+
+    expect(screen.queryByText(messages.billing.payg.breakdown.ai)).toBeNull();
+  });
+
+  it('SHOWS the row at zero when the plan does grant an allowance', () => {
+    // The reader whose chat just stopped working. Hiding a spent pot makes it
+    // indistinguishable from a plan that never had one, and leaves the one person
+    // who needs the explanation with a card that says nothing at all.
+    renderCard('en', { aiBalance: 0, hasAiAllowance: true });
+
+    const label = screen.getByText(messages.billing.payg.breakdown.ai);
+    // Scoped to the allowance row: the PAYG row also reads 0.0 in this fixture.
+    expect(label.parentElement?.textContent).toContain('0.0');
+  });
+
+  it('omits the row when the balance endpoint did not answer', () => {
+    renderCard('en');
+
+    expect(screen.queryByText(messages.billing.payg.breakdown.ai)).toBeNull();
   });
 });
 

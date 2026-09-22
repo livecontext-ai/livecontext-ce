@@ -9,7 +9,6 @@ import com.apimarketplace.auth.repository.PlanRepository;
 import com.apimarketplace.auth.repository.SubscriptionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -66,75 +65,93 @@ public class FreeSubscriptionProvisioner {
      * <p>Credits are attributed separately by
      * {@link UserResolutionService#attributeCreditsIfEligible} once the email is verified.
      *
+     * <p><b>Failures propagate.</b> This method deliberately catches nothing. A transaction
+     * cannot recover from its own failure: once a statement has raised, PostgreSQL has aborted
+     * the transaction and Spring has flagged it rollback-only, so a catch here would return a
+     * tidy value and then be overruled by an {@code UnexpectedRollbackException} thrown at the
+     * commit, outside this method, where no catch of ours can reach it. That is not a
+     * hypothetical: it is how a swallowed duplicate-key ended up failing users' logins. Only the
+     * caller, which is outside this transaction, is in a position to decide what a failed
+     * provisioning means, and {@code UserResolutionService.ensureFreeSubscription} decides it
+     * means "log it and carry on".
+     *
      * @return the subscription id when this call created one, otherwise empty (already had one,
-     *         lost the race, or could not provision)
+     *         or the FREE plan is missing)
      */
     @Transactional
     public Optional<Long> provisionIfMissing(User user) {
         if (user == null || user.getId() == null) {
             return Optional.empty();
         }
-        try {
-            BillingCustomer billingCustomer = lockOrCreateBillingCustomer(user);
-
-            // Re-check INSIDE the lock. A concurrent request that got here first has already
-            // committed its subscription by the time it released the billing-customer row.
-            if (subscriptionRepository.findActiveByUserId(user.getId()).isPresent()) {
-                return Optional.empty();
-            }
-
-            Optional<Plan> freePlanOpt = planRepository.findByCode("FREE");
-            if (freePlanOpt.isEmpty()) {
-                log.error("FREE plan not found in database");
-                return Optional.empty();
-            }
-            Plan freePlan = freePlanOpt.get();
-
-            LocalDateTime now = LocalDateTime.now();
-            Subscription sub = new Subscription();
-            sub.setBillingCustomer(billingCustomer);
-            sub.setPlan(freePlan);
-            sub.setCadence("monthly");
-            sub.setStatus("active");
-            sub.setProvider("internal");
-            sub.setCurrentPeriodStart(now);
-            sub.setCurrentPeriodEnd(now.plusMonths(1));
-            sub.setCancelAtPeriodEnd(false);
-            Subscription saved = subscriptionRepository.save(sub);
-
-            log.info("FREE subscription created for userId={} (subId={}). Credits pending email verification.",
-                    user.getId(), saved.getId());
-
-            quotaSyncer.syncAfterCommit(user.getId(), freePlan);
-            return Optional.ofNullable(saved.getId());
-        } catch (DataIntegrityViolationException e) {
-            // The partial unique index rejected us: another actor provisioned first. Nothing to
-            // do and nothing wrong - this is the backstop working, on a path where a duplicate
-            // used to be created silently.
-            log.info("FREE subscription already provisioned for userId={} (unique constraint), skipping",
-                    user.getId());
-            return Optional.empty();
-        } catch (Exception e) {
-            log.warn("Could not ensure free subscription for userId={}: {}", user.getId(), e.getMessage());
+        // Cheap idempotent early-out, taken BEFORE the mutex. resolveUser runs on every gateway
+        // request while the subscription is created exactly once, so this is the answer virtually
+        // every time, and what it saves on that path is a PESSIMISTIC_WRITE row lock taken on the
+        // user's billing customer by every single request. It does NOT save the first-login racers
+        // anything: on a cold start none of them sees a subscription, so they all fall through to
+        // the mutex below. What keeps THEM alive is that acquiring it can no longer raise.
+        if (subscriptionRepository.findActiveByUserId(user.getId()).isPresent()) {
             return Optional.empty();
         }
+
+        BillingCustomer billingCustomer = lockOrCreateBillingCustomer(user);
+
+        // Re-check INSIDE the lock. A concurrent request that got here first has already
+        // committed its subscription by the time it released the billing-customer row.
+        if (subscriptionRepository.findActiveByUserId(user.getId()).isPresent()) {
+            return Optional.empty();
+        }
+
+        Optional<Plan> freePlanOpt = planRepository.findByCode("FREE");
+        if (freePlanOpt.isEmpty()) {
+            log.error("FREE plan not found in database");
+            return Optional.empty();
+        }
+        Plan freePlan = freePlanOpt.get();
+
+        LocalDateTime now = LocalDateTime.now();
+        Subscription sub = new Subscription();
+        sub.setBillingCustomer(billingCustomer);
+        sub.setPlan(freePlan);
+        sub.setCadence("monthly");
+        sub.setStatus("active");
+        sub.setProvider("internal");
+        sub.setCurrentPeriodStart(now);
+        sub.setCurrentPeriodEnd(now.plusMonths(1));
+        sub.setCancelAtPeriodEnd(false);
+        // V494: the AI allowance is NOT seeded here. It buys real platform-key
+        // inference, so it is granted where the monthly credits are granted, behind the
+        // same email-verification gate (CreditAttributionService.attributeOnSubscription,
+        // reached from UserResolutionService.attributeCreditsIfEligible). Seeding it on
+        // the row at creation looked harmless and was not: it handed every unverified
+        // throwaway signup an immediate, scriptable 100 credits of inference.
+        Subscription saved = subscriptionRepository.save(sub);
+
+        log.info("FREE subscription created for userId={} (subId={}). Credits pending email verification.",
+                user.getId(), saved.getId());
+
+        quotaSyncer.syncAfterCommit(user.getId(), freePlan);
+        return Optional.ofNullable(saved.getId());
     }
 
     /**
-     * The per-user mutex. Locks the existing billing-customer row, or creates it - the unique
-     * index on {@code user_id} means a concurrent creator either loses on that index (and we
-     * retry the read) or wins and we lock what it wrote.
+     * The per-user mutex. Locks the existing billing-customer row, or creates it first.
+     *
+     * <p>The creation goes through {@link BillingCustomerRepository#insertIfAbsent}, which cannot
+     * raise. It used to be a {@code save()} wrapped in a catch that re-read the winner's row on a
+     * unique-index violation, and that shape is unfixable from the inside: the violation has
+     * already aborted the PostgreSQL transaction and flagged it rollback-only, so the re-read
+     * itself fails and the commit throws past every catch in this class. See the repository method
+     * for the full account.
      */
     private BillingCustomer lockOrCreateBillingCustomer(User user) {
         Optional<BillingCustomer> existing = billingCustomerRepository.findByUserIdForUpdate(user.getId());
         if (existing.isPresent()) {
             return existing.get();
         }
-        try {
-            return billingCustomerRepository.save(new BillingCustomer(user, "internal"));
-        } catch (DataIntegrityViolationException e) {
-            return billingCustomerRepository.findByUserIdForUpdate(user.getId())
-                    .orElseThrow(() -> e);
-        }
+        int inserted = billingCustomerRepository.insertIfAbsent(user.getId(), "internal");
+        return billingCustomerRepository.findByUserIdForUpdate(user.getId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "billing customer still absent after insertIfAbsent(inserted=" + inserted
+                                + ") for userId=" + user.getId()));
     }
 }

@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.service;
 
+import com.apimarketplace.common.credit.ChatCreditRefusal;
 import com.apimarketplace.agent.domain.AgentEntity;
 import com.apimarketplace.agent.domain.AgentTaskEntity;
 import com.apimarketplace.agent.domain.AgentTaskEventEntity;
@@ -2365,8 +2366,17 @@ public class AgentTaskService {
                 logger.info("[TaskReview] Reviewer agent {} executed for task {} (conversation: {})",
                         reviewerAgentId, taskId, conversationId);
             } else {
-                logger.error("[TaskReview] Reviewer agent {} failed for task {}: {}",
-                        reviewerAgentId, taskId, result.get("error"));
+                // A wallet the tenant can top up is a refusal, not a fault: WARN. Everything
+                // else keeps ERROR. Only the level differs; the review still did not happen
+                // and handleReviewerFailureToAct below runs either way.
+                String reviewError = result.get("error") != null ? result.get("error").toString() : null;
+                if (ChatCreditRefusal.isChatCreditRefusal(reviewError)) {
+                    logger.warn("[TaskReview] Reviewer agent {} refused for task {}: {}",
+                            reviewerAgentId, taskId, reviewError);
+                } else {
+                    logger.error("[TaskReview] Reviewer agent {} failed for task {}: {}",
+                            reviewerAgentId, taskId, reviewError);
+                }
             }
 
             // P8: If the reviewer finished but never called task_approve/task_reject_review,
@@ -2738,7 +2748,13 @@ public class AgentTaskService {
                     logger.info("[TaskExec] Agent {} advanced task {} to {} despite chat success=false: {}",
                             assigneeId, taskId, latestTask.get().getStatus(), error);
                 } else {
-                    logger.error("[TaskExec] Agent {} failed for task {}: {}", assigneeId, taskId, error);
+                    // Same rule as [TaskReview] above: a credit refusal is the customer's to
+                    // resolve, so WARN. The task is still failed below, unchanged.
+                    if (ChatCreditRefusal.isChatCreditRefusal(error)) {
+                        logger.warn("[TaskExec] Agent {} refused for task {}: {}", assigneeId, taskId, error);
+                    } else {
+                        logger.error("[TaskExec] Agent {} failed for task {}: {}", assigneeId, taskId, error);
+                    }
                     latestTask.ifPresent(t -> {
                         if (AgentTaskEntity.STATUS_IN_PROGRESS.equals(t.getStatus())) {
                             self.markExecutionFailed(taskId, tenantId,

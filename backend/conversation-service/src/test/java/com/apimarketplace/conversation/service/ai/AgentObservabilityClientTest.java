@@ -44,6 +44,59 @@ class AgentObservabilityClientTest {
         );
     }
 
+    @Nested
+    @DisplayName("key route (whose API key the turn ran on)")
+    class KeyRoute {
+
+        private AgentExecutionResponseDto responseWithMetrics(Map<String, Object> metrics) {
+            return new AgentExecutionResponseDto(
+                true, "Final answer", "content", List.of(), 1,
+                Map.of("promptTokens", 100, "completionTokens", 50, "totalTokens", 150),
+                null, 1200L, "anthropic", "claude-3",
+                List.of(), "end_turn", metrics, null, null, null, null, null, null);
+        }
+
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        private Map<String, Object> postedBody(AgentExecutionResponseDto response) {
+            org.mockito.Mockito.when(restTemplate.exchange(org.mockito.ArgumentMatchers.anyString(),
+                    org.mockito.ArgumentMatchers.eq(org.springframework.http.HttpMethod.POST),
+                    org.mockito.ArgumentMatchers.any(org.springframework.http.HttpEntity.class),
+                    org.mockito.ArgumentMatchers.eq(Map.class)))
+                .thenReturn(org.springframework.http.ResponseEntity.ok(Map.of()));
+
+            client.recordAsync("tenant-1", null, "agent-id", response, "prompt", null, "conv-1",
+                agentConfig(null, null, null), "CHAT", null, null);
+
+            var captor = org.mockito.ArgumentCaptor.forClass(org.springframework.http.HttpEntity.class);
+            org.mockito.Mockito.verify(restTemplate).exchange(org.mockito.ArgumentMatchers.anyString(),
+                    org.mockito.ArgumentMatchers.eq(org.springframework.http.HttpMethod.POST),
+                    captor.capture(), org.mockito.ArgumentMatchers.eq(Map.class));
+            return (Map<String, Object>) captor.getValue().getBody();
+        }
+
+        @Test
+        @DisplayName("the route agent-service wrote on the response metrics is posted on the observability body")
+        void forwardsTheRouteFromMetrics() {
+            Map<String, Object> body = postedBody(responseWithMetrics(Map.of("keyRoute", "OWN_KEY")));
+
+            // This body is what agent-service turns into the debit: an OWN_KEY turn is billed
+            // a flat fee there instead of the token rate.
+            assertThat(body).containsEntry("keyRoute", "OWN_KEY");
+        }
+
+        @Test
+        @DisplayName("no route on the metrics (older agent-service, empty or blank) posts no route: the debit bills the platform route")
+        void absentRouteStaysAbsent() {
+            assertThat(postedBody(responseWithMetrics(null))).doesNotContainKey("keyRoute");
+        }
+
+        @Test
+        @DisplayName("a blank route is not forwarded either")
+        void blankRouteStaysAbsent() {
+            assertThat(postedBody(responseWithMetrics(Map.of("keyRoute", " ")))).doesNotContainKey("keyRoute");
+        }
+    }
+
     // ==========================================================================
     // Tool results flattening (the bug fix)
     // ==========================================================================

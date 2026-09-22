@@ -57,8 +57,15 @@ class InternalChatControllerAsyncGateTest {
     void asyncGateRefusalReturns402WithoutStreamInit() {
         ChatRequest request = new ChatRequest();
         request.setMessage("widget prompt");
+        // Real provider/model, not nulls: the gate must ask about the model the turn
+        // will actually run (V494 - the AI allowance only funds the opened ones), and a
+        // null-stubbed fixture would pass just as well if the controller hard-coded
+        // nulls and quietly asked the pre-V494 question.
+        request.setProvider("anthropic");
+        request.setModel("claude-haiku-4-5");
         when(creditClient.checkCredits("user-9",
-                CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION)).thenReturn(false);
+                CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION,
+                "anthropic", "claude-haiku-4-5")).thenReturn(false);
 
         Mono<ResponseEntity<Map<String, String>>> mono = controller.chat(request, "user-9", "org-1");
         ResponseEntity<Map<String, String>> response = mono.block();
@@ -74,8 +81,11 @@ class InternalChatControllerAsyncGateTest {
     void asyncGateAllowedInitializesStream() {
         ChatRequest request = new ChatRequest();
         request.setMessage("widget prompt");
+        request.setProvider("anthropic");
+        request.setModel("claude-haiku-4-5");
         when(creditClient.checkCredits("user-9",
-                CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION)).thenReturn(true);
+                CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION,
+                "anthropic", "claude-haiku-4-5")).thenReturn(true);
         Mono<ResponseEntity<Map<String, String>>> initialized =
                 Mono.just(ResponseEntity.ok(Map.of("streamId", "s-1")));
         when(streamInitializer.initializeStreamAsync(any(ChatRequest.class), eq("user-9")))

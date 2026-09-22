@@ -104,8 +104,8 @@ class ServiceToolsControllerTest {
     }
 
     @Test
-    @DisplayName("Should put allowedInterfaceIds into variables (not credentials)")
-    void shouldPutAllowedIdsIntoVariables() {
+    @DisplayName("puts allowedInterfaceIds into BOTH channels - credentials is the one the module reads")
+    void shouldPutAllowedIdsIntoCredentialsAndVariables() {
         when(toolsProvider.execute(any(), any(), any()))
             .thenReturn(ToolExecutionResult.success(Map.of()));
 
@@ -118,8 +118,17 @@ class ServiceToolsControllerTest {
 
         ArgumentCaptor<ToolExecutionContext> ctxCaptor = ArgumentCaptor.forClass(ToolExecutionContext.class);
         verify(toolsProvider).execute(any(), any(), ctxCaptor.capture());
-        assertThat(ctxCaptor.getValue().variables()).containsKey("allowedInterfaceIds");
-        assertThat(ctxCaptor.getValue().variables().get("allowedInterfaceIds")).isEqualTo(List.of("uuid-1", "uuid-2"));
+        // CREDENTIALS is the load-bearing assertion: InterfaceCrudModule resolves its
+        // allow-list through ToolAccessControl.getAllowedIds(context.credentials(), ...), so
+        // this relay loop IS the whole enforcement path in microservice (cloud) mode. Without
+        // this line the loop could be deleted with every test still green, and interface
+        // scoping would evaporate in cloud exactly as it had in the monolith.
+        assertThat(ctxCaptor.getValue().credentials())
+                .containsEntry("allowedInterfaceIds", List.of("uuid-1", "uuid-2"));
+        // variables keeps the same value: it is part of this relay's published shape and
+        // nothing reads the allow-list from it any more, but removing a key is a separate change.
+        assertThat(ctxCaptor.getValue().variables())
+                .containsEntry("allowedInterfaceIds", List.of("uuid-1", "uuid-2"));
     }
 
     @Test
@@ -167,5 +176,31 @@ class ServiceToolsControllerTest {
         ResponseEntity<Map<String, Object>> response = controller.listTools();
         assertThat(response.getStatusCode().value()).isEqualTo(200);
         assertThat(response.getBody()).containsEntry("count", 0);
+    }
+
+    @Test
+    @DisplayName("a body-supplied orgRole never reaches the execution context")
+    void bodyOrgRoleIsIgnored() {
+        // The body was a second channel for the privilege axis, on an endpoint the gateway routes.
+        // The gateway strips the caller's own identity HEADERS but not the body, so a user whose
+        // gateway resolved no active org could name a workspace and assert OWNER in it. Every
+        // internal caller sends the role as a header from the same source it filled the body with.
+        when(toolsProvider.execute(any(), any(), any()))
+            .thenReturn(ToolExecutionResult.success(Map.of()));
+
+        Map<String, Object> request = new java.util.HashMap<>();
+        request.put("tool", "interface");
+        request.put("parameters", Map.of("action", "list"));
+        request.put("orgId", "victim-org");
+        request.put("orgRole", "OWNER");
+
+        controller.executeTool(createRequest("tenant-1"), request);
+
+        ArgumentCaptor<ToolExecutionContext> ctx = ArgumentCaptor.forClass(ToolExecutionContext.class);
+        verify(toolsProvider).execute(any(), any(), ctx.capture());
+        assertThat(ctx.getValue().orgRole())
+            .as("a body-supplied role must never reach the execution context")
+            .isNull();
+        assertThat(ctx.getValue().orgId()).isEqualTo("victim-org");
     }
 }

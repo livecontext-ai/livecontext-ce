@@ -28,7 +28,12 @@ import { routing } from '@/i18n/routing';
 // and only a crawler (or a `curl`) sees the spinner. `publicMarketingPathCoverage`
 // in the tests now enumerates the pages that use the public chrome and fails when
 // one is missing from this list, so the next public page cannot repeat it.
-const PUBLIC_MARKETING_PREFIXES = ['/compare', '/about', '/contact', '/legal', '/changelog', '/docs', '/blog', '/marketplace', '/u', '/status', '/integrations', '/models'];
+// `/videos` is the product-film library. Its pages exist to be READ (the problem,
+// the answer, the chapters and the full transcript are the ranking asset; the film
+// is the conversion asset), so spinner-only HTML would empty them of the only
+// thing they are for. Measured before this entry: 52 KB and 127 KB of markup with
+// the spinner at the top of the body.
+const PUBLIC_MARKETING_PREFIXES = ['/compare', '/about', '/contact', '/legal', '/changelog', '/docs', '/marketplace', '/u', '/status', '/integrations', '/models', '/videos', '/for'];
 
 export function isPublicMarketingPath(pathname: string | null): boolean {
   if (!pathname) return false;

@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.controller;
 
+import com.apimarketplace.agent.service.BridgeProviderSaveGuard;
 import com.apimarketplace.agent.util.RequestParameterExtractor;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.agent.domain.AgentEntity;
@@ -11,6 +12,7 @@ import com.apimarketplace.agent.service.AgentWidgetConfigService;
 import com.apimarketplace.agent.webhook.AgentWebhookTokenService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
@@ -70,6 +72,16 @@ public class AgentController {
         this.triggerRestTemplate = new RestTemplate();
     }
 
+    /** Holds the save-time bridge rule shared with the agent MCP tool and clone. */
+    private BridgeProviderSaveGuard bridgeProviderSaveGuard = new BridgeProviderSaveGuard();
+
+    @Autowired(required = false)
+    void setBridgeProviderSaveGuard(BridgeProviderSaveGuard guard) {
+        if (guard != null) {
+            this.bridgeProviderSaveGuard = guard;
+        }
+    }
+
     /**
      * Create a new agent.
      */
@@ -106,6 +118,12 @@ public class AgentController {
         ResponseEntity<Object> compactionModelError = validateCompactionModel(request);
         if (compactionModelError != null) {
             return compactionModelError;
+        }
+
+        // No existing provider on create, so any forbidden bridge is refused outright.
+        ResponseEntity<Object> bridgeError = validateBridgeAccess(httpRequest, request, null);
+        if (bridgeError != null) {
+            return bridgeError;
         }
 
         AgentEntity created = agentService.createAgent(
@@ -253,6 +271,46 @@ public class AgentController {
     }
 
     /**
+     * Refuse to persist an agent on a CLI bridge its owner can never dispatch.
+     *
+     * <p>Thin wrapper over {@link BridgeProviderSaveGuard}, which holds the rule so the REST
+     * path, the {@code agent} MCP tool and clone all apply the SAME one. See that class for
+     * why only a standing denial and only a CHANGING provider are judged.
+     *
+     * @param currentProvider what the agent is stored on today; {@code null} on create
+     */
+    private ResponseEntity<Object> validateBridgeAccess(HttpServletRequest httpRequest,
+                                                        Map<String, Object> request,
+                                                        String currentProvider) {
+        if (!request.containsKey("modelProvider")) {
+            return null;
+        }
+        String provider = extractor.getString(request, "modelProvider");
+        String userId = tenantResolver.resolveOrNull(httpRequest);
+        return bridgeProviderSaveGuard
+            .denialReason(userId, httpRequest.getHeader("X-User-Roles"), provider, currentProvider)
+            .<ResponseEntity<Object>>map(reason -> bridgeDenied(provider, reason))
+            .orElse(null);
+    }
+
+    /**
+     * The 403 body for a save-time bridge refusal.
+     *
+     * <p>Same shape and same {@code BRIDGE_ACCESS_DENIED} discriminator that
+     * {@code GlobalExceptionHandler} already emits for a DISPATCH-time refusal, so a client
+     * keying on the documented value (see {@code AgentClient.extractStructuredError}) sees both
+     * kinds. Shared with clone, which reads its provider from the source entity rather than the
+     * request body and would otherwise duplicate the literal.
+     */
+    private static ResponseEntity<Object> bridgeDenied(String provider, String reason) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+            "error", "BRIDGE_ACCESS_DENIED",
+            "reason", reason,
+            "provider", provider,
+            "message", BridgeProviderSaveGuard.deniedMessage(provider, reason)));
+    }
+
+    /**
      * List agents for a tenant (org-aware).
      */
     @GetMapping
@@ -380,7 +438,12 @@ public class AgentController {
      * bypass the sub-agent budget hierarchy guarantees (§6.1 AGENT_BUDGET_HIERARCHY.md).
      */
     private static final List<String> READ_ONLY_BUDGET_FIELDS =
-        List.of("creditsReserved", "creditsFree", "creditsConsumed", "creditsConsumedFromSubagents");
+        List.of("creditsReserved", "creditsFree", "creditsConsumed", "creditsConsumedFromSubagents",
+                // Derived verdicts, serialized onto every agent payload. A client that reads an
+                // agent and PUTs it back sends them, and silently ignoring them would teach the
+                // caller that the cap can be lifted by setting a flag. It cannot: the way back
+                // is creditBudget, or letting the period roll.
+                "budgetBlocked", "budgetBlockedUntil", "budgetCommitted");
 
     /**
      * Update an agent.
@@ -390,7 +453,14 @@ public class AgentController {
             @PathVariable("id") UUID id,
             HttpServletRequest httpRequest,
             @RequestHeader(value = "X-Organization-ID", required = false) String callerOrgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
             @RequestBody Map<String, Object> request) {
+
+        if (callerOrgId != null && orgRole != null && "VIEWER".equalsIgnoreCase(orgRole.trim())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "error", "viewer_role",
+                    "message", "VIEWER role cannot modify agents"));
+        }
 
         // Reject requests that try to mutate server-managed budget fields.
         // Fail fast (400) rather than silently stripping - makes the contract obvious
@@ -443,6 +513,24 @@ public class AgentController {
         ResponseEntity<Object> compactionModelError = validateCompactionModel(request);
         if (compactionModelError != null) {
             return compactionModelError;
+        }
+
+        // Judge only a CHANGE of provider: an agent already on a forbidden bridge stays
+        // editable, so its owner can rename it and, above all, move it off. The read is
+        // skipped entirely when the body carries no provider, so a plain rename costs nothing.
+        if (request.containsKey("modelProvider")) {
+            Optional<AgentEntity> existingForProvider =
+                agentService.getAgent(id, tenantId, callerOrgId, orgRole);
+            // Unreadable here (read and write scopes are resolved separately) means we cannot
+            // tell whether the provider is changing. Judging it as a change would 403 an owner
+            // on their own agent, so leave it to the update itself to fail.
+            if (existingForProvider.isPresent()) {
+                ResponseEntity<Object> bridgeError = validateBridgeAccess(
+                    httpRequest, request, existingForProvider.get().getModelProvider());
+                if (bridgeError != null) {
+                    return bridgeError;
+                }
+            }
         }
 
         AgentEntity updated = agentService.updateAgent(
@@ -508,6 +596,12 @@ public class AgentController {
         return ResponseEntity.ok(updated);
     }
 
+    /** Backward-compatible direct-call overload used by controller unit tests. */
+    public ResponseEntity<?> updateAgent(UUID id, HttpServletRequest httpRequest,
+                                         String callerOrgId, Map<String, Object> request) {
+        return updateAgent(id, httpRequest, callerOrgId, null, request);
+    }
+
     /**
      * Reset credits consumed for an agent.
      *
@@ -541,13 +635,43 @@ public class AgentController {
      * Clone an agent.
      */
     @PostMapping("/{id:[0-9a-fA-F\\-]{36}}/clone")
-    public ResponseEntity<AgentEntity> cloneAgent(
+    public ResponseEntity<?> cloneAgent(
             @PathVariable("id") UUID id,
             HttpServletRequest request,
             @RequestHeader(value = "X-Organization-ID", required = false) String callerOrgId,
             @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         String tenantId = tenantResolver.resolveOrNull(request);
+
+        // Note the argument order differs between the two calls below: getAgent takes
+        // (id, tenant, orgId, orgRole) and cloneAgent takes (id, tenant, orgRole, orgId).
+        // Both are correct against their signatures; a transposition would compile silently.
+        //
+        // A source this read cannot see is left unjudged rather than refused, for the same
+        // reason as the update path above: read and write scopes are resolved separately, so
+        // treating 'unreadable' as 'forbidden' would 403 an owner on their own agent. The
+        // clone itself then applies its own scope check.
+        //
+        // A clone inherits the source's provider, so cloning an agent that sits on a bridge
+        // this caller cannot dispatch would mint a SECOND agent that fails at every run.
+        // Judged against null, because a clone is a create: there is nothing to preserve.
+        //
+        // In cloud that makes every clone of the stored bridge agents a refusal for a non-admin,
+        // and it is meant: a clone is a new agent, and a new agent may not name a CLI there unless
+        // an administrator is the one asking (the access policy then decides, as on self-hosted).
+        // Note there is no clone-then-repair route, since a clone is atomic - the way for a user
+        // to duplicate one of those agents is to move the source onto an API provider first, which
+        // stays allowed because that provider is not a bridge.
+        Optional<AgentEntity> source = agentService.getAgent(id, tenantId, callerOrgId, orgRole);
+        if (source.isPresent()) {
+            String sourceProvider = source.get().getModelProvider();
+            Optional<String> denial = bridgeProviderSaveGuard.denialReason(
+                tenantId, request.getHeader("X-User-Roles"), sourceProvider, null);
+            if (denial.isPresent()) {
+                return bridgeDenied(sourceProvider, denial.get());
+            }
+        }
+
         AgentEntity cloned = agentService.cloneAgent(id, tenantId, orgRole, callerOrgId);
         return ResponseEntity.ok(cloned);
     }

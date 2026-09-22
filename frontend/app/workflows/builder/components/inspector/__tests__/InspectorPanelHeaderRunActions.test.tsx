@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import * as React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { Node } from 'reactflow';
 
 vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
@@ -54,6 +54,8 @@ function renderHeader(over: {
   isRunMode?: boolean;
   isTriggerNode?: boolean;
   status?: Record<string, boolean>;
+  isAdvanced?: boolean;
+  onOpenLogs?: () => void;
 } = {}) {
   render(
     <InspectorPanelHeader
@@ -61,7 +63,7 @@ function renderHeader(over: {
       data={node.data}
       isRunMode={over.isRunMode ?? true}
       isFullscreen={false}
-      isAdvanced={false}
+      isAdvanced={over.isAdvanced ?? false}
       isTriggerNode={over.isTriggerNode ?? false}
       isInterfaceNode={false}
       shouldForceSmallMode={false}
@@ -69,14 +71,13 @@ function renderHeader(over: {
       triggerNavigationLevel="root"
       selectedDataSourceId={null}
       dataSources={[]}
-      viewMode="configuration"
-      onViewModeChange={vi.fn()}
       showExecutionData={false}
       onShowExecutionDataChange={vi.fn()}
       canShowExecutionDataToggle={false}
       stepByStepStatus={status(over.status)}
       hasGlobalValidationErrors={false}
       onUpdate={vi.fn()}
+      onOpenLogs={over.onOpenLogs}
     />,
   );
 }
@@ -124,5 +125,15 @@ describe('InspectorPanelHeader run actions', () => {
   it('offers no run actions outside run mode', () => {
     renderHeader({ isRunMode: false, status: { canRerun: true, isStepByStepMode: true } });
     expect(rerunButton()).toBeNull();
+  });
+
+  it('offers the side-panel Logs action without restoring the former Logs segment', () => {
+    const onOpenLogs = vi.fn();
+    renderHeader({ isAdvanced: true, onOpenLogs });
+
+    fireEvent.click(screen.getByTitle('viewLogs'));
+
+    expect(onOpenLogs).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Logs')).toBeNull();
   });
 });

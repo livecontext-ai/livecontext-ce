@@ -6,9 +6,10 @@ import path from 'node:path';
  * The workflow card's footer meta row, which must stay ONE line.
  *
  * It accumulates: a modified date, a run count, a spending figure, a live dot, a
- * review or rejected badge, a shared globe or a private lock, and the relations
- * button. Nothing stopped the text inside each segment from wrapping, so on a
- * narrow card the date alone took two lines and pushed the rest of the row down.
+ * review or rejected badge, a shared globe or a private lock, and - at the right
+ * edge - a group holding the relations button and the resource-info button.
+ * Nothing stopped the text inside each segment from wrapping, so on a narrow card
+ * the date alone took two lines and pushed the rest of the row down.
  *
  * The mechanism is `truncate` on the date and `shrink-0` on every other DIRECT
  * child, so the date is the only thing that gives. That is a whole-row
@@ -50,12 +51,13 @@ function rowSource(): string {
         'Re-anchor this test on the row it describes rather than deleting it.'
     );
   }
-  // `+ 2` to take the closing `/>` WITH it. Without it the slice stopped one
-  // token short and the LAST child - the relations button, the very element
-  // whose missing `shrink-0` this test exists for - never reached the scanner,
-  // so restoring that bug left the suite green.
-  const end = SOURCE.indexOf('/>', SOURCE.indexOf('<WorkflowRelationsMenu', start)) + 2;
-  if (end <= start + 1) throw new Error('WorkflowTable.metaRow: the row no longer ends on WorkflowRelationsMenu.');
+  // Take the closing `</div>` of the controls group WITH it. Without the tail the
+  // slice stopped short of the LAST child - the very element whose missing
+  // `shrink-0` this test exists for - and restoring that bug left the suite green.
+  const lastControl = SOURCE.indexOf('<ResourceInfoPopover', start);
+  if (lastControl === -1) throw new Error('WorkflowTable.metaRow: the row no longer ends on the controls group.');
+  const end = SOURCE.indexOf('</div>', SOURCE.indexOf('/>', lastControl)) + '</div>'.length;
+  if (end <= start + 1) throw new Error('WorkflowTable.metaRow: the controls group is not closed.');
   return SOURCE.slice(start, end);
 }
 
@@ -85,13 +87,37 @@ function flexItems(row: string): { tag: string; className: string | null }[] {
   const items: { tag: string; className: string | null }[] = [];
   let depth = 0;
 
-  // Attributes are "anything that is not a tag delimiter". The earlier version
-  // tried to be quote-aware and broke on the first apostrophe inside a `//`
-  // comment between attributes ("the row's ONLY control"), which silently
-  // dropped that element - and it was the relations button, the one this test
-  // exists for.
-  for (const match of body.matchAll(/<(\/?)([A-Za-z][\w.]*)([^<>]*?)(\/?)>/g)) {
-    const [, closing, tag, attrs, selfClosing] = match;
+  // A tag ends on the first `>` that is NOT inside a JSX expression. Reading
+  // attributes as "anything that is not a tag delimiter" is what an earlier
+  // version did, and it cut the tag short at the `>` of the arrow in
+  // `loadEditors={() => ...}`: everything after it, className included, fell
+  // outside the match, so that child was reported as carrying no class - a
+  // failure naming the wrong cause. Tracking brace depth is what makes an
+  // inline handler transparent, the way it is to the layout.
+  //
+  // Deliberately NOT quote-aware beyond that: an earlier version was, and broke
+  // on the first apostrophe inside a `//` comment between attributes ("the
+  // row's ONLY control"), silently dropping the element this test exists for.
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] !== '<') continue;
+    const nameMatch = /^<(\/?)([A-Za-z][\w.]*)/.exec(body.slice(i));
+    if (!nameMatch) continue;
+    const [head, closing, tag] = nameMatch;
+
+    let braces = 0;
+    let end = -1;
+    for (let j = i + head.length; j < body.length; j++) {
+      const ch = body[j];
+      if (ch === '{') braces += 1;
+      else if (ch === '}') braces -= 1;
+      else if (ch === '>' && braces === 0) { end = j; break; }
+    }
+    if (end === -1) break;
+
+    const attrs = body.slice(i + head.length, end);
+    const selfClosing = attrs.trimEnd().endsWith('/');
+    i = end;
+
     if (closing) {
       depth -= 1;
       continue;
@@ -108,24 +134,47 @@ function flexItems(row: string): { tag: string; className: string | null }[] {
 
 const CHILDREN = flexItems(ROW);
 
+/** The right-edge controls group: its own class list, and the controls inside it. */
+const CONTROLS_GROUP = ROW.match(/<div className="([^"]*ml-auto[^"]*)"/)?.[1] ?? '';
+const CONTROLS = flexItems(ROW.slice(ROW.indexOf('<div className="' + CONTROLS_GROUP)));
+
 describe('the workflow card footer stays on one line', () => {
   it('found the row it is about, and all of it', () => {
     expect(ROW_OPEN, 'no container class list found after the marker').not.toBe('');
     expect(ROW).toContain('BudgetChip');
     expect(ROW).toContain('WorkflowRelationsMenu');
+    expect(ROW).toContain('ResourceInfoPopover');
     // Every optional segment, so a test that stops seeing one says so.
     for (const marker of ['runCount', 'workflow.live', 'PENDING_REVIEW', 'REJECTED']) {
       expect(ROW, `the row no longer carries ${marker}`).toContain(marker);
     }
     expect(CHILDREN.length).toBeGreaterThan(6);
-    // Named explicitly, because these two are the ones a scanner drops first:
-    // the chip carries no className, and the relations button closes the row
-    // and is written across several lines with comments between its attributes.
-    // A slice or a regex that loses either turns the test below into a weaker
-    // claim without failing.
+    // Named explicitly, because these are the ones a scanner drops first: the chip
+    // carries no className, and the controls group closes the row and is written
+    // across several lines with comments between its attributes. A slice or a regex
+    // that loses either turns the test below into a weaker claim without failing.
     expect(CHILDREN.map((child) => child.tag)).toEqual(
-      expect.arrayContaining(['BudgetChip', 'WorkflowRelationsMenu'])
+      expect.arrayContaining(['BudgetChip', 'div'])
     );
+    // The controls are one level down now, inside that group - so the group is what
+    // the row's shrink invariant applies to, and CONTROLS below is what covers them.
+    expect(CONTROLS.map((child) => child.tag)).toEqual(
+      ['WorkflowRelationsMenu', 'ResourceInfoPopover']
+    );
+  });
+
+  it('keeps both controls in ONE group that carries the right-edge push', () => {
+    // `ml-auto` belongs to the GROUP, not to either button. On a card with no
+    // relations the info button would otherwise be the one carrying it on some
+    // cards and not others, and the row's right edge would jitter across a grid.
+    expect(CONTROLS_GROUP, 'the controls group lost its right-edge push').toContain('ml-auto');
+    expect(CONTROLS_GROUP, 'the controls group can be squeezed').toContain('shrink-0');
+    for (const control of CONTROLS) {
+      expect(control.className ?? '', `<${control.tag}> should not carry ml-auto`).not.toContain('ml-auto');
+      // Inside the group's own flex row the same rule applies: a 28px square that
+      // shrinks stops being a square.
+      expect(control.className ?? '', `<${control.tag}> can still be squeezed`).toContain('shrink-0');
+    }
   });
 
   /**

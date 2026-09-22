@@ -228,7 +228,10 @@ public class DataSourceRowModule implements ToolModule {
             resultMap.put("insertedIds", result.data() != null && result.data().insertedIds() != null
                 ? result.data().insertedIds() : List.of());
             resultMap.put("status", "CREATED");
-            resultMap.put("message", "Successfully inserted " + crudRows.size() + " rows into table " + datasourceId + ".");
+            resultMap.put("message", withWarningNotice(
+                "Successfully inserted " + crudRows.size() + " rows into table " + datasourceId + ".",
+                result));
+            addWarnings(resultMap, result);
             resultMap.put("marker", "[visualize:datasource:" + datasourceId + "]");
 
             return ToolExecutionResult.success(resultMap, buildVizMetadata(datasourceId));
@@ -280,17 +283,70 @@ public class DataSourceRowModule implements ToolModule {
             int affectedRows = result.data() != null && result.data().affectedRows() != null
                 ? result.data().affectedRows() : 0;
 
-            return ToolExecutionResult.success(Map.of(
-                "datasourceId", datasourceId,
-                "updatedColumns", sanitizedSet.keySet(),
-                "affectedRows", affectedRows,
-                "status", "UPDATED",
-                "message", "Successfully updated " + affectedRows + " rows in table " + datasourceId + ".",
-                "marker", "[visualize:datasource:" + datasourceId + "]"
-            ), buildVizMetadata(datasourceId));
+            Map<String, Object> resultMap = new LinkedHashMap<>();
+            resultMap.put("datasourceId", datasourceId);
+            resultMap.put("updatedColumns", sanitizedSet.keySet());
+            resultMap.put("affectedRows", affectedRows);
+            resultMap.put("status", "UPDATED");
+            resultMap.put("message", withWarningNotice(
+                "Successfully updated " + affectedRows + " rows in table " + datasourceId + ".", result));
+            addWarnings(resultMap, result);
+            resultMap.put("marker", "[visualize:datasource:" + datasourceId + "]");
+
+            return ToolExecutionResult.success(resultMap, buildVizMetadata(datasourceId));
         } catch (Exception e) {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to update rows: " + e.getMessage());
         }
+    }
+
+    /**
+     * The write succeeded, and the column type had something to say about a value.
+     *
+     * <p>Every write runs through the column-type coercion, which reports what it did rather than
+     * refusing the value. Most of what it reports is a NORMALISATION and needs no action - a date
+     * rewritten to ISO, a comma read as a decimal separator. A few say the value was kept but looks
+     * wrong for the column, and some say the value could not be read or could not be resolved to a
+     * file, which means the cell is stored but unusable. The service produces all of them, and this
+     * tool used to answer a
+     * flat "Successfully inserted N rows" and drop them - so a caller that wrote a cell the platform
+     * had just diagnosed as unusable was told it had succeeded, and found out by looking at the
+     * table.
+     *
+     * <p>The wording here is deliberately neutral, and it does NOT tell the caller to go and fix
+     * anything: on an ordinary import most warnings are normalisations, and an instruction to
+     * rewrite them sends the caller round a loop rewriting values the coercer will normalise again.
+     * Each warning names what happened in its own words; the judgement is the caller's, and the
+     * tool help explains how to read them.
+     */
+    private static String withWarningNotice(String baseMessage, CrudResult result) {
+        List<String> warnings = coercionWarnings(result);
+        if (warnings.isEmpty()) {
+            return baseMessage;
+        }
+        return baseMessage + " The column types reported " + warnings.size()
+            + (warnings.size() == 1 ? " note" : " notes")
+            + " about the values written - read 'warnings' and judge each one. Most notes are "
+            + "normalisations that need nothing.";
+    }
+
+    /**
+     * The warnings as the write produced them. They are already one line per distinct finding with
+     * a count (the service groups them), so a thousand-row import answers with a handful of lines
+     * and every distinct finding survives - including the one the caller needed, whichever row
+     * happened to produce it.
+     */
+    private static void addWarnings(Map<String, Object> resultMap, CrudResult result) {
+        List<String> warnings = coercionWarnings(result);
+        if (!warnings.isEmpty()) {
+            resultMap.put("warnings", List.copyOf(warnings));
+        }
+    }
+
+    private static List<String> coercionWarnings(CrudResult result) {
+        if (result.data() == null || result.data().warnings() == null) {
+            return List.of();
+        }
+        return result.data().warnings();
     }
 
     private ToolExecutionResult executeDeleteRows(Map<String, Object> parameters, String tenantId, String orgId) {

@@ -72,6 +72,7 @@ public final class ChatObservabilityAdapter {
         req.setStatus(request.success() ? "COMPLETED" : "FAILED");
         req.setStopReason(request.stopReason());
         req.setBudgetScope(request.budgetScope());
+        req.setKeyRoute(request.keyRoute());
         req.setErrorMessage(request.errorMessage());
         req.setDurationMs(request.durationMs());
 

@@ -5,7 +5,10 @@ import { Check, Loader2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Popover, PopoverTrigger } from '@/components/ui/popover';
+// A menu opened from the studio is drawn on the studio's own ground: it renders in a portal on
+// the document, so it cannot inherit the surface's tokens and has to be handed them.
+import { StudioPopoverContent } from '@/components/studio/StudioPopoverContent';
 // See components/ui/menu.ts: the bare PopoverContent has no background in this theme.
 import { menuItemClass, menuSurfaceClass } from '@/components/ui/menu';
 import type { GenerationOptionsState } from '@/hooks/useGenerationOptions';
@@ -113,7 +116,7 @@ export function StudioParamControl({
           {missing && <span aria-hidden="true">*</span>}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className={`${menuSurfaceClass} max-h-[50vh] w-64 overflow-y-auto`}>
+      <StudioPopoverContent align="start" className={`${menuSurfaceClass} max-h-[50vh] w-64 overflow-y-auto`}>
         <p className="mb-2 text-xs font-medium text-theme-secondary">{label}</p>
 
         {field.kind === 'choice' && (
@@ -174,7 +177,7 @@ export function StudioParamControl({
             {t('params.clear')}
           </Button>
         )}
-      </PopoverContent>
+      </StudioPopoverContent>
     </Popover>
   );
 }

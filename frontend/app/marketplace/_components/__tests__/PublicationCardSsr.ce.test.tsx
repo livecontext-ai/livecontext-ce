@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 // A self-hosted install prices in dollars, managed cloud in credits. The
 // edition is resolved at module load, so this needs its own file rather than a
 // branch inside the main suite.
-vi.mock('@/lib/edition', () => ({ IS_CE: true }));
+vi.mock('@/lib/edition', () => ({ IS_CE: true, IS_MANAGED_CLOUD: false }));
 
 // `server-only` throws outside a React Server Component; stub it for the unit
 // test (the convention in publicPublications.test.ts).
@@ -62,5 +62,15 @@ describe('PublicationCardSsr on a self-hosted install', () => {
     // Telling a CE visitor a price in a currency their install does not use is
     // the drift this mirrors PricePill to avoid.
     expect(container.textContent).not.toContain('credits');
+  });
+
+  it('never shows a verified check, even when the caller says the author is verified', () => {
+    // Verified badges are a managed-cloud feature. This is the presentation half of
+    // the lock: the backend already refuses to mark anyone verified here.
+    const { queryByRole } = render(
+      <PublicationCardSsr publication={PUBLICATION} publisherVerified />,
+    );
+
+    expect(queryByRole('img', { name: 'Verified account' })).toBeNull();
   });
 });

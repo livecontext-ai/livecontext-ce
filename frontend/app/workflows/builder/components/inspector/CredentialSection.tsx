@@ -12,7 +12,11 @@ import {
   type PlatformCredentialPublicInfo,
 } from '@/lib/api/orchestrator';
 import { CredentialWizard, resolveByokConfig, resolveByokOnlyScopeList, resolvePlatformScopeList } from '@/components/credentials/CredentialWizard';
-import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
+// The list is PORTALLED, so on a studio surface it lands outside the element carrying the
+// studio's colour tokens and comes back in the application's theme. Inert everywhere else:
+// off a studio surface this renders exactly what SelectContent renders.
+import { StudioSelectContent } from '@/components/studio/StudioSelectContent';
 import { ToggleGroup } from '@/components/ui/toggle-group';
 import Toast, { useToast } from '@/components/Toast';
 import { useTranslations } from 'next-intl';
@@ -22,9 +26,12 @@ import {
   findBestUserCredential,
 } from '@/lib/credentials/credentialMatching';
 import { normalizeScopes } from '@/lib/credentials/normalizeScopes';
-import { MissingScopesBanner } from './MissingScopesBanner';
+import { MissingScopesBanner } from '@/components/credentials/MissingScopesBanner';
 
 import { platformSellsThis } from '@/lib/generation/platformSells';
+import { BASE_RATE } from '@/lib/generation/priceModifiers';
+import { formatCredits } from '@/lib/generation/price';
+import { generationQuoteKey } from '@/lib/generation/quoteKey';
 
 export type CredentialSource = 'user' | 'platform';
 
@@ -92,6 +99,44 @@ interface CredentialSectionProps {
    */
   quantityUnit?: string | null;
   /**
+   * What the call's own CHOICES do to the published rate: 2 for a render sold
+   * at twice it, 1.2 for one carrying two files priced at a tenth each.
+   *
+   * <p>Computed by the surface that holds the parameters (this section sees
+   * only the model and the size), from the model's declared `price.modifiers`.
+   * It travels because it changes the AMOUNT, and because a caller that left it
+   * out of its cache key would stop sharing the quote with the callers that
+   * carry it: two requests for one generation, and two amounts that can
+   * disagree on the same screen.
+   *
+   * <p>Omitted means "at the published rate", which is every ordinary endpoint
+   * and every model that declares no modifiers.
+   */
+  priceMultiplier?: number | null;
+  /**
+   * The factor in WORDS, when the caller can say which choices produced it.
+   *
+   * <p>This section is handed a number; only the surface holding the parameters knows that the
+   * number is "Resolution x2". Optional because not every caller has the model's modifier table
+   * (the wizard quotes a whole integration), and the note degrades to the bare factor rather than
+   * disappearing: an unexplained multiplier still beats an unexplained total.
+   */
+  priceFactorReason?: string;
+  /**
+   * True when the factor CANNOT be known from what is on screen.
+   *
+   * <p>The workflow inspector's fields accept expressions, and a priced parameter bound to one has
+   * no value until the run reaches that step. The local calculation then falls to the reference
+   * tier, the quote is asked without a factor, and the server answers the published rate - so this
+   * pane printed "60 credits per second, 10 seconds = 600 credits" as a plain fact for a step the
+   * server bills 2400.
+   *
+   * <p>It is a separate flag from `priceFactorReason` because it has to survive the factor gate:
+   * that note renders only when the server ECHOES a factor, which in this exact case it never
+   * does. The honest statement is about the total, not about a surcharge.
+   */
+  priceFactorIsUncertain?: boolean;
+  /**
    * True when the bound endpoint resells a generated asset (it carries a
    * generation descriptor in the catalog).
    *
@@ -144,6 +189,28 @@ interface CredentialSectionProps {
     source: CredentialSource,
     platformCredentialId: number | null,
   ) => void;
+  /**
+   * An overlay of this section opened or closed: the credential wizard, or the
+   * dropdown listing the reader's own keys.
+   *
+   * <p><b>Why a caller ever needs to know.</b> Both render in a portal on the
+   * document, OUTSIDE whatever contains this section. A container that closes
+   * when the reader interacts somewhere else - a popover, which is how the
+   * studio offers this - therefore sees the first click inside the wizard as a
+   * click outside ITSELF, closes, unmounts this section, and takes the wizard
+   * down with it. The reader presses "add a key", a form appears, and the first
+   * field they touch makes it vanish. The dropdown does the same through focus.
+   *
+   * <p>So the container is TOLD, and can hold itself open for as long as one is
+   * up. It is told FALSE when this section unmounts, whatever state the overlay
+   * was in: a container still holding itself open for an overlay that no longer
+   * exists can never be closed again, which looks like a frozen app and is a
+   * worse outcome than the bug this prevents.
+   *
+   * <p>The inspector, which lives in a panel that closes on nothing, passes
+   * nothing and behaves exactly as before.
+   */
+  onWizardOpenChange?: (open: boolean) => void;
 }
 
 interface CredentialStatus {
@@ -239,6 +306,9 @@ export function CredentialSection({
   modelId,
   quantity,
   quantityUnit,
+  priceMultiplier,
+  priceFactorReason,
+  priceFactorIsUncertain,
   isGeneration = false,
   isRunMode = false,
   showPlatformPricingNotes = true,
@@ -248,6 +318,7 @@ export function CredentialSection({
   platformCredentialId,
   onCredentialSourceChange,
   requiredScopes,
+  onWizardOpenChange,
 }: CredentialSectionProps) {
   const t = useTranslations('credentials');
   const { toasts, addToast, removeToast } = useToast();
@@ -267,6 +338,40 @@ export function CredentialSection({
   // the BYOK form (oauth-config step). Set either by an explicit CTA or by
   // requiredScopes when Standard cannot grant the endpoint's scopes.
   const [wizardInitialMode, setWizardInitialMode] = React.useState<CredentialWizardMode>('standard');
+
+  /**
+   * Whether ANY overlay of this section is open: the credential wizard, or the
+   * "which of my keys" dropdown.
+   *
+   * <p>Both render in a portal on the document, which is the whole reason the
+   * container has to be told. The dropdown is not a lesser case: it takes
+   * FOCUS, which is one of the three ways a popover dismisses itself, so a
+   * container that only heard about the wizard still lost the pane the moment
+   * the reader opened the list of their own keys.
+   */
+  const [isKeyListOpen, setIsKeyListOpen] = React.useState(false);
+  const anyOverlayOpen = isWizardOpen || isKeyListOpen;
+
+  // Told once per change, from the state itself rather than from each of the
+  // places that set it: a notification wired into the setters is one refactor
+  // away from a container that stays open after the form has gone.
+  const onWizardOpenChangeRef = React.useRef(onWizardOpenChange);
+  // Kept current in an effect rather than during render: a render can be thrown away, and the
+  // cleanup below reads this ref on the way out.
+  React.useEffect(() => {
+    onWizardOpenChangeRef.current = onWizardOpenChange;
+  }, [onWizardOpenChange]);
+  React.useEffect(() => {
+    onWizardOpenChangeRef.current?.(anyOverlayOpen);
+    // UNMOUNTING is a close, and the most important one. A container that holds
+    // itself open while an overlay is up and is never told the overlay went
+    // would refuse every dismissal for the rest of its life: Escape, the
+    // trigger, a click anywhere. This section unmounts under an open overlay
+    // whenever the provider it belongs to disappears (a catalogue refetch, a
+    // model switch), and the result would look like the app had frozen - a
+    // worse bug than the one the guard exists to fix.
+    return () => onWizardOpenChangeRef.current?.(false);
+  }, [anyOverlayOpen]);
 
   // Shared cache for user credentials - deduplicated across all CredentialSection instances
   const {
@@ -292,22 +397,34 @@ export function CredentialSection({
   // price of the previous one.
   const normalizedModelId = modelId ?? null;
   const normalizedQuantity = quantity ?? null;
+  // What the call's own CHOICES do to the rate, from the surface that holds the
+  // parameters. It is part of the key for the same reason the quantity is (it
+  // changes the amount), and it has to be in the key of EVERY caller of this
+  // endpoint or the ones that carry it stop sharing the cache with the ones
+  // that do not - which is two requests for one generation, and two amounts
+  // that can disagree on screen.
+  //
+  // `lib/generation/__tests__/quoteKeyCallSites.test.ts` pins the SHAPE of that question: it reads
+  // the object literal at every call site and fails when one sends a different set of fields. It
+  // cannot see a different VALUE in the same field, which is a second way to split the cache and
+  // has happened once (the studio rounded a character count, the other three did not); that half
+  // is guarded where the value is computed. This line used to cite `PriceQuoteKeyParityTest`,
+  // which existed nowhere in the repo.
+  const normalizedMultiplier = priceMultiplier ?? BASE_RATE;
   const { data: platformInfo } = useQuery({
-    queryKey: [
-      'platform-credential-public-info',
-      normalizedIntegration,
-      normalizedApiToolId,
-      normalizedModelId,
-      normalizedQuantity,
-      // Part of the key because it changes the ANSWER: the same endpoint quoted
-      // as a generation may not inherit the credential-wide default, so a
-      // cached "priced" answer must not be served once the node is known to be
-      // bound to a generation.
-      isGeneration,
-      // Also part of the key: it too can flip a "priced" answer to "not sold",
-      // so a cached amount must not outlive a change of model.
-      quantityUnit ?? null,
-    ],
+    // Built by the shared helper, not written out here. Every element changes the ANSWER (a
+    // generation does not inherit the credential-wide default; a unit can flip "priced" to "not
+    // sold"), and this endpoint has four callers, two of them on screen at once: a key that
+    // differs by one element is two requests for one generation and two amounts that can disagree.
+    queryKey: generationQuoteKey({
+      integrationName: normalizedIntegration,
+      apiToolId: normalizedApiToolId,
+      modelId: normalizedModelId,
+      quantity: normalizedQuantity,
+      generation: isGeneration,
+      quantityUnit,
+      priceMultiplier: normalizedMultiplier,
+    }),
     queryFn: () => orchestratorApi.getPlatformCredentialPublicInfo(
       normalizedIntegration,
       normalizedApiToolId,
@@ -316,6 +433,7 @@ export function CredentialSection({
         quantity: normalizedQuantity,
         generation: isGeneration,
         quantityUnit,
+        priceMultiplier: normalizedMultiplier,
       },
     ),
     staleTime: 5 * 60_000,
@@ -687,6 +805,35 @@ export function CredentialSection({
                   : note.values;
                 return t(note.key, values);
               })()}
+              {/* WHY the total is not the rate times the size.
+                  This pane quotes an amount that already carries the factor and said nothing
+                  about it: the sentence above reads "60 credits per second, 10 seconds = 1200
+                  credits", which does not multiply out, and the reader's first assumption about
+                  an unexplained total is that one of the two numbers beside it is wrong.
+
+                  Drawn from the factor the SERVER echoed, never from the local calculation, for
+                  the same reason the studio badge is: a server that did not apply it answers at
+                  the published rate, and a sentence explaining a surcharge the amount does not
+                  contain is the same lie in the other direction. */}
+              {/* The total above cannot be right when a priced parameter is an expression, and no
+                  factor will be echoed for it either - so this is stated on its own, before the
+                  factor note, and independently of it. */}
+              {priceFactorIsUncertain && (
+                <div className="pt-1">{priceFactorReason}</div>
+              )}
+              {(() => {
+                if (priceFactorIsUncertain) return null;
+                const echoed = Number(platformInfo?.priceMultiplier);
+                if (!Number.isFinite(echoed) || echoed <= 0 || echoed === 1) return null;
+                const factor = formatCredits(echoed);
+                return (
+                  <div className="pt-1">
+                    {priceFactorReason
+                      ? t('source.markupNoteFactorWithReason', { factor, reason: priceFactorReason })
+                      : t('source.markupNoteFactor', { factor })}
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -750,6 +897,9 @@ export function CredentialSection({
               {status.isConfigured && (
                 <Select
                   value={status.selectedId ? String(status.selectedId) : undefined}
+                  // Its list is portalled and takes focus, exactly like the wizard, so a container
+                  // that closes on focus leaving it has to be told this is open too.
+                  onOpenChange={setIsKeyListOpen}
                   onValueChange={(value) => {
                     if (value === '__new__') {
                       handleConfigureClick(status.credential);
@@ -762,7 +912,7 @@ export function CredentialSection({
                   <SelectTrigger className="h-10 min-h-0 rounded-lg text-sm px-3 py-2.5">
                     <SelectValue placeholder={t('selectCredential')} />
                   </SelectTrigger>
-                  <SelectContent>
+                  <StudioSelectContent>
                     {status.userCredentials.map((cred) => (
                       <SelectItem key={cred.id} value={String(cred.id)} className="text-xs">
                         {cred.name}
@@ -775,7 +925,7 @@ export function CredentialSection({
                         {t('addNewCredential')}
                       </span>
                     </SelectItem>
-                  </SelectContent>
+                  </StudioSelectContent>
                 </Select>
               )}
 

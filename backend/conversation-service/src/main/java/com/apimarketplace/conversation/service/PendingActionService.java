@@ -519,6 +519,20 @@ public class PendingActionService {
     public static Map<String, Object> buildToolAuthorizationAction(String rule, String toolName, String action,
                                                                    String toolCallId, String argsSummary,
                                                                    String applicationId) {
+        return buildToolAuthorizationAction(rule, toolName, action, toolCallId, argsSummary,
+                applicationId, null);
+    }
+
+    /**
+     * As above, plus the card's SUBJECT - what it is about (which workflow and version is
+     * going live, which cron is being armed). Stored verbatim under {@code subject} so a
+     * reload rebuilds a card that still names its thing; a card that forgets it asks a
+     * question the user cannot answer.
+     */
+    public static Map<String, Object> buildToolAuthorizationAction(String rule, String toolName, String action,
+                                                                   String toolCallId, String argsSummary,
+                                                                   String applicationId,
+                                                                   Map<String, Object> subject) {
         Instant now = Instant.now();
         Map<String, Object> pa = new HashMap<>();
         pa.put("waiting_for", "tool_authorization");
@@ -529,6 +543,9 @@ public class PendingActionService {
         pa.put("args_summary", argsSummary);
         if (applicationId != null) {
             pa.put("application_id", applicationId);
+        }
+        if (subject != null && !subject.isEmpty()) {
+            pa.put("subject", subject);
         }
         pa.put("created_at", now.toString());
         pa.put("expires_at", now.plus(DEFAULT_EXPIRY_HOURS, ChronoUnit.HOURS).toString());

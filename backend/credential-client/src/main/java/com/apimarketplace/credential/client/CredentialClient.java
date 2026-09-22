@@ -29,8 +29,6 @@ import java.util.UUID;
 public class CredentialClient {
 
     private static final Logger log = LoggerFactory.getLogger(CredentialClient.class);
-    private static final String HMAC_ALGO = "HmacSHA256";
-    private static final String SIGNATURE_PREFIX = "gw_";
     private static final String INTERNAL_PROVIDER_ID = "internal-credential-client";
 
     private final RestTemplate restTemplate;
@@ -344,23 +342,29 @@ public class CredentialClient {
     }
 
     /**
-     * Delete all user credentials for a given integration name (across all tenants).
-     * Used when an API's auth type changes during catalog reimport.
+     * Take every usable credential of an integration OUT OF SERVICE, across tenants, without
+     * deleting it. Used when an API's auth type changes during a catalog re-import.
      *
-     * @return the number of deleted credentials, or -1 on failure
+     * <p>This replaced a delete. An automated caller may stop a credential being used; it may not
+     * destroy it, because the owner usually cannot get the secret back (a revoked OAuth refresh
+     * token, an API key shown once at creation).
+     *
+     * @return the number of credentials moved to needs_reauth, or -1 on failure
      */
-    public int deleteCredentialsByIntegration(String integrationName) {
+    public int markCredentialsNeedReauthByIntegration(String integrationName) {
         try {
-            String url = baseUrl + "/api/internal/credentials/by-integration/" + integrationName;
+            String url = baseUrl + "/api/internal/credentials/by-integration/" + integrationName
+                    + "/needs-reauth";
             ResponseEntity<Map> resp = restTemplate.exchange(
-                    url, HttpMethod.DELETE, new HttpEntity<>(buildHeaders("SYSTEM")), Map.class);
+                    url, HttpMethod.POST, new HttpEntity<>(buildHeaders("SYSTEM")), Map.class);
             Map<String, Object> body = resp.getBody();
-            if (body != null && body.containsKey("deleted")) {
-                return ((Number) body.get("deleted")).intValue();
+            if (body != null && body.containsKey("marked")) {
+                return ((Number) body.get("marked")).intValue();
             }
             return 0;
         } catch (Exception e) {
-            log.warn("Failed to delete credentials for integration {}: {}", integrationName, e.getMessage());
+            log.warn("Failed to mark credentials needing re-auth for integration {}: {}",
+                    integrationName, e.getMessage());
             return -1;
         }
     }
@@ -590,6 +594,23 @@ public class CredentialClient {
      * not proceed without an answer have to treat empty as "unknown" themselves.
      */
     public List<CredentialIdentityDto> getCredentialIdentities(String userId) {
+        return tryGetCredentialIdentities(userId).orElseGet(List::of);
+    }
+
+    /**
+     * The same listing, but able to say that it could not look.
+     *
+     * <p>{@link #getCredentialIdentities} answers an empty list for a failure, which is
+     * the right default for a caller that is MATCHING a credential: nothing matches, and
+     * the call is refused. It is the wrong answer for a caller that is DESCRIBING what
+     * the account holds, because "the credential service is unreachable" and "you have
+     * no accounts" are then the same answer, and only one of them is safe to tell a
+     * person. So the distinction is offered here rather than changed there.
+     *
+     * @return the identities, or empty when the listing could not be read
+     */
+    public Optional<List<CredentialIdentityDto>> tryGetCredentialIdentities(String userId) {
+
         try {
             String url = UriComponentsBuilder.fromHttpUrl(baseUrl)
                     .path("/api/internal/credentials/identities")
@@ -598,10 +619,10 @@ public class CredentialClient {
             ResponseEntity<List<CredentialIdentityDto>> resp = restTemplate.exchange(
                     url, HttpMethod.GET, new HttpEntity<>(buildHeaders(userId)),
                     new ParameterizedTypeReference<>() {});
-            return resp.getBody() != null ? resp.getBody() : List.of();
+            return Optional.of(resp.getBody() != null ? resp.getBody() : List.of());
         } catch (Exception e) {
             log.warn("Failed to list credential identities for user={}: {}", userId, e.getMessage());
-            return List.of();
+            return Optional.empty();
         }
     }
 
@@ -881,6 +902,34 @@ public class CredentialClient {
                                                                      UUID apiToolId,
                                                                      String modelId,
                                                                      java.math.BigDecimal quantity) {
+        return resolveScopeMarkupRate(scopeKind, scopeId, userId, platformCredentialId, apiToolId,
+                modelId, quantity, null);
+    }
+
+    /**
+     * Same lookup, carrying what the CHOICES in this call do to the published
+     * rate.
+     *
+     * <p>A published price scales on one dimension: the size of the call.
+     * Everything else the caller picked is invisible to it, which is correct
+     * while those choices are free and a silent loss when they are not (a
+     * render at 1080p, a reference image the provider charges to read). The
+     * factor is derived by the caller that holds the parameters, from the
+     * model's own declared modifiers, and applied here to the amount rather
+     * than to the quantity: a ten second clip stays ten seconds whatever it
+     * costs.
+     *
+     * @param priceMultiplier factor to apply to the resolved amount, or null
+     *                        for a call at the published rate. Null and 1 mean
+     *                        the same thing and both leave the amount exactly
+     *                        as every pre-modifier caller received it.
+     */
+    public Optional<ResolvedScopeMarkupDto> resolveScopeMarkupRate(String scopeKind, String scopeId,
+                                                                     Long userId, Long platformCredentialId,
+                                                                     UUID apiToolId,
+                                                                     String modelId,
+                                                                     java.math.BigDecimal quantity,
+                                                                     java.math.BigDecimal priceMultiplier) {
         try {
             UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(baseUrl)
                     .path("/api/internal/credentials/markup/scope-rate")
@@ -894,6 +943,13 @@ public class CredentialClient {
             }
             if (quantity != null) {
                 builder.queryParam("quantity", quantity.toPlainString());
+            }
+            // Sent only when it changes something, so an ordinary lookup is
+            // byte-for-byte the request it was before modifiers existed and an
+            // absent parameter keeps meaning "at the published rate".
+            if (priceMultiplier != null
+                    && priceMultiplier.compareTo(java.math.BigDecimal.ONE) != 0) {
+                builder.queryParam("priceMultiplier", priceMultiplier.toPlainString());
             }
             String url = builder.toUriString();
             ResponseEntity<ResolvedScopeMarkupDto> resp = restTemplate.exchange(
@@ -1022,6 +1078,24 @@ public class CredentialClient {
      */
     public Optional<FrozenMarkupDto> resolveFrozenMarkup(Long pricingVersionId, UUID apiToolId,
                                                           String modelId, java.math.BigDecimal quantity) {
+        return resolveFrozenMarkup(pricingVersionId, apiToolId, modelId, quantity, null);
+    }
+
+    /**
+     * Same resolution, carrying what the CHOICES in this call do to the rate.
+     *
+     * <p>The relay reads that factor back out of the provider-shaped body it
+     * was sent, from the model's own declared modifiers, for the same reason it
+     * reads the size there: a self-hosted install that stated its own factor
+     * could state it as 1 and pay the base rate for a call the platform owner
+     * is charged extra for.
+     *
+     * @param priceMultiplier factor for this call, or null for one at the
+     *                        published rate
+     */
+    public Optional<FrozenMarkupDto> resolveFrozenMarkup(Long pricingVersionId, UUID apiToolId,
+                                                          String modelId, java.math.BigDecimal quantity,
+                                                          java.math.BigDecimal priceMultiplier) {
         try {
             UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(baseUrl)
                     .path("/api/internal/credentials/resolve-markup")
@@ -1032,6 +1106,10 @@ public class CredentialClient {
             }
             if (quantity != null) {
                 builder.queryParam("quantity", quantity.toPlainString());
+            }
+            if (priceMultiplier != null
+                    && priceMultiplier.compareTo(java.math.BigDecimal.ONE) != 0) {
+                builder.queryParam("priceMultiplier", priceMultiplier.toPlainString());
             }
             String url = builder.toUriString();
             ResponseEntity<FrozenMarkupDto> resp = restTemplate.exchange(
@@ -1165,32 +1243,15 @@ public class CredentialClient {
      * headers; the user id now is too. The method takes NO identity argument,
      * so there is nothing left to pass that could disagree with what is sent.
      */
+    /**
+     * Stamps the three gateway headers through the shared signer. The whole ritual lives there,
+     * including the blank-secret no-op and the header NAMES: a private copy of those beside a
+     * delegating signer is the drift this consolidation removes.
+     */
     private void applyGatewaySignature(HttpHeaders headers) {
-        if (gatewaySecretKey == null || gatewaySecretKey.isBlank()) {
-            return;
-        }
-        String timestamp = String.valueOf(System.currentTimeMillis());
-        headers.set("X-Provider-ID", INTERNAL_PROVIDER_ID);
-        headers.set("X-Gateway-Timestamp", timestamp);
-        headers.set("X-Gateway-Secret", computeGatewaySignature(
-                INTERNAL_PROVIDER_ID,
-                headers.getFirst("X-User-ID"),
-                headers.getFirst("X-Organization-ID"),
-                timestamp));
+        com.apimarketplace.common.web.InternalGatewaySigner.stamp(
+                headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
     }
 
-    private String computeGatewaySignature(String providerId, String userId, String organizationId, String timestamp) {
-        String safeUser = userId != null ? userId : "";
-        String safeOrg = organizationId != null ? organizationId : "";
-        String data = providerId + "|" + safeUser + "|" + safeOrg + "|" + timestamp;
-        try {
-            Mac mac = Mac.getInstance(HMAC_ALGO);
-            mac.init(new SecretKeySpec(gatewaySecretKey.getBytes(StandardCharsets.UTF_8), HMAC_ALGO));
-            byte[] hash = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
-            return SIGNATURE_PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
-        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
-            throw new IllegalStateException("HmacSHA256 unavailable", e);
-        }
-    }
 
 }

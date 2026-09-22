@@ -8,7 +8,7 @@ It exists as a separate container because embedding Playwright in the backend wo
 roughly 250 MB of Chromium into the JVM image for a feature most installs never enable.
 
 **This directory is the corresponding source of the published
-`ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer` image (AGPL-3.0).** You do not
+`ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer` image.** You do not
 need to build it to run LiveContext: the `renderer` Compose profile pulls the prebuilt
 image.
 

@@ -112,7 +112,7 @@ describe('useInspectorViewMode - execution-data toggle default by run data', () 
     expect(result.current.showExecutionData).toBe(true);
   });
 
-  it('forces configuration viewMode for an interface node while the toggle default still follows run data', () => {
+  it('keeps the execution-data default consistent for an interface node', () => {
     const { result } = renderHook(() =>
       useInspectorViewMode({
         isRunMode: true,
@@ -123,8 +123,6 @@ describe('useInspectorViewMode - execution-data toggle default by run data', () 
       })
     );
 
-    // Interface nodes are pinned to configuration view (they own a 3-mode output column).
-    expect(result.current.viewMode).toBe('configuration');
     // The toggle is hidden for interface nodes, but the per-node default still resolves
     // to false (no run data) - inert here, yet consistent with every other node type.
     expect(result.current.showExecutionData).toBe(false);

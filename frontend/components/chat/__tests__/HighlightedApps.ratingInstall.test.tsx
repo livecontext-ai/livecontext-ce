@@ -39,7 +39,8 @@ vi.mock('@/hooks/useAuthGuard', () => ({
   useAuthGuard: () => ({ ...authState, isReady: true }),
 }));
 
-vi.mock('@/lib/edition', () => ({ IS_CE: false }));
+// IS_MANAGED_CLOUD is read by the verified badge on each card's publisher row.
+vi.mock('@/lib/edition', () => ({ IS_CE: false, IS_MANAGED_CLOUD: true }));
 vi.mock('@/lib/format-cost', () => ({ isCeMode: false }));
 
 vi.mock('@/hooks/useCeCloudLinkStatus', () => ({

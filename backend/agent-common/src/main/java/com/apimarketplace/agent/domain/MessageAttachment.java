@@ -2,6 +2,8 @@ package com.apimarketplace.agent.domain;
 
 import lombok.Builder;
 
+import java.util.Map;
+
 /**
  * Represents a file attachment within a chat message.
  * Used for multimodal LLM interactions (images, PDFs, text files).
@@ -32,7 +34,24 @@ public record MessageAttachment(
      * Extracted text content for PDFs/text files.
      * Used as fallback for providers that don't support the native format.
      */
-    String extractedText
+    String extractedText,
+
+    /**
+     * Canonical FileRef ({@code {_type:"file", path, name, mimeType, size, id}}) when this
+     * attachment is backed by a durable, tenant-scoped S3 object - null for a legacy DB-blob
+     * row (pre S3 migration) that has no storage key to reference from another tool.
+     *
+     * <p>Set only by {@code AttachmentService.loadAttachments} (conversation-service), the
+     * single place a chat attachment is resolved from storage. Everything downstream
+     * (direct-API {@code AgentLoopService}, the bridge's {@code attachmentPrompt.mjs}) reads
+     * this to tell the model the attachment can be passed VERBATIM as a tool's file-shaped
+     * argument (e.g. {@code generation}'s {@code input_image}), instead of only being visible
+     * to the model as inline vision/text content. Without it, an agent can SEE an attached
+     * image but can never REFERENCE it in a tool call, because {@code input_image} requires
+     * "the whole file object another tool returned" and a bare chat attachment never produced
+     * one.
+     */
+    Map<String, Object> fileRef
 ) {
 
     /**

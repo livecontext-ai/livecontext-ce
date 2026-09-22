@@ -1,5 +1,7 @@
 package com.apimarketplace.agent.webhook;
 
+import com.apimarketplace.common.credit.AgentBudgetRefusal;
+import com.apimarketplace.common.credit.ChatCreditRefusal;
 import com.apimarketplace.agent.domain.AgentEntity;
 import com.apimarketplace.agent.domain.AgentWebhookTokenEntity;
 import com.apimarketplace.agent.repository.AgentRepository;
@@ -91,6 +93,28 @@ public class AgentWebhookDispatchService {
             return AgentWebhookResponse.error("Agent is inactive");
         }
 
+        // The agent's OWN cap, checked here for the same reason the schedule checks it: this is
+        // an UNATTENDED entry point, and the only thing enforcing the cap used to be a guard
+        // that runs BETWEEN two iterations of a run already under way. A caller that retries
+        // this endpoint in a loop therefore bought a fresh turn every time, whatever the owner
+        // had capped the agent at.
+        //
+        // WARN, not ERROR: the workspace has money and its owner set this limit, so a retrying
+        // caller would otherwise write one alert per attempt for a product behaving as told.
+        if (agent.isBudgetBlocked()) {
+            // consumed PLUS what an in-flight sub-agent is holding. Reporting the spend
+            // alone prints "6 of 10 credits" beside a refusal, which reads as a bug to the
+            // person who set the cap: what stopped the run is the 4 committed elsewhere.
+            java.math.BigDecimal committed = orZero(agent.getCreditsConsumed())
+                    .add(orZero(agent.getCreditsReserved()));
+            String refusal = AgentBudgetRefusal.message(
+                    agent.getCreditBudget(), committed, agent.getBudgetBlockedUntil());
+            logger.warn("Webhook agent {} refused by its own budget (cap={}, consumed={}, until={})",
+                    agentId, agent.getCreditBudget(), agent.getCreditsConsumed(),
+                    agent.getBudgetBlockedUntil());
+            return AgentWebhookResponse.error(refusal);
+        }
+
         String agentName = agent.getName();
         String tenantId = agent.getTenantId();
         String organizationId = agent.getOrganizationId();
@@ -134,7 +158,13 @@ public class AgentWebhookDispatchService {
                 logger.info("Webhook agent {} responded, length: {}", agentId, content.length());
                 return AgentWebhookResponse.success(conversationId, agentId.toString(), agentName, content);
             } else {
-                logger.error("Webhook agent {} failed: {}", agentId, error);
+                // A credit refusal is the tenant's to resolve, so WARN; a real fault keeps
+                // ERROR. The webhook caller gets the identical error response either way.
+                if (ChatCreditRefusal.isChatCreditRefusal(error)) {
+                    logger.warn("Webhook agent {} refused: {}", agentId, error);
+                } else {
+                    logger.error("Webhook agent {} failed: {}", agentId, error);
+                }
                 return AgentWebhookResponse.error(error != null ? error : "Agent execution failed");
             }
 
@@ -147,6 +177,10 @@ public class AgentWebhookDispatchService {
     /**
      * Format the webhook payload as a user message.
      */
+    private static java.math.BigDecimal orZero(java.math.BigDecimal value) {
+        return value != null ? value : java.math.BigDecimal.ZERO;
+    }
+
     private String formatPayloadAsMessage(Map<String, Object> payload) {
         if (payload == null || payload.isEmpty()) {
             return "[Webhook triggered with no payload]";

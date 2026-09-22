@@ -5,7 +5,7 @@
       "type": 3,
       "title": "LiveContext CE",
       "name": "livecontext-ce",
-      "description": "Self-hosted AI workflow and agent platform. Build workflows with 700+ API integrations, run agents against your own LLM keys, and ship interactive interfaces. AGPL-3.0.",
+      "description": "Self-hosted AI workflow and agent platform. Build workflows with 1000+ API integrations, run agents against your own LLM keys, and ship interactive interfaces. Source-available (Sustainable Use License).",
       "note": "Publish BOTH ports: the web UI is on FRONTEND_PORT and the browser talks to the backend on BACKEND_PORT. The app derives the backend origin from the address you open it with, so a LAN or domain install needs no rebuild. To connect OAuth credentials (Gmail, Slack) set PUBLIC_BASE_URL to the address you actually open the app at, otherwise the provider sends the user back to their own machine; register the same URL as the redirect URI with each provider, and use no trailing slash. Behind a reverse proxy serving everything on one origin, set GATEWAY_PUBLIC_URL to the browser-facing backend URL as well. Agents need at least one LLM key, which you can also add later from Settings inside the app.",
       "categories": ["AI", "Automation", "Productivity"],
       "platform": "linux",

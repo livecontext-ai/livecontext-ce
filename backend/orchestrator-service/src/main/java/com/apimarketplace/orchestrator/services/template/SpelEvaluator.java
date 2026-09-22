@@ -504,6 +504,23 @@ public class SpelEvaluator {
         return null;
     }
 
+    /**
+     * The resolution a condition actually performs, exposed read-only so a diagnostic
+     * can ASK the engine instead of modelling it.
+     *
+     * <p>{@link PathNavigator#getVariableValueFromMap} is NOT this method: it has one
+     * production caller and resolves strictly less (no whole-path key lookup, no scan of
+     * every context entry and its {@code output} sub-map, no prefixed-key handling). A
+     * diagnostic built on it declares references missing that the engine resolves
+     * perfectly well, which is a confident wrong answer.
+     *
+     * @return the value, or null when this expression genuinely resolves to nothing here
+     */
+    public Object resolveVariableForDiagnostics(String variablePath, Map<String, Object> context,
+                                                PathNavigator pathNavigator) {
+        return resolveVariableFromMap(variablePath, context, pathNavigator);
+    }
+
     @SuppressWarnings("unchecked")
     private Object resolveVariableFromMap(String variablePath, Map<String, Object> context, PathNavigator pathNavigator) {
         if (variablePath == null || variablePath.isEmpty() || context == null) {

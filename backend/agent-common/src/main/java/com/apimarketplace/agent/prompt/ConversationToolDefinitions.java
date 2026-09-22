@@ -98,15 +98,21 @@ public final class ConversationToolDefinitions {
 
                 ACTIONS
                 - list: which external services the user has connected (never returns secret values).
-                  Response: {connected:[{name,integration,status,isDefault,account}],count,defaultCount,hint}.
+                  Response: {connected:[{name,integration,status,isDefault,account,scopes}],count,defaultCount,hint}.
                   status: active (ready) | expiring (still works) | needs_reauth (only the user can
                   Reconnect - you cannot fix it) | error (an admin must fix the configuration).
-                  Executing a tool directly always uses the isDefault=true one. The others are
-                  not dead: a workflow mcp step runs on one of them by naming it in its
-                  credential_selector, which is how one workflow serves several accounts of the
-                  same integration. The hint names the NON-DEFAULT ones you may pick (the default
-                  is nameable too, it just needs no naming). These make an entry unpickable, and
-                  each FAILS the step rather than falling back to the default: a status other
+                  scopes is what an OAuth account was actually granted, absent for a credential
+                  with no scope concept. Two accounts of one integration routinely differ there,
+                  and that is what decides which endpoints each can run - you do not have to
+                  compare them yourself, catalog(action='response_schema') names the accounts
+                  that can run a given endpoint.
+                  Executing a tool directly uses the isDefault=true one unless the call names
+                  another: pass credential_name to catalog(action='execute'). A workflow mcp step
+                  names one the same way through its credential_selector, which is how one
+                  workflow serves several accounts of the same integration. The hint names the
+                  NON-DEFAULT ones you may pick (the default is nameable too, it just needs no
+                  naming). These make an entry unpickable, and each FAILS the call rather than
+                  falling back to the default: a status other
                   than 'active', a name shared with another active entry of the same integration
                   (naming it selects neither), and a name that is a positive whole number (read
                   as a credential id instead). Copy the name from here: matching ignores
@@ -131,12 +137,16 @@ public final class ConversationToolDefinitions {
                   Creating beyond the plan cap returns a LIMIT REACHED error: tell the user to
                   upgrade or delete a variable, DO NOT RETRY.
                 - require: ask the user to connect (or reconnect) a third-party service - shows a
-                  Connect card. Params: services, reason, force.
+                  Connect card. Params: services, reason, scopes, force.
 
                 REQUIRE DECISION TABLE
                 Situation                                  | Call you must make
                 -------------------------------------------|-----------------------------------------------
-                Tool returned "credentialsRequired"        | credential(action="require", services=["X"], reason="...")
+                Tool returned "credentialsRequired"        | READ the sentence it returned: it says which of
+                                                           | your accounts can run the call, if any. If it names
+                                                           | one, re-send with credential_name. Only when it says
+                                                           | none can, or names no account at all:
+                                                           | credential(action="require", services=["X"], reason="...")
                 Tool returned status "approval_needed"     | NOTHING. That call already asked for this
                   (executed:false)                         | service, so asking again adds nothing.
                                                            | Report it and move on.
@@ -144,17 +154,31 @@ public final class ConversationToolDefinitions {
                 Token clearly rejected (old lastUsedAt,    | credential(action="require", services=["X"],
                   401 says "expired"/"revoked"/            |            reason="token expired", force=true)
                   "invalid_grant", refresh failed)         |
+                Refusal names the scopes the account      | credential(action="require", services=["X"],
+                  lacks (CREDENTIALS_INSUFFICIENT, or a    |            scopes=["<each scope it named>"],
+                  sentence saying it "was not granted"     |            reason="...")
+                  them)                                    | NO force. The server checks the account against
+                                                           | those scopes and raises the card itself.
                 401 might be scope/quota/account/endpoint  | DO NOT call require again. Try a different
-                                                           | tool, narrow the scope, or report to the user.
+                  and NOTHING names a missing scope        | tool, narrow the scope, or report to the user.
 
-                FORCING A RECONNECT: you MUST literally include `force: true` (boolean) in the
-                arguments - deciding it in your reasoning is NOT enough. Without `force: true`, a
-                second require on a credential that already exists returns the same error again and
-                shows NO reconnect card. Do not loop.
+                SCOPES: pass them whenever a refusal named them. It is the difference between
+                asserting a reconnect is needed and letting the server verify it: with `scopes`, a
+                connected account that is short of them raises the card on the ordinary path, with
+                no force, no "already exist" error and no anti-loop cooldown. An account that holds
+                them all still returns "already exist", which is the correct answer - the scopes
+                were not the problem.
+
+                FORCING A RECONNECT: `force: true` is for the one case the server cannot check, the
+                token itself being dead. You MUST literally include `force: true` (boolean) in the
+                arguments - deciding it in your reasoning is NOT enough. Without `force: true` (and
+                without `scopes`), a second require on a credential that already exists returns the
+                same error again and shows NO reconnect card. Do not loop.
 
                 REQUIRE RESPONSES: success = a Connect card (or, after force, a Reconnect warning
                 card) was shown to the user. Error "Credentials already exist for: ..." = the
-                credential is connected and NO card was shown; go back to the decision table.
+                credential is connected, it is not short of any scope you named, and NO card was
+                shown; go back to the decision table.
 
                 ANTI-LOOP: never call require with `force: true` more than once for the same
                 service in this conversation - the server blocks the second attempt. If the forced
@@ -178,6 +202,12 @@ public final class ConversationToolDefinitions {
                     .name("reason")
                     .type("string")
                     .description("require only. Why these services are needed (shown to user). Be concise.")
+                    .required(false)
+                    .build(),
+                ToolParameter.builder()
+                    .name("scopes")
+                    .type("array")
+                    .description("require only. The scopes the failing call needs, copied from the refusal that named them. When a connected account is short of any of them, the card is raised with no force and no \"already exist\" error. Omit when no refusal named a scope. ONE service at a time: a scope list describes one integration, so sending it with several services is refused.")
                     .required(false)
                     .build(),
                 ToolParameter.builder()

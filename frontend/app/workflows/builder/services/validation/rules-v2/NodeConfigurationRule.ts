@@ -341,6 +341,25 @@ export class NodeConfigurationRule extends BaseValidationRule {
         issues.push(this.createError(elementKey, 'agent',
           'Classify must have at least two categories',
           { rule: 'classify_missing_categories', nodeId: node.id }));
+      } else {
+        // Duplicate labels make one branch unreachable: routing resolves a label to the
+        // FIRST category that matches it, so the second port can never fire. The backend
+        // decision engine refuses them outright before it calls anything, so without this
+        // warning a node that works today becomes a run-time failure the moment its engine
+        // is switched, with nothing in the builder to say why.
+        const seen = new Set<string>();
+        const duplicates = new Set<string>();
+        for (const category of categories) {
+          const label = (category?.label ?? '').trim().toLowerCase();
+          if (!label) continue;
+          if (seen.has(label)) duplicates.add(label);
+          seen.add(label);
+        }
+        if (duplicates.size > 0) {
+          issues.push(this.createError(elementKey, 'agent',
+            `Classify categories must have distinct labels (duplicated: ${[...duplicates].join(', ')})`,
+            { rule: 'classify_duplicate_category_labels', nodeId: node.id }));
+        }
       }
     }
     // Browser Agent: natural-language goal ('task') is required so the

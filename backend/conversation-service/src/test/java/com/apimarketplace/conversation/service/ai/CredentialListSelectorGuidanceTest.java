@@ -87,8 +87,9 @@ class CredentialListSelectorGuidanceTest {
                 .contains("\"Client B\" (instagram)")
                 .contains("active only");
         assertThat(content)
-                .as("the direct path is unchanged and the agent must not stop using it")
-                .contains("Executing a tool directly always uses the isDefault=true credential");
+                .as("the direct path, and the fact that it too can name an account")
+                .contains("Executing a tool directly uses the isDefault=true credential unless the "
+                        + "call names another with credential_name");
     }
 
     @Test
@@ -109,6 +110,29 @@ class CredentialListSelectorGuidanceTest {
         assertThat(hint())
                 .doesNotContain("Only isDefault=true credentials are used")
                 .doesNotContain("Only default credentials are used");
+    }
+
+    @Test
+    @DisplayName("granted scopes are listed, because they are what separates two accounts of one integration")
+    void listsGrantedScopes() throws Exception {
+        // Without them a chat agent sees two Gmail accounts and nothing to tell them
+        // apart, then gets refused on whichever one the default resolves to.
+        MockRestServiceServer server = bindAuthServiceServer();
+        server.expect(requestTo("http://localhost:8083/api/internal/credentials/all?userId=tenant-1"))
+                .andRespond(withSuccess("""
+                        [
+                          {"name":"Perso","integration":"gmail","status":"ACTIVE","is_default":true,
+                           "scopes":["https://www.googleapis.com/auth/gmail.send"]},
+                          {"name":"Stripe","integration":"stripe","status":"ACTIVE","is_default":true}
+                        ]
+                        """, MediaType.APPLICATION_JSON));
+
+        String content = list().content();
+
+        assertThat(content).contains("https://www.googleapis.com/auth/gmail.send");
+        // An API key has no scopes; emitting [] would read as "granted nothing", which is
+        // exactly what a revoked OAuth account looks like.
+        assertThat(content).doesNotContain("\"scopes\":[]");
     }
 
     @Test

@@ -15,10 +15,10 @@ import java.util.Set;
  * <p>
  * Contract:
  * <ul>
- *   <li>{@code null} toolsConfig → all modules enabled (unrestricted) <b>except generation</b>,
- *       which is opt-in even in unrestricted mode.</li>
+ *   <li>{@code null} toolsConfig → all modules enabled (unrestricted) <b>except the opt-in
+ *       modules ({@code generation}, {@code mailbox})</b>, which stay off even there.</li>
  *   <li>{@code mode=none} → only MCP/catalog tools blocked; internal tools (table, web_search, etc.)
- *       remain enabled. {@code generation} stays opt-in.</li>
+ *       remain enabled. The opt-in modules ({@code generation}, {@code mailbox}) stay opt-in.</li>
  *   <li>Per-resource family: the AUTHORITATIVE per-family grant ({@code <family>Grant}) decides -
  *       {@code "all"} → unrestricted, {@code "custom"} → accessible iff the id list (the "custom"
  *       payload) is non-empty, {@code "none"}/absent → blocked. The id list is NEVER consulted to
@@ -28,6 +28,9 @@ import java.util.Set;
  *       accepts {@code true} OR {@code { enabled: true, ... }}; absent/null/false → disabled.
  *       Default off because every create spends the customer's credits at the model's own rate,
  *       and a per-second video model spends far more of them than web_search (1 credit).</li>
+ *   <li>Mailbox: opt-IN under the {@code mailbox} key, same two accepted shapes. Default off
+ *       for a different reason than generation, not cost but reach: it reads the account's mail
+ *       and can send from its address, to a person, with no undo.</li>
  * </ul>
  */
 public final class AgentModuleResolver {
@@ -40,11 +43,12 @@ public final class AgentModuleResolver {
      * carries none), or a wire field that arrived {@code null}.
      *
      * <p>It is {@link #resolveEnabledModules(Map)} on a {@code null} config, i.e. this
-     * class's own definition of "unrestricted", which deliberately leaves out the
-     * credit-spending opt-in module ({@code generation}).
+     * class's own definition of "unrestricted", which deliberately leaves out BOTH opt-in
+     * modules: {@code generation}, which spends the customer's credits, and {@code mailbox},
+     * which reaches a real mailbox.
      * Every surface that used to answer "no config ⇒ every tool" must use this instead:
-     * handing a caller that enabled nothing a tool that spends the customer's credits is
-     * the exact opposite of those modules being opt-in.
+     * handing a caller that enabled nothing a tool that spends money, or sends mail from
+     * someone's address, is the exact opposite of those modules being opt-in.
      *
      * <p>Hoisted here (rather than re-derived per service) so the workflow agent node,
      * the remote agent loop, the sub-agent handler, the CLI/bridge session and chat all
@@ -87,9 +91,24 @@ public final class AgentModuleResolver {
             // mode=none → only MCP/catalog tools blocked; internal tools stay enabled.
             // generation still requires explicit opt-in (it is not "internal": it spends
             // the customer's credits).
-            enabled.addAll(Set.of("table", "interface", "agent", "skill", "memory", "workflow", "application", "web_search", "files", "wait", "ask_user"));
+            enabled.addAll(Set.of("table", "interface", "agent", "skill", "memory", "workflow", "application", "files", "wait", "ask_user"));
             enabled.remove("catalog");
+            // web_search is NOT internal and must honour its opt-out toggle here exactly as the
+            // main path below does. This branch used to add it unconditionally. Chat happened to
+            // survive that because AgentContextBuilder filters the tool a second time, but
+            // AgentNode (workflow agents), SubAgentExecutionHandler and CliAgentService call this
+            // resolver with no second filter, and WebSearchToolsProvider.execute has no permission
+            // check of its own - so an agent configured mode='none', webSearch=false received a
+            // working web_search tool. The five GRANT-BEARING families above (table, interface,
+            // agent, workflow, application) stay unconditional on purpose: that is this branch's
+            // documented intent ("internal tools stay enabled"), and their execution is closed
+            // anyway because the credentials still carry an empty allow-list. That argument does
+            // NOT extend to skill/memory/files/wait/ask_user, which have no entry in
+            // ToolAccessControl.CREDENTIAL_KEYS and therefore no allow-list to be empty: skill
+            // and memory are gated only by their access mode, which is a different axis.
+            if (isBooleanEnabled(toolsConfig, "webSearch")) enabled.add("web_search");
             if (isGenerationEnabled(toolsConfig)) enabled.add("generation");
+            if (isMailboxEnabled(toolsConfig)) enabled.add("mailbox");
             return enabled;
         }
 
@@ -129,6 +148,7 @@ public final class AgentModuleResolver {
         if (isResourceAccessible(toolsConfig, "applications")) enabled.add("application");
         // Web search: opt-out boolean toggle (absent or true = enabled, false = disabled)
         if (isBooleanEnabled(toolsConfig, "webSearch"))        enabled.add("web_search");
+        if (isMailboxEnabled(toolsConfig))                     enabled.add("mailbox");
         // Generation (any format): opt-in (default off; accepts both bool and {enabled,...})
         if (isGenerationEnabled(toolsConfig))                  enabled.add("generation");
 
@@ -191,6 +211,25 @@ public final class AgentModuleResolver {
      */
     public static boolean isGenerationEnabled(Map<String, Object> toolsConfig) {
         return isOptInEnabled(toolsConfig, "generation");
+    }
+
+    /**
+     * Whether this agent may touch the account's mailbox at all. OPT-IN, default OFF.
+     *
+     * <p>Opt-in rather than opt-out, and the comparison that settles it is web_search: that one
+     * reads the public web, this one reads someone's mail and can send from their address, to a
+     * person, with no undo. It is at least as consequential as {@code generation}, which is
+     * opt-in for spending credit alone.
+     *
+     * <p>It also keeps every agent that has nothing to do with mail from carrying the tool: a
+     * capability nobody enabled is one nobody has to reason about, and the schema it would add
+     * to the prompt is not free either.
+     *
+     * <p>Consequence worth stating plainly: connecting an IMAP credential is NOT enough for an
+     * agent to use it. Someone has to turn this on for that agent, which is the point.
+     */
+    public static boolean isMailboxEnabled(Map<String, Object> toolsConfig) {
+        return isOptInEnabled(toolsConfig, "mailbox");
     }
 
     /**

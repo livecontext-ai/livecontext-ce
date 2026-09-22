@@ -53,6 +53,21 @@ vi.mock('@/lib/api/orchestrator/schedule-settings.service', () => ({
 
 // Hooks + heavy child components → inert stubs so the modal mounts without their internals.
 vi.mock('@/lib/providers/smart-providers', () => ({ useAuth: () => ({ hasRole: () => false }) }));
+// The modal asks which pot pays for this agent's turns, to pick a default model
+// its plan can actually run (V494). Underneath, that hook reads the credit
+// balance through the auth context these suites do not mount. Stubbed to the
+// PAID answer with the verdict already in, which is exactly how the modal
+// behaved before the question existed - so nothing below changes meaning.
+vi.mock('@/lib/hooks/useMonthlyCreditsCannotPay', () => ({
+  useMonthlyCreditsCannotPay: () => ({
+    blocked: false,
+    blockedForModel: () => false,
+    freeTierForModel: () => false,
+    prefersFreeTierModels: false,
+    verdictReady: true,
+  }),
+}));
+
 vi.mock('@/hooks/useModels', () => ({
   useVisibleModels: () => ({ providers: [], defaultModel: null, defaultProvider: null, isLoading: false }),
   getModelsCache: () => null,

@@ -17,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.UnexpectedRollbackException;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -211,6 +212,58 @@ class UserResolutionServiceTest {
 
             assertThat(response).isNotNull();
             verify(samlLoginService).ensureMembershipForIdentityProvider(user, alias);
+        }
+
+        @Test
+        @DisplayName("a failed FREE-subscription provisioning does not cost the user their login")
+        void provisioningFailureStillResolvesTheUser() {
+            String providerId = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
+            User user = createTestUser(1L, providerId, "racer");
+
+            when(userRepository.findByProviderId(providerId)).thenReturn(Optional.of(user));
+            when(onboardingService.needsOnboarding(providerId)).thenReturn(false);
+            when(organizationService.getDefaultMembership(1L)).thenReturn(Optional.empty());
+            // What a losing first-login racer actually got in production: the provisioner
+            // swallowed a duplicate key, then its commit threw this from the proxy, past every
+            // catch the provisioner had.
+            doThrow(new UnexpectedRollbackException("Transaction silently rolled back"))
+                    .when(freeSubscriptionProvisioner).provisionIfMissing(user);
+
+            UserResolutionResponse response = userResolutionService.resolveUser(providerId, null);
+
+            // This returned null, and null is how the gateway is told the user does not exist.
+            // The account had just been created and its owner was shown a login failure.
+            assertThat(response)
+                    .as("bookkeeping that fails must not decide whether someone is signed in")
+                    .isNotNull();
+            assertThat(response.getUserId()).isEqualTo(1L);
+        }
+
+        @Test
+        @DisplayName("credit attribution keeps its handler outside its own transaction, and the login survives")
+        void creditAttributionFailureStillResolvesTheUser() {
+            String providerId = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
+            User user = createTestUser(1L, providerId, "verified");
+            user.setEmailVerified(true);
+
+            when(userRepository.findByProviderId(providerId)).thenReturn(Optional.of(user));
+            when(onboardingService.needsOnboarding(providerId)).thenReturn(false);
+            when(organizationService.getDefaultMembership(1L)).thenReturn(Optional.empty());
+            // Unlike the provisioning test above, this one is NOT a regression test: on the login
+            // path attributeCreditsIfEligible is a self-call, so the catch that used to sit inside
+            // it worked, and this passed before the change too. It pins the contract that replaced
+            // it, which is what makes moving the catch safe rather than merely tidy.
+            //
+            // First read is the attribution pass and it blows up; the second is the response
+            // build, which must still get its answer.
+            when(subscriptionRepository.findActiveByUserId(1L))
+                    .thenThrow(new UnexpectedRollbackException("Transaction silently rolled back"))
+                    .thenReturn(Optional.empty());
+
+            UserResolutionResponse response = userResolutionService.resolveUser(providerId, null);
+
+            assertThat(response).isNotNull();
+            assertThat(response.getUserId()).isEqualTo(1L);
         }
 
         @Test

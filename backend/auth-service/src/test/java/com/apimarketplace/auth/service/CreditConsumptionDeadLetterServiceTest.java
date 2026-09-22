@@ -82,6 +82,18 @@ class CreditConsumptionDeadLetterServiceTest {
             assertThat(entry.getPromptTokens()).isEqualTo(1000);
             assertThat(entry.getCompletionTokens()).isEqualTo(500);
             assertThat(entry.getErrorReason()).isEqualTo("Connection refused");
+            // The 9-arg form is the pre-route shape: no route means the platform route.
+            assertThat(entry.getKeyRoute()).isNull();
+        }
+
+        @Test
+        @DisplayName("V506: the key route the consumption was meant to be billed under is kept on the entry, so the replay bills it the same way")
+        void keepsTheKeyRoute() {
+            service.persistFailedConsumption(TENANT_ID, SOURCE_TYPE, SOURCE_ID,
+                    PROVIDER, MODEL, 1000, 500, "Connection refused", ORG_ID, "OWN_KEY");
+
+            verify(repository).save(entityCaptor.capture());
+            assertThat(entityCaptor.getValue().getKeyRoute()).isEqualTo("OWN_KEY");
         }
 
         @Test
@@ -188,7 +200,7 @@ class CreditConsumptionDeadLetterServiceTest {
 
             service.retryFailedConsumptions();
 
-            verify(creditClient, never()).consumeCredits(any(), any(), any(), any(), any(), any(), any());
+            verify(creditClient, never()).consumeCredits(any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -197,8 +209,8 @@ class CreditConsumptionDeadLetterServiceTest {
             CreditConsumptionDeadLetterEntity entry = createEntry(Status.PENDING, 0);
             when(repository.findByStatusInOrderByCreatedAtAsc(anyList()))
                     .thenReturn(List.of(entry));
-            when(creditClient.consumeCredits(TENANT_ID, SOURCE_TYPE, SOURCE_ID,
-                    PROVIDER, MODEL, 1000, 500))
+            when(creditClient.consumeCredits(eq(TENANT_ID), eq(SOURCE_TYPE), eq(SOURCE_ID),
+                    eq(PROVIDER), eq(MODEL), eq(1000), eq(500), isNull(), isNull(), isNull()))
                     .thenReturn(Map.of("success", true));
 
             service.retryFailedConsumptions();
@@ -211,12 +223,31 @@ class CreditConsumptionDeadLetterServiceTest {
         }
 
         @Test
+        @DisplayName("V506 regression: an own-key entry is replayed under its route - replaying it route-less billed the token rate for a turn the provider had already billed")
+        void replaysUnderTheEntryKeyRoute() {
+            CreditConsumptionDeadLetterEntity entry = createEntry(Status.PENDING, 0);
+            entry.setKeyRoute("OWN_KEY");
+            when(repository.findByStatusInOrderByCreatedAtAsc(anyList()))
+                    .thenReturn(List.of(entry));
+            when(creditClient.consumeCredits(eq(TENANT_ID), eq(SOURCE_TYPE), eq(SOURCE_ID),
+                    eq(PROVIDER), eq(MODEL), eq(1000), eq(500), isNull(), isNull(), eq("OWN_KEY")))
+                    .thenReturn(Map.of("success", true));
+
+            service.retryFailedConsumptions();
+
+            verify(creditClient).consumeCredits(eq(TENANT_ID), eq(SOURCE_TYPE), eq(SOURCE_ID),
+                    eq(PROVIDER), eq(MODEL), eq(1000), eq(500), isNull(), isNull(), eq("OWN_KEY"));
+            verify(repository).save(entityCaptor.capture());
+            assertThat(entityCaptor.getValue().getStatus()).isEqualTo(Status.RECONCILED);
+        }
+
+        @Test
         @DisplayName("should mark as FAILED when 402 (insufficient credits)")
         void shouldMarkFailedOn402() {
             CreditConsumptionDeadLetterEntity entry = createEntry(Status.PENDING, 0);
             when(repository.findByStatusInOrderByCreatedAtAsc(anyList()))
                     .thenReturn(List.of(entry));
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any()))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(Map.of("success", false, "error", "402 Insufficient credits"));
 
             service.retryFailedConsumptions();
@@ -231,7 +262,7 @@ class CreditConsumptionDeadLetterServiceTest {
             CreditConsumptionDeadLetterEntity entry = createEntry(Status.RETRYING, 9);
             when(repository.findByStatusInOrderByCreatedAtAsc(anyList()))
                     .thenReturn(List.of(entry));
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any()))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(Map.of("success", false, "error", "service unavailable"));
 
             service.retryFailedConsumptions();
@@ -248,7 +279,7 @@ class CreditConsumptionDeadLetterServiceTest {
             CreditConsumptionDeadLetterEntity entry = createEntry(Status.PENDING, 3);
             when(repository.findByStatusInOrderByCreatedAtAsc(anyList()))
                     .thenReturn(List.of(entry));
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any()))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(Map.of("success", false, "error", "timeout"));
 
             service.retryFailedConsumptions();
@@ -266,7 +297,7 @@ class CreditConsumptionDeadLetterServiceTest {
             CreditConsumptionDeadLetterEntity entry = createEntry(Status.RETRYING, 9);
             when(repository.findByStatusInOrderByCreatedAtAsc(anyList()))
                     .thenReturn(List.of(entry));
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any()))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenThrow(new RuntimeException("Connection reset"));
 
             service.retryFailedConsumptions();
@@ -285,13 +316,13 @@ class CreditConsumptionDeadLetterServiceTest {
             }
             when(repository.findByStatusInOrderByCreatedAtAsc(anyList()))
                     .thenReturn(entries);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any()))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(Map.of("success", true));
 
             service.retryFailedConsumptions();
 
             // Only 50 should be processed (BATCH_SIZE)
-            verify(creditClient, times(50)).consumeCredits(any(), any(), any(), any(), any(), any(), any());
+            verify(creditClient, times(50)).consumeCredits(any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
             verify(repository, times(50)).save(any());
         }
 
@@ -302,7 +333,7 @@ class CreditConsumptionDeadLetterServiceTest {
             CreditConsumptionDeadLetterEntity retrying = createEntry(Status.RETRYING, 5);
             when(repository.findByStatusInOrderByCreatedAtAsc(anyList()))
                     .thenReturn(List.of(pending, retrying));
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any()))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(Map.of("success", true));
 
             service.retryFailedConsumptions();
@@ -319,7 +350,7 @@ class CreditConsumptionDeadLetterServiceTest {
             CreditConsumptionDeadLetterEntity entry = createEntry(Status.PENDING, 0);
             when(repository.findByStatusInOrderByCreatedAtAsc(anyList()))
                     .thenReturn(List.of(entry));
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any()))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(Map.of("success", true));
 
             service.retryFailedConsumptions();
@@ -334,7 +365,7 @@ class CreditConsumptionDeadLetterServiceTest {
             CreditConsumptionDeadLetterEntity entry = createEntry(Status.PENDING, 0);
             when(repository.findByStatusInOrderByCreatedAtAsc(anyList()))
                     .thenReturn(List.of(entry));
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any()))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(Map.of("success", false, "error", "Insufficient credits: balance=0, required=5"));
 
             service.retryFailedConsumptions();

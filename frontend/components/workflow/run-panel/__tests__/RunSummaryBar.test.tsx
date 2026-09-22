@@ -94,6 +94,12 @@ describe('RunSummaryBar - which action a run is offered', () => {
 });
 
 describe('RunSummaryBar - reaching the run history', () => {
+  it('renders a pending badge while the run status is still loading', () => {
+    render(<RunSummaryBar currentRunInfo={{ runId: 'run-1' }} />);
+
+    expect(screen.getByTestId('run-status-badge').textContent).toBe('status.pending');
+  });
+
   it('makes the version chip the way in', () => {
     const onVersionClick = vi.fn();
     renderBar('RUNNING', { onVersionClick });

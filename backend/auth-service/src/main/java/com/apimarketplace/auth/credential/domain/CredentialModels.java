@@ -107,6 +107,10 @@ public final class CredentialModels {
          * scrub-on-public-response path).
          */
         public static final Set<String> PUBLIC_DIAGNOSTIC_KEYS = Set.of(
+                // Whose key an llm_<provider> credential routes to: "no_proxy" (mine) or "proxy"
+                // (the platform). The user's own settings page shows the switch from it; the
+                // api_key next to it stays encrypted and stripped.
+                "mode",
                 // Cascade-revoke trail (CredentialService.revokeForByokDelete)
                 "byok_revoke_reason",
                 "byok_revoked_at",

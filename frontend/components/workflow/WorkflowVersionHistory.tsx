@@ -13,6 +13,7 @@ import type { WorkflowPlanVersion } from "@/lib/api/orchestrator/types";
 import { useTranslations } from "next-intl";
 import { isEventForWorkflow } from "@/lib/workflow/workflowEventScope";
 import { useEnterRunMode } from "@/hooks/useEnterRunMode";
+import { useRefreshHomeStatus } from "@/hooks/useHomeStatus";
 
 interface WorkflowSaveWithVersionsProps {
   workflowId: string;
@@ -65,6 +66,7 @@ export const WorkflowSaveWithVersions: React.FC<WorkflowSaveWithVersionsProps> =
   const [editingVersion, setEditingVersion] = useState<number | null>(null);
   const [editLabel, setEditLabel] = useState("");
   const [pinnedVersion, setPinnedVersion] = useState<number | null>(null);
+  const refreshAutomations = useRefreshHomeStatus();
   const [pinning, setPinning] = useState(false);
   const [pinConfirm, setPinConfirm] = useState<{ version: number | null; label: string } | null>(null);
   const [pinError, setPinError] = useState<string | null>(null);
@@ -212,6 +214,9 @@ export const WorkflowSaveWithVersions: React.FC<WorkflowSaveWithVersionsProps> =
       const result = await orchestratorApi.pinVersion(workflowId, version);
       if (result.success) {
         setPinnedVersion(result.pinnedVersion);
+        // Same reason as every other pin site: this is what puts the workflow in the bell's
+        // Triggers rows and imminent-fire ring, and nothing else invalidates that payload.
+        refreshAutomations();
         window.dispatchEvent(new CustomEvent('workflowPinnedVersionChange', {
           detail: { pinnedVersion: result.pinnedVersion, workflowId }
         }));

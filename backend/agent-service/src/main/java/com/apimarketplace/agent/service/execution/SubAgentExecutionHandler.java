@@ -62,6 +62,9 @@ import java.util.stream.Collectors;
 @Component
 public class SubAgentExecutionHandler {
 
+    /** Same key AgentHelpModule and AgentCrudModule read; the gateway injects it upstream. */
+    private static final String CRED_USER_ROLES = "__userRoles__";
+
     private static final int DEFAULT_TIMEOUT_SECONDS = 600;
     private static final int MIN_TIMEOUT_SECONDS = 10;
     private static final int MAX_TIMEOUT_SECONDS = 7200;
@@ -117,6 +120,46 @@ public class SubAgentExecutionHandler {
     private com.apimarketplace.agent.service.ModelCatalogService modelCatalog;
 
     /**
+     * Resolves a child's key route when it cannot inherit the parent's (different provider,
+     * parent on its own key). Optional so the positional constructor stays test-friendly;
+     * absent, such a child runs unpinned (user-first by tenant, the pre-pin behaviour).
+     */
+    @Autowired(required = false)
+    private KeyRouteResolver keyRouteResolver;
+
+    /**
+     * Whose key this child runs on, for the provider it actually executes on.
+     *
+     * <p>A CLI bridge holds no API key: the child is pinned {@code PLATFORM} without any lookup
+     * and WITHOUT touching the stamp it carries, so a bridge hop is transparent for routing.
+     * The execution-link bridge-failure fallback then re-reads the parent's original stamp for
+     * the billed pair, and anything the bridge child spawns inherits from the parent, not from
+     * a bridge pin that means nothing for a direct-API provider.
+     *
+     * <p>Otherwise: inherited from the parent's stamp when the provider is the same, else
+     * resolved fresh for the child's provider (a pin is per (tenant, provider)). That
+     * covers a parent on its own OpenAI key spawning an Anthropic child, AND a parent that was
+     * never pinned at all (a chat that ran on a CLI bridge, which never builds a context): its
+     * direct-API children take their own pin here, so no production path runs unpinned while a
+     * resolver is wired. The decision is re-stamped into the child's credentials so grandchildren
+     * inherit THIS child's pin; a null decision (no resolver) leaves the parent's stamp alone. See
+     * {@link KeyRoute#inheritFor}.
+     */
+    private KeyRoute childKeyRoute(Map<String, Object> credentials, String tenantId, String provider) {
+        if (SubAgentBridgeClient.isBridgeProvider(provider)) {
+            return KeyRoute.PLATFORM;
+        }
+        KeyRoute route = KeyRoute.inheritFor(credentials, provider);
+        if (route == null && keyRouteResolver != null) {
+            route = keyRouteResolver.resolve(tenantId, provider);
+        }
+        if (route != null) {
+            KeyRoute.stamp(credentials, route, provider);
+        }
+        return route;
+    }
+
+    /**
      * Model execution links: a delegated sub-agent's billed pair may have to run on
      * another target, exactly like a top-level agent run. The router itself is an
      * unconditional bean (it answers "no route" in CE, where the link store is off), so
@@ -125,6 +168,27 @@ public class SubAgentExecutionHandler {
      */
     @Autowired(required = false)
     private ExecutionLinkRouter executionLinkRouter;
+
+    /**
+     * Optional, exactly like {@code BridgeLoopDispatcher}'s: the bean is wired in agent-service,
+     * and optional injection keeps test slices and bridge-less deployments green. Absent means no
+     * check, which is the behaviour this branch had for its whole life.
+     */
+    @Autowired(required = false)
+    private com.apimarketplace.agent.bridge.BridgeAccessGuard bridgeAccessGuard;
+
+    /** Visible for tests (mirrors BridgeLoopDispatcher / AgentHelpModule). */
+    public void setBridgeAccessGuard(com.apimarketplace.agent.bridge.BridgeAccessGuard guard) {
+        this.bridgeAccessGuard = guard;
+    }
+
+    /**
+     * Optional Prometheus metrics sink, field-injected for the same reason as the other
+     * optional collaborators above. Only consulted by the execution-link bridge-failure
+     * fallback below, to keep a silent-by-design recovery visible to operators.
+     */
+    @Autowired(required = false)
+    private com.apimarketplace.agent.metrics.AgentPrometheusMetrics prometheusMetrics;
 
     /**
      * Activity source reported for link resolution. It matches no surface scope, so a
@@ -231,6 +295,12 @@ public class SubAgentExecutionHandler {
     }
 
     @SuppressWarnings("unchecked")
+    /** {@code __userRoles__} as the parent carried it, or null when absent or blank. */
+    private static String callerRoles(Map<String, Object> credentials) {
+        Object roles = credentials != null ? credentials.get(CRED_USER_ROLES) : null;
+        return roles instanceof String s && !s.isBlank() ? s : null;
+    }
+
     private ToolResult doExecute(ToolCall toolCall, Map<String, Object> params,
                                   String tenantId, Map<String, Object> credentials, long startTime) {
 
@@ -358,6 +428,11 @@ public class SubAgentExecutionHandler {
         if (organizationId != null) {
             subCredentials.putIfAbsent("__orgId__", organizationId);
         }
+        // Carry the parent's key-route stamp (route + the provider it was resolved for) so
+        // buildSubAgentContext can decide what this child inherits once its own execution
+        // provider is known (see KeyRoute.inheritFor).
+        KeyRoute.stamp(subCredentials, KeyRoute.fromCredentials(credentials),
+            credentials != null && credentials.get(KeyRoute.PROVIDER_CREDENTIAL_KEY) instanceof String p ? p : null);
 
         // Apply toolsConfig resource restrictions to credentials
         applyToolsConfigCredentials(subCredentials, entity.getToolsConfig());
@@ -469,7 +544,7 @@ public class SubAgentExecutionHandler {
                     }
                     recordObservability(refused, entity, tenantId, callerAgentEntityId, subAgentDepth,
                         conversationId, parentConversationId, memoryEnabled, List.of(), BigDecimal.ZERO,
-                        entity.getSystemPrompt(), fullPrompt, "parent_reservation", subCredentials);
+                        entity.getSystemPrompt(), fullPrompt, "parent_reservation", /*keyRoute*/ null, subCredentials);
                     return buildFailure(toolCall, startTime, error);
                 }
             }
@@ -579,47 +654,17 @@ public class SubAgentExecutionHandler {
                 }
             }
 
-            AgentLoopContext context = AgentLoopContext.builder()
-                // EXECUTION identity (= the billed pair unless a link redirected it).
-                .provider(execProvider)
-                .model(execModel)
-                .systemPrompt(fullSystemPrompt)
-                .userPrompt(fullPrompt)
-                .conversationHistory(conversationHistory)
-                .tools(tools)
-                .autoDiscoverTools(false) // tools come from cache, not discovery
-                .maxIterations(resolveMaxIterations(entity))
-                .executionTimeout(timeout)
-                // Clamp the configured budget (per-agent value, else the platform default)
-                // to the model's real output ceiling so a high default (e.g. 16000) never
-                // 400s against a low-cap model (DeepSeek-chat = 8192). Unknown cap ⇒
-                // MaxTokensClamp's safe 8192 floor.
-                .maxTokens(com.apimarketplace.agent.config.MaxTokensClamp.clamp(
-                        entity.getMaxTokens() != null ? entity.getMaxTokens() : agentDefaults.getMaxTokens(),
-                        modelCatalog != null ? modelCatalog.resolveMaxOutputTokens(execProvider, execModel) : null))
-                .temperature(entity.getTemperature() != null ? entity.getTemperature().doubleValue() : 0.7)
-                .tenantId(tenantId)
-                .agentId(entity.getId() != null ? entity.getId().toString() : null)
-                // Carry the spawned execution's id so CE centralized relay billing aggregates the
-                // sub-agent's relayed calls into ONE CE_LLM_RELAY line (parity with the main loop);
-                // without it the sub-agent silently falls back to per-call billing.
-                .executionId(executionId)
-                .credentials(subCredentials)
-                .preIterationGuard(guard)
-                // Per-agent LoopDetector thresholds - null ⇒ AgentLoopService.bootstrapLoop
-                // falls back to LoopDetector defaults.
-                .loopIdenticalStop(entity.getLoopIdenticalStop())
-                .loopConsecutiveStop(entity.getLoopConsecutiveStop())
-                // Reasoning effort (bridge/CLI providers): agent setting, then the
-                // per-model admin default. No per-conversation override on the
-                // sub-agent path. Null modelCatalog (e.g. unit tests) ⇒ agent value only.
-                // Effort is an EXECUTION concern (the CLI/provider that actually runs the
-                // turn), so it follows the execution pair when a link redirects the run.
-                .reasoningEffort(modelCatalog != null
-                    ? modelCatalog.resolveEffortWithDefault(entity.getReasoningEffort(), execProvider, execModel)
-                    : entity.getReasoningEffort())
-                .purpose(CallPurpose.MAIN)
-                .build();
+            // EXECUTION identity (= the billed pair unless a link redirected it). The
+            // execution-link bridge-failure fallback below reuses this SAME builder method on
+            // the BILLED pair instead of duplicating the builder chain (a second inline
+            // AgentLoopContext.builder() would desync ContextWindowWiringTest's 1:1 discovery
+            // of "one builder call site = one .contextWindow(...) wiring" per file).
+            String userRoles = callerRoles(credentials);
+            AgentLoopContext context = buildSubAgentContext(execProvider, execModel, subCredentials,
+                fullSystemPrompt, fullPrompt, conversationHistory, tools, entity, timeout, guard,
+                userRoles, tenantId, executionId);
+            // Whose key the child is billed under: the pin of this context, or of the fallback below.
+            KeyRoute executedRoute = context.keyRoute();
 
             // 13. Create streaming callback, wrapped with fleet activity publishing
             baseCallback =
@@ -635,6 +680,9 @@ public class SubAgentExecutionHandler {
             String taskId = taskIdFromCredentials(subCredentials);
             StreamingCallback callback = wrapWithFleetActivity(baseCallback, agentEntityIdStr, executionId, taskId);
 
+            // The access gate for a bridge this agent NAMES itself sits just below, on the useBridge
+            // branch, and only when no execution link chose the route; the execution-link fallback
+            // never sees a policy denial because a routed run is not judged at all.
             boolean useBridge = bridgeClient != null && SubAgentBridgeClient.isBridgeProvider(execProvider);
 
             // Publish fleet activity: execution started
@@ -649,10 +697,60 @@ public class SubAgentExecutionHandler {
             AgentLoopResult result;
             String bridgeBudgetScope = null;
             if (useBridge) {
+                // Refuse a CLI this caller CHOSE and may not use; let a ROUTED one through.
+                // Two things were wrong here before. This branch had no access check at ALL, which
+                // is how a non-admin's sub-agent COMPLETED twice on claude-code and billed 2617
+                // credits to the shared subscription while the same agent's scheduled fires were
+                // refused - same agent, same user, opposite outcomes, decided by which path ran.
+                // And the gate added to AgentLoopService covers only the else-branch below, so
+                // whether the bridge transport happened to be wired decided whether the policy
+                // applied at all. The distinction is the one BridgeLoopDispatcher.gateSelection
+                // draws: executionRoute == null means the agent names this CLI itself.
+                if (bridgeAccessGuard != null && executionRoute == null) {
+                    bridgeAccessGuard.enforce(context.tenantId(), context.userRoles(),
+                        execProvider, true);
+                }
                 AgentExecutionResponseDto bridgeResponse = executeBridgeRaw(context, streamId,
                     conversationId, parentConversationId, entity, agentEntityIdStr, workflowRunId, agentBudget);
                 bridgeBudgetScope = bridgeResponse != null ? bridgeResponse.budgetScope() : null;
-                result = convertBridgeResponse(bridgeResponse, provider, model);
+
+                // A linked sub-agent whose bridge attempt failed before producing anything an end
+                // user could see (no content, no tool results) is safe to retry invisibly: like
+                // the top-level agent path, the bridge streams to Redis as it goes, so ANY visible
+                // output means this branch must not fire. Direct (non-link) bridge sub-agents fall
+                // through unchanged below - the billed pair already IS the bridge, nothing distinct
+                // to retry on.
+                // Same rule as the top-level path: a cancelled run is not retried, or the
+                // user pays a full direct-API turn for the sub-agent they just stopped.
+                if (executionRoute != null && bridgeResponse != null
+                        && !bridgeResponse.success() && bridgeResponse.hasNoVisibleOutput()
+                        && !bridgeResponse.wasCancelledByUser()) {
+                    if (prometheusMetrics != null) {
+                        prometheusMetrics.recordExecutionLinkFallback(provider, model, execProvider);
+                    }
+                    log.warn("[SUB_AGENT] [EXECUTION_LINK_FALLBACK] bridge dispatch for '{}' failed "
+                            + "before producing output (exec={}/{}: {}); retrying on billed pair {}/{}",
+                        entity.getName(), execProvider, execModel, bridgeResponse.error(), provider, model);
+                    Map<String, Object> fallbackCredentials = new HashMap<>(subCredentials);
+                    fallbackCredentials.remove(ExecutionLinkRouter.RESTRICTED_TOOLSET_KEY);
+                    // Rebuilt via the SAME buildSubAgentContext(...) as the primary attempt, on the
+                    // BILLED pair: maxTokens/contextWindow/reasoningEffort all describe "the model
+                    // that actually runs the turn" (see linkedSubAgentResolvesModelLimitsOnTheExecution
+                    // Pair), which is now the billed pair, not claude-code - reusing the execution
+                    // pair's stale values here could send an oversized max_tokens to a smaller billed
+                    // model and 400 the very call this fallback exists to rescue.
+                    AgentLoopContext directContext = buildSubAgentContext(provider, model, fallbackCredentials,
+                        fullSystemPrompt, fullPrompt, conversationHistory, tools, entity, timeout, guard,
+                        userRoles, tenantId, executionId);
+                    result = agentLoopService.execute(directContext, callback);
+                    executedRoute = directContext.keyRoute();
+                    // The captured budgetScope described the discarded bridge attempt, not what
+                    // actually happened; a stale value here would mislabel the fallback's own
+                    // (diagnostic-only, non-financial) recordObservability row.
+                    bridgeBudgetScope = null;
+                } else {
+                    result = convertBridgeResponse(bridgeResponse, provider, model, execProvider);
+                }
             } else {
                 result = agentLoopService.execute(context, callback);
             }
@@ -698,7 +796,7 @@ public class SubAgentExecutionHandler {
             reservationHeld = false;
             recordObservability(result, entity, tenantId, callerAgentEntityId, subAgentDepth,
                 conversationId, parentConversationId, memoryEnabled, chainForChild, requestedReservation,
-                fullSystemPrompt, fullPrompt, bridgeBudgetScope, subCredentials);
+                fullSystemPrompt, fullPrompt, bridgeBudgetScope, executedRoute, subCredentials);
 
             // 18. Build tool result
             return buildToolResult(toolCall, agentId, entity.getName(), result, durationMs, tenantId, credentials);
@@ -845,7 +943,7 @@ public class SubAgentExecutionHandler {
         Double tenantBalance = null;
         if (creditConsumptionClient != null && context.tenantId() != null) {
             try {
-                BigDecimal balance = creditConsumptionClient.fetchBalance(context.tenantId());
+                BigDecimal balance = creditConsumptionClient.fetchLlmSpendableBalance(context.tenantId());
                 tenantBalance = balance != null ? balance.doubleValue() : null;
             } catch (Exception e) {
                 log.warn("[SUB_AGENT_BRIDGE] Failed to fetch tenant balance: {}", e.getMessage());
@@ -907,10 +1005,33 @@ public class SubAgentExecutionHandler {
      * Convert bridge response DTO back to AgentLoopResult.
      * Preserves all fields so downstream observability and persistence work unchanged.
      */
-    private AgentLoopResult convertBridgeResponse(AgentExecutionResponseDto response,
-                                                    String provider, String model) {
+    /**
+     * @param provider          the BILLED provider - what the observability row and the
+     *                          ledger are stamped with (the sub-agent entity's own pair)
+     * @param executionProvider the provider that actually RAN this turn, which under a
+     *                          model execution link is a CLI bridge. Its token counts are
+     *                          re-expressed in the billed provider's convention below:
+     *                          the Claude Code bridge folds the cache into its prompt
+     *                          total, so handing it straight to billing under an
+     *                          Anthropic label charges the cache twice.
+     */
+    // Package-private so the convention conversion can be pinned directly: driving it
+    // through execute() would need the whole bridge + guard + observability stack, and
+    // the thing worth testing is one arithmetic step.
+    AgentLoopResult convertBridgeResponse(AgentExecutionResponseDto response,
+                                                    String provider, String model,
+                                                    String executionProvider) {
         if (!response.success()) {
             AgentStopReason stopReason = parseStopReason(response.stopReason());
+            // A failed run is not a free run: carry back what the CLI spent before it
+            // stopped, rather than reporting zero for a turn that was paid for.
+            //
+            // Through the SAME convention conversion as the success path below, and for
+            // the same reason the javadoc above gives: the counts come from the CLI that
+            // ran, the ledger is stamped with the pair that is billed, and handing one
+            // convention to the other charges the cache twice. Carrying the raw numbers
+            // here would have turned an under-bill into a roughly fourfold OVER-bill on
+            // a claude-code-executed sub-agent - the more expensive mistake of the two.
             return AgentLoopResult.builder()
                 .success(false)
                 .error(response.error())
@@ -921,7 +1042,16 @@ public class SubAgentExecutionHandler {
                 .model(response.model() != null ? response.model() : model)
                 .stopReason(stopReason)
                 .conversationHistory(convertBridgeConversationHistory(response.conversationHistory()))
-                .usagePerIteration(Collections.emptyList())
+                .usage(response.totalUsage() != null
+                    ? TokenUsageConventions.toBilledConvention(
+                        convertUsageInfo(response.totalUsage()), executionProvider, provider)
+                    : null)
+                .usagePerIteration(response.usagePerIteration() != null
+                    ? response.usagePerIteration().stream()
+                        .map(this::convertUsageInfo)
+                        .map(u -> TokenUsageConventions.toBilledConvention(u, executionProvider, provider))
+                        .toList()
+                    : Collections.emptyList())
                 .iterationDurations(Collections.emptyList())
                 .finishReasonsPerIteration(Collections.emptyList())
                 .build();
@@ -936,12 +1066,14 @@ public class SubAgentExecutionHandler {
             .build();
 
         UsageInfo usage = response.totalUsage() != null
-            ? convertUsageInfo(response.totalUsage())
+            ? TokenUsageConventions.toBilledConvention(
+                convertUsageInfo(response.totalUsage()), executionProvider, provider)
             : null;
 
         List<UsageInfo> usagePerIteration = response.usagePerIteration() != null
             ? response.usagePerIteration().stream()
                 .map(this::convertUsageInfo)
+                .map(u -> TokenUsageConventions.toBilledConvention(u, executionProvider, provider))
                 .toList()
             : Collections.emptyList();
 
@@ -1344,7 +1476,8 @@ public class SubAgentExecutionHandler {
                                       boolean memoryEnabled,
                                       List<UUID> callerChain, BigDecimal reservedAmount,
                                       String systemPrompt, String userPrompt,
-                                      String budgetScope, Map<String, Object> credentials) {
+                                      String budgetScope, KeyRoute keyRoute,
+                                      Map<String, Object> credentials) {
         try {
             AgentObservabilityRequest request = new AgentObservabilityRequest();
             request.setTenantId(tenantId);
@@ -1360,6 +1493,10 @@ public class SubAgentExecutionHandler {
             request.setSource("SUB_AGENT");
             request.setProvider(entity.getModelProvider());
             request.setModel(entity.getModelName());
+            // Whose key this child ran on: the pin of the context that produced the result. A
+            // bridge child holds no key (PLATFORM); its execution-link fallback re-pins for the
+            // billed pair. Never read off the credentials map: the parent stamp lives there.
+            request.setKeyRoute(keyRoute != null ? keyRoute.name() : null);
             request.setStatus(result.success() ? "COMPLETED" : "FAILED");
             request.setStopReason(result.stopReason() != null ? result.stopReason().name() : null);
             request.setBudgetScope(budgetScope);
@@ -1625,6 +1762,31 @@ public class SubAgentExecutionHandler {
             forwardCredential(creds, parentCreds, "__approvedServices__");
             // Forward task linkage for execution→task tracing
             forwardCredential(creds, parentCreds, "__taskId__");
+            // The parent's read/write MODES. ToolAccessControl reads an absent mode as FULL
+            // access, so without this a read-only mail agent's child could SEND: spawning a
+            // child was the way around the one restriction no approval wildcard can lift.
+            //
+            // BOTH spellings, because the producers disagree and each one covers a different
+            // origin: AgentContextBuilder writes the namespaced form for a conversation, while
+            // AgentToolsConfigCredentials writes the plain form for a sub-agent's OWN config
+            // and for every CLI-bridge session. Forwarding one would carry a restriction that
+            // came from chat and silently drop one that came from the agent's own row, which
+            // is the deeper of the two nestings and the likelier to matter.
+            //
+            // Note this NARROWS: a child that states no mode for a family now inherits the
+            // parent's instead of defaulting to write. That is the point, and it is the safe
+            // direction, but it is a real behaviour change for children created through the
+            // `agent` tool, which routinely omits modes.
+            //
+            // Deliberately NOT forwarding the module list: the block above resolves the
+            // child's own modules and overwrites anything put here, and its comment explains
+            // why inheriting them would be wrong in both directions.
+            for (String key : ToolAccessControl.ACCESS_MODE_KEYS) {
+                forwardCredential(creds, parentCreds, key);
+            }
+            for (String key : ToolAccessControl.INTERNAL_ACCESS_MODE_KEYS) {
+                forwardCredential(creds, parentCreds, key);
+            }
         }
 
         return creds;
@@ -1735,6 +1897,70 @@ public class SubAgentExecutionHandler {
             try { return Integer.parseInt(s); } catch (NumberFormatException e) { return null; }
         }
         return null;
+    }
+
+    /**
+     * Build the sub-agent's {@link AgentLoopContext}. Called on the EXECUTION pair for the
+     * primary attempt, and on the BILLED pair by the execution-link bridge-failure fallback in
+     * {@link #doExecute} - {@code provider}/{@code model}/{@code credentials} are the only
+     * fields that differ between the two calls; {@code maxTokens}/{@code contextWindow}/
+     * {@code reasoningEffort} are re-resolved against whichever pair is passed in, so the
+     * fallback never sends the execution pair's limits to the billed pair's provider.
+     */
+    private AgentLoopContext buildSubAgentContext(String provider, String model, Map<String, Object> credentials,
+            String fullSystemPrompt, String fullPrompt, List<Message> conversationHistory,
+            List<ToolDefinition> tools, AgentEntity entity, int timeoutSeconds, PreIterationGuard guard,
+            String userRoles, String tenantId, String executionId) {
+        return AgentLoopContext.builder()
+            .provider(provider)
+            .model(model)
+            .systemPrompt(fullSystemPrompt)
+            .userPrompt(fullPrompt)
+            .conversationHistory(conversationHistory)
+            .tools(tools)
+            .autoDiscoverTools(false) // tools come from cache, not discovery
+            .maxIterations(resolveMaxIterations(entity))
+            .executionTimeout(timeoutSeconds)
+            // Clamp the configured budget (per-agent value, else the platform default)
+            // to the model's real output ceiling so a high default (e.g. 16000) never
+            // 400s against a low-cap model (DeepSeek-chat = 8192). Unknown cap ⇒
+            // MaxTokensClamp's safe 8192 floor.
+            .maxTokens(com.apimarketplace.agent.config.MaxTokensClamp.clamp(
+                    entity.getMaxTokens() != null ? entity.getMaxTokens() : agentDefaults.getMaxTokens(),
+                    modelCatalog != null ? modelCatalog.resolveMaxOutputTokens(provider, model) : null))
+            // Resolved on whichever pair actually runs the turn (the execution pair for the
+            // primary attempt, the billed pair for the fallback) - the window that can
+            // overflow belongs to that model. Observability only.
+            .contextWindow(modelCatalog != null ? modelCatalog.resolveContextWindow(provider, model) : null)
+            .temperature(entity.getTemperature() != null ? entity.getTemperature().doubleValue() : 0.7)
+            .tenantId(tenantId)
+            .keyRoute(childKeyRoute(credentials, tenantId, provider))
+            // The caller's roles, carried in the parent's credentials by the same key every
+            // other consumer reads. Without them the loop's bridge gate sees null, treats it
+            // as USER, and refuses an ADMIN their own sub-agent on a CLI bridge. Blank
+            // normalises to null so downstream reads one spelling.
+            .userRoles(userRoles)
+            .agentId(entity.getId() != null ? entity.getId().toString() : null)
+            // Carry the spawned execution's id so CE centralized relay billing aggregates the
+            // sub-agent's relayed calls into ONE CE_LLM_RELAY line (parity with the main loop);
+            // without it the sub-agent silently falls back to per-call billing.
+            .executionId(executionId)
+            .credentials(credentials)
+            .preIterationGuard(guard)
+            // Per-agent LoopDetector thresholds - null ⇒ AgentLoopService.bootstrapLoop
+            // falls back to LoopDetector defaults.
+            .loopIdenticalStop(entity.getLoopIdenticalStop())
+            .loopConsecutiveStop(entity.getLoopConsecutiveStop())
+            // Reasoning effort (bridge/CLI providers): agent setting, then the
+            // per-model admin default. No per-conversation override on the
+            // sub-agent path. Null modelCatalog (e.g. unit tests) ⇒ agent value only.
+            // An EXECUTION concern (the CLI/provider that actually runs the turn), so it
+            // follows whichever pair is passed in.
+            .reasoningEffort(modelCatalog != null
+                ? modelCatalog.resolveEffortWithDefault(entity.getReasoningEffort(), provider, model)
+                : entity.getReasoningEffort())
+            .purpose(CallPurpose.MAIN)
+            .build();
     }
 
     private int resolveMaxIterations(AgentEntity entity) {

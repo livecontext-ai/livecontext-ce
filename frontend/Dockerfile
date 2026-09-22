@@ -61,6 +61,11 @@ ARG NEXT_PUBLIC_POSTHOG_HOST=https://eu.i.posthog.com
 # Browser API key for the Google Drive Picker (referrer-restricted, public by design - it ships
 # in the client bundle). Empty by default → the Drive picker shows an error until configured.
 ARG NEXT_PUBLIC_GOOGLE_PICKER_API_KEY=
+# reCAPTCHA v3 site key for the public /contact form (public by design - it ships in the
+# client bundle; the matching secret lives on auth-service as RECAPTCHA_SECRET_KEY).
+# Empty by default -> the form renders disabled with a "use email instead" notice, rather
+# than accepting a message that grecaptcha.execute() would then reject.
+ARG NEXT_PUBLIC_RECAPTCHA_SITE_KEY=
 ENV NEXT_PUBLIC_APP_EDITION=$NEXT_PUBLIC_APP_EDITION
 ENV NEXT_PUBLIC_AUTH_MODE=$NEXT_PUBLIC_AUTH_MODE
 ENV NEXT_PUBLIC_KEYCLOAK_URL=$NEXT_PUBLIC_KEYCLOAK_URL
@@ -71,6 +76,7 @@ ENV NEXT_PUBLIC_SPRING_BASE_URL=$NEXT_PUBLIC_SPRING_BASE_URL
 ENV NEXT_PUBLIC_POSTHOG_KEY=$NEXT_PUBLIC_POSTHOG_KEY
 ENV NEXT_PUBLIC_POSTHOG_HOST=$NEXT_PUBLIC_POSTHOG_HOST
 ENV NEXT_PUBLIC_GOOGLE_PICKER_API_KEY=$NEXT_PUBLIC_GOOGLE_PICKER_API_KEY
+ENV NEXT_PUBLIC_RECAPTCHA_SITE_KEY=$NEXT_PUBLIC_RECAPTCHA_SITE_KEY
 
 # CE image parity with the public CE repo: the hosted-SaaS legal pages
 # (app/legal, which name a natural person for legal reasons) must not be

@@ -1,5 +1,12 @@
 package com.apimarketplace.agent.domain;
 
+import com.apimarketplace.common.security.token.EncryptedTokenConverter;
+import com.apimarketplace.common.security.token.HashedTokenEntity;
+import com.apimarketplace.common.security.token.HashedTokenListener;
+import com.apimarketplace.common.security.token.TokenSlot;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import java.util.List;
+
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -14,9 +21,10 @@ import java.util.UUID;
  * Stores webhook configuration for agents to receive external triggers.
  */
 @Entity
+@EntityListeners(HashedTokenListener.class)
 @Table(name = "agent_webhook_tokens")
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-public class AgentWebhookTokenEntity {
+public class AgentWebhookTokenEntity implements HashedTokenEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -25,8 +33,18 @@ public class AgentWebhookTokenEntity {
     @Column(name = "agent_id", nullable = false)
     private UUID agentId;
 
-    @Column(name = "token", nullable = false, unique = true)
+    /**
+     * The agent webhook URL token (wh_... in /webhook/agent/{token}).
+     * Stored encrypted (ENC:...) through {@link EncryptedTokenConverter}; the entity always holds
+     * the plaintext. Lookups go through {@link #getTokenHash()}, never through this column.
+     */
+    @Convert(converter = EncryptedTokenConverter.class)
+    @Column(name = "token", nullable = false, unique = true, length = 255)
     private String token;
+
+    /** HMAC-SHA256 of the plaintext, filled by {@link HashedTokenListener}; the only lookup key. */
+    @Column(name = "token_hash", length = 64)
+    private String tokenHash;
 
     @Column(name = "http_method", length = 10)
     private String httpMethod = "POST";
@@ -165,5 +183,20 @@ public class AgentWebhookTokenEntity {
                 ", authType='" + authType + '\'' +
                 ", isActive=" + isActive +
                 '}';
+    }
+
+    @JsonIgnore
+    public String getTokenHash() {
+        return tokenHash;
+    }
+
+    public void setTokenHash(String tokenHash) {
+        this.tokenHash = tokenHash;
+    }
+
+    @Override
+    @JsonIgnore
+    public List<TokenSlot> tokenSlots() {
+        return List.of(new TokenSlot(this::getToken, this::setTokenHash));
     }
 }

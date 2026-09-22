@@ -10,6 +10,7 @@ import Toast, { useToast } from '@/components/Toast';
 import { useTranslations } from 'next-intl';
 import { PageHeader } from '@/components/settings';
 import { webhookSettingsService } from '@/lib/api/orchestrator';
+import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import type { StandaloneWebhook, WebhookSettingsConfig } from '@/lib/api/orchestrator';
 import { WebhookCallLogsDialog } from '../webhooks/components/WebhookCallLogsDialog';
 import { CurlExamplePopover } from '@/components/webhook/CurlExamplePopover';
@@ -32,6 +33,10 @@ export default function TriggersSettingsPage() {
   const tSettings = useTranslations('settings');
   const { toasts, addToast, removeToast } = useToast();
   const searchParams = useSearchParams();
+  // Creating, editing or deleting a trigger changes what the notification bell lists as armed
+  // and when its rows say they next fire. That payload is invalidated by nothing, so it has to
+  // be asked for here, as every other producer of a row does.
+  const refreshAutomations = useRefreshHomeStatus();
 
   const initialTab = (searchParams.get('tab') as TriggerTab) || 'webhook';
   const [activeTab, setActiveTab] = useState<TriggerTab>(initialTab);
@@ -86,6 +91,7 @@ export default function TriggersSettingsPage() {
     setActionLoading(true);
     try {
       await webhookSettingsService.delete(deletingWebhook.id);
+      refreshAutomations();
       addToast({ type: 'success', title: tWebhook('deleted'), message: '' });
       setDeleteDialogOpen(false);
       setDeletingWebhook(null);

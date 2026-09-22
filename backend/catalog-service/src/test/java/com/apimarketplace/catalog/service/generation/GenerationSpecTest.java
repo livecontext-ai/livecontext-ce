@@ -729,6 +729,54 @@ class GenerationSpecTest {
     class ShippedSeeds {
 
         /**
+         * Seedance 2.5 takes references and no pinned frame, and that is a DECISION.
+         *
+         * <p>ModelArk: "Dreamina Seedance 2.5 has special constraints for ...
+         * first-frame/first-and-last-frame image-to-video tasks ... ratio only supports
+         * adaptive; you cannot specify another aspect ratio." The 2.0 series carries no
+         * such sentence, which is why it keeps both frames.
+         *
+         * <p>A descriptor cannot say "this value only when that slot is filled": the
+         * pairing rules sit on a BINDING, which all eleven models of this endpoint
+         * share, so declaring the restriction would over-refuse on the 2.0 family.
+         * Until that changes, leaving the slots off 2.5 is the only truthful shape, and
+         * adding them back is a one-word edit in a capabilities array that every other
+         * check in this repository would wave through.
+         */
+        @Test
+        @DisplayName("Seedance 2.5 offers no pinned frame, because its aspect ratio rule cannot be declared")
+        void seedanceTwoFiveTakesNoFrame() throws Exception {
+            Path seed = Path.of("..", "..", "scripts", "api-migrations", "seedance.json");
+            assumeTrue(Files.isRegularFile(seed), "seedance.json not reachable from this module");
+
+            JsonNode api = MAPPER.readTree(Files.readString(seed));
+            GenerationSpec spec = null;
+            for (JsonNode ep : api.path("endpoints")) {
+                if (!ep.path("generation").isMissingNode() && !ep.path("generation").isNull()) {
+                    spec = GenerationSpec.parse(ep.path("generation"), "seedance").orElseThrow();
+                }
+            }
+            assertThat(spec).as("seedance.json must still declare a generation endpoint").isNotNull();
+
+            List<String> frames = List.of("first_frame_image", "last_frame_image");
+            for (GenerationSpec.Model model : spec.models()) {
+                boolean isTwoFive = model.id().startsWith("seedance-2.5");
+                for (String frame : frames) {
+                    assertThat(model.accepts(frame))
+                            .as("%s accepting '%s': on 2.5 a pinned frame forces ratio=adaptive, "
+                                    + "which no descriptor can say for three models out of eleven; "
+                                    + "on the 2.0 series the provider documents no such restriction",
+                                    model.id(), frame)
+                            .isEqualTo(!isTwoFive);
+                }
+                // Both families keep the reference slot, and every model that takes a closing
+                // frame takes an opening one: the pair is never half-offered.
+                assertThat(model.accepts("input_image")).as("%s keeps its references", model.id())
+                        .isTrue();
+            }
+        }
+
+        /**
          * Drift guard. Every descriptor committed to scripts/api-migrations MUST
          * parse, because the import that reads them runs against production and
          * a rejected seed there is a failed release, not a failed test.
@@ -1420,6 +1468,331 @@ class GenerationSpecTest {
                     json(CAPPED.replace("\"maxLength\": 10", "\"maxLength\": 0")), "ctx"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("maxLength must be > 0");
+        }
+    }
+
+    @Nested
+    @DisplayName("several files at once, each with its own meaning")
+    class RoleNamedSlots {
+
+        /** xAI 1.5: a first frame, a last frame and up to three references in ONE call. */
+        private static final String THREE_SLOTS = """
+                {
+                  "kind": "video", "assetPath": "url",
+                  "paramMap": {
+                    "prompt": "prompt",
+                    "input_image": { "path": "image.url", "encoding": "data_url", "role": "first_frame" },
+                    "last_frame_image": { "path": "last_frame.url", "encoding": "data_url", "role": "last_frame" },
+                    "reference_image": {
+                      "path": "reference_images[0].url", "encoding": "data_url",
+                      "role": "reference", "maxItems": 3
+                    }
+                  },
+                  "models": [{
+                    "id": "v-1",
+                    "capabilities": ["prompt", "input_image", "last_frame_image", "reference_image"]
+                  }]
+                }
+                """;
+
+        @Test
+        @DisplayName("three image slots coexist on one endpoint, each keeping its own role")
+        void parsesThreeSlots() {
+            GenerationSpec spec = GenerationSpec.parse(json(THREE_SLOTS), "ctx").orElseThrow();
+
+            assertThat(spec.paramMap().get("input_image").role())
+                    .isEqualTo(GenerationSpec.AssetRole.FIRST_FRAME);
+            assertThat(spec.paramMap().get("last_frame_image").role())
+                    .isEqualTo(GenerationSpec.AssetRole.LAST_FRAME);
+            assertThat(spec.paramMap().get("reference_image").role())
+                    .isEqualTo(GenerationSpec.AssetRole.REFERENCE);
+            assertThat(spec.paramMap().get("reference_image").maxItems()).isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("'last_frame' is a role the surfaces can name, so a closing frame is declarable at all")
+        void lastFrameIsAKnownRole() {
+            // Before it existed the only way to declare the second frame of a
+            // clip was to call it something it is not.
+            assertThat(GenerationSpec.AssetRole.LAST_FRAME.wire()).isEqualTo("last_frame");
+        }
+
+        @Test
+        @DisplayName("two slots with the same role are refused: nothing downstream could tell them apart")
+        void refusesTwoSlotsSharingARole() {
+            // Both would be labelled "Reference image" in the composer menu, and
+            // the picker behind each entry would be a coin toss.
+            assertThatThrownBy(() -> GenerationSpec.parse(json(THREE_SLOTS.replace(
+                    "\"path\": \"image.url\", \"encoding\": \"data_url\", \"role\": \"first_frame\"",
+                    "\"path\": \"image.url\", \"encoding\": \"data_url\", \"role\": \"reference\"")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("two file slots with the same role 'reference'");
+        }
+
+        @Test
+        @DisplayName("a role-named slot cannot declare a different role: the label and the wire would disagree")
+        void refusesANameThatContradictsItsRole() {
+            // The seed author reads the NAME and every surface labels the field
+            // from the ROLE, so this ships a field called "Reference image" whose
+            // file is sent as the closing frame.
+            assertThatThrownBy(() -> GenerationSpec.parse(json(THREE_SLOTS.replace(
+                    "\"path\": \"last_frame.url\", \"encoding\": \"data_url\", \"role\": \"last_frame\"",
+                    "\"path\": \"last_frame.url\", \"encoding\": \"data_url\", \"role\": \"source\"")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("is the 'last_frame' slot, so its role can only be 'last_frame'");
+        }
+
+        @Test
+        @DisplayName("a role-named slot still has to say its role, like every other file slot")
+        void refusesARoleNamedSlotWithNoRole() {
+            assertThatThrownBy(() -> GenerationSpec.parse(json(THREE_SLOTS.replace(
+                    ", \"role\": \"last_frame\"", "")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("carries a file, so it needs");
+        }
+    }
+
+    @Nested
+    @DisplayName("slots that only work as a pair")
+    class PairedSlots {
+
+        /** Seedance: two images or none, never the closing one alone. */
+        private static final String PAIRED = """
+                {
+                  "kind": "video", "assetPath": "url",
+                  "paramMap": {
+                    "prompt": "content[0].text",
+                    "first_frame_image": {
+                      "path": "content[1].image_url.url", "encoding": "data_url", "role": "first_frame"
+                    },
+                    "last_frame_image": {
+                      "path": "content[2].image_url.url", "encoding": "data_url", "role": "last_frame",
+                      "requires": ["first_frame_image"]
+                    }
+                  },
+                  "models": [{
+                    "id": "s-1",
+                    "capabilities": ["prompt", "first_frame_image", "last_frame_image"]
+                  }]
+                }
+                """;
+
+        @Test
+        @DisplayName("the companion is parsed onto the slot that cannot run without it")
+        void parsesTheCompanion() {
+            GenerationSpec spec = GenerationSpec.parse(json(PAIRED), "ctx").orElseThrow();
+
+            assertThat(spec.paramMap().get("last_frame_image").requires())
+                    .containsExactly("first_frame_image");
+            assertThat(spec.paramMap().get("first_frame_image").requires()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a companion this endpoint cannot send is refused: the slot could never be used")
+        void refusesAnUnmappedCompanion() {
+            assertThatThrownBy(() -> GenerationSpec.parse(json(PAIRED.replace(
+                    "\"requires\": [\"first_frame_image\"]", "\"requires\": [\"input_image\"]")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("which this endpoint does not map");
+        }
+
+        @Test
+        @DisplayName("a model offering one half of a pair is refused: every call using it would be turned down")
+        void refusesAModelMissingTheOtherHalf() {
+            assertThatThrownBy(() -> GenerationSpec.parse(json(PAIRED.replace(
+                    "\"capabilities\": [\"prompt\", \"first_frame_image\", \"last_frame_image\"]",
+                    "\"capabilities\": [\"prompt\", \"last_frame_image\"]")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("only works together with 'first_frame_image'");
+        }
+
+        @Test
+        @DisplayName("a slot cannot require itself, which would be a call nobody can make")
+        void refusesSelfReference() {
+            assertThatThrownBy(() -> GenerationSpec.parse(json(PAIRED.replace(
+                    "\"requires\": [\"first_frame_image\"]", "\"requires\": [\"last_frame_image\"]")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot name 'last_frame_image' itself");
+        }
+
+        @Test
+        @DisplayName("an empty companion list is refused: it reads as a rule and enforces nothing")
+        void refusesAnEmptyList() {
+            assertThatThrownBy(() -> GenerationSpec.parse(json(PAIRED.replace(
+                    "[\"first_frame_image\"]", "[]")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("must be a non-empty array");
+        }
+
+        @Test
+        @DisplayName("a blank companion name is refused rather than quietly ignored")
+        void refusesABlankCompanion() {
+            assertThatThrownBy(() -> GenerationSpec.parse(json(PAIRED.replace(
+                    "[\"first_frame_image\"]", "[\"   \"]")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("must be non-blank parameter names");
+        }
+
+        @Test
+        @DisplayName("a MISSPELLED rule is refused, where it used to disarm the guard in silence")
+        void refusesAnUnknownBindingKey() {
+            // The worst outcome available: `require` parses, the pair is unenforced, the import is
+            // green, and the provider refusal the rule exists to prevent comes back with nothing
+            // anywhere pointing at the cause.
+            assertThatThrownBy(() -> GenerationSpec.parse(json(PAIRED.replace(
+                    "\"requires\":", "\"require\":")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("has unknown key 'require'");
+        }
+
+        @Test
+        @DisplayName("a companion outside the platform vocabulary is refused with the list that exists")
+        void refusesAnUnknownCompanion() {
+            assertThatThrownBy(() -> GenerationSpec.parse(json(PAIRED.replace(
+                    "\"requires\": [\"first_frame_image\"]", "\"requires\": [\"opening_shot\"]")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("is not a unified parameter");
+        }
+    }
+
+    @Nested
+    @DisplayName("slots that cannot travel together")
+    class ExcludedSlots {
+
+        /** Seedance again: pinning a frame and lending a reference are different kinds of request. */
+        private static final String EXCLUSIVE = """
+                {
+                  "kind": "video", "assetPath": "url",
+                  "paramMap": {
+                    "prompt": "content[0].text",
+                    "first_frame_image": {
+                      "path": "content[1].image_url.url", "encoding": "data_url",
+                      "role": "first_frame", "excludes": ["input_image"]
+                    },
+                    "input_image": {
+                      "path": "content[3].image_url.url", "encoding": "data_url",
+                      "role": "reference", "maxItems": 4
+                    }
+                  },
+                  "models": [{
+                    "id": "s-2",
+                    "capabilities": ["prompt", "first_frame_image", "input_image"]
+                  }]
+                }
+                """;
+
+        @Test
+        @DisplayName("the forbidden pair is parsed onto the slot that declared it")
+        void parsesTheExclusion() {
+            GenerationSpec spec = GenerationSpec.parse(json(EXCLUSIVE), "ctx").orElseThrow();
+
+            assertThat(spec.paramMap().get("first_frame_image").excludes())
+                    .containsExactly("input_image");
+            // Declared once. The other side carries nothing, and is still refused at run time,
+            // because a rule that has to be written twice is a rule that gets written once.
+            assertThat(spec.paramMap().get("input_image").excludes()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("both models may take both halves: only sending them together is refused")
+        void doesNotForbidTheCapability() {
+            // The exclusion is about one CALL, not about what the model can do. Refusing the
+            // capability would make the endpoint offer one of its two modes and hide the other.
+            GenerationSpec spec = GenerationSpec.parse(json(EXCLUSIVE), "ctx").orElseThrow();
+            assertThat(spec.models().get(0).capabilities())
+                    .contains("first_frame_image", "input_image");
+        }
+
+        @Test
+        @DisplayName("a file slot NAMING a value parameter is refused too, not only a rule written on one")
+        void refusesARuleNamingAValueParameter() {
+            // The other spelling. Published in the listing, printed under the field, and able to
+            // block nothing: the composer closes a slot by looking at the files attached, and a
+            // value has none. Which half was refused used to depend on which binding the author
+            // happened to be writing.
+            assertThatThrownBy(() -> GenerationSpec.parse(json(EXCLUSIVE.replace(
+                    "\"role\": \"first_frame\", \"excludes\": [\"input_image\"]",
+                    "\"role\": \"first_frame\", \"excludes\": [\"aspect_ratio\"]")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("is not a file slot");
+        }
+
+        @Test
+        @DisplayName("a pairing rule on a parameter carrying a VALUE is refused, not half-supported")
+        void refusesARuleOnAValueParameter() {
+            // Enforced at build time and drawn by no surface is the worst of both: it reads
+            // like a guarantee. The restriction an author actually wants there (an aspect
+            // ratio forbidden beside a pinned frame) is per MODEL, and a binding shared by
+            // every model of the endpoint cannot express it.
+            assertThatThrownBy(() -> GenerationSpec.parse(json(EXCLUSIVE.replace(
+                    "\"prompt\": \"content[0].text\",",
+                    "\"prompt\": \"content[0].text\", \"aspect_ratio\": "
+                            + "{\"path\": \"ratio\", \"excludes\": [\"first_frame_image\"]},")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("is a rule about FILE slots");
+        }
+
+        @Test
+        @DisplayName("a forbidden partner this endpoint cannot send is refused as a rule about nothing")
+        void refusesAnUnmappedPartner() {
+            assertThatThrownBy(() -> GenerationSpec.parse(json(EXCLUSIVE.replace(
+                    "\"excludes\": [\"input_image\"]", "\"excludes\": [\"input_video\"]")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("which this endpoint does not map");
+        }
+
+        @Test
+        @DisplayName("requiring and excluding the same slot is refused: no caller could satisfy it")
+        void refusesARuleThatContradictsItself() {
+            assertThatThrownBy(() -> GenerationSpec.parse(json(EXCLUSIVE.replace(
+                    "\"role\": \"first_frame\", \"excludes\": [\"input_image\"]",
+                    "\"role\": \"first_frame\", \"requires\": [\"input_image\"], "
+                            + "\"excludes\": [\"input_image\"]")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("both requires and excludes");
+        }
+
+        @Test
+        @DisplayName("one slot requiring what another forbids is refused, however it is spelled")
+        void refusesTheSameContradictionWrittenFromBothSides() {
+            // The contradiction survives being split across two bindings, and the reader of either
+            // one alone sees a rule that looks fine.
+            assertThatThrownBy(() -> GenerationSpec.parse(json(EXCLUSIVE.replace(
+                    "\"role\": \"reference\", \"maxItems\": 4",
+                    "\"role\": \"reference\", \"maxItems\": 4, "
+                            + "\"requires\": [\"first_frame_image\"]")), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("No caller can satisfy both");
+        }
+    }
+
+    @Nested
+    @DisplayName("one meaning, one slot")
+    class RoleUniqueness {
+
+        /** A video and an audio, both genuinely sources, which is the case the rule costs. */
+        private static final String TWO_SOURCES = """
+                {
+                  "kind": "video", "assetPath": "url",
+                  "paramMap": {
+                    "prompt": "prompt",
+                    "input_video": {"path": "video", "encoding": "data_url", "role": "source"},
+                    "input_audio": {"path": "audio", "encoding": "data_url", "role": "source"}
+                  },
+                  "models": [{"id": "v-2", "capabilities": ["prompt", "input_video", "input_audio"]}]
+                }
+                """;
+
+        @Test
+        @DisplayName("two slots of DIFFERENT kinds still cannot share a role, and that is deliberate")
+        void refusesEvenAcrossKinds() {
+            // Recorded rather than discovered: every surface labels a slot from its role alone, so
+            // two "Source" fields are two identical labels over two different pickers. The day a
+            // provider needs this shape, the fix is to key the label on role AND kind - not to
+            // drop the rule, and not to mis-declare one of the two roles.
+            assertThatThrownBy(() -> GenerationSpec.parse(json(TWO_SOURCES), "ctx"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("two file slots with the same role 'source'");
         }
     }
 }

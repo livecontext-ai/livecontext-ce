@@ -48,6 +48,8 @@ const HAND_MEASURED_ALLOW_LIST: Record<string, string> = {
   'app/workflows/builder/components/TriggerPanel.tsx': 'sizes a panel, and already reads clientWidth first',
   'components/data-table/JsonPreviewPopover.tsx':
     'FLIPS the card left/right of a cell before falling back to a gutter, which is a placement algorithm the clamp does not have; its boxes carry their own viewport cap',
+  'app/workflows/builder/components/inspector/useInspectorLayout.ts':
+    'reads the window for a 1024px breakpoint and to size the fullscreen panel, and measures the rect of the PANEL ITSELF (not a trigger) to tell a narrow dock from a narrow window. It places no floating box, so there is no edge for the clamp to hold',
 };
 
 const read = (file: string) => fs.readFileSync(path.join(FRONTEND, file), 'utf8');

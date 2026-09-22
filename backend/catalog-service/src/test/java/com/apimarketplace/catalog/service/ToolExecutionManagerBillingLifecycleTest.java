@@ -66,7 +66,7 @@ import static org.mockito.Mockito.when;
  * third-party provider and charged nothing. Every test here fails on that
  * version of the code, because none of the calls it asserts on existed.
  *
- * <p>Second concern, equally important: the 600+ ordinary catalog endpoints
+ * <p>Second concern, equally important: the 1000+ ordinary catalog endpoints
  * carry no published platform price. They must keep behaving exactly as before,
  * so "no price resolved" is asserted to be a plain pass-through with nothing
  * reserved, nothing committed and nothing released.
@@ -192,6 +192,37 @@ class ToolExecutionManagerBillingLifecycleTest {
      * to the catalog as well, or it is asserting ordinary-tool behaviour while
      * the code correctly sees a generation.
      */
+    /**
+     * A REAL descriptor on the fixture's endpoint, so the body can be measured.
+     *
+     * <p>The class-wide fixture ships `{"kind":"video"}`, which parses but declares no model: the
+     * measurement finds nothing to price and falls back to what the request carried, which is the
+     * right behaviour and the wrong fixture for testing that the body wins.
+     */
+    private void givenAGenerationEndpoint() {
+        ApiToolEntity tiered = new ApiToolEntity();
+        tiered.setId(TOOL_ID);
+        tiered.setApiId(API_ID);
+        tiered.setToolSlug("create-video-task");
+        tiered.setGenerationSpec("""
+                {
+                  "kind": "video", "modelParam": "model", "assetPath": "content.video_url",
+                  "paramMap": { "prompt": "content[0].text", "duration_seconds": "duration",
+                                "resolution": "resolution" },
+                  "models": [{
+                    "id": "vid-tiered", "upstream": "vendor-tiered", "label": "Tiered",
+                    "capabilities": ["prompt", "duration_seconds", "resolution"],
+                    "required": ["resolution"],
+                    "constraints": { "resolution": { "allowed": ["720p", "1080p"] } },
+                    "price": { "unit": "second", "unitCredits": 60,
+                               "modifiers": [{ "param": "resolution",
+                                               "multiply": { "720p": 1, "1080p": 2 } }] }
+                  }]
+                }
+                """);
+        when(apiToolRepository.findById(TOOL_ID)).thenReturn(Optional.of(tiered));
+    }
+
     private void givenAnOrdinaryEndpoint() {
         ApiToolEntity ordinary = new ApiToolEntity();
         ordinary.setId(TOOL_ID);
@@ -337,6 +368,11 @@ class ToolExecutionManagerBillingLifecycleTest {
             measured.setGenerationModelId("seedance-2.0");
             measured.setGenerationQuantity(new BigDecimal("10"));
             measured.setGenerationQuantityUnit("second");
+            // Deliberately a different number from the quantity. Both are BigDecimal and they sit
+            // two apart in a sixteen-argument positional call, so a swap COMPILES: with 10 in both
+            // places the scope would read correctly whichever slot each landed in, and the test
+            // would pass on the wiring it exists to check.
+            measured.setGenerationPriceMultiplier(new BigDecimal("2.4"));
 
             executionManager.executeTool(TOOL_SLUG, measured, USER_ID, null, "req-measured");
 
@@ -352,6 +388,99 @@ class ToolExecutionManagerBillingLifecycleTest {
             assertThat(scope.getValue().generationQuantityUnit())
                     .as("without the unit, a per-image rate can be multiplied by a count of seconds")
                     .isEqualTo("second");
+            assertThat(scope.getValue().generationPriceMultiplier())
+                    .as("dropped here, a 1080p render is billed at the 720p rate on every call")
+                    .isEqualByComparingTo("2.4");
+            // And the two stay APART. Ten seconds is what was produced; 2.4 is what it cost. Folded
+            // together, the run reports a duration nobody asked for and no player would show.
+            assertThat(scope.getValue().generationQuantity()).isEqualByComparingTo("10");
+        }
+
+        @Test
+        @DisplayName("a FORGED cheap factor is overruled by what the body actually says")
+        void aForgedFactorCannotBuyADiscount() {
+            // The hole: the size, the unit, the model and the factor all decide what a call costs
+            // and all four arrived as headers. They are stripped at the gateway and at the CE
+            // monolith, and stripping happens at an EDGE - so anything reaching catalog-service
+            // without traversing one believed them. `X-Lc-Generation-Multiplier: 0.001` turned a
+            // 4K render into a rounding error, and `billed_quantity` came back as the forged value,
+            // so nothing on the invoice looked wrong.
+            //
+            // The cloud already refuses to believe a linked install and re-derives from the body.
+            // The body is here too, so the same reading applies and the headers stop deciding money.
+            givenReservationTaken();
+            givenUpstreamReturns(upstreamSuccess("platform"));
+            givenAGenerationEndpoint();
+
+            ToolExecutionRequest forged = platformRequest();
+            forged.setParameters(Map.of(
+                    "model", "vendor-tiered",
+                    "resolution", "1080p",
+                    "duration", 10,
+                    "content", java.util.List.of(Map.of("type", "text", "text", "a cat"))));
+            forged.setGenerationModelId("vid-tiered");
+            forged.setGenerationQuantity(new BigDecimal("1"));       // claims a one second clip
+            forged.setGenerationQuantityUnit("second");
+            forged.setGenerationPriceMultiplier(new BigDecimal("0.001"));  // claims a 1000x discount
+
+            executionManager.executeTool(TOOL_SLUG, forged, USER_ID, null, "req-forged");
+
+            ArgumentCaptor<CatalogToolBillingService.BillingScope> scope =
+                    ArgumentCaptor.forClass(CatalogToolBillingService.BillingScope.class);
+            verify(billingService).preflightReserve(scope.capture());
+            assertThat(scope.getValue().generationPriceMultiplier())
+                    .as("the body asks for 1080p, which this model prices at twice its rate")
+                    .isEqualByComparingTo("2");
+            assertThat(scope.getValue().generationQuantity())
+                    .as("the body carries ten seconds however few the header claimed")
+                    .isEqualByComparingTo("10");
+        }
+
+        @Test
+        @DisplayName("a body the descriptor cannot read leaves the request's own values alone")
+        void anUnreadableBodyFallsBackToTheRequest() {
+            // The half that keeps every pre-existing caller working: an ordinary endpoint, a body
+            // naming no model this descriptor knows, or a descriptor that will not parse. Measuring
+            // must never be able to blank a value the caller legitimately supplied.
+            givenReservationTaken();
+            givenUpstreamReturns(upstreamSuccess("platform"));
+            givenAGenerationEndpoint();
+
+            ToolExecutionRequest plain = platformRequest();
+            plain.setParameters(Map.of("model", "a-model-this-descriptor-never-heard-of"));
+            plain.setGenerationModelId("seedance-2.0");
+            plain.setGenerationQuantity(new BigDecimal("10"));
+            plain.setGenerationQuantityUnit("second");
+
+            executionManager.executeTool(TOOL_SLUG, plain, USER_ID, null, "req-unreadable");
+
+            ArgumentCaptor<CatalogToolBillingService.BillingScope> scope =
+                    ArgumentCaptor.forClass(CatalogToolBillingService.BillingScope.class);
+            verify(billingService).preflightReserve(scope.capture());
+            assertThat(scope.getValue().generationQuantity()).isEqualByComparingTo("10");
+            assertThat(scope.getValue().generationModelId()).isEqualTo("seedance-2.0");
+        }
+
+        @Test
+        @DisplayName("a generation with no factor reaches billing carrying none, not a 1")
+        void aPlainGenerationCarriesNoFactor() {
+            // Most models declare no modifiers at all. "No factor" has to arrive as absent rather
+            // than as a neutral 1, because absent is what every pricing path resolved before
+            // factors existed: it is the guarantee that this feature changed nothing for them.
+            givenReservationTaken();
+            givenUpstreamReturns(upstreamSuccess("platform"));
+
+            ToolExecutionRequest plain = platformRequest();
+            plain.setGenerationModelId("seedance-2.0");
+            plain.setGenerationQuantity(new BigDecimal("10"));
+            plain.setGenerationQuantityUnit("second");
+
+            executionManager.executeTool(TOOL_SLUG, plain, USER_ID, null, "req-plain");
+
+            ArgumentCaptor<CatalogToolBillingService.BillingScope> scope =
+                    ArgumentCaptor.forClass(CatalogToolBillingService.BillingScope.class);
+            verify(billingService).preflightReserve(scope.capture());
+            assertThat(scope.getValue().generationPriceMultiplier()).isNull();
         }
 
         @Test
@@ -463,7 +592,7 @@ class ToolExecutionManagerBillingLifecycleTest {
         @Test
         @DisplayName("an ordinary tool with no resolvable price proceeds and is neither reserved nor committed")
         void zeroPricedToolIsUntouched() {
-            // This is what the 600+ catalog endpoints look like: preflightReserve
+            // This is what the 1000+ catalog endpoints look like: preflightReserve
             // resolves no positive markup and answers allowedWithoutBilling.
             givenNothingToBill();
             givenUpstreamReturns(upstreamSuccess("user"));
@@ -654,7 +783,7 @@ class ToolExecutionManagerBillingLifecycleTest {
 
         @Test
         @DisplayName("still runs an ordinary tool unbilled, because an unreachable ledger must not take the "
-                + "600+ catalog endpoints down with it")
+                + "1000+ catalog endpoints down with it")
         void ordinaryToolStillRuns() {
             when(billingService.preflightReserve(any()))
                     .thenThrow(new IllegalStateException("auth-service unreachable"));
@@ -772,7 +901,7 @@ class ToolExecutionManagerBillingLifecycleTest {
         void ordinaryEndpointWithNoBuildableScopeStillRuns() {
             // The same unidentifiable call on an endpoint that resells nothing.
             // The guard must not turn a missing billing context into a refusal
-            // for the 700+ catalog endpoints that were never going to be billed.
+            // for the 1000+ catalog endpoints that were never going to be billed.
             ApiToolEntity ordinary = new ApiToolEntity();
             ordinary.setId(TOOL_ID);
             ordinary.setApiId(API_ID);

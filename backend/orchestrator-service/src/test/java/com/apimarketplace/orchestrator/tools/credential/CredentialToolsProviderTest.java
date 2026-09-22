@@ -457,6 +457,75 @@ class CredentialToolsProviderTest {
                 .containsPattern("(?s)needs_reauth.*(user|re-authorize|Reconnect)");
     }
 
+    // -- granted scopes -------------------------------------------------
+
+    @Test
+    @DisplayName("an account granted scopes carries them, because that is what decides which endpoints it can run")
+    void surfacesGrantedScopes() {
+        // Two accounts of one integration routinely differ here, and until this was
+        // listed the difference was invisible: an agent could see two Gmail accounts and
+        // nothing to tell them apart, then be refused on the one the default resolves to.
+        CredentialSummaryDto perso = cred("Perso", "gmail", "active", true, null);
+        perso.setScopes(List.of("https://www.googleapis.com/auth/gmail.send"));
+        when(credentialClient.getAllCredentials(TENANT)).thenReturn(List.of(perso));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> connected = (List<Map<String, Object>>) data(call()).get("connected");
+        assertThat(connected.get(0).get("scopes"))
+                .isEqualTo(List.of("https://www.googleapis.com/auth/gmail.send"));
+    }
+
+    @Test
+    @DisplayName("a credential with no scope concept omits the field rather than reporting an empty grant")
+    void omitsScopesWhenThereAreNone() {
+        // An API key has no scopes. Emitting [] would read as "granted nothing", which is
+        // what a revoked OAuth account looks like.
+        CredentialSummaryDto apiKey = cred("Stripe", "stripe", "active", true, null);
+        when(credentialClient.getAllCredentials(TENANT)).thenReturn(List.of(apiKey));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> connected = (List<Map<String, Object>>) data(call()).get("connected");
+        assertThat(connected.get(0)).doesNotContainKey("scopes");
+
+        apiKey.setScopes(List.of());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> again = (List<Map<String, Object>>) data(call()).get("connected");
+        assertThat(again.get(0)).doesNotContainKey("scopes");
+    }
+
+    // -- the documented sample must be the answer the runtime gives ------
+
+    @Test
+    @DisplayName("the hint in helpText repeats the sentences the runtime hint actually produces")
+    void documentedHintMatchesTheRuntimeHint() {
+        // The helpText carries a worked example of the response, hint included. Nothing
+        // compared the two, so changing the runtime sentence left the documented one
+        // stating the opposite - and the documented one is what an agent reads before it
+        // has ever called. Caught exactly that way while adding credential_name.
+        CredentialSummaryDto gmail = cred("Gmail", "gmail", "active", true, null);
+        CredentialSummaryDto clientA = cred("Client A", "instagram", "active", true, null);
+        CredentialSummaryDto clientB = cred("Client B", "instagram", "active", false, null);
+        when(credentialClient.getAllCredentials(TENANT))
+                .thenReturn(List.of(gmail, clientA, clientB));
+
+        String runtimeHint = (String) data(call()).get("hint");
+        String helpText = provider.getTools().get(0).helpText();
+
+        // Sentence by sentence rather than whole: the sample is JSON-escaped and names
+        // example accounts, so only the invariant prose can be compared.
+        for (String sentence : List.of(
+                "Executing a tool directly uses the default one unless the call names another"
+                        + " with credential_name.",
+                "This is what YOUR workspace holds",
+                "Also held and selectable BY NAME, either on a direct catalog execute call"
+                        + " through its credential_name argument, or by a workflow step that names"
+                        + " one in its credential_selector (active only)")) {
+            assertThat(runtimeHint).as("runtime hint lost: %s", sentence).contains(sentence);
+            assertThat(helpText).as("documented sample drifted from the runtime hint: %s", sentence)
+                    .contains(sentence);
+        }
+    }
+
     /** Mutable, null-tolerant map builder (Map.of rejects nulls and is immutable). */
     private static Map<String, Object> mapOf(Object... kv) {
         Map<String, Object> m = new HashMap<>();

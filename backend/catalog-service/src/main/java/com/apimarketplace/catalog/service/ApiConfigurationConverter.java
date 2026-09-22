@@ -330,6 +330,11 @@ public class ApiConfigurationConverter {
                 if (header.defaultValue() != null) h.put("defaultValue", header.defaultValue());
                 if (header.allowedValues() != null) h.put("allowedValues", header.allowedValues());
                 if (header.extras() != null) h.put("extras", header.extras());
+                // ToolParameterService reads both off the header map. Without them an
+                // auto-supplied header persists visible and with an empty description,
+                // so an agent is asked to fill a value the platform already supplies.
+                if (header.description() != null) h.put("description", header.description());
+                if (header.isHidden() != null) h.put("isHidden", header.isHidden());
                 headers.add(h);
             }
             toolData.put("headers", headers);

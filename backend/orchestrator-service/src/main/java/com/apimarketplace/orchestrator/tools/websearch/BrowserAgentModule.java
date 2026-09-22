@@ -13,6 +13,8 @@ import com.apimarketplace.orchestrator.config.WebSearchConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import com.apimarketplace.agent.domain.KeyRoute;
+import com.apimarketplace.auth.client.entitlement.OwnKeyFeatureGate;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.env.Environment;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -145,6 +147,16 @@ public class BrowserAgentModule extends WebJobModule {
     private final LlmCredentialResolver credentialResolver;
 
     /**
+     * Whose key the runner was handed, as a top-level job parameter (the runner only reads
+     * the keys it knows) and as a field of the result, where both observability writers
+     * (this chat path and {@code BrowserAgentNode}) pick it up for the billing row.
+     */
+    public static final String KEY_ROUTE_KEY = "key_route";
+
+    /** Plan gate for the user's own key; absent (tests, CE) = not gated. */
+    private OwnKeyFeatureGate ownKeyFeatureGate;
+
+    /**
      * Final fallback when {@link #credentialResolver} returns empty. Reads
      * {@code ai.agent.providers.<provider>.api-key} from the same Spring
      * config the agent providers (GeminiProvider, OpenAIProvider, …) consume.
@@ -202,6 +214,11 @@ public class BrowserAgentModule extends WebJobModule {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setCloudRuntimeAccess(CloudLlmRuntimeAccess cloudRuntimeAccess) {
         this.cloudRuntimeAccess = cloudRuntimeAccess;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setOwnKeyFeatureGate(OwnKeyFeatureGate ownKeyFeatureGate) {
+        this.ownKeyFeatureGate = ownKeyFeatureGate;
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -468,8 +485,9 @@ public class BrowserAgentModule extends WebJobModule {
             // Cloud: honor model execution links before resolving a key, or the run
             // executes on the exact provider key the admin linked away from.
             maybeApplyExecutionLink(llmCopy);
-            injectLlmApiKey(llmCopy, userId);
+            KeyRoute keyRoute = injectLlmApiKey(llmCopy, userId);
             jobParams.put("llm", llmCopy);
+            jobParams.put(KEY_ROUTE_KEY, keyRoute.name());
         } else if (llmObj != null) {
             // Non-map and non-JSON value - forward verbatim so the runner
             // returns a precise LlmConfigError rather than us swallowing it.
@@ -937,7 +955,13 @@ public class BrowserAgentModule extends WebJobModule {
     @Override
     protected Map<String, Object> postProcess(Map<String, Object> response,
                                               Map<String, Object> parameters,
+                                              Map<String, Object> jobParams,
                                               ToolExecutionContext context) {
+        // Whose key the run was handed (decided in buildJobParameters), surfaced on the
+        // result so the billing row, whichever path writes it, is billed under it.
+        if (jobParams != null && jobParams.get(KEY_ROUTE_KEY) instanceof String kr && !kr.isBlank()) {
+            response.put(KEY_ROUTE_KEY, kr);
+        }
         // Same screenshot cleanup as fetch - drop inline base64 arrays, keep keys.
         // The runner uploads to MinIO and returns keys; the base64 was never meant to
         // round-trip through the agent's context window.
@@ -1268,7 +1292,12 @@ public class BrowserAgentModule extends WebJobModule {
         });
     }
 
-    private void injectLlmApiKey(Map<String, Object> llm, String userId) {
+    /**
+     * @return whose key the runner will call the provider with: {@code OWN_KEY} when the
+     *         user's saved key was injected, {@code PLATFORM} otherwise (bridge, explicit
+     *         caller key, platform credential, or nothing at all).
+     */
+    private KeyRoute injectLlmApiKey(Map<String, Object> llm, String userId) {
         // Bridge check FIRST: a bridge session must never trigger a direct
         // upstream credential lookup, regardless of what api_key (if any) is
         // already in the block. Whatever the caller put under api_key for a
@@ -1279,31 +1308,43 @@ public class BrowserAgentModule extends WebJobModule {
         // never short-circuit billing").
         Object kindObj = llm.get("provider_kind");
         if (kindObj != null && "bridge".equals(String.valueOf(kindObj).trim().toLowerCase())) {
-            return;
+            return KeyRoute.PLATFORM;
         }
         // Caller-supplied api_key wins for direct-provider sessions: explicit
         // override beats resolver lookup. Same shape the runner consumes.
         if (llm.get("api_key") instanceof String existing && !existing.isBlank()) {
-            return;
+            return KeyRoute.PLATFORM;
         }
         Object providerObj = llm.get("provider");
         if (providerObj == null) {
-            return;
+            return KeyRoute.PLATFORM;
         }
         String provider = String.valueOf(providerObj).trim().toLowerCase();
         if (provider.isEmpty()) {
-            return;
+            return KeyRoute.PLATFORM;
         }
-        // 1) Shared resolver: user's default credential → platform credential.
-        //    Same chain AbstractLLMProvider uses for in-process LLM calls
-        //    (workflow-agent / classify / guardrail), so a user with a
-        //    personal OpenAI key sees the same resolution everywhere. We pass
-        //    userId explicitly because workflow threads have no servlet
-        //    request bound (RequestContextHolder is empty there) - relying on
-        //    the resolver's static TenantResolver.currentRequestUserId() would
-        //    silently skip the user lookup on the primary BrowserAgent caller.
-        String resolved = lookupResolverCredential(provider, userId);
-        // 2) Spring config fallback (`ai.agent.providers.<provider>.api-key`).
+        // 1) The user's OWN saved key, when their plan allows running on it: the same pin
+        //    every other execution kind gets from agent-service's KeyRouteResolver, made
+        //    here because the runner is not agent-service. We pass userId explicitly
+        //    because workflow threads have no servlet request bound (RequestContextHolder
+        //    is empty there) - relying on the resolver's static
+        //    TenantResolver.currentRequestUserId() would silently skip the user lookup on
+        //    the primary BrowserAgent caller. Not entitled = the key is skipped, like a
+        //    proxy-mode credential, and the platform key serves.
+        boolean ownKeyAllowed = ownKeyFeatureGate == null || ownKeyFeatureGate.isAllowed(userId);
+        if (ownKeyAllowed) {
+            String own = lookupCredential(provider, userId, /* userOnly */ true);
+            if (own != null) {
+                llm.put("api_key", own);
+                return KeyRoute.OWN_KEY;
+            }
+        }
+        // 2) The resolver's user-then-platform chain (the pre-route lookup, kept so a
+        //    resolver without an own-key view still serves), or the platform credential
+        //    alone when the plan says the saved key must not run: a null userId skips
+        //    the user lookup in the resolver.
+        String resolved = lookupCredential(provider, ownKeyAllowed ? userId : null, /* userOnly */ false);
+        // 3) Spring config fallback (`ai.agent.providers.<provider>.api-key`).
         //    Same env-tail AbstractLLMProvider.resolveApiKey() appends after
         //    the resolver. Required when the operator runs on env vars only
         //    (no DB seed) - common dev/CE setup.
@@ -1319,14 +1360,21 @@ public class BrowserAgentModule extends WebJobModule {
                 + "with the upstream provider's auth error.",
                 provider, provider, provider);
         }
+        return KeyRoute.PLATFORM;
     }
 
-    private String lookupResolverCredential(String provider, String userId) {
+    /**
+     * @param userOnly the user's own saved key and nothing else; otherwise the platform
+     *                 credential ({@code userId} null skips the user lookup in the resolver)
+     */
+    private String lookupCredential(String provider, String userId, boolean userOnly) {
         if (credentialResolver == null) {
             return null;
         }
         try {
-            return credentialResolver.resolveApiKey(userId, provider)
+            return (userOnly
+                    ? credentialResolver.resolveUserApiKey(userId, provider)
+                    : credentialResolver.resolveApiKey(userId, provider))
                 .filter(s -> !s.isBlank())
                 .orElse(null);
         } catch (Exception e) {
@@ -1558,12 +1606,23 @@ public class BrowserAgentModule extends WebJobModule {
         req.setOrganizationId(context.orgId());
         req.setAgentType("browser_agent");
         req.setSource("chat_tool");
+        req.setKeyRoute(stringField(response, KEY_ROUTE_KEY));
 
         String rawStop = stringFieldFromObj(response.get("stop_reason"));
         boolean success = "COMPLETED".equalsIgnoreCase(rawStop);
         req.setStopReason(BrowserAgentStopReasonMapper.map(rawStop, success));
         req.setStatus(success ? "COMPLETED" : "FAILED");
 
+        // browser-use reports tokens_in INCLUSIVE of cache_read and EXCLUSIVE of
+        // cache_creation, which matches neither billing convention: converted here into
+        // the billed provider's one, or the cached tokens are charged twice (Anthropic)
+        // or never discounted (OpenAI family, which reads cachedTokens).
+        // One lookup, used both to convert the counts below and to stamp the row's provider
+        // further down: the two MUST be the same identity, and reading the block twice made
+        // that agreement a coincidence rather than a property.
+        Object llm = parameters == null ? null : parameters.get("llm");
+        String billedProvider = llm instanceof Map<?, ?> m && m.get("provider") != null
+                ? String.valueOf(m.get("provider")) : null;
         Object costObj = response.get("cost");
         if (costObj instanceof Map<?, ?> costRaw) {
             Map<String, Object> cost = (Map<String, Object>) costRaw;
@@ -1571,13 +1630,20 @@ public class BrowserAgentModule extends WebJobModule {
             long tokensOut = longField(cost, "tokens_out");
             long cacheRead = longField(cost, "cache_read_tokens");
             long cacheCreation = longField(cost, "cache_creation_tokens");
+            var counts = com.apimarketplace.agent.domain.TokenUsageConventions
+                    .fromPromptIncludingCacheReads(tokensIn, cacheRead, cacheCreation, billedProvider);
             if (tokensIn > 0 || tokensOut > 0) {
-                req.setPromptTokens(tokensIn);
+                req.setPromptTokens(counts.promptTokens());
                 req.setCompletionTokens(tokensOut);
-                req.setTotalTokens(tokensIn + tokensOut);
+                // prompt + completion, the same rule every provider and
+                // TokenUsageConventions use, so a row's three numbers agree with each
+                // other. For an Anthropic-billed row that leaves the cache outside the
+                // total exactly as the Anthropic API reports it.
+                req.setTotalTokens(counts.promptTokens() + tokensOut);
             }
-            if (cacheRead > 0) req.setCacheReadTokens(cacheRead);
-            if (cacheCreation > 0) req.setCacheCreationTokens(cacheCreation);
+            if (counts.cacheReadTokens() > 0) req.setCacheReadTokens(counts.cacheReadTokens());
+            if (counts.cachedTokens() > 0) req.setCachedTokens(counts.cachedTokens());
+            if (counts.cacheCreationTokens() > 0) req.setCacheCreationTokens(counts.cacheCreationTokens());
             // browser_seconds is the wall-clock cost (Chromium + LLM).
             // Convert to ms so the dashboard's "duration" column matches
             // chat / classify / guardrail rows.
@@ -1593,10 +1659,9 @@ public class BrowserAgentModule extends WebJobModule {
             req.setIterationCount(stepsList.size());
         }
 
-        Object llm = parameters == null ? null : parameters.get("llm");
+        // The same block the conversion above read - billedProvider is that provider.
         if (llm instanceof Map<?, ?> llmMap) {
-            Object p = llmMap.get("provider");
-            if (p != null) req.setProvider(String.valueOf(p));
+            if (billedProvider != null) req.setProvider(billedProvider);
             Object m = llmMap.get("model");
             if (m != null) req.setModel(String.valueOf(m));
         }

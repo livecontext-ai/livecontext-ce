@@ -98,7 +98,7 @@ public class InternalWorkflowVariablesController {
         // Platform-wide VIEWER read-only rule - same gate as the public
         // controller's requireWriteAccess, enforced here because the agent
         // path reaches this endpoint directly (no gateway/public controller).
-        if (organizationId != null && "VIEWER".equalsIgnoreCase(organizationRole)) {
+        if (organizationId != null && organizationRole != null && "VIEWER".equalsIgnoreCase(organizationRole.trim())) {
             return ResponseEntity.status(403).body(Map.of(
                     "error", "org_role_read_only",
                     "message", "Viewers cannot modify workspace variables. "

@@ -27,7 +27,10 @@ import { triggerKey } from '@/app/workflows/builder/utils/labelNormalizer';
 import { isNavigateRef } from '@/app/workflows/builder/utils/interfaceActionRefs';
 import { TriggerPanel, type TriggerPanelConfig } from '@/app/workflows/builder/components/TriggerPanel';
 import { formatUtcTime } from '@/lib/utils/dateFormatters';
-import { RunningBorder } from './RunningBorder';
+import { RunStateIndicator } from './RunStateIndicator';
+import { RunActionBar } from './RunActionBar';
+import { computeRunBlockers } from '@/lib/workflow/runBlockers';
+import { dispatchInterfaceContinue, requestInterfaceContinue } from '@/lib/workflow/interfaceContinue';
 import { VIEWING_EPOCH_EVENT, shouldAdoptEpochEvent, type EpochEventDetail } from '@/lib/workflow/epochEventScope';
 import { getPickedEpoch, markEpochPickedByUser, useDefaultEpochSelection } from '@/components/workflow/run-panel/useDefaultEpochSelection';
 import { epochDisplayDurationMs, isEpochLive, resolveEpochBadgeStatus } from '@/components/workflow/run-panel/runFormatting';
@@ -76,6 +79,8 @@ interface ApplicationTabContentProps {
   config: ApplicationConfig;
   runId: string | null;
   workflowId?: string;
+  /** Run-panel bus surface paired with this application. */
+  runSurfaceId?: string;
   onAction: (triggerRef: string, data: Record<string, unknown>) => void;
   /** Carousel dot indicators injected into the InterfaceToolbar */
   carouselControls?: React.ReactNode;
@@ -171,7 +176,7 @@ function isExplicitFalse(value: unknown): boolean {
   return value === false || value === 'false';
 }
 
-export function ApplicationTabContent({ config, runId, workflowId, onAction, carouselControls, isExpanded: controlledExpanded, onExpandedChange, toolbarOpen: controlledToolbarOpen, onToolbarOpenChange, viewingEpoch: controlledViewingEpoch, onViewingEpochChange, openOnLatestEpoch = false, previewMode = false, templateSource, mediaMuted, onToggleMediaMuted }: ApplicationTabContentProps) {
+export function ApplicationTabContent({ config, runId, workflowId, runSurfaceId, onAction, carouselControls, isExpanded: controlledExpanded, onExpandedChange, toolbarOpen: controlledToolbarOpen, onToolbarOpenChange, viewingEpoch: controlledViewingEpoch, onViewingEpochChange, openOnLatestEpoch = false, previewMode = false, templateSource, mediaMuted, onToggleMediaMuted }: ApplicationTabContentProps) {
   const t = useTranslations('marketplace');
   const tActions = useTranslations('actions');
   const tCanvas = useTranslations('workflowBuilder.canvas');
@@ -992,9 +997,10 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
 
   const handleContinue = React.useCallback((actionKey: string, data: Record<string, unknown>) => {
     if (!runId || !config.nodeId) return;
-    window.dispatchEvent(new CustomEvent('workflowInterfaceContinue', {
-      detail: { runId, nodeId: config.nodeId, actionKey, data, itemIndex: currentItemIndex },
-    }));
+    // Deliberately WITHOUT a workflowId: an application surface can be showing a
+    // publisher's workflow under a different id than the canvas it sits in, and
+    // an unnamed event reaches every bridge (see isEventForWorkflow).
+    dispatchInterfaceContinue({ runId, nodeId: config.nodeId, actionKey, data, itemIndex: currentItemIndex });
   }, [runId, config.nodeId, currentItemIndex]);
 
   // Detect if the interface node is awaiting signal.
@@ -1009,13 +1015,115 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
 
   const [isContinuing, setIsContinuing] = React.useState(false);
 
-  const handleDefaultContinue = React.useCallback(() => {
+  // ── What is this run waiting on that the person here can answer? ──
+  // Run-wide, not node-scoped: `runState.pendingSignals` always carried the
+  // approvals of every node and this surface filtered them out, so an approval
+  // parked anywhere left the application frozen with nothing to click and no
+  // explanation. Preview surfaces are excluded: they render a publisher's
+  // frozen showcase, where acting would advance someone else's run.
+  //
+  // TWO lists, because scope belongs to the ACTION and not to the STATEMENT.
+  // Deriving the indicator from the actionable list put the original lie back:
+  // on a preview, or while reading an older epoch, a parked run had an empty
+  // actionable list and therefore fell back to a sweeping busy blue - claiming
+  // work was happening while the run sat waiting on a person.
+  //
+  // `runWideBlockers` is the TRUTH about the run: is it waiting on a human at
+  // all. It feeds the indicator only.
+  const runWideBlockers = React.useMemo(
+    () => computeRunBlockers(runState, {
+      displayedInterfaceNodeId: config.nodeId,
+      interfaceIsAwaiting: isAwaitingSignal,
+      displayedItemIndex: currentItemIndex,
+    }),
+    [runState, config.nodeId, isAwaitingSignal, currentItemIndex],
+  );
+  // `blockers` is what THIS viewer may answer HERE. It feeds the action bar.
+  const blockers = React.useMemo(
+    () => (previewMode ? [] : computeRunBlockers(runState, {
+      displayedInterfaceNodeId: config.nodeId,
+      interfaceIsAwaiting: isAwaitingSignal,
+      // The item the Continue button would carry: the endpoint resolves
+      // max(epoch) FOR THAT ITEM, so the epoch guard has to key on it too.
+      displayedItemIndex: currentItemIndex,
+      // `viewingEpoch`, NOT `currentDisplayEpoch`: null here means "all epochs"
+      // and must leave the list unfiltered, while currentDisplayEpoch coerces
+      // that null to the newest fire and would silently hide every other one.
+      viewingEpoch,
+    })),
+    [previewMode, runState, config.nodeId, isAwaitingSignal, viewingEpoch, currentItemIndex],
+  );
+
+  // The run row stays RUNNING while a node is parked (the backend never writes
+  // AWAITING_SIGNAL to it), so `isRunning` on its own kept the app sweeping a
+  // busy blue for the whole time it was in fact waiting for the user. Waiting
+  // wins over running for exactly that reason.
+  const runIndicatorState = runWideBlockers.length > 0
+    ? 'awaiting' as const
+    : (isRunning ? 'running' as const : null);
+
+  const handleResolveApproval = React.useCallback(async (
+    blocker: { nodeId: string; epoch?: number; itemId?: string },
+    resolution: 'APPROVED' | 'REJECTED',
+  ) => {
+    // THROW, never return: the caller reads a resolved promise as "it landed"
+    // and leaves its spinner up forever. Unreachable while the bar only renders
+    // with a run, but a silent success is the one shape this bar exists to end.
+    if (!runId || !runContext) throw new Error('No run bound to this application');
+    // Straight onto the run context, which owns the resolve + re-hydrate. No
+    // StepByStep context is needed (the application surface has none), and no
+    // new plumbing: this is the same method the canvas approval node ends up in.
+    await runContext.resolveApproval(runId, blocker.nodeId, resolution, blocker.epoch, blocker.itemId);
+  }, [runId, runContext]);
+
+  /**
+   * Why the BUTTON's continue is awaited while the iframe's is not: the bridge
+   * used to answer nobody, so a 403 or a 404 looked exactly like success and
+   * the only thing that ever cleared the spinner was the 10 s safety valve
+   * below. The in-page bridge action still tracks completion through the run
+   * state it re-renders from; a button has no other way to learn it was
+   * refused, and this change promotes that button out of a collapsed toolbar
+   * onto an always-visible bar.
+   */
+  const [continueFailure, setContinueFailure] = React.useState<'failed' | 'forbidden' | null>(null);
+  const handleDefaultContinue = React.useCallback(async () => {
     if (!runId || !config.nodeId || isContinuing) return;
     // Guard: don't send Continue for an already-resolved item (stale render data race)
     if (!isCurrentItemPending) return;
+    setContinueFailure(null);
     setIsContinuing(true);
-    handleContinue('__continue', {});
-  }, [runId, config.nodeId, isContinuing, isCurrentItemPending, handleContinue]);
+    const response = await requestInterfaceContinue({
+      runId,
+      nodeId: config.nodeId,
+      actionKey: '__continue',
+      data: {},
+      itemIndex: currentItemIndex,
+    });
+    setIsContinuing(false);
+    // Already resolved is not a failure: someone continued from another surface
+    // and the run DID move; the refresh will unpark the node.
+    if (response.ok || response.alreadyResolved) return;
+    // Never `response.error`: that is the client's own English, and this screen
+    // is read in six locales.
+    setContinueFailure(response.status === 403 ? 'forbidden' : 'failed');
+  }, [runId, config.nodeId, isContinuing, isCurrentItemPending, currentItemIndex]);
+
+  // A refusal describes ONE question. Cleared when the run moves to another,
+  // or the red line sits under an approval it never referred to - possibly for
+  // good, since the Continue that would have cleared it may be gone.
+  const currentBlockerKey = blockers[0]
+    ? (blockers[0].kind === 'approval' ? `a${blockers[0].signalId}` : `i${blockers[0].nodeId}`)
+    : null;
+  React.useEffect(() => {
+    setContinueFailure(null);
+  }, [currentBlockerKey]);
+  // ...and it expires on its own, matching the canvas Continue button. Without
+  // this a 403 on a run that then sits parked leaves a red line up for good.
+  React.useEffect(() => {
+    if (!continueFailure) return;
+    const timer = window.setTimeout(() => setContinueFailure(null), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [continueFailure]);
 
   // Reset loading when awaiting state clears OR when execution progresses
   // (covers parallel epochs where isAwaitingSignal stays true because the
@@ -1233,7 +1341,7 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
    *    role check does NOT cover this: an anonymous visitor has no organisation,
    *    and `useCanMutateInCurrentOrg` reads a personal workspace as allowed.
    */
-  const runActions = useRunActions(workflowId, runId);
+  const runActions = useRunActions(workflowId, runId, runSurfaceId);
   const canMutateRun = useCanMutateInCurrentOrg();
   const pathname = usePathname();
   const isPublicShareRoute = (pathname ?? '').startsWith('/s/');
@@ -1657,9 +1765,10 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
     : 0;
 
   // ── Shared iframe content ──
-  // The application stays visible at all times. While its workflow run is
-  // executing (runStatus === 'running'), a pulsing blue border is overlaid on
-  // top to signal "this app's current epoch is running" - see RunningBorder.
+  // The application stays visible at all times. An overlay on top says what the
+  // run is doing: blue and sweeping while the engine executes, amber and still
+  // while it waits on a person - see RunStateIndicator. Deliberately NOT keyed
+  // on `runStatus`, which reads `running` for the whole time a node is parked.
   // Rendered here (inside the shared content) so every surface that shows an
   // application gets the same border in both panel and fullscreen modes.
   const renderApplicationIframe = (sizing: { className?: string; style: React.CSSProperties }) => (
@@ -1739,9 +1848,37 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
       >
         <LoadingSpinner size="sm" />
       </div>
-      {/* Pulsing blue "running" border - overlays the app (still visible
-          underneath) while the run executes. Renders nothing otherwise. */}
-      <RunningBorder running={isRunning} label={tActions('running')} />
+      {/* Run-state indicator - overlays the app (still visible underneath)
+          while the run executes or waits on a human. Renders nothing otherwise. */}
+      <RunStateIndicator
+        state={runIndicatorState}
+        label={
+          runIndicatorState !== 'awaiting'
+            ? tActions('running')
+            // "for you" only when this viewer actually has something to answer
+            // here. On a preview, or on an older epoch, the run IS parked (so the
+            // ring is amber) but it is not waiting on the reader.
+            : blockers.length > 0 ? tRun('awaitingYou') : tRun('awaitingSomeone')
+        }
+      />
+      {/* The action bar sits INSIDE the shared content on purpose: that is what
+          gives it to every surface at once (right side panel, application page,
+          chat card, fullscreen) instead of once per branch. Above the
+          application toolbar, which is collapsed by default - the reason the
+          Continue button was effectively hidden until now. */}
+      {blockers.length > 0 && (
+        <div className="absolute bottom-20 inset-x-0 z-40 flex justify-center pointer-events-none px-3">
+          <RunActionBar
+            blockers={blockers}
+            displayedInterfaceNodeId={config.nodeId}
+            onContinue={handleDefaultContinue}
+            onResolveApproval={handleResolveApproval}
+            isContinuing={isContinuing}
+            continueDisabled={!isCurrentItemPending}
+            continueFailure={continueFailure}
+          />
+        </div>
+      )}
     </div>
   );
 
@@ -1802,8 +1939,8 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
           </Button>
         </div>
 
-        {/* Content - full viewport iframe (the pulsing running border is
-            rendered inside iframeContent so it traces this area while executing) */}
+        {/* Content - full viewport iframe (the running indicator is rendered
+            inside iframeContent so it traces this area while executing) */}
         <div className="flex-1 w-full h-full overflow-y-auto relative">
           {iframeContent}
         </div>
@@ -1887,7 +2024,7 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
   return (
     <div ref={setAppContainerEl} className="flex-1 flex flex-col min-h-0 relative">
       {/* Interface iframe - full bleed, no padding. While the run is executing,
-          iframeContent overlays a pulsing blue border (app stays visible). */}
+          iframeContent overlays the running indicator (app stays visible). */}
       <div
         className="flex-1 min-h-0 overflow-hidden"
         style={isDragging ? { pointerEvents: 'none' } : undefined}

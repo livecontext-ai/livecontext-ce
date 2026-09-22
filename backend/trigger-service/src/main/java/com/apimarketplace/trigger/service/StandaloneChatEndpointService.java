@@ -1,5 +1,9 @@
 package com.apimarketplace.trigger.service;
 
+
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.trigger.security.TriggerTokenAtRestBackfill;
+
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.trigger.client.dto.StandaloneChatEndpointDto;
 import com.apimarketplace.trigger.client.dto.StandaloneChatEndpointRequest;
@@ -45,6 +49,14 @@ public class StandaloneChatEndpointService {
 
     @Value("${orchestrator.chat-endpoint.base-url:http://localhost:8080}")
     private String baseUrl;
+
+    /**
+     * Read-only plaintext fallback for an endpoint row still stored in clear (pre-2026-09-17) when its hash lookup misses.
+     * Optional so a unit test can build the service without a database; in a Spring context
+     * the component is always present (same package tree).
+     */
+    @Autowired(required = false)
+    private TriggerTokenAtRestBackfill tokenBackfill;
 
     public StandaloneChatEndpointService(StandaloneChatEndpointRepository chatEndpointRepository,
                                          ChatEndpointAccessLogRepository accessLogRepository,
@@ -219,7 +231,8 @@ public class StandaloneChatEndpointService {
     }
 
     public Optional<StandaloneChatEndpointDto> findByToken(String token) {
-        return chatEndpointRepository.findByToken(token).map(this::toDto);
+        return TokenAtRest.lookup(token, chatEndpointRepository::findByTokenHash,
+                t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(TriggerTokenAtRestBackfill.STANDALONE_CHAT_ENDPOINTS, t, chatEndpointRepository::findLegacyPlaintext)).map(this::toDto);
     }
 
     @Transactional

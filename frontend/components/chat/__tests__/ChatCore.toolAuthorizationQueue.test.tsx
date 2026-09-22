@@ -101,11 +101,14 @@ vi.mock('@/components/chat/ToolAuthorizationCard', () => ({
     onApproved,
     onDenied,
   }: {
-    pendingAuthorization: { rule: string; toolCallId?: string };
+    pendingAuthorization: { rule: string; toolCallId?: string; subject?: unknown };
     onApproved?: (rule: string, blanket: boolean, toolCallId?: string) => void;
     onDenied?: (rule: string, toolCallId?: string) => void;
   }) => (
     <div>
+      {/* The real card renders this; here it is surfaced so a test can assert the subject
+          actually REACHED the card, which is the hop a reload depends on. */}
+      <span data-testid="card-subject">{JSON.stringify(pendingAuthorization.subject ?? null)}</span>
       <button type="button" onClick={() => onApproved?.(pendingAuthorization.rule, false, pendingAuthorization.toolCallId)}>approve</button>
       <button type="button" onClick={() => onApproved?.(pendingAuthorization.rule, true, pendingAuthorization.toolCallId)}>approve-blanket</button>
       <button type="button" onClick={() => onDenied?.(pendingAuthorization.rule, pendingAuthorization.toolCallId)}>decline-tool</button>
@@ -224,6 +227,7 @@ describe('ChatCore tool authorization', () => {
     });
     await waitFor(() => {
       expect(screen.getByTestId('queued-message')).toHaveTextContent(RESUME_INSTALLED);
+      expect(screen.getByTestId('queued-message')).toHaveTextContent('Invoice Parser (pub-123)');
     });
   });
 
@@ -323,5 +327,58 @@ describe('ChatCore tool authorization', () => {
     expect(useAppRunAutoOpenStore.getState().armedAt).toBeNull();
     expect(onSendMessage).not.toHaveBeenCalled();
     expect(mocks.approveToolAuthorization).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatCore rehydrates an authorization card from the persisted row', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.streaming.getStreamContent.mockReturnValue('');
+    mocks.streaming.getToolActivities.mockReturnValue([]);
+    mocks.streaming.getPendingServiceApprovals.mockReturnValue([]);
+    mocks.streaming.getPendingAskUserQuestions.mockReturnValue([]);
+    // Nothing is streaming: this is the state after a page reload, where the card can only
+    // come from the conversation's persisted pending actions.
+    mocks.streaming.isStreamingConversation.mockReturnValue(false);
+    mocks.streaming.getStreamState.mockReturnValue(null);
+    mocks.streaming.getPendingToolAuthorizations.mockReturnValue([]);
+  });
+
+  it('carries the subject from the persisted row to the card, so the reloaded card still names its workflow', () => {
+    // Without this hop the card comes back after a refresh asking "run this action?" about a
+    // pin. Every other hop is covered elsewhere; this is the one between the row and the card.
+    const conversation = {
+      pendingActions: [{
+        waiting_for: 'tool_authorization',
+        rule: 'workflow:pin',
+        tool_name: 'workflow',
+        action: 'pin',
+        tool_call_id: 'call-9',
+        args_summary: '{"action":"pin"}',
+        subject: { kind: 'workflow', id: 'w-1', version: 12 },
+        created_at: '2026-09-16T10:00:00Z',
+      }],
+    };
+
+    render(<ChatCore conversationId="conversation-1" conversation={conversation as never} messages={[]} onSendMessage={vi.fn()} />);
+
+    expect(screen.getByTestId('card-subject')).toHaveTextContent('"id":"w-1"');
+    expect(screen.getByTestId('card-subject')).toHaveTextContent('"version":12');
+  });
+
+  it('still shows a persisted card that has no subject', () => {
+    // Rows written before the field existed live out their expiry and must keep rendering.
+    const conversation = {
+      pendingActions: [{
+        waiting_for: 'tool_authorization',
+        rule: 'workflow:execute',
+        tool_call_id: 'call-10',
+        created_at: '2026-09-16T10:00:00Z',
+      }],
+    };
+
+    render(<ChatCore conversationId="conversation-1" conversation={conversation as never} messages={[]} onSendMessage={vi.fn()} />);
+
+    expect(screen.getByTestId('card-subject')).toHaveTextContent('null');
   });
 });

@@ -9,7 +9,7 @@
 # pinned to this release, so a clone always runs the matching version.
 #
 # Configuration (cloud connection, SMTP, ports): copy docker/.env.ce.example to
-# docker/.env.ce and pass it with `--env-file docker/.env.ce`. For agents to run, connect
+# .env in the repository root; Compose reads it automatically. For agents to run, connect
 # to LiveContext Cloud (recommended) or add your own OpenAI/Anthropic/Google key in the app.
 #
 # Ports (override via env or --env-file):
@@ -26,16 +26,9 @@
 #
 # Optional features (OPT-IN - a default `up` starts NEITHER, keeping the stack light):
 #   renderer       interface-node screenshot (PNG) + PDF rendering (~1 GB Playwright/Chromium)
+#                    set COMPOSE_PROFILES=renderer and SCREENSHOT_RENDERER_URL in .env
 #   browser-agent  agent_browse + web_search (heavy Chromium + SearXNG, ~2 GB; model picked per AI provider)
-#
-# Each one is turned on by an env file (`docker/.env.ce.renderer`, `docker/.env.ce.browser-agent`)
-# that sets the Docker profile AND the matching app setting in one shot:
-#   docker compose --env-file docker/.env.ce.renderer up -d
-#
-# Those env files ship with the git repository, NOT with the npm package, and
-# `npx livecontext` passes no --env-file. So if you started this stack with npx,
-# clone the repo and use `docker compose` directly to enable either add-on:
-#   https://github.com/livecontext-ai/livecontext-ce
+#                    set COMPOSE_PROFILES=browser-agent and WEBSEARCH_ENABLED=true in .env
 # See README.md ("Optional features") and docker/README-CE.md for details.
 
 name: livecontext-ce
@@ -43,6 +36,7 @@ name: livecontext-ce
 services:
   postgres:
     image: pgvector/pgvector:pg16
+    container_name: livecontext-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: livecontext
@@ -62,6 +56,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: livecontext-redis
     restart: unless-stopped
     volumes:
       - livecontext_redis:/data
@@ -78,6 +73,7 @@ services:
 
   minio:
     image: minio/minio:latest
+    container_name: livecontext-minio
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -98,6 +94,7 @@ services:
 
   minio-init:
     image: minio/mc:latest
+    container_name: livecontext-minio-init
     depends_on:
       minio:
         condition: service_healthy
@@ -112,6 +109,7 @@ services:
 
   bridge:
     image: ghcr.io/livecontext-ai/livecontext-ce-bridge:latest
+    container_name: livecontext-bridge
     restart: unless-stopped
     depends_on:
       redis:
@@ -139,6 +137,7 @@ services:
 
   livecontext:
     image: ghcr.io/livecontext-ai/livecontext-ce:latest
+    container_name: livecontext-app
     restart: unless-stopped
     depends_on:
       postgres:
@@ -189,6 +188,11 @@ services:
       # entirely (no badge either). See README-CE.md.
       CE_VERSIONCHECK_ENABLED: ${CE_VERSIONCHECK_ENABLED:-true}
       CE_VERSIONCHECK_SENDINSTALLID: ${CE_VERSIONCHECK_SENDINSTALLID:-true}
+      # In-app "What's new": a one-time panel, with an image or a short video, describing the
+      # newest change in the version you are running. It ships INSIDE this image, so it makes no
+      # network request and works offline; it is shown once per user and never replays older
+      # entries. Set CHANGELOG_ENABLED=false to remove it entirely (no panel, no sidebar entry).
+      CHANGELOG_ENABLED: ${CHANGELOG_ENABLED:-true}
       # Browser agent (agent_browse) - OFF by default. Opt in with the
       # `browser-agent` profile + WEBSEARCH_ENABLED=true (both set by
       # docker/.env.ce.browser-agent). When enabled, the orchestrator talks to
@@ -210,17 +214,46 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      # OAuth2 redirect URLs (for end-user credential connections)
-      # Followed by the user's BROWSER after the provider redirects, so a remote install
-      # needs an address the browser can reach. Defaults keep localhost working; set
-      # PUBLIC_BASE_URL and GATEWAY_PUBLIC_URL when serving CE on a LAN address or domain,
-      # and register the same values as redirect URIs with each OAuth provider.
-      # NO TRAILING SLASH: compose cannot normalise it, and a trailing slash yields
-      # https://host//api/credentials/oauth2/callback, which will not match the registered
-      # redirect URI. It breaks OAuth only, not the WebSocket, so a working realtime layer
-      # is not proof the value is well formed.
+      # OAuth2 redirect URLs (for end-user credential connections).
+      # These are sent to the PROVIDER and then followed by the user's BROWSER, so on a
+      # remote install they must name an address the browser can reach, not localhost.
+      # The defaults keep a localhost install working unchanged; serving CE on a LAN
+      # address or a domain means setting PUBLIC_BASE_URL (where the browser reaches the
+      # web UI) and GATEWAY_PUBLIC_URL (where it reaches the backend), for example:
+      #   PUBLIC_BASE_URL=http://192.168.1.50:3000
+      #   GATEWAY_PUBLIC_URL=http://192.168.1.50:8080
+      # Whatever you use here must also be registered as the redirect URI with each OAuth
+      # provider. Without this, the realtime layer works remotely but connecting a Gmail
+      # or Slack credential redirects the user to their own machine and fails.
+      #
+      # NO TRAILING SLASH on either variable. Compose cannot normalise it, so
+      # GATEWAY_PUBLIC_URL=https://example.com/ produces
+      # https://example.com//api/credentials/oauth2/callback, which is sent verbatim as
+      # redirect_uri and will not match what you registered with the provider. (The
+      # WebSocket path does strip it, server-side, so a trailing slash breaks OAuth only:
+      # do not take a working realtime layer as proof the value is well formed.)
       OAUTH2_FRONTEND_URL: "${PUBLIC_BASE_URL:-http://localhost:${FRONTEND_PORT:-3000}}"
       OAUTH2_CALLBACK_URL: "${GATEWAY_PUBLIC_URL:-http://localhost:${BACKEND_PORT:-8080}}/api/credentials/oauth2/callback"
+      # SMTP. Nothing here is required to run, and everything that is an e-mail is
+      # simply lost without it: the password reset link above all, which is the
+      # only way back into an account whose password is forgotten (a locked-out
+      # sole admin has no other route). Set MAIL_HOST to your relay; add
+      # MAIL_USERNAME and MAIL_PASSWORD together if it requires credentials, which
+      # is all it takes for the client to authenticate.
+      #
+      # PUBLIC_BASE_URL above is also the host in the reset link, so if it is
+      # wrong the mail arrives with a link nobody outside this machine can open.
+      MAIL_HOST: "${MAIL_HOST:-localhost}"
+      MAIL_PORT: "${MAIL_PORT:-1025}"
+      MAIL_USERNAME: "${MAIL_USERNAME:-}"
+      MAIL_PASSWORD: "${MAIL_PASSWORD:-}"
+      MAIL_FROM: "${MAIL_FROM:-noreply@livecontext.local}"
+      # STARTTLS is opportunistic: a local relay that does not advertise it keeps
+      # working in plaintext, a real relay gets an encrypted session. Turn it off
+      # and a non-local host refuses to boot, on purpose. If your relay presents a
+      # certificate from a private CA, put that CA's PEM in ./extra-ca (mounted at
+      # /app/extra-ca) rather than turning TLS off.
+      MAIL_SMTP_STARTTLS: "${MAIL_SMTP_STARTTLS:-true}"
       # Catalog seed: import the bundled OpenAPI specs at first boot
       CATALOG_SEED_ENABLED: "true"
       CATALOG_SEED_PATH: /app/catalog-seeds
@@ -262,6 +295,7 @@ services:
     build:
       context: ./websearch-service
     image: livecontext-ce-websearch:local
+    container_name: livecontext-websearch
     restart: unless-stopped
     depends_on:
       redis:
@@ -310,6 +344,7 @@ services:
   searxng:
     profiles: ["browser-agent"]
     image: searxng/searxng:latest
+    container_name: livecontext-searxng
     restart: unless-stopped
     environment:
       SEARXNG_SETTINGS_PATH: /etc/searxng/settings.yml
@@ -337,6 +372,7 @@ services:
   screenshot-renderer:
     profiles: ["renderer"]
     image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:latest
+    container_name: livecontext-screenshot-renderer
     restart: unless-stopped
     environment:
       PORT: "8094"
@@ -360,6 +396,7 @@ services:
 
   frontend:
     image: ghcr.io/livecontext-ai/livecontext-ce-frontend:latest
+    container_name: livecontext-frontend
     restart: unless-stopped
     depends_on:
       livecontext:
@@ -368,12 +405,12 @@ services:
       - "${FRONTEND_PORT:-3000}:3000"
     environment:
       # Where the BROWSER reaches the backend. Read at runtime (GET /api/runtime-config),
-      # so the same prebuilt image serves localhost, a LAN address and a public domain.
+      # so one prebuilt image serves localhost, a LAN address and a public domain alike.
       #
       # Leave GATEWAY_PUBLIC_URL empty (the default) and the app derives the origin from
-      # the address you opened it with, on BACKEND_PORT: `npx livecontext` on a server and
-      # opening http://192.168.1.50:3000 connects to http://192.168.1.50:8080, with nothing
-      # to rebuild.
+      # the address you opened it with, on BACKEND_PORT: open http://192.168.1.50:3000 and
+      # it connects to http://192.168.1.50:8080. That is what makes an install reachable
+      # from another machine work without rebuilding the frontend image.
       #
       # Set it only when the backend is NOT at <the address you opened the app with>:BACKEND_PORT,
       # typically a reverse proxy serving both on one origin:

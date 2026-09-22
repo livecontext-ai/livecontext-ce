@@ -48,7 +48,7 @@ vi.mock('@/components/ai/ModelInfo', () => ({
   ModelInfoPopover: () => null,
 }));
 vi.mock('@/lib/hooks/useMonthlyCreditsCannotPay', () => ({
-  useMonthlyCreditsCannotPay: () => ({ blocked: h.blocked, isLoading: false }),
+  useMonthlyCreditsCannotPay: () => ({ blocked: h.blocked, blockedForModel: () => h.blocked, freeTierForModel: () => false, prefersFreeTierModels: false, isLoading: false }),
 }));
 vi.mock('@/lib/edition', () => ({ IS_CE: false }));
 vi.mock('@/hooks/useModels', async (importOriginal) => {

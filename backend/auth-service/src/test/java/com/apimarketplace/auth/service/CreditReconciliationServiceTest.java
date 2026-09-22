@@ -167,4 +167,50 @@ class CreditReconciliationServiceTest {
         verify(ledgerRepository, never()).sumAmountByUserIdExcludingReleasedReserves(any());
         verify(reconciliationLogRepository, never()).save(any(CreditReconciliationLog.class));
     }
+
+    @Test
+    @DisplayName("V494 regression: a turn paid by the AI allowance is NOT drift - without the add-back this paged ops on every free-tier user")
+    void aiFundedTurnDoesNotDriftFalsely() {
+        // The shape that breaks naively: the ledger row carries the FULL cost of the
+        // turn (-2), because that is what it was worth and reporting reads it, but the
+        // allowance sits in a third bucket getTotalBalance() excludes - so the wallet
+        // did not move at all. Sub 100 + PAYG 0 = 100, ledger sum -2, ai_portion +2.
+        // Drift must be 100 - (-2 + 2) = 100 - 0 ... and the grant that put 100 there
+        // is itself in the ledger, so a balanced account nets to zero.
+        Subscription sub = subWithBuckets(new BigDecimal("100"), BigDecimal.ZERO);
+        when(ledgerRepository.findAllDistinctUserIds()).thenReturn(List.of(1L));
+        when(subscriptionRepository.findActiveByUserId(1L)).thenReturn(Optional.of(sub));
+        // grant +102, one AI-funded debit of -2 → raw sum 100.
+        when(ledgerRepository.sumAmountByUserIdSince(eq(1L), any())).thenReturn(new BigDecimal("98"));
+        when(ledgerRepository.sumAiPortionByUserIdSince(eq(1L), any())).thenReturn(new BigDecimal("2"));
+
+        service.reconcile();
+
+        // Pre-fix this logged drift = 100 - 98 = +2 on EVERY free-tier turn, growing
+        // without bound and reported as a real missing movement.
+        verify(reconciliationLogRepository, never()).save(any(CreditReconciliationLog.class));
+    }
+
+    @Test
+    @DisplayName("V494: a real drift on an account that also used its AI allowance is still caught")
+    void realDriftStillDetectedAlongsideAiSpend() {
+        // The add-back must not become a blanket excuse: here 70 credits are genuinely
+        // missing on top of 2 legitimately paid by the allowance.
+        Subscription sub = subWithBuckets(new BigDecimal("30"), BigDecimal.ZERO);
+        when(ledgerRepository.findAllDistinctUserIds()).thenReturn(List.of(1L));
+        when(subscriptionRepository.findActiveByUserId(1L)).thenReturn(Optional.of(sub));
+        when(ledgerRepository.sumAmountByUserIdSince(eq(1L), any())).thenReturn(new BigDecimal("98"));
+        when(ledgerRepository.sumAiPortionByUserIdSince(eq(1L), any())).thenReturn(new BigDecimal("2"));
+        when(ledgerRepository.sumAmountByUserIdExcludingReleasedReserves(1L)).thenReturn(new BigDecimal("98"));
+        when(ledgerRepository.sumAiPortionByUserId(1L)).thenReturn(new BigDecimal("2"));
+
+        service.reconcile();
+
+        ArgumentCaptor<CreditReconciliationLog> logCaptor = ArgumentCaptor.forClass(CreditReconciliationLog.class);
+        verify(reconciliationLogRepository).save(logCaptor.capture());
+        assertThat(logCaptor.getValue().getDrift()).isEqualByComparingTo("-70");
+        assertThat(logCaptor.getValue().isExplained())
+                .as("the lifetime books are off by the same 70, so this is a real lost movement")
+                .isFalse();
+    }
 }

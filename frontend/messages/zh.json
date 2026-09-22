@@ -155,7 +155,7 @@
   },
   "contact": {
     "metadata": {
-      "title": "联系 - LiveContext",
+      "title": "联系",
       "description": "联系 LiveContext，获取支持、报告安全问题、商务合作或媒体咨询。"
     },
     "layout": {
@@ -167,6 +167,7 @@
     },
     "title": "联系",
     "subtitle": "请告诉我们如何帮助您。我们通常会在一个工作日内回复。",
+    "unavailable": "联系表单无法使用。请发送邮件至 contact@livecontext.ai。",
     "fields": {
       "name": "姓名",
       "email": "电子邮件",
@@ -476,7 +477,8 @@
       "sessionExpired": "您的会话已过期。",
       "submit": "登录",
       "subtitle": "登录以从上次离开的地方继续。",
-      "title": "欢迎回来。"
+      "title": "欢迎回来。",
+      "forgotPassword": "忘记密码？"
     },
     "register": {
       "confirmPassword": "确认密码",
@@ -499,6 +501,40 @@
       "firstRunTitle": "设置您的 LiveContext",
       "firstRunSubtitle": "这是一个全新的实例。创建管理员账户即可开始使用。",
       "title": "创建您的账户"
+    },
+    "forgotPassword": {
+      "title": "重置密码",
+      "subtitle": "输入你登录时使用的邮箱地址，我们会发送一个链接让你设置新密码。",
+      "email": "邮箱",
+      "emailPlaceholder": "you@example.com",
+      "submit": "发送重置链接",
+      "sentTitle": "请查看你的邮箱",
+      "sentBody": "如果该地址对应一个账户，重置链接已经发出。链接只能使用一次，一小时后失效。",
+      "sentHint": "几分钟后仍未收到？请查看垃圾邮件文件夹。本实例通过自己的服务器发送邮件，如果始终没有收到，请让管理员检查 SMTP 配置。",
+      "remembered": "想起来了？",
+      "backToLogin": "返回登录",
+      "error": "出现问题，请重试。",
+      "cloudNotice": "在此部署中，密码重置在登录页面完成。请返回并使用那里的链接。"
+    },
+    "resetPassword": {
+      "title": "设置新密码",
+      "subtitle": "此链接只能使用一次。请选择一个你在这里未曾用过的密码。",
+      "newPassword": "新密码",
+      "newPasswordPlaceholder": "至少 {min} 个字符",
+      "rule": "至少 {min} 个字符。",
+      "confirm": "确认密码",
+      "confirmPlaceholder": "请再次输入",
+      "submit": "更新密码",
+      "tooShort": "密码至少需要 {min} 个字符。",
+      "mismatch": "两次输入的密码不一致。",
+      "error": "此重置链接无效，请重新申请。",
+      "doneTitle": "密码已更新",
+      "doneBody": "你已在所有设备上退出登录。请使用新密码登录。",
+      "goToLogin": "前往登录",
+      "missingTokenTitle": "链接不完整",
+      "missingTokenBody": "缺少令牌，无法确定要重置哪个账户。请重新申请链接。",
+      "needAnother": "链接已过期？",
+      "requestAnother": "重新申请"
     }
   },
   "sidePanel": {
@@ -528,11 +564,13 @@
     "agent": "代理",
     "workflowPanel": "工作流面板",
     "workflows": "工作流",
+    "logs": "日志",
     "showMore": "显示更多（剩余 {count} 项）",
     "filterPlaceholder": "筛选...",
     "activity": "动态",
     "agents": "代理",
     "conversations": "对话",
+    "untitled": "无标题",
     "files": "文件",
     "projects": "项目",
     "deleteAgentConfirm": "您确定要删除 \"{name}\" 吗？此操作无法撤销。",
@@ -542,6 +580,7 @@
     "deleteInterfaceConfirm": "您确定要删除 \"{name}\" 吗？此操作无法撤销。",
     "deleteInterfaceTitle": "删除界面",
     "deleteWorkflowConfirm": "您确定要删除 \"{name}\" 吗？此操作无法撤销。",
+    "deleteFailed": "无法删除“{name}”。请重试。",
     "deleteWorkflowTitle": "删除工作流"
   },
   "platformStatus": {
@@ -701,6 +740,20 @@
     "maxIterationsPlaceholder": "10"
   },
   "chat": {
+    "activityFeed": {
+      "previousSteps": "{count, plural, other {显示之前的 # 个步骤}}",
+      "hidePreviousSteps": "隐藏之前的步骤",
+      "showMore": "显示更多",
+      "showLess": "收起",
+      "timeline": "推理与工具",
+      "thinking": "正在思考...",
+      "duration": "推理用时 {duration}",
+      "awaitingApproval": "等待批准",
+      "stopped": "已停止",
+      "error": "错误",
+      "collapse": "收起推理",
+      "done": "已完成"
+    },
     "diff": {
       "files": "{count} 个文件",
       "truncated": "差异已截断"
@@ -716,6 +769,8 @@
         "countLive": "{n, plural, one {# 个工作流运行中} other {# 个工作流运行中}}",
         "webhookEndpoint": "Webhook 端点",
         "liveBadge": "运行中",
+        "pausedBadge": "已停用",
+        "budgetBlockedBadge": "已封顶",
         "soon": "即将",
         "imminent": "现在",
         "subMinute": "<1分钟",
@@ -744,12 +799,18 @@
           "label": "定时操作",
           "runNow": "立即运行",
           "runNowHint": "原定的运行仍会照常进行。",
+          "runNowBudgetBlocked": "被支出上限阻止",
           "runInstead": "代替原定运行",
           "runInsteadHint": "会消耗掉即将到来的那次运行。",
           "openAgenda": "在日程中打开",
           "ranKeeping": "已启动。原定的运行仍会进行。",
           "ranReplacing": "已启动，代替原定的运行。",
-          "runFailed": "无法启动。"
+          "runFailed": "无法启动。",
+          "pauseResource": "{type, select, workflow {禁用工作流} agent {禁用智能体} interface {禁用界面} other {禁用资源}}",
+          "resumeResource": "{type, select, workflow {重新启用工作流} agent {重新启用智能体} interface {重新启用界面} other {重新启用资源}}",
+          "resourcePaused": "{type, select, workflow {工作流已禁用，其生产触发器将不会运行。} agent {智能体已禁用，其生产触发器将不会运行。} interface {界面已禁用，其生产触发器将不会运行。} other {资源已禁用，其生产触发器将不会运行。}}",
+          "resourceResumed": "{type, select, workflow {工作流已重新启用。} agent {智能体已重新启用。} interface {界面已重新启用。} other {资源已重新启用。}}",
+          "resourceToggleFailed": "{type, select, workflow {无法修改工作流。} agent {无法修改智能体。} interface {无法修改界面。} other {无法修改资源。}}"
         }
       },
       "recent": {
@@ -1035,6 +1096,7 @@
       "loadError": "加载消息时出错"
     },
     "tool": {
+      "loadFailed": "无法加载结果",
       "noContent": "无内容"
     },
     "dashboard": {
@@ -1052,6 +1114,44 @@
   "workflow": {
     "title": "工作流",
     "subtitle": "您的自动化工作流",
+    "logs": {
+      "backToRun": "返回运行",
+      "loadRunError": "无法加载运行信息。",
+      "loadStepsError": "无法加载日志。",
+      "openLogs": "打开运行日志",
+      "openNodeLogs": "打开此节点的日志",
+      "root": "根目录",
+      "simple": "简洁",
+      "table": "表格",
+      "view": "视图",
+      "hideNodes": "隐藏节点",
+      "showNodes": "显示节点",
+      "epoch": "轮次",
+      "allEpochs": "所有轮次",
+      "epochNumber": "轮次 {number}",
+      "nodes": "节点",
+      "node": "节点",
+      "chooseNode": "选择节点",
+      "nodeUnavailable": "此节点在本轮次中没有日志。请选择其他节点或轮次。",
+      "input": "输入",
+      "output": "输出",
+      "direction": "显示的数据",
+      "passage": "执行次数",
+      "passageNumber": "第 {number} 次执行",
+      "inputData": "输入数据",
+      "outputData": "输出数据",
+      "readOnly": "只读",
+      "loadedPassages": "已加载 {loaded} / {total} 次执行",
+      "loadMore": "加载更多执行记录",
+      "loading": "正在加载日志…",
+      "emptyEpoch": "本轮次尚未执行任何节点。",
+      "emptyData": "此次执行没有数据。",
+      "loadDataError": "无法加载日志。已保留您的选择。",
+      "retry": "重试",
+      "refresh": "刷新日志",
+      "copy": "复制数据",
+      "value": "值"
+    },
     "createWorkflow": "创建工作流",
     "searchPlaceholder": "按名称、描述搜索工作流...",
     "noWorkflowsFound": "未找到工作流",
@@ -1230,6 +1330,20 @@
     "unavailable": "工作流不可用",
     "unavailableHint": "该工作流不在您的工作区中，或已被删除"
   },
+  "resourceInfo": {
+    "label": "详细信息",
+    "labelFor": "{name} 的详细信息",
+    "createdBy": "创建者",
+    "created": "创建于",
+    "lastModified": "最后修改",
+    "editorsTitle": "最近的编辑者",
+    "editorsHint": "在此保存过更改的人员，最近的排在前面",
+    "editorsLoading": "正在加载编辑者...",
+    "editCount": "{count, plural, one {# 次修改} other {# 次修改}}",
+    "editorCount": "{count, plural, one {# 位编辑者} other {# 位编辑者}}",
+    "unknownPerson": "不在此工作区中",
+    "resolvingPerson": "正在解析姓名"
+  },
   "data": {
     "title": "数据表",
     "subtitle": "您的数据表",
@@ -1370,6 +1484,13 @@
     "deactivateWorkflow": "点击将此工作流设为草稿",
     "runDisabledDraft": "无法运行草稿工作流，请先激活。",
     "effortAuto": "自动",
+    "modelFilterTier": "层级",
+    "modelFilterProvider": "提供商",
+    "allTiers": "所有层级",
+    "allProviders": "所有提供商",
+    "noModelMatchesFilters": "没有模型符合这些筛选条件",
+    "clearModelFilters": "清除筛选",
+    "resetModelMenu": "重置",
     "reasoningEffort": "推理强度"
   },
   "versionHistory": {
@@ -1967,6 +2088,15 @@
       "description": "运行时发生错误。请稍后重试。",
       "retry": "重试"
     },
+    "missingApiKey": {
+      "title": "需要 API 密钥",
+      "description": "尚未配置任何大模型 API 密钥。请添加你的 OpenAI、Anthropic 或其他厂商的密钥，以使用对话和智能体。",
+      "cta": "配置 API 密钥",
+      "rejectedTitle": "你的 API 密钥被拒绝",
+      "rejectedDescription": "厂商拒绝了此账号中保存的密钥。它可能已被吊销、已过期或额度用尽。请保存一个可用的密钥，或将该厂商切换回平台密钥。",
+      "rejectedCta": "打开我的密钥",
+      "close": "关闭"
+    },
     "ceCloudCredit": {
       "title": "云端额度已用尽",
       "description": "您关联的 LiveContext Cloud 账户额度已用尽。请在云端充值或升级套餐，以继续使用对话、智能体和工作流。",
@@ -2085,7 +2215,7 @@
     "insufficientCredits": {
       "title": "您的积分已用完",
       "description": "您的积分余额不足以执行此操作。请升级您的计划以继续。",
-      "freeScopeNote": "在 Free 套餐中，每月额度仅用于运行工作流。聊天和智能体需要付费套餐或额度充值。",
+      "freeScopeNote": "在免费方案中，每月额度用于运行工作流。对话与智能体则从独立的每月 AI 额度中扣除，仅限向免费方案开放的模型；额度用完后需要充值或升级到付费方案。",
       "recommended": "推荐",
       "currentPlan": "当前计划",
       "upgrade": "升级",
@@ -2099,7 +2229,7 @@
       },
       "features": {
         "freeCredits": "每月 1,000 积分",
-        "freeCreditsTooltip": "免费额度用于运行您的工作流。聊天和智能体需要付费套餐或额度充值。",
+        "freeAiCredits": "每月 {credits} 个 AI 积分",
         "freeConcurrent": "1 个并发执行",
         "freeStorage": "100 MB 存储空间",
         "creditsPerMonth": "积分/月",
@@ -2129,6 +2259,7 @@
       "features": {
         "freeStorage": "100 MB 存储空间",
         "freeCredits": "每月 1,000 积分",
+        "freeAiCredits": "每月 {credits} 个 AI 积分",
         "starterStorage": "1 GB 存储空间",
         "starterCredits": "每月 5,000 积分",
         "proStorage": "10 GB 存储空间",
@@ -2550,6 +2681,7 @@
       "scheduleMaxExecutionsPlaceholder": "无限制",
       "scheduleNextRun": "下次运行",
       "scheduleTaskHelp": "每次计划触发时，此消息都会发送给代理。",
+      "scheduleTaskEmptyWarning": "未填说明：只有当代理有被指派的任务时，该计划才会做事。否则每次运行都会被跳过。",
       "scheduleTaskLabel": "计划任务",
       "scheduleTaskPlaceholder": "描述代理在触发时应做什么……",
       "scheduleTimezone": "时区",
@@ -2896,12 +3028,41 @@
       "successTitle": "已更新",
       "title": "编辑详情"
     },
+    "welcomeGift": {
+      "title": "欢迎礼物",
+      "subtitle": "您正在使用 Free 方案。以下是它每月为您提供的额度。",
+      "features": {
+        "freeCredits": "工作流积分",
+        "freeCreditsDetail": "用于运行您的工作流。",
+        "freeAiCredits": "AI 积分",
+        "freeAiCreditsDetail": "用于支付聊天和智能体的对话，适用于向免费方案开放的模型。"
+      },
+      "renewal": "两者都会在每月初自动补满，无需绑定银行卡。",
+      "renewalSingle": "它们会在每月初自动补满，无需绑定银行卡。",
+      "cta": "开始探索"
+    },
     "suggestedApps": {
       "cta": "浏览市场",
       "dismiss": "稍后再说",
       "subtitle": "根据您在引导过程中告诉我们的内容，以下是您可能喜欢的应用。",
       "title": "为您挑选的应用",
       "viewInMarketplace": "在市场中查看"
+    }
+  },
+  "nodeTypeFilter": {
+    "label": "节点类型",
+    "searchPlaceholder": "搜索节点类型",
+    "clearSearch": "清除搜索",
+    "clearAll": "清除筛选",
+    "noResults": "没有节点类型符合您的搜索",
+    "empty": "暂无节点类型",
+    "families": {
+      "trigger": "触发器",
+      "mcp": "集成",
+      "agent": "智能体",
+      "core": "核心节点",
+      "table": "数据表",
+      "interface": "界面"
     }
   },
   "nodeTypeSettings": {
@@ -3215,7 +3376,43 @@
       "models": "模型管理",
       "geminiCli": "Gemini CLI",
       "mistralVibe": "Mistral Vibe",
-      "executionLinks": "执行链接"
+      "executionLinks": "执行链接",
+      "yourKeys": "您的密钥"
+    },
+    "yourKeys": {
+      "title": "使用您自己的 API 密钥运行",
+      "intro": "保存一个提供商密钥，您的智能体就会使用它运行：提供商向您收取 token 费用，LiveContext 按智能体回合收取固定费用，而不是常规积分。随时可切换回 LiveContext 密钥；您的密钥会保留。",
+      "addKey": "保存密钥",
+      "replace": "替换",
+      "replaceKey": "粘贴新密钥以替换已保存的密钥",
+      "showKey": "显示密钥",
+      "hideKey": "隐藏密钥",
+      "useMyKey": "使用我的密钥",
+      "noProviders": "目前该工作区没有可使用您自己密钥的提供商。",
+      "requiresPlan": "自有密钥从 {plan} 套餐开始提供。",
+      "upgrade": "升级到 {plan}",
+      "fees": {
+        "open": "查看每回合价格",
+        "title": "使用您的密钥时的每回合价格",
+        "intro": "token 由您的提供商向您收费。LiveContext 按模型价格档位，对每个智能体回合收取以下积分，且绝不超过同一回合使用 LiveContext 密钥时的费用。",
+        "unit": "每回合积分"
+      },
+      "route": {
+        "mine": "使用您的密钥运行",
+        "platform": "使用 LiveContext 密钥运行",
+        "platformSaved": "使用 LiveContext 密钥运行（您的密钥已保存）"
+      },
+      "billing": {
+        "mine": "{provider} 向您收取 token 费用。LiveContext 按智能体回合收取固定费用，在积分历史中显示为“您的密钥”。",
+        "platform": "LiveContext 以积分计收 token 费用。"
+      },
+      "errors": {
+        "loadFailed": "无法加载您的密钥。",
+        "invalidKey": "{provider} 拒绝了此密钥。{reason}",
+        "saveFailed": "无法保存密钥。",
+        "deleteFailed": "无法移除密钥。",
+        "switchFailed": "无法切换路由。"
+      }
     },
     "bridge": {
       "claudeCode": {
@@ -3317,6 +3514,8 @@
       "bundleShipOn": "CE：启用",
       "bundleShipOff": "CE：停用",
       "bundleShipTooltip": "CE 捆绑包为此模型分发的状态，独立于启用开关：自动跟随开关，启用即使此处停用也向自托管安装分发启用状态，停用则分发停用状态。",
+      "freeTierChip": "免费",
+      "freeTierTooltip": "免费方案的账户能否将其每月 AI 额度用于此模型。该额度是独立的一份，与用于工作流的每月额度分开。默认关闭：此时免费账户需要充值才能使用该模型。",
       "notConfigured": "未配置",
       "notConfiguredTooltip": "已列出以便排序和定价，但尚不可用：此提供商没有 API 密钥（或云中继无法运行它）。添加密钥后即可使用。",
       "custom": "自定义",
@@ -3354,6 +3553,26 @@
       "allProviders": "所有提供商",
       "editName": "点击以编辑显示名称",
       "filterByProvider": "按提供商筛选",
+      "selectAll": "选择所有显示的模型",
+      "selectRow": "选择",
+      "bulkSelected": "已选 {count} 个",
+      "bulkEnable": "启用",
+      "bulkDisable": "关闭",
+      "bulkTier": "设置档位",
+      "bulkClear": "清除选择",
+      "bulkPartial": "{action}：{total} 个中有 {failed} 个失败。{reason}",
+      "searchPlaceholder": "搜索模型",
+      "filterByTier": "档位",
+      "allTiers": "所有档位",
+      "filterByState": "状态",
+      "allStates": "所有状态",
+      "stateOn": "已启用",
+      "stateOff": "已关闭",
+      "clearFilters": "清除筛选",
+      "providerEnabled": "启用该提供商",
+      "providerSwitchUnavailable": "无法读取提供商开关，因此已隐藏。下方的模型列表不受影响。",
+      "providerOffOption": "{provider}（已关闭）",
+      "providerOffNotice": "{provider} 已关闭：下方所有模型在任何地方都不会被提供。每个模型仍保留各自的设置，重新开启该提供商即可恢复您的选择。",
       "rateLimits": {
         "rpmGlobal": "RPM 全局",
         "rpmTenant": "每租户 RPM",
@@ -3361,7 +3580,8 @@
         "title": "速率限制（提供商上限）",
         "tpmGlobal": "TPM 全局",
         "tpmTenant": "每租户 TPM"
-      }
+      },
+      "freeTierNoneOpen": "此标签页下没有向免费方案开放任何模型，因此定价页所宣传的每月 AI 额度无法支付此类运行：免费账户会被拒绝。请用上方的“免费”标记至少开放一个模型。"
     },
     "adminOnlyBadge": "仅限管理员",
     "modelBundle": {
@@ -3423,24 +3643,29 @@
     "catalogSync": {
       "added": "已添加",
       "applied": "已应用 {inserted} 个新增、{updated} 个更新、{deprecated} 个弃用。构建新包以进行分发。",
+      "appliedHeldBack": "{count, plural, other {有 # 项价格变动被暂缓。再次运行刷新即可查看。}}",
       "apply": "应用",
       "applyRejected": "应用被拒绝 - 请检查上方的守卫失败。",
       "discoveryTitle": "直接从服务商处发现",
       "discoveryPricedFromOpenRouter": "价格来自 OpenRouter，这是转售价。启用模型前，请对照服务商自己的价目表核对。",
       "discoveryCount": "{count, plural, other {# 个新模型}}",
       "discoverySkipped": "缺少 API 密钥：{providers}。无法读取它们的模型列表。",
+      "discoveryNotAsked": "未询问（时间预算）：{providers}。下次运行时将优先询问它们。",
       "cancel": "取消",
       "colModel": "模型",
       "colProvider": "提供商",
       "colReason": "原因",
-      "flaggedRows": "{count, plural, other {# 行被标记}}",
+      "flaggedRows": "{count, plural, other {# 项价格变动被标记}}",
+      "flaggedRowsHint": "这些行的价格变动超出预期，因此本次刷新不包含它们，其余各行照常写入。",
       "guardFailures": "已触发守卫",
       "modalSubtitle": "在应用前请查看差异和任何守卫失败。",
       "modalTitle": "同步预览",
       "modelsKept": "保留的模型",
       "noChanges": "无内容可应用 - 您的目录已与数据源匹配。",
-      "overridePriceSanity": "覆盖价格合理性守卫",
-      "overridePriceSanityHint": "仍然应用被标记的行。仅在您已通过提供商的官方定价页面核实价格变更后才勾选此项。",
+      "overridePriceSanity": "同时应用被暂缓的行",
+      "overridePriceSanityHint": "仅在您已对照服务商官方价格页核实新价格后再勾选。",
+      "overrideCountFloor": "尽管数据源变小，仍然应用",
+      "overrideCountFloorHint": "数据源返回的模型比预期少。仅在您清楚它为何变小时才勾选，例如本次版本中有意新增的过滤规则。",
       "refresh": "从提供商刷新",
       "subtitle": "从 LiteLLM、OpenRouter 以及各服务商自己的模型列表拉取当前模型和价格，预览差异，然后应用。",
       "title": "从实时数据源刷新",
@@ -3480,6 +3705,7 @@
       "loadError": "加载执行链接失败。",
       "saveError": "保存执行链接失败。",
       "requiredError": "需要计费提供方、计费模型和一个执行提供方。",
+      "writeError": "修改路由失败。",
       "enabled": "已启用",
       "disabled": "已禁用",
       "delete": "删除",
@@ -3497,7 +3723,17 @@
       "scopeSchedule": "定时任务",
       "scopeTask": "任务",
       "scopeTaskReview": "任务审查",
-      "allSurfacesUsed": "该模型的所有场景都已关联。"
+      "allSurfacesUsed": "该模型的所有场景都已关联。",
+      "linkToCliHint": "路由到 {cli}：一键将该模型在所有场景关联到该 CLI。计费价格不变，执行走 CLI 订阅。“所有场景”包含 CLI 无法处理的调用方，因此针对该模型的单次 JSON 补全会失败。",
+      "routedVia": "通过 {target} 执行，场景：{surfaces}。点击可修改场景。",
+      "routedViaTitle": "通过 {target} 执行",
+      "removeRouting": "移除路由",
+      "cliNotAvailable": "{cli} 无法在桥接主机上运行：未安装，或未登录。凡是路由到它的调用都会失败，直到修复它或改变路由。",
+      "routedViaDisabled": "到 {target} 的路由已关闭。点击可修改场景。",
+      "coveredByAll": "经由所有场景",
+      "perSurfaceHint": "关闭“所有场景”后才能逐个设置场景路由。",
+      "accessPolicyCaveat": "CLI 还有自己的访问策略（在该 CLI 的标签页中），出厂设置为仅管理员：你自己的执行可以通过，但其他用户使用该模型的执行会被拒绝，而这个标记看不到这一点。",
+      "allScopeCliCaveat": "“所有场景”还覆盖不带场景的调用方，而它们各自选择自己的模型。当那个模型正好是本模型时，{cli} 无法处理：单次 JSON 补全（对话压缩）会失败，头像生成会改用其他模型，浏览器代理则保留计费模型。"
     }
   },
   "credentials": {
@@ -3849,6 +4085,8 @@
     "source": {
       "label": "凭据来源",
       "markupNote": "此步骤将使用共享的平台凭据。每次调用会收取少量加价。",
+      "markupNoteFactor": "所选选项会将该金额乘以 {factor}。",
+      "markupNoteFactorWithReason": "所选选项会将该金额乘以 {factor}（{reason}）。",
       "markupNoteWithRate": "此步骤将使用共享的平台凭据。每次调用收取 {rate} 积分作为加价。",
       "markupNoteNotSold": "此步骤已设为使用共享的平台凭据，但该生成不通过此凭据出售：此模型没有已发布的价格，只有凭据的全局默认价，而生成从不继承该默认价。请切换到您自己的密钥来运行它。",
       "markupNoteWithUnitRate": "此步骤将使用共享的平台凭据。按每{unit} {unitRate} 积分计费，请求越大费用越高。",
@@ -4896,8 +5134,11 @@
         "processing": "处理中…"
       },
       "features": {
-        "creditsFree": "每月 1,000 积分",
-        "creditsFreeTooltip": "免费额度用于运行您的工作流。聊天和智能体需要付费套餐或额度充值。",
+        "creditsFree": "每月 1,000 工作流积分",
+        "creditsFreeTooltip": "这些积分只用于运行你的工作流：一次运行每执行一个节点消耗 **{nodeCredits} 积分**。对话与智能体从不动用它们，它们取自下面那一行的独立月度 AI 额度；联网搜索、图像生成这类附加能力则需要单独充值。",
+        "aiCreditsFree": "每月 {credits} 个 AI 额度",
+        "aiCreditsFreeUnknown": "每月 AI 额度",
+        "aiCreditsFreeTooltip": "在面向免费方案开放的模型上，对话与智能体轮次另有一份独立的月度额度：与已配置的智能体进行一次简短交流（含其全部上下文），在 {basisModel} 这类轻量模型上约需 **{exchangeCredits} 积分**。这是基于真实用量的估算，不是上限。它每月自动补满，且从不动用你的工作流积分。",
         "creditsPerMonth": "每月 {credits} 积分",
         "creditsCustom": "定制积分",
         "users1": "1 个用户",
@@ -4958,7 +5199,9 @@
         "nodesCore": "核心节点库（不含发布类集成）",
         "nodesPublishing": "包含发布类集成",
         "nodesAll": "全部节点与集成，无任何限制",
-        "nodesPublishingTooltip": "可直接从工作流发布到目录中的社交与视频平台，包括 YouTube、Instagram、TikTok、X 和 LinkedIn，并会持续增加。"
+        "nodesPublishingTooltip": "可直接从工作流发布到目录中的社交与视频平台，包括 YouTube、Instagram、TikTok、X 和 LinkedIn，并会持续增加。",
+        "ownLlmKey": "使用您自己的 LLM API 密钥运行",
+        "ownLlmKeyTooltip": "保存您的 OpenAI、Anthropic、Google、Mistral 或 DeepSeek 密钥，您的智能体就会使用它运行：提供商向您收取 token 费用，LiveContext 按智能体回合收取固定费用。云端从 Pro 起提供。"
       }
     },
     "compare": {
@@ -4980,6 +5223,8 @@
       },
       "dimensions": {
         "credits": "每月积分",
+        "aiCredits": "AI 额度",
+        "aiCreditsTooltip": "在面向免费方案开放的模型上，对话与智能体轮次另有一份独立的月度额度：与已配置的智能体进行一次简短交流（含其全部上下文），在 {basisModel} 这类轻量模型上约需 **{exchangeCredits} 积分**。这是基于真实用量的估算，不是上限。付费方案不需要这份额度：它们的积分本就可用于智能体，而免费方案的积分只能运行工作流。",
         "nodes": "节点与集成",
         "nodesTooltip": "受限的只有发布：向 YouTube、Instagram、TikTok、X、LinkedIn 及另外 13 个平台发布内容需要付费套餐。从这些平台读取内容，以及其他所有节点，在每个套餐中都可用。",
         "concurrent": "并发执行",
@@ -4990,10 +5235,12 @@
         "workspaces": "工作区",
         "analytics": "分析",
         "support": "支持",
-        "creditsTooltip": "积分按模型和工具实际处理的内容计费，因此一个月能做多少取决于具体工作。按 Claude Sonnet 5 这类顶级模型计价：不调用任何工具的一问一答约 {simpleCredits} 积分，由智能体为你搭建工作流的一场对话约 {agentCredits} 积分（约 5 轮交互、45 次工具调用，搭建更久则费用更高），运行中的工作流里的单次分类步骤约 {classifyCredits} 积分。轻量模型还要便宜数倍。"
+        "creditsTooltip": "与已配置的智能体进行一次简短交流（含其全部上下文），在 {basisModel} 这类轻量模型上约需 **{exchangeCredits} 积分**。这是基于真实用量的估算，不是上限；顶级模型的花费更高。"
       },
       "values": {
-        "creditsFree": "1,000 / 月",
+        "creditsFree": "1,000 / 月（工作流）",
+        "aiCreditsFree": "{credits} / 月",
+        "aiCreditsIncluded": "已包含在额度内",
         "creditsDynamic": "{credits} 起 / 月",
         "creditsCustom": "定制",
         "nodesCore": "除发布外全部",
@@ -5080,7 +5327,7 @@
       },
       "conversationCost": {
         "question": "我的积分能支持多少场对话？",
-        "answer": "这取决于你要求的工作量，两端的情况如下。不调用任何工具的一问一答约需 {simpleCredits} 积分。与智能体一起搭建工作流则是重活：它要检索工具目录、读取你的数据表、创建并连接节点、运行工作流再读回结果，而每一次工具调用都会把全部对话记录重新发送给模型。以所有真实的、智能体调用过工具的对话测算，约 5 轮交互、45 次工具调用，一场约需 {agentCredits} 积分；轮次更多的搭建费用按比例增加。运行中的工作流里的单次分类步骤约需 {classifyCredits} 积分。以上数字按 Claude Sonnet 5 这类顶级模型计价；轻量模型还要便宜数倍。计费依据是模型读取和生成的 token，而非消息条数。",
+        "answer": "计费依据是模型读取和生成的 token，而非消息条数，因此取决于你要求的工作量。不调用任何工具的一问一答约需 {simpleCredits} 积分。由智能体为你搭建工作流的一场对话（约 5 轮交互、45 次工具调用）约需 {agentCredits} 积分，搭建更久则按比例增加。运行中的工作流里的单次分类步骤约需 {classifyCredits} 积分。以上按 {basisModel} 这类轻量模型计价；顶级模型的花费更高。",
         "examplesCaption": "每个付费方案自带的 {credits} 积分可以买到：",
         "examples": {
           "simpleChat": {
@@ -5158,7 +5405,7 @@
       "selfHosted": "自托管",
       "or": "或",
       "availableOn": "云端托管与自托管均可使用",
-      "selfHostNote": "更想自托管？Community Edition 免费且开源--将它关联到任意套餐即可解锁相同的功能。",
+      "selfHostNote": "更想自托管？Community Edition 免费，源码公开--将它关联到任意套餐即可解锁相同的功能。",
       "selfHostCta": "在 GitHub 上查看"
     },
     "cePricing": {
@@ -5230,7 +5477,9 @@
     "unlimited": "无限制",
     "usage": {
       "title": "存储使用量",
-      "usedOf": "已使用 {used} / {total}"
+      "usedOf": "已使用 {used} / {total}",
+      "thisWorkspace": "此工作区已使用 {used}",
+      "accountPool": "账户：{total} 中已使用 {used}，由所有工作区共享"
     },
     "breakdown": {
       "title": "存储明细",
@@ -5274,7 +5523,8 @@
       "personalHint": "您的个人存储。切换工作区以查看团队存储。",
       "teamHint": "当前组织的存储。所有成员从此池中消耗。",
       "teamPlanLabel": "团队工作区",
-      "allWorkspaces": "所有工作区"
+      "allWorkspaces": "所有工作区",
+      "workspacesUnavailable": "{count, plural, other {无法加载 # 个工作区，已从该总计中排除。}}"
     },
     "upgrade": {
       "title": "需要更多存储？",
@@ -5290,6 +5540,24 @@
     "reExecutionBadge": "重新执行 {number}",
     "itemLabel": "项",
     "reviewItemTooltip": "在检查器中打开此项",
+    "continueInterface": "继续",
+    "continueInterfaceTooltip": "让工作流继续执行，跳过此界面的等待",
+    "continueInterfaceRemaining": "继续第 {epoch} 轮的第 {item} 项（还有 {count} 项在等待）",
+    "continueInterfaceLoading": "正在加载此处仍在等待的项",
+    "continueInterfaceFailed": "无法继续。",
+    "continueInterfaceForbidden": "您没有权限继续此次运行。",
+    "awaitingYou": "等你操作",
+    "awaitingSomeone": "等待回应",
+    "actionBar": {
+      "continuePrompt": "此应用正在等待你继续。",
+      "approvalPrompt": "“{node}”正在等待你的审批。",
+      "elsewhere": "位于工作流的其他环节：{node}",
+      "more": "还有 {count} 项在等待",
+      "failed": "操作未成功，请重试。",
+      "alreadyResolved": "该项已经继续过了。",
+      "hide": "先收起，稍后再答",
+      "reopen": "{count} 项等你操作"
+    },
     "approvalContextLabel": "审批上下文",
     "approvalContextEmpty": "未提供上下文。",
     "approvalBar": {
@@ -5431,6 +5699,11 @@
       "classify": "分类",
       "guardrail": "护栏",
       "purchase": "购买",
+      "marketplacePurchase": "市场购买",
+      "paygTopup": "积分充值",
+      "rewardReferral": "推荐奖励",
+      "rewardClawback": "奖励撤回",
+      "manualAdjustment": "手动调整",
       "planGrant": "计划授予",
       "planReset": "计划重置",
       "browserAgent": "浏览器代理",
@@ -5458,7 +5731,8 @@
       "noHistory": "暂无使用历史",
       "filterAll": "所有类型",
       "page": "第 {current} 页，共 {total} 页",
-      "cost": "成本（$）"
+      "cost": "成本（$）",
+      "ownKeyBadge": "您的密钥"
     },
     "error": {
       "loadFailed": "加载配额数据失败"
@@ -6018,6 +6292,8 @@
       },
       "subtitle": "管理您的套餐、付款方式和发票",
       "summary": {
+        "creditsRefresh": "积分补充时间：{date}",
+        "creditsRefreshAmount": "每周期 {amount} 积分",
         "accessEndsOn": "访问权限于 {date} 结束",
         "nextBilling": "下次计费：{date}",
         "scheduledChange": "已安排套餐变更。",
@@ -6053,6 +6329,12 @@
       "title": "自托管实例"
     },
     "marketplaceHighlights": {
+      "demoInstall": {
+        "title": "演示模式",
+        "description": "市场中的每张卡片都会重新提供安装按钮，包括你已发布的和已安装的应用。点击会播放真实的安装动画和真实的对话框。",
+        "scope": "不会创建任何内容，不会产生任何费用，也不会记录任何安装。仅限本浏览器，且仅限平台管理员。",
+        "activeNotice": "演示模式已开启。在关闭之前，市场安装均为模拟。"
+      },
       "candidates": {
         "add": "添加",
         "empty": "此类别没有候选项。",
@@ -6080,7 +6362,13 @@
         "SKILL": "Skills",
         "TABLE": "表格",
         "WORKFLOW": "工作流",
-        "LANDING": "着陆页"
+        "LANDING": "着陆页",
+        "LANDING_OPS": "运营页面",
+        "LANDING_CREATOR": "创作者页面",
+        "LANDING_SUPPORT": "支持页面",
+        "LANDING_SALES": "销售页面",
+        "LANDING_MARKETING": "营销页面",
+        "LANDING_RECRUITING": "招聘页面"
       },
       "save": "保存",
       "saving": "正在保存……",
@@ -6102,7 +6390,17 @@
       "timeoutHelp": "尽力而为，按每次尝试生效。0 表示禁用。",
       "executeOnceLabel": "仅执行一次",
       "executeOnceHelp": "在 Split 中仅对第一个条目执行。",
-      "executeOnceBlockedTooltip": "Split、Aggregate、Merge 或 Loop 节点不可用：它们需要协调所有 Split 条目，跳过条目会破坏其逻辑。"
+      "executeOnceBlockedTooltip": "Split、Aggregate、Merge 或 Loop 节点不可用：它们需要协调所有 Split 条目，跳过条目会破坏其逻辑。",
+      "providerRetryLabel": "供应商重试时间预算（秒）",
+      "providerRetryPlaceholder": "由平台决定",
+      "providerRetryHelp": "留空则由平台消化供应商的频率限制。若此工作流已自行控制节奏，请填 0。",
+      "providerRetryHelpCededToNode": "该节点已自行重试，因此平台不会在其下方重发调用。填入数值可改变这一行为。",
+      "providerRetryHelpBoundedByTimeout": "该节点的超时时间只给平台 {seconds} 秒来消化频率限制。填入数值可更改。",
+      "providerRetryHelpCappedByTimeout": "该节点的超时时间将其上限压到 {seconds} 秒。请调高超时时间或调低此值，使两者一致。",
+      "providerRetryInfoDefault": "留空：当供应商回复“请求过多”时，平台会按它要求的时长等待并重发该调用，且不超出平台自己的时间预算。",
+      "providerRetryInfoZero": "0：调用永不重发。当你的工作流已通过循环或该节点的重试控制节奏时请使用，否则两者会成倍放大请求量。",
+      "providerRetryInfoCap": "超过平台预算的等待时长会被降到该预算：该步骤是在单次调用内部等待，等得更久会让步骤失败，即使调用已经成功。",
+      "providerRetryInfoRunning": "等待期间节点保持运行状态，结束后会显示调用被重发了多少次。"
     },
     "mock": {
       "title": "模拟输出",
@@ -6349,6 +6647,9 @@
       "startStepByStep": "以分步模式启动工作流",
       "onlyTriggersCanStart": "只有触发器才能启动分步执行",
       "viewTable": "查看表",
+      "viewLogs": "查看节点日志",
+      "editMode": "编辑",
+      "runDataMode": "运行数据",
       "tables": "Tables",
       "dragToMove": "拖动以移动面板",
       "collapse": "Collapse",
@@ -6412,9 +6713,9 @@
         "viewTree": "树形",
         "viewJson": "原始 JSON",
         "viewTable": "表格",
+        "tableShowingField": "显示来自以下字段的行",
         "tableUnavailable": "这些数据不是行列表，无法以表格显示。",
         "tableColumnsTruncated": "已显示前 {shown} 列，另有 {hidden} 列被隐藏。",
-        "jsonBadge": "JSON",
         "expandJson": "展开该 JSON 值",
         "collapseJson": "折叠该 JSON 值",
         "showMore": "显示更多",
@@ -6437,10 +6738,7 @@
         "signalBrowserTakeover": "浏览器接管",
         "signalExpiresAt": "{date} 过期",
         "noResolvedParams": "没有已解析的参数",
-        "configuredParamsTitle": "启动参数",
-        "mismatchTitle": "{count, plural, other {本次运行未报告 # 个参数}}",
-        "mismatchRenamed": "以其他名称报告：{runtimeKey}",
-        "mismatchNotReported": "已在节点上配置，但本次运行未报告。"
+        "configuredParamsTitle": "启动参数"
       },
       "moreActions": "更多操作",
       "nodeOutputs": "节点输出",
@@ -7125,10 +7423,24 @@
       "nodeCount": "{count, plural, one {# node} other {# nodes}}",
       "stepByStep": "逐步",
       "mockRun": "模拟运行",
+      "followRunningNode": "跟随正在运行的步骤",
+      "stopFollowingRunningNode": "停止跟随正在运行的步骤",
       "runsHistory": "运行历史",
       "backToHome": "返回首页",
       "searchPlaceholder": "搜索 {context}...",
       "frequentlyUsed": "常用",
+      "coreTriggers": "核心触发器",
+      "appTriggerShortcuts": "应用触发器",
+      "appTriggerShortcutsDescription": "选择应用触发器以添加其可直接配置的节点。",
+      "appTriggerLoadError": "无法加载此应用的工具，请重试。",
+      "triggerShortcuts": {
+        "gmail-new-email": { "label": "新 Gmail 邮件", "description": "每分钟列出 Gmail 未读邮件。", "triggerLabel": "每分钟检查 Gmail", "actionLabel": "列出 Gmail 未读邮件" },
+        "outlook-new-email": { "label": "新 Outlook 邮件", "description": "每分钟列出 Outlook 未读邮件。", "triggerLabel": "每分钟检查 Outlook", "actionLabel": "列出 Outlook 未读邮件" },
+        "telegram-update": { "label": "Telegram 消息", "description": "通过 POST Webhook 接收 Telegram 更新，然后在机器人中注册生成的 URL。", "triggerLabel": "Telegram Webhook", "actionLabel": "读取 Telegram 聊天" },
+        "slack-event": { "label": "Slack 事件", "description": "通过 POST Webhook 接收 Slack Events API 数据。", "triggerLabel": "Slack 事件 Webhook", "actionLabel": "读取 Slack 会话" },
+        "github-event": { "label": "GitHub 事件", "description": "通过 POST Webhook 接收代码仓库事件。", "triggerLabel": "GitHub 事件 Webhook", "actionLabel": "读取 GitHub 仓库" },
+        "google-drive-file": { "label": "新 Google Drive 文件", "description": "每五分钟列出最近修改的 Drive 文件。", "triggerLabel": "每五分钟检查 Drive", "actionLabel": "列出最近的 Drive 文件" }
+      },
       "paletteCategories": "分类",
       "paletteNodes": "节点",
       "paletteIntegrations": "集成",
@@ -7459,9 +7771,12 @@
           "voice": "语音",
           "language": "语言",
           "seed": "随机种子",
-          "input_image": "参考图片",
-          "input_audio": "参考音频",
-          "input_video": "参考视频"
+          "input_image": "输入图片",
+          "input_audio": "输入音频",
+          "input_video": "输入视频",
+          "first_frame_image": "首帧",
+          "last_frame_image": "尾帧",
+          "reference_image": "参考图片"
         },
         "placeholders": {
           "prompt": "描述要生成的内容",
@@ -8016,6 +8331,12 @@
     "selectAuth": "选择认证类型",
     "authNone": "无（公开）",
     "authBasic": "Basic认证",
+      "authOAuth2": "OAuth2",
+      "oauthHint": "OAuth 连接所需的提供方端点。用户在提供方侧创建自己的应用，并在连接时提供其客户端 ID 和密钥。",
+      "oauthAuthorizationUrl": "授权 URL",
+      "oauthTokenUrl": "令牌 URL",
+      "oauthScopes": "权限范围（空格分隔）",
+      "oauthUrlsRequired": "OAuth2 需要同时填写授权 URL 和令牌 URL。",
     "authHeader": "Header认证",
     "authJwt": "JWT认证",
     "username": "用户名",
@@ -8169,6 +8490,7 @@
       "noAgentsFound": "未找到代理",
       "createFirstAgent": "创建您的第一个代理开始使用",
       "noMatchingAgents": "没有代理匹配您的搜索条件",
+      "openFailed": "该智能体可能已被删除，或属于其他工作区。",
       "deleteCount": "删除 ({count})",
       "deleteTitle": "删除代理",
       "deleteConfirmation": "您确定要删除 {count} 个代理吗？此操作无法撤销。",
@@ -8655,27 +8977,6 @@
         "teamWorkspaces": "团队工作区",
         "toolOrchestration": "工具编排"
       }
-    },
-    "firstBuild": {
-      "goalPrompts": {
-        "emailFollowUps": "帮我搭建一个工作流：每个工作日早上浏览我的收件箱，找出仍在等我回复的邮件，然后按紧急程度给我一份简短的汇总。",
-        "contentPublishing": "帮我搭建一个工作流：把一个想法变成一周的内容，先起草这些帖子，让我审核，然后按计划发布。",
-        "leadGeneration": "帮我搭建一个工作流：收集每一条新线索，补全对方的公司信息，写入我的 CRM，并在一分钟内发出一封个性化的首次回复。",
-        "customerSupport": "帮我搭建一个智能体：阅读收到的支持请求，用我们自己的文档回答其中常见的问题，其余的连同一份建议回复转给我。",
-        "reporting": "帮我搭建一个工作流：每周一早上汇总我的关键数据，做成一个我可以打开的看板，并把与上周相比的变化发到我的邮箱。",
-        "dataSync": "帮我搭建一个工作流，让我的各个工具保持同步：一边的记录发生变化就更新另一边，并记录所有变动。",
-        "monitoringAlerts": "帮我搭建一个工作流：定时检查我关心的内容，只有真正需要我处理时才提醒我。",
-        "aiAssistant": "帮我搭建一个智能体，让团队可以直接与它对话，它了解我们的文档，并且能在我们的工具里执行操作，而不只是回答问题。",
-        "internalAutomation": "帮我搭建一个工作流，端到端接管我们一项重复的内部事务，并让我看到每一次运行，这样我才能放心。",
-        "privateAssistants": "帮我搭建一个助手，运行在这个实例上，只根据我们自己的文档作答，绝不把文档发到别处。",
-        "dataPipelines": "帮我搭建一条数据管道：定时采集数据、清洗数据、存入表格，并在运行失败时通知我。",
-        "toolOrchestration": "帮我搭建一个工作流，把我们的多个工具串成一次操作，并在最后一步之前留一个需要我审批的环节。",
-        "teamWorkspaces": "帮我搭建一个团队共享工作区：一张大家都能写入的表、一个用于查看的页面，以及一个让它保持更新的工作流。",
-        "marketplacePublishing": "帮我搭建一个可以发布的小应用，配一个使用页面和背后的工作流。",
-        "evaluationSandbox": "帮我搭建一个端到端的小示例，展示这个平台能做什么：一个触发器、几个步骤，以及一个展示结果的页面。"
-      },
-      "toolsClause": "我主要使用 {tools}。",
-      "promptSeparator": ""
     }
   },
   "webhookSettings": {
@@ -8964,6 +9265,7 @@
       "overAllowance": "超出套餐 +{percent}%",
       "overAllowanceTiny": "略微超出套餐",
       "usedPercent": "已用套餐的 {percent}%",
+      "remainingPercent": "套餐剩余 {percent}%",
       "viewUsage": "查看用量"
     },
     "cancel": {
@@ -8994,8 +9296,19 @@
       "paygActivating": "正在为您的钱包充值……"
     },
     "payg": {
+      "renewal": {
+        "line": "{date} 恢复至 {amount} 积分",
+        "explainLabel": "续订如何运作",
+        "title": "续订如何运作",
+        "grant": "您的订阅余额将在 {date} 恢复至 {amount} 积分。",
+        "noCarryOver": "未使用的订阅积分不会结转：余额会被替换，而不是叠加。",
+        "paygKept": "充值积分不受影响，会跨续订周期保留在您的钱包中。",
+        "yearlyBilling": "您的下次扣款在 {date}，但积分按月发放。"
+      },
       "breakdown": {
         "payg": "PAYG 充值",
+        "ai": "AI 额度",
+        "aiHint": "用于智能体与对话，仅限向免费方案开放的模型。每月自动恢复。",
         "paygHintPersists": "在续订周期之间保留。",
         "sub": "订阅"
       },
@@ -9030,6 +9343,12 @@
       "totalAvailable": "可用积分总数",
       "walletSubtitle": "您的套餐和充值中的积分",
       "walletTitle": "钱包"
+    },
+    "freeTier": {
+      "label": "免费",
+      "srLabel": "已包含在您的套餐中",
+      "tooltip": "已包含在您的 Free 套餐中：每月的 AI 额度可支付使用此模型的聊天和智能体回合。",
+      "tooltipWithCredits": "已包含在您的 Free 套餐中：每月 {credits} 个 AI 积分，可支付使用此模型的聊天和智能体回合。"
     },
     "upgradeRequired": {
       "label": "需要付费积分",
@@ -9572,6 +9891,12 @@
     "executionTimeoutLabel": "超时（秒）",
     "generationLabel": "生成",
     "generationInfo": "允许助手创建图像、视频、音频、语音和音乐。每次生成按平台费率扣除积分；更长的视频或更长的文本费用更高。",
+    "mailboxLabel": "邮箱",
+    "mailboxInfo": "允许助手在账户已连接的邮箱中读取和发送邮件（读取用 IMAP，发送用 SMTP）。默认关闭：它会访问真实邮箱，并可以从该地址发信。它无法指向您未连接的服务器。",
+    "mailboxAccessLabel": "邮箱权限",
+    "mailboxAccessInfo": "只读保留列出邮件、文件夹和标记已读，并禁止发送、移动和删除。完全访问允许全部操作。工作区的只读角色（VIEWER）无论此设置如何都会禁止发送。",
+    "mailboxAccessRead": "只读",
+    "mailboxAccessWrite": "完全访问",
     "loopConsecutiveStopInfo": "在这么多次连续的模型步骤后停止，以防止失控的链条。",
     "compactionEnabledLabel": "上下文压缩",
     "compactionEnabledInfo": "当对话变长时总结较早的轮次，以保持在模型的上下文窗口内。默认关闭；保持不变时沿用平台设置。",
@@ -9672,7 +9997,7 @@
       "authApiKey": "API 密钥",
       "authBearer": "Bearer Token",
       "authNone": "无",
-      "authOAuth2": "OAuth2",
+      "authBasic": "基本认证",
       "authType": "身份验证类型",
       "baseUrl": "基础 URL",
       "baseUrlPlaceholder": "https://api.example.com",
@@ -9770,12 +10095,18 @@
     "tpmLabel": "Token / 分钟",
     "creditEstimateShort": "约 {credits} 积分",
     "creditEstimateTooltip": {
-      "agentConversation": "该模型在一次典型的带工具对话中约需 {credits} 积分，约 5 轮交互、45 次工具调用。这是基于真实用量的估算，不是上限。",
-      "chatConversation": "一次不调用工具的典型交流约需 {credits} 积分。这是基于真实用量的估算，不是上限。",
-      "guardrailCheck": "对一条典型消息进行一次校验约需 {credits} 积分。这是基于真实用量的估算，不是上限。",
-      "classifyStep": "对一条典型输入进行一次分类约需 {credits} 积分。这是基于真实用量的估算，不是上限。"
+      "chatConversation": "与已配置的智能体进行一次简短交流（包含其全部上下文）约需 **{credits} 积分**。这是基于真实用量的估算，不是上限。",
+      "guardrailCheck": "对一条典型消息进行一次校验约需 **{credits} 积分**。这是基于真实用量的估算，不是上限。",
+      "classifyStep": "对一条典型输入进行一次分类约需 **{credits} 积分**。这是基于真实用量的估算，不是上限。"
     },
-    "creditEstimateLabel": "预计消耗"
+    "creditEstimateLabel": "预计消耗",
+    "ownKeyFeeShort": "{credits} 积分",
+    "ownKeyFeeLabel": "使用您的密钥的费用",
+    "ownKeyFeeTooltip": "使用您的密钥时每回合的费用，绝不高于平台价格。token 由您的提供商向您收费。",
+    "ownKeyBadge": "您的密钥",
+    "ownKeyBadgeTooltip": "该模型使用您自己的 API 密钥运行，而非平台密钥。",
+    "platformKeyBadge": "LiveContext 密钥",
+    "platformKeyBadgeTooltip": "该模型使用 LiveContext 密钥运行并按积分计费，即使您为其他提供商配置了自己的密钥。"
   },
   "publicationReview": {
     "adminOnlyBadge": "仅限管理员",
@@ -10092,6 +10423,7 @@
     "approve": "授权",
     "approved": "已授权",
     "approvedMessage": "该操作已获授权",
+    "loadingSubject": "加载中…",
     "approving": "正在授权……",
     "continueInterfaceSubtitle": "代理想要推进一个已暂停的界面步骤",
     "continueInterfaceTitle": "继续此界面？",
@@ -10101,6 +10433,17 @@
     "dontAskAgain": "在此对话中不再询问",
     "install": "安装",
     "installSubtitle": "它将被添加到您的工作区",
+    "pinTitle": "将此工作流上线？",
+    "pinTitleNamed": "将“{name}”上线？",
+    "pinSubtitle": "它的定时任务和 webhook 将自行触发。",
+    "pinSubtitleVersioned": "版本 {version} 将接管：其定时任务和 webhook 将自行触发。",
+    "unpinTitle": "将此工作流下线？",
+    "unpinTitleNamed": "将“{name}”下线？",
+    "unpinSubtitle": "在重新上线一个版本之前，它的定时任务和 webhook 将停止触发。",
+    "agentScheduleTitle": "允许此代理按计划运行？",
+    "agentScheduleTitleNamed": "允许“{name}”按计划运行？",
+    "agentScheduleSubtitle": "它将按 {cron}（{timezone}）自行启动并在无人看管时运行。",
+    "agentScheduleSubtitleBare": "它将按计划自行启动并在无人看管时运行。",
     "installTitle": "安装此应用？",
     "installing": "正在安装……",
     "installingMessage": "正在安装应用……",
@@ -10111,6 +10454,10 @@
     "resumeInstalled": "我已自行安装该应用 - 它现在在我的工作区中。无需再次获取即可继续。",
     "runSubtitle": "代理想要运行一个敏感操作",
     "runTitle": "运行此操作？",
+    "mailboxSendTitle": "发送这封邮件吗？",
+    "mailboxSendSubtitle": "该智能体想从已连接的邮箱发送一封邮件。邮件会立即送达收件人，且无法撤回。",
+    "mailboxDeleteTitle": "删除这封邮件吗？",
+    "mailboxDeleteSubtitle": "该智能体想从已连接的邮箱中删除一封邮件。届时只有邮件服务商还保留着它。",
     "toolLabel": "工具"
   },
   "askUser": {
@@ -10131,6 +10478,7 @@
     "submitFailed": "无法发送您的答案，请重试。",
     "submitFailedTitle": "答案未发送",
     "resumeIntro": "我的答案：",
+    "resumeSkipped": "我跳过了这些问题（{headers}）。请根据现有信息继续原任务；如果缺少必要信息，请说明阻碍。",
     "noAnswer": "尚未回答"
   },
   "board": {
@@ -10225,7 +10573,51 @@
       "list": "工作流"
     }
   },
+  "verifiedAccounts": {
+    "selfHosted": {
+      "title": "当前部署不支持",
+      "body": "已认证账号是托管云的功能，自托管安装不适用。"
+    },
+    "title": "已认证账号",
+    "subtitle": "为账号授予或撤销在平台各处显示于名称右侧的蓝色认证标记。",
+    "adminOnlyBadge": "仅限管理员",
+    "form": {
+      "sectionTitle": "选择账号",
+      "sectionSubtitle": "平台管理员凭角色即已拥有认证标记，无需在此设置。",
+      "targetModeLabel": "识别用户的方式",
+      "targetModeEmail": "邮箱",
+      "targetModeId": "用户 ID",
+      "emailLabel": "账号邮箱",
+      "emailPlaceholder": "例如 alice@example.com",
+      "userIdLabel": "用户 ID",
+      "userIdPlaceholder": "例如 42",
+      "grant": "认证该账号",
+      "granting": "正在认证...",
+      "revoke": "撤销标记",
+      "revoking": "正在撤销..."
+    },
+    "result": {
+      "granted": "已为该账号授予认证标记。",
+      "revoked": "已撤销该账号的认证标记。",
+      "stillVerifiedByRole": "该账号是平台管理员，凭角色仍保留认证标记。若要移除标记，请先撤销其管理员角色。",
+      "profileWithdrawn": "该账号已将资料设为私密，因此认证标记已保存但不会在任何位置显示。当其资料重新可见时，标记就会出现。"
+    },
+    "toasts": {
+      "grantedTitle": "账号已认证",
+      "grantedMessage": "{target} 现已拥有认证标记",
+      "revokedTitle": "标记已撤销",
+      "revokedMessage": "{target} 已不再拥有认证标记",
+      "failureTitle": "修改失败"
+    },
+    "errors": {
+      "adminOnly": "只有平台管理员才能认证账号。",
+      "invalidEmail": "请输入有效的邮箱地址。",
+      "invalidUserId": "用户 ID 必须是正整数。",
+      "unknown": "出了点问题，请重试。"
+    }
+  },
   "profile": {
+    "verifiedAccount": "已认证账号",
     "metaTitle": "个人资料",
     "metaDescription": "查看该创作者的公开资料及其发布的应用。",
     "notFoundTitle": "未找到资料",
@@ -10312,9 +10704,9 @@
     "dismiss": "知道了",
     "learnMore": "查看全部更新",
     "latest": {
-      "title": "你的智能体不再从零开始",
-      "body": "智能体现在会记住学到的东西：一次纠正、一个偏好、一条团队规则。每条记忆都会带入这个工作区中所有工作流的每一次执行，所以周五告诉它的事，定时智能体周一就会照做。打开「记忆」标签页即可查看它们记住了什么，随时更正、置顶重要内容或删除多余内容。",
-      "mediaAlt": "「记忆」标签页，列出工作区中智能体记住的内容，每条都标有类型、范围和置顶状态"
+      "title": "类型安全的分类器，以及你自己的模型密钥",
+      "body": "Classify 节点现在可以跑在决策模型上：TypeSafe Jev 直接从你定义的类别里挑出一个，并给每个类别一个概率，而不是让对话模型写出类别的名字。类别不变，分支不变，只换一次提供方。同时，你自己的提供方密钥现在驱动一切，智能体、对话和节点都一样：每一次执行都绑定到它真正用过的那把密钥；提供方在运行途中拒绝你的密钥时，你读到的是它自己的原话，而不是我们的转述。",
+      "mediaAlt": "并排的两个图标：TypeSafe 标志，配文为 Classify 的类型化引擎；以及一把钥匙，配文为用于智能体、对话和节点的你自己的密钥"
     }
   },
   "optionalComponents": {
@@ -10708,9 +11100,12 @@
       "duration_seconds": "时长（秒）",
       "n": "数量",
       "seed": "随机种子",
-      "input_image": "参考图片",
-      "input_audio": "参考音频",
-      "input_video": "参考视频"
+      "input_image": "输入图片",
+      "input_audio": "输入音频",
+      "input_video": "输入视频",
+      "first_frame_image": "首帧",
+      "last_frame_image": "尾帧",
+      "reference_image": "参考图片"
     },
     "price": {
       "perUnit": "每 {unit} {rate} 积分",
@@ -10748,7 +11143,7 @@
     "openInFiles": "在文件中查看",
     "savedNoPreview": "生成已完成，但返回的内容本页面无法显示。如果确实产出了素材，它就在你的文件中。",
     "generate": "生成",
-    "again": "修改",
+    "modify": "修改",
     "back": "返回",
     "cancel": "取消",
     "close": "关闭",
@@ -10757,9 +11152,21 @@
       "stillRunning": "连接已中断，但生成仍在服务器上继续，并会计费。完成后，您的文件将出现在文件列表中。",
       "unreadable": "本次生成被拒绝，未产出任何内容，但拒绝原因返回的格式无法在此页面显示。请换一个模型，或稍后重试。"
     },
+    "assetPairing": {
+      "goesWith": "需与以下一起发送：{slots}",
+      "notWith": "不能与以下一起发送：{slots}"
+    },
+    "assetRoleHints": {
+      "source": "该文件会被处理，并以修改后的形式返回。",
+      "first_frame": "视频以这张图片开场。",
+      "last_frame": "视频以这张图片收尾。",
+      "reference": "只借用其主体或风格，不会作为画面出现。",
+      "mask": "标出另一张图片中可以被修改的区域。"
+    },
     "assetRoles": {
       "source": "源图片",
       "first_frame": "首帧",
+      "last_frame": "尾帧",
       "reference": "参考图片",
       "mask": "蒙版"
     },
@@ -10775,14 +11182,15 @@
     "emptyForFormat": "这里还没有生成过{format}内容。",
     "error": "无法加载历史生成，请稍后重试。",
     "untitled": "未命名的生成",
-    "reuse": "再次使用",
+    "modify": "修改",
     "reuseUnavailable": "该模型已下架，这条生成无法重新运行。",
     "open": "打开 {name}",
     "previous": "上一页",
     "next": "下一页",
     "range": "第 {from}-{to} 条",
     "generatedWith": "由 {model} 生成",
-    "regenerate": "修改后重新生成"
+    "cost": "{count, plural, other {{credits} 积分}}",
+    "costTitle": "平台为本次生成收取的费用"
   },
   "folders": {
     "newFolder": "新建文件夹",
@@ -10832,6 +11240,13 @@
     },
     "weekRange": "{from} 至 {to}",
     "searchPlaceholder": "搜索",
+    "triggerSearch": {
+      "label": "搜索生产触发器",
+      "placeholder": "选择生产触发器",
+      "clear": "清除触发器选择",
+      "empty": "没有匹配的活动生产触发器",
+      "uses": "{n} 次使用"
+    },
     "clock": {
       "tooltip": "{zone} 的当前时间"
     },
@@ -10855,11 +11270,23 @@
       "notLiveYet": "该计划已随工作流保存。搭建完成并设为生产版本后才会开始触发。",
       "slotActionAt": "在 {date} {time} 安排任务",
       "slotActionOn": "在 {date} 安排任务",
-      "monthlyDayGap": "设在每月 {day} 日的计划，在天数较少的月份不会运行。"
+      "monthlyDayGap": "设在每月 {day} 日的计划，在天数较少的月份不会运行。",
+      "agentTitle": "新建定时智能体",
+      "kindWorkflow": "工作流",
+      "kindWorkflowHint": "在画布上搭建的一连串步骤。",
+      "kindAgent": "智能体",
+      "kindAgentHint": "自行执行一条指令的助手。",
+      "agentNamePlaceholder": "晨间简报",
+      "agentConfirm": "继续",
+      "agentLiveOnSave": "该计划会带入智能体表单。保存智能体后即自动开始运行。",
+      "agentCreatedTitle": "智能体已创建",
+      "agentCreatedMessage": "请在日历中查看它的下一次运行。",
+      "agentCreatedNoPromptMessage": "未填说明时，它只在有被指派的任务时才会运行。"
     },
     "moreCount": "还有 {n} 项",
     "showLess": "收起",
     "movedBadge": "已移出原计划",
+    "launchedBy": "由{kind}启动",
     "resource": {
       "workflow": "工作流",
       "application": "应用",
@@ -10873,18 +11300,23 @@
       "form": "表单",
       "datasource": "数据表",
       "workflow": "工作流",
-      "error": "错误"
+      "error": "错误",
+      "sub_agent": "子智能体",
+      "task": "任务",
+      "widget": "挂件"
     },
     "status": {
       "planned": "已计划",
       "running": "运行中",
       "completed": "已完成",
       "failed": "失败",
+      "cancelled": "已停止",
       "fired": "已触发",
       "budgetBlocked": "不会运行：已达支出上限"
     },
     "filters": {
       "resourceTypes": "资源类型",
+      "launchKinds": "启动方式",
       "view": "视图",
       "settings": "显示设置",
       "timezone": "时区",
@@ -10902,11 +11334,15 @@
     "menu": {
       "runNow": "立即运行",
       "runNowHint": "原定的运行仍会照常进行。",
+      "runNowBudgetBlocked": "被支出上限阻止",
       "move": "移动…",
-      "pause": "暂停定时",
-      "resume": "恢复定时",
+      "pause": "暂停此计划",
+      "resume": "重新启用此计划",
+      "pauseResource": "{type, select, workflow {禁用工作流} agent {禁用智能体} interface {禁用界面} other {禁用资源}}",
+      "resumeResource": "{type, select, workflow {重新启用工作流} agent {重新启用智能体} interface {重新启用界面} other {重新启用资源}}",
       "open": "打开资源",
-      "openRun": "打开这次运行"
+      "openRun": "打开这次运行",
+      "openConversation": "打开这个对话"
     },
     "move": {
       "title": "移动 {name}",
@@ -10927,13 +11363,17 @@
     },
     "truncated": {
       "schedules": "{n, plural, other {# 个计划}}触发过于频繁，无法在此完整显示。请切换到日视图查看全部。",
-      "past": "该时间范围内的部分较早运行未显示。"
+      "past": "该时间范围内的部分较早运行未显示。",
+      "pastFrom": "{date} 起的历史记录是完整的，此区间更早的部分运行未显示。",
+      "agentHistoryUnavailable": "智能体的运行记录无法加载，因此这段历史并不完整。"
     },
     "empty": {
       "title": "这里没有安排",
       "description": "工作流、应用和智能体的定时任务会显示在此日历上。",
       "allFilteredTitle": "未选择任何资源类型",
       "allFilteredDescription": "重新启用一种资源类型即可查看已安排的内容。",
+      "noLaunchKindTitle": "未选择任何启动方式",
+      "noLaunchKindDescription": "重新开启一种启动方式即可看到运行记录。",
       "searchTitle": "没有匹配项",
       "searchDescription": "该时间段内没有与搜索匹配的已安排资源。",
       "filteredTitle": "没有符合筛选条件的内容",
@@ -10960,11 +11400,16 @@
       "ranTitle": "已启动",
       "ranMessage": "原定的运行仍会照常进行。",
       "runFailedTitle": "无法运行",
-      "pausedTitle": "已暂停",
-      "pausedMessage": "在你恢复之前不会触发。",
-      "resumedTitle": "已恢复",
-      "resumedMessage": "已重新就绪。",
-      "toggleFailedTitle": "无法修改定时"
+      "pausedTitle": "计划已暂停",
+      "pausedMessage": "重新启用前，此计划不会触发任何运行。",
+      "resumedTitle": "计划已重新启用",
+      "resumedMessage": "此计划将重新触发运行。",
+      "toggleFailedTitle": "无法修改计划",
+      "resourcePausedTitle": "{type, select, workflow {工作流已禁用} agent {智能体已禁用} interface {界面已禁用} other {资源已禁用}}",
+      "resourcePausedMessage": "{type, select, workflow {重新启用前，此工作流的生产触发器均不会运行。} agent {重新启用前，此智能体的生产触发器均不会运行。} interface {重新启用前，此界面的生产触发器均不会运行。} other {重新启用前，此资源的生产触发器均不会运行。}}",
+      "resourceResumedTitle": "{type, select, workflow {工作流已重新启用} agent {智能体已重新启用} interface {界面已重新启用} other {资源已重新启用}}",
+      "resourceResumedMessage": "{type, select, workflow {此工作流的生产触发器已重新启用。} agent {此智能体的生产触发器已重新启用。} interface {此界面的生产触发器已重新启用。} other {此资源的生产触发器已重新启用。}}",
+      "resourceToggleFailedTitle": "{type, select, workflow {无法修改工作流} agent {无法修改智能体} interface {无法修改界面} other {无法修改资源}}"
     },
     "hiddenOnWeekends": "{n, plural, other {有 # 次运行落在被隐藏的周末。}} 显示周末。"
   },
@@ -11192,12 +11637,19 @@
       "duration_seconds": "时长（秒）",
       "n": "数量",
       "seed": "随机种子",
-      "input_image": "参考图片",
-      "input_audio": "参考音频",
-      "input_video": "参考视频"
+      "input_image": "输入图片",
+      "input_audio": "输入音频",
+      "input_video": "输入视频",
+      "first_frame_image": "首帧",
+      "last_frame_image": "尾帧",
+      "reference_image": "参考图片"
     },
     "price": {
       "perUnit": "每 {unit} {rate} 积分",
+      "factor": "{param} x{factor}",
+      "factors": "含 {list}",
+      "multiplierBadge": "x{factor}",
+      "factorRuntime": "最终价格取决于该步骤运行时解析出的值",
       "plusBase": "另加 {base} 起步",
       "flat": "{credits} 积分",
       "min": "最低 {credits}",
@@ -11214,9 +11666,21 @@
     "modelCount": "{count} 个模型",
     "empty": "目前还没有可用的生成模型。",
     "billedOn": "按 {quantity} {unit} 计费",
+    "assetPairing": {
+      "goesWith": "需与以下一起发送：{slots}",
+      "notWith": "不能与以下一起发送：{slots}"
+    },
+    "assetRoleHints": {
+      "source": "该文件会被处理，并以修改后的形式返回。",
+      "first_frame": "视频以这张图片开场。",
+      "last_frame": "视频以这张图片收尾。",
+      "reference": "只借用其主体或风格，不会作为画面出现。",
+      "mask": "标出另一张图片中可以被修改的区域。"
+    },
     "assetRoles": {
       "source": "源图片",
       "first_frame": "首帧",
+      "last_frame": "尾帧",
       "reference": "参考图片",
       "mask": "蒙版"
     }
@@ -11228,6 +11692,10 @@
       "send": "创作",
       "missingRequired": "请先填写标出的设置",
       "addFile": "添加文件",
+      "fileWanted": "需先添加{slots}才能发送",
+      "chooseRole": "这个文件用来做什么？",
+      "goesWith": "需要搭配：{slots}",
+      "notWith": "不能与{slots}同时使用",
       "allSlotsFull": "该模型不能再接收文件",
       "uploading": "正在上传",
       "uploadFailed": "上传失败",
@@ -11252,6 +11720,10 @@
       "clear": "清除"
     },
     "untitled": "未命名作品",
+    "look": {
+      "toDarkroom": "切换到暗房视图",
+      "toApp": "返回应用视图"
+    },
     "thread": {
       "loading": "正在加载该创作记录"
     },
@@ -11268,7 +11740,7 @@
       "noAnswer": "这一次没有收到任何回应。它可能已经完成并已计费，请先查看你的文件，再决定是否重新运行。",
       "failed": "这一次没有产出任何内容。",
       "savedNoPreview": "已完成，但没有返回本页面可以显示的内容。如果生成了文件，它在你的文件里。",
-      "reuse": "再次使用",
+      "modify": "修改",
       "openInFiles": "在文件中查看",
       "chargedNoAsset": "本次生成已执行并已计费，但文件未能保存。请通过下方链接及时保存：链接将在几分钟后失效。",
       "recoverAsset": "从服务商处保存该文件"
@@ -11290,6 +11762,9 @@
     "apps": {
       "title": "创作应用",
       "favorites": "我的创作应用"
+    },
+    "history": {
+      "title": "你的生成记录"
     },
     "payer": {
       "change": "由谁付费",
@@ -11363,6 +11838,9 @@
     "saving": "保存中...",
     "cancel": "取消",
     "close": "关闭",
+    "clearSearch": "清除搜索",
+    "filterByType": "按类型筛选",
+    "editorDescription": "标题和摘要是智能体无需询问就能看到的内容，其余的都写进详情。",
     "toastCreated": "记忆已保存。",
     "toastUpdated": "记忆已更新。",
     "toastDeleted": "记忆已删除。",
@@ -11379,5 +11857,3172 @@
     "deactivateAction": "停用",
     "loadFailedTitle": "无法加载记忆",
     "loadFailedSubtitle": "列表未能加载，因此并不一定为空。请重试。"
+  },
+  "LandingShell": {
+    "pricing": "价格",
+    "selfHosted": "自托管",
+    "signIn": "登录",
+    "getStarted": "免费开始",
+    "docs": "文档",
+    "product": "产品",
+    "models": "模型",
+    "resources": "资源",
+    "compare": "对比",
+    "marketplace": "市场",
+    "company": "公司",
+    "legal": "法律",
+    "useCases": "应用场景",
+    "workflows": "工作流",
+    "agents": "智能体",
+    "interfaces": "界面与应用",
+    "tables": "表格与数据",
+    "integrations": "集成",
+    "videos": "视频",
+    "allIntegrations": "全部集成",
+    "language": "语言",
+    "toLightTheme": "切换到浅色主题",
+    "toDarkTheme": "切换到深色主题",
+    "status": "服务状态",
+    "about": "关于我们",
+    "careers": "招聘",
+    "soon": "即将推出",
+    "contact": "联系我们",
+    "privacy": "隐私政策",
+    "terms": "服务条款",
+    "notice": "法律声明",
+    "alternativeTo": "{brand} 的替代方案",
+    "tagline": "AI 自动化平台。说清楚要做的事，看着工作流自己搭起来，再作为一个团队可以直接用的应用交付。云端或自托管。",
+    "rights": "保留所有权利。",
+    "personaOps": "运营团队",
+    "personaCreator": "内容创作者",
+    "personaSupport": "客户支持",
+    "personaSales": "销售团队",
+    "personaMarketing": "市场团队",
+    "personaRecruiting": "招聘团队"
+  },
+    "LandingHome": {
+      "faq": {
+        "eyebrow": "常见问题",
+        "title": "常见问题解答",
+        "what": {
+          "question": "LiveContext 是什么？",
+          "answer": "LiveContext 是一个 AI 自动化平台。你在对话里描述一件事，工作流就当着你的面搭起来，AI 智能体在受限的工具权限和硬性额度预算下执行它，结果变成一个你的团队或客户可以直接用的应用。平台内置 {integrations} 个 API 集成、数据表、浏览器智能体，以及一个可以直接复刻的自动化市场。"
+        },
+        "code": {
+          "question": "需要会写代码吗？",
+          "answer": "不需要。你在对话里把事情说清楚，再在可视化画布上微调。需要的时候，进阶工具都在：代码节点、原始 HTTP 请求、数据库查询，以及你自己的 API 定义。"
+        },
+        "selfHost": {
+          "question": "可以自托管 LiveContext 吗？",
+          "answer": "可以。社区版免费且自托管：在你自己的服务器上执行一次 docker compose up，代码在 GitHub 上公开。云版本额外提供托管运维、SAML 单点登录、工作区和平台额度。"
+        },
+        "compare": {
+          "question": "LiveContext 和 Zapier、n8n 或 Make 有什么不同？",
+          "answer": "那些工具止步于流水线；LiveContext 覆盖整个闭环：搭出工作流的对话、在预算和受限权限下执行它的智能体、团队打开的应用，以及存放数据的表格。详细对比见 livecontext.ai/compare。"
+        },
+        "pricing": {
+          "question": "价格是怎么算的？",
+          "answer": "有免费档，不需要信用卡。付费方案按额度计费：你选一个额度档位，并可以给每个智能体设一个它不能超过的预算上限。自托管的社区版免费。"
+        },
+        "models": {
+          "question": "可以用哪些 AI 模型？",
+          "answer": "主流厂商都支持，包括 Anthropic Claude、OpenAI（最新到 GPT-6 Astra）、Google Gemini 和 DeepSeek，另有 TypeSafe 的决策模型 Jev，用于分类步骤。可以用平台额度，也可以用你自己的 API 密钥，并为每个智能体单独选模型。"
+        },
+        "more": "更多细节见<docs>文档</docs>或<compare>对比页面</compare>。"
+      },
+      "jsonLd": {
+        "softwareDescription": "AI 自动化平台：用对话搭建工作流，交给有预算约束的 AI 智能体运行，再作为应用交付。{integrations} 个集成、内置表格、市场，云端或自托管。",
+        "offerDescription": "云端有免费档；自托管社区版免费。"
+      },
+      "agentTeam": {
+        "nova": {
+          "name": "客户支持",
+          "description": "分流工单，回复或升级"
+        },
+        "atlas": {
+          "name": "线索评估",
+          "description": "为每条新线索补充信息"
+        },
+        "scout": {
+          "name": "深度研究",
+          "description": "带来源的深入调研"
+        },
+        "ember": {
+          "name": "内容撰写",
+          "description": "用你的语气写帖子"
+        },
+        "orion": {
+          "name": "代码评审",
+          "description": "审查每一个合并请求"
+        },
+        "sol": {
+          "name": "社媒发布",
+          "description": "排期并发布社媒内容"
+        },
+        "helix": {
+          "name": "软件测试",
+          "description": "每晚跑一遍测试套件"
+        },
+        "aurora": {
+          "name": "共享收件箱",
+          "description": "回复共享收件箱"
+        },
+        "midas": {
+          "name": "账单催收",
+          "description": "跟进未付款的发票"
+        },
+        "drift": {
+          "name": "竞品监控",
+          "description": "盯住竞品页面的变化"
+        },
+        "sensei": {
+          "name": "品牌审核",
+          "description": "发布前把关文案"
+        },
+        "fizz": {
+          "name": "活动视觉",
+          "description": "生成活动用的视觉素材"
+        }
+      },
+      "agendaSchedules": {
+        "triage": "收件箱分流",
+        "leads": "新线索",
+        "standup": "站会",
+        "digest": "团队摘要",
+        "dashboard": "客户应用",
+        "research": "市场扫描",
+        "social": "社媒发布",
+        "community": "论坛摘要",
+        "backup": "备份",
+        "invoices": "发票"
+      },
+      "meta": {
+        "title": "LiveContext：AI 自动化平台。对话、工作流、智能体、应用。",
+        "description": "在对话里说清楚要做的事，LiveContext 就会当着你的面搭好自动化和它的应用，按日程运行，并把结果以链接、PDF 或导出文件的形式分享出去。每一步都看得见，每个智能体都有预算，云端或自托管。"
+      },
+      "hero": {
+        "eyebrow": "AI 自动化平台",
+        "titleLineOne": "一条消息<u>进</u>。",
+        "titleLineTwo": "一个能跑的自动化<u>出</u>。",
+        "lead": "{integrations} 个集成，支持所有主流大模型，云端或自托管。以可视化方式、在对话中或用代码构建、部署并运行你的智能体，并在任意环节加入人工确认。",
+        "startFree": "免费开始"
+      },
+      "integrations": {
+        "heading": "连接你的团队已经在用的工具"
+      },
+      "socialProof": {
+        "logosLabel": "他们用 LiveContext 做自动化"
+      },
+      "roles": {
+        "eyebrow": "为你的岗位而做",
+        "title": "六种角色，六种开始方式。",
+        "lead": "挑一个最接近你日常的。每个页面都会把该角色的工作流从头跑到尾：从对话里敲下的需求，到由人确认的结果。",
+        "cta": "了解{role}"
+      },
+      "marketplace": {
+        "eyebrow": "社区市场",
+        "title": "复刻别人做好的，一键发布你自己的。",
+        "lead": "一个真正在运行的自动化市场，由每天使用它们的人发布。每张卡片都是真实运行的画面，不是截图。复刻一个，整套东西都跟着来：工作流、里面的智能体、页面、表格，甚至文件。改成你的，再分享回去给下一个人。",
+        "footnote": "发布你做的，复刻别人分享的。整个社区都跑得更快。"
+      },
+      "agents": {
+        "eyebrow": "智能体团队",
+        "title": "你的整个智能体团队，一屏看完。",
+        "lead": "每个智能体都有自己的形象、你选的模型、限定的工具集，以及一份不能超支的额度预算。这就是真实的智能体视图，实时的：收藏一个，或者选中几张卡片。",
+        "cta": "创建第一个智能体"
+      },
+      "agenda": {
+        "eyebrow": "日程",
+        "title": "你自动化的一切，都在同一个日历上。",
+        "lead": "每个按日程运行的工作流、应用和智能体都会落在这里，旁边就是已经跑过的记录和结果。把一次运行挪到另一天，让某一次提前跑，一眼就能看出哪一次会被你的支出上限拦下。下面这个日历是真的，实时的：就在这里翻月份、按类型筛选。",
+        "cta": "把你的工作放上日程"
+      },
+      "build": {
+        "testimonialsEyebrow": "客户故事",
+        "testimonialsTitle": "他们说清楚要做的事，就拿到了自动化。",
+        "testimonialsLead": "真实的团队，用他们自己的话，讲他们自动化了什么、又替代了什么。",
+        "testimonialsRow": "客户故事，第 {n} 行"
+      },
+      "pricing": {
+        "eyebrow": "价格",
+        "title": "价格简单，每个智能体都能设上限。",
+        "lead": "选一个方案，选你的额度档位，再给每个智能体设一个它不能超过的预算。你只为实际运行付费，没有隐藏费用，也不会突然超支。"
+      },
+      "finalCta": {
+        "titleLineOne": "别再在一堆工具之间来回切换。",
+        "titleLineTwo": "从一个开始。",
+        "lead": "和它对话，用它搭建，用它交付，派它替你把活干完。"
+      }
+    },
+  "PersonaLanding": {
+    "buildable": {
+        "bandRow": "自动化示例，第 {n} 行",
+    "eyebrow": "更多自动化",
+        "title": "把任务说清楚，拿到自动化。",
+        "description": "这里的每一条今天就能搭出来，只需一条消息，用的都是目录里已有的集成。",
+        "examples": {
+          "agency": {
+            "role": "社媒代理",
+            "automation": "内容表里新增一行，智能体写好文案和配图，由人确认后发布到 Instagram 和 LinkedIn。"
+          },
+          "founder": {
+            "role": "独立创始人",
+            "automation": "Stripe 收到付款后在 Notion 建好客户行，打开入驻清单，并把金额发到 Slack。"
+          },
+          "recruiter": {
+            "role": "招聘负责人",
+            "automation": "Gmail 标签里收到的简历被读进表格，按岗位要求打分，入围名单变成招聘经理可以打开的页面。"
+          },
+          "support": {
+            "role": "客服主管",
+            "automation": "每张新的 Zendesk 工单都会被分类、转到正确的队列，并生成一份等人确认后才发出的回复草稿。"
+          },
+          "ops": {
+            "role": "运营负责人",
+            "automation": "每周一早上八点，六个看板被汇总成一份 PDF，在周会之前发给管理层。"
+          },
+          "sales": {
+            "role": "销售团队",
+            "automation": "HubSpot 里的商机一换阶段，就补全公司信息、写好跟进话术，并在 Slack 上通知客户负责人。"
+          },
+          "ecommerce": {
+            "role": "电商运营",
+            "automation": "Shopify 来单后先查库存，缺货就发邮件给供应商，并把补货日期写回订单。"
+          },
+          "content": {
+            "role": "内容团队",
+            "automation": "新的 YouTube 视频会被转写、剪成短片段，并生成一篇等待审阅的博客草稿。"
+          },
+          "finance": {
+            "role": "财务",
+            "automation": "放进 Drive 文件夹的发票会被读进表格，金额超出常规区间的会标记出来交给人处理。"
+          },
+          "product": {
+            "role": "产品经理",
+            "automation": "本周在 Linear 关闭的问题会汇成一份按主题分组的摘要，每周五发到团队频道。"
+          },
+          "developer": {
+            "role": "开发者",
+            "automation": "GitHub 上新开的 PR 会跑一遍评审清单、把发现写成评论，若改动了部署代码就在 Discord 上呼叫值班同事。"
+          },
+          "consultant": {
+            "role": "顾问",
+            "automation": "Google 日历上的预约会先备好客户简报，通话结束后笔记归档、账单发出。"
+          }
+        }
+      },
+    "common": {
+      "back": "返回首页",
+      "eyebrow": "围绕您的工作而设计",
+      "previewLabel": "工作区预览",
+      "workflowLabel": "查看实际工作过程",
+      "painpointsLabel": "减少重复劳动",
+      "processLabel": "从请求到结果",
+      "faqLabel": "常见问题",
+      "otherPersonasLabel": "探索其他角色",
+      "cta": "开始创建",
+      "secondaryCta": "了解运作方式",
+      "approvalLabel": "由您决定哪些步骤需要审批",
+      "iframeTitle": "LiveContext 互动介绍",
+      "personaNavigation": "选择您的角色",
+      "marketplaceEyebrow": "市场",
+      "marketplaceTitle": "从可供您调整的现成方案开始。",
+      "marketplaceDescription": "探索社区创作的工作流、智能体和应用，再根据您的工作方式进行调整。",
+      "pricingEyebrow": "价格",
+      "pricingTitle": "找到适合您工作的方案。",
+      "pricingDescription": "比较可用方案，选择您希望如何使用 LiveContext。",
+      "integrationsBrowseAll": "浏览全部 {integrations} 个集成",
+      "integrationsDetails": "{operations} 项可直接调用的操作，也可连接您自己的 API。",
+      "buildEyebrow": "你可以搭建什么",
+      "buildTableLabel": "数据表"
+    },
+    "personas": {
+      "ops": {
+        "workforce": {
+          "eyebrow": "您的运营团队",
+          "title": "每一项重复工作都有专属智能体。",
+          "description": "接收、库存、发票、报告：每个智能体都有明确职责、可用工具和不可超出的预算，关键处的审批仍由您决定。"
+        },
+        "team": {
+          "first": {
+            "name": "接收",
+            "description": "从已连接的表单和邮箱收集请求。"
+          },
+          "second": {
+            "name": "分派",
+            "description": "把每条请求交给负责处理的人。"
+          },
+          "third": {
+            "name": "库存",
+            "description": "让数量随新订单同步更新。"
+          },
+          "fourth": {
+            "name": "供应商",
+            "description": "库存偏低时准备补货消息。"
+          },
+          "fifth": {
+            "name": "发票",
+            "description": "汇总发票上下文并准备下一次开具。"
+          },
+          "sixth": {
+            "name": "报告",
+            "description": "从您的工具中汇总本周数据。"
+          },
+          "seventh": {
+            "name": "清单",
+            "description": "把流程拆成团队可勾选的步骤。"
+          },
+          "eighth": {
+            "name": "提醒",
+            "description": "某个步骤到期时准备下一次提醒。"
+          },
+          "ninth": {
+            "name": "记录",
+            "description": "让您的表格和文档保持最新。"
+          },
+          "tenth": {
+            "name": "质量",
+            "description": "按您的规范检查准备好的内容。"
+          },
+          "eleventh": {
+            "name": "警报",
+            "description": "提示需要人工决定的事项。"
+          },
+          "twelfth": {
+            "name": "交接",
+            "description": "把上下文交给接手的同事。"
+          }
+        },
+        "name": "运营",
+        "metaTitle": "面向运营团队的 AI 工作流 | LiveContext",
+        "metaDescription": "把周报、客户入驻和库存盘点放到日程上。LiveContext 汇总数据、拟好更新，并等你确认后才发出。",
+        "eyebrow": "面向运营团队",
+        "title": "重复的活儿，自己跑起来。",
+        "description": "LiveContext 按日程执行重复的工作：从你的工具里汇总数据，拟好更新，再放到一个界面上，由团队确认后才发出。",
+        "previewTitle": "一切都在日程上",
+        "previewDescription": "连接你运营已经在用的工具",
+        "benefits": {
+          "first": {
+            "title": "周报自己写好",
+            "description": "数据从各个工具汇总，摘要拟好，开会前就准备就绪。"
+          },
+          "second": {
+            "title": "每次执行都在同一张日历上",
+            "description": "周一的周报、客户入驻、库存盘点，都在日历上，旁边就是已经跑过的记录和结果。"
+          },
+          "third": {
+            "title": "没有确认就不会发出",
+            "description": "日程负责准备，你负责确认。中间那一步仍然是你的。"
+          }
+        },
+        "ctaTitle": "把重复的工作放到日程上。",
+        "ctaDescription": "先从周报开始，其余的慢慢加。",
+        "agendaSchedules": {
+          "first": "周报",
+          "second": "客户入驻",
+          "third": "库存盘点",
+          "fourth": "开票",
+          "fifth": "KPI 摘要",
+          "sixth": "备份检查",
+          "seventh": "供应商同步",
+          "eighth": "月度结算"
+        },
+        "workflowShowcase": {
+          "title": "从一条日程，到一份团队确认的周报。",
+          "description": "到点后，LiveContext 从你的工具里汇总数据并拟好更新。团队在一个界面上阅读并确认后才发出。",
+          "heroRequest": "每周一早上 8 点，汇总上周的数据，写好摘要，发给团队之前先让我过目。",
+          "heroReply": "已就绪：每周一 08:00 智能体从你的工具里汇总数据，在发送到你手机的审阅界面上写好摘要。你一确认，摘要发到 Slack，表格同步更新，汇总邮件发出，每份周报都记入数据表。",
+          "studio": {
+              "cards": {
+                "gather": {
+                  "label": "汇总",
+                  "title": "周一早上开六个标签页，还是只看一块屏",
+                  "summary": "数字分散在六个工具里，每周都要有人手动誊抄。运行会读完这六处、写好更新，并把结果汇到一块屏上。"
+                },
+                "alert": {
+                  "label": "告警",
+                  "title": "只发一条通知，而且是要紧的那条",
+                  "summary": "大多数运行没什么可说的，就什么都不发。发现问题的那一次才会推到手机上，并带上需要做的决定。"
+                },
+                "table": {
+                  "label": "留痕",
+                  "title": "每一周都会自己记下来",
+                  "summary": "每次运行都会追加一行：数字、谁批准的、什么时候批的。历史是一张能打开的表，而不是一串聊天记录。"
+                },
+                "schedule": {
+                  "label": "定时",
+                  "title": "每周一都会跑，不用谁记着",
+                  "summary": "日程就是触发器。不管有没有人在工位，它都会跑，而且每一次都留了下来，随时可以回看。"
+                },
+                "micro": {
+                  "silent": "无异常",
+                  "escalated": "已推送到手机",
+                  "next": "下一次运行",
+                  "done": "已批准"
+                }
+              }
+            },
+          "interfaceLabel": "审阅周报",
+          "approvedStatus": "已确认",
+          "workbench": {
+            "workspace": "运营工作区",
+            "overview": "概览",
+            "review": "待审阅",
+            "prepared": "已准备",
+            "owner": "负责人",
+            "progress": "进度",
+            "status": "状态",
+            "details": "指标",
+            "value": "数值",
+            "trend": "变化",
+            "runs": "执行次数",
+            "onTime": "准时率",
+            "hoursSaved": "节省工时",
+            "lowStock": "低于阈值",
+            "onHand": "现有库存",
+            "supplier": "供应商",
+            "sku": "货号"
+          },
+          "examples": {
+            "report": {
+              "label": "周报",
+              "title": "上周的数据，已经写好",
+              "summary": "周一的周报已汇总并写好，等你过目。",
+              "customerName": "Claire Fontaine",
+              "subject": "运营 · 第 37 周",
+              "customerMessage": "第 37 周的执行次数、准时率和节省工时，与上一周对比。",
+              "contextLabel": "数据来源",
+              "contextValue": "6 个工作流共 34 次执行 · 读取 3 个工具 · 与上周数据核对",
+              "responseLabel": "拟好的摘要",
+              "response": "第 37 周：34 次执行，准时率 97%，节省 12 小时。增益主要来自两个工作流；开票流程有三次重试，需要留意。",
+              "actionLabel": "确认周报",
+              "agentLabel": "撰写周报",
+              "statusLabel": "等待确认",
+              "phoneTitle": "周报已经准备好",
+              "phoneMessage": "34 次执行，准时率 97%，节省 12 小时。确认后发送给团队。",
+              "triggerLabel": "周一 08:00",
+              "approvalLabel": "确认周报",
+              "destinationFirst": "Slack",
+              "destinationSecond": "Google Sheets",
+              "destinationThird": "Gmail",
+              "records": {
+                "first": {
+                  "label": "执行次数",
+                  "value": "34",
+                  "detail": "较第 36 周 +6"
+                },
+                "second": {
+                  "label": "准时率",
+                  "value": "97%",
+                  "detail": "+2 个百分点"
+                },
+                "third": {
+                  "label": "节省工时",
+                  "value": "12 小时",
+                  "detail": "+1.5 小时"
+                }
+              },
+              "table": {
+                "createLabel": "新增行",
+                "name": "周报记录",
+                "description": "每周的周报连同数据和确认人一起保存。",
+                "status": "演示数据"
+              }
+            },
+            "intake": {
+              "label": "客户入驻",
+              "title": "每位客户都按同一套流程入驻",
+              "summary": "入驻表单会开通账号、生成清单并拟好启动邮件。",
+              "customerName": "Yanis Berger",
+              "subject": "Meridian Labs · 入驻",
+              "customerMessage": "新客户签了 Growth 方案，9 月 22 日开始，按惯例配置。",
+              "contextLabel": "入驻清单",
+              "contextValue": "工作区已创建 · 已索要材料 · 启动会待约",
+              "responseLabel": "拟好的启动邮件",
+              "response": "欢迎 Meridian Labs。工作区已就绪，清单已打开，启动会建议定在周二 10:00。",
+              "actionLabel": "确认入驻",
+              "agentLabel": "准备配置",
+              "statusLabel": "等待确认",
+              "phoneTitle": "有新客户可以开始入驻",
+              "phoneMessage": "Meridian Labs 的工作区、清单和启动邮件都已准备好。确认后发送。",
+              "triggerLabel": "入驻表单",
+              "approvalLabel": "确认入驻",
+              "destinationFirst": "Notion",
+              "destinationSecond": "Slack",
+              "destinationThird": "Gmail",
+              "records": {
+                "first": {
+                  "label": "创建工作区",
+                  "value": "已完成",
+                  "detail": "运营"
+                },
+                "second": {
+                  "label": "索要材料",
+                  "value": "待发送",
+                  "detail": "财务"
+                },
+                "third": {
+                  "label": "预约启动会",
+                  "value": "待预约",
+                  "detail": "客户经理"
+                }
+              },
+              "table": {
+                "createLabel": "新增行",
+                "name": "客户入驻记录",
+                "description": "每次入驻、负责人以及当前进度。",
+                "status": "演示数据"
+              }
+            },
+            "stock": {
+              "label": "库存盘点",
+              "title": "在断货之前盘点库存",
+              "summary": "订单会更新库存表，补货单会拟好等你确认。",
+              "customerName": "Nora Lefèvre",
+              "subject": "仓库 · 库存盘点",
+              "customerMessage": "昨晚的订单之后，有两个货号跌破了阈值。",
+              "contextLabel": "库存盘点",
+              "contextValue": "现有 418 件 · 2 个货号低于阈值 · 需联系 3 家供应商",
+              "responseLabel": "拟好的补货单",
+              "response": "两个货号低于阈值：MRW-114（剩 8 件）和 MRW-231（剩 12 件）。补货单已按常用供应商拟好，五天内到货。",
+              "actionLabel": "确认补货",
+              "agentLabel": "盘点库存",
+              "statusLabel": "等待确认",
+              "phoneTitle": "两个货号快用完了",
+              "phoneMessage": "MRW-114 和 MRW-231 已低于阈值。确认补货即可发给供应商。",
+              "triggerLabel": "新订单",
+              "approvalLabel": "确认补货",
+              "destinationFirst": "Shopify",
+              "destinationSecond": "Google Sheets",
+              "destinationThird": "Slack",
+              "records": {
+                "first": {
+                  "label": "MRW-114",
+                  "value": "8",
+                  "detail": "低于阈值"
+                },
+                "second": {
+                  "label": "MRW-231",
+                  "value": "12",
+                  "detail": "低于阈值"
+                },
+                "third": {
+                  "label": "MRW-087",
+                  "value": "64",
+                  "detail": "库存充足"
+                }
+              },
+              "table": {
+                "createLabel": "新增行",
+                "name": "库存预警",
+                "description": "每条预警、库存水平以及下单情况。",
+                "status": "演示数据"
+              }
+            }
+          }
+        }
+      },
+      "support": {
+        "workforce": {
+          "eyebrow": "您的支持团队",
+          "title": "一整支客服团队，一个岗位一个智能体。",
+          "description": "分类、回复、账单、转交：每个智能体都有明确职责、可用工具和不可超出的预算，未经您审批不会发给客户。"
+        },
+        "name": "客户支持",
+        "metaTitle": "客户支持 AI 工作流 | LiveContext",
+        "metaDescription": "通过可审计的 AI 客服工作流处理请求，使用批准的知识、人工审批、完整运行日志、SLA 跟踪和结果指标。",
+        "eyebrow": "为客户支持团队打造",
+        "title": "客户需要答案。让每次回复都有依据。",
+        "description": "LiveContext 汇集请求、客户历史和知识资料，准备有用的回复，并持续推进后续跟进。",
+        "previewTitle": "让待办请求持续推进",
+        "previewDescription": "让您熟悉的工具协同工作。",
+        "previewColumns": {
+          "first": "接收",
+          "second": "准备",
+          "third": "跟进"
+        },
+        "previewItems": {
+          "first": "账单咨询",
+          "second": "有上下文的回复",
+          "third": "工单更新"
+        },
+        "previewStatuses": {
+          "first": "已分类",
+          "second": "待审核",
+          "third": "已分配"
+        },
+        "painpointsTitle": "少些查找，多些有用的回复。",
+        "benefits": {
+          "first": {
+            "title": "先了解全貌，再做出回复。",
+            "description": "不必在多个标签页之间来回查找。LiveContext 从已连接的工具中收集所需上下文。"
+          },
+          "second": {
+            "title": "回复只是开始。",
+            "description": "工单更新与定时跟进让对话继续推进，为每个承诺安排下一步行动。"
+          },
+          "third": {
+            "title": "回复更有用，无需从头写起。",
+            "description": "回复依据已批准的知识资料生成。团队可以审核内容，并接手敏感对话。"
+          }
+        },
+        "processTitle": "从第一条消息到后续跟进。",
+        "steps": {
+          "first": {
+            "title": "接收",
+            "description": "通过已连接的收件箱或表单触发工作流。"
+          },
+          "second": {
+            "title": "理解",
+            "description": "对请求进行分类并收集相关上下文。"
+          },
+          "third": {
+            "title": "准备",
+            "description": "起草回复，并在需要时提交审核。"
+          },
+          "fourth": {
+            "title": "跟进",
+            "description": "发送已批准的回复并更新已连接的工具。"
+          }
+        },
+        "faq": {
+          "first": {
+            "question": "团队可以审核回复吗？",
+            "answer": "可以。在发送消息或修改记录之前加入审批步骤。"
+          },
+          "second": {
+            "question": "上下文来自哪里？",
+            "answer": "来自您为工作流选择的资料来源和已连接工具。"
+          },
+          "third": {
+            "question": "如何处理敏感请求？",
+            "answer": "设置分派规则，将请求转交给合适的人员。"
+          }
+        },
+        "ctaTitle": "让每个请求都得到应有的关注。",
+        "ctaDescription": "将客户沟通中的重复事务交给 LiveContext。",
+        "agendaSchedules": {
+          "first": "工单分类",
+          "second": "回复草稿",
+          "third": "回复审核",
+          "fourth": "转交处理",
+          "fifth": "客户跟进",
+          "sixth": "支持报告",
+          "seventh": "周末收件箱分类",
+          "eighth": "周一交接摘要"
+        },
+        "team": {
+          "first": {
+            "name": "分类",
+            "description": "整理请求并分配到合适的队列。"
+          },
+          "second": {
+            "name": "回复",
+            "description": "依据已批准的知识准备有用的回复。"
+          },
+          "third": {
+            "name": "账单",
+            "description": "收集账单咨询所需的背景信息。"
+          },
+          "fourth": {
+            "name": "订单",
+            "description": "通过已连接工具准备订单更新。"
+          },
+          "fifth": {
+            "name": "知识",
+            "description": "从资料来源中找到相关答案。"
+          },
+          "sixth": {
+            "name": "转交",
+            "description": "将敏感问题交给您的团队。"
+          },
+          "seventh": {
+            "name": "跟进",
+            "description": "在合适的时间准备下一条消息。"
+          },
+          "eighth": {
+            "name": "反馈",
+            "description": "在沟通结束后收集客户反馈。"
+          },
+          "ninth": {
+            "name": "摘要",
+            "description": "为同事提供简洁的对话摘要。"
+          },
+          "tenth": {
+            "name": "质量",
+            "description": "根据您的要求检查回复草稿。"
+          },
+          "eleventh": {
+            "name": "提醒",
+            "description": "标记需要人工关注的请求。"
+          },
+          "twelfth": {
+            "name": "报告",
+            "description": "汇总已连接支持工具中的活动。"
+          }
+        },
+        "workflowShowcase": {
+          "title": "从客户请求，到可供审核的回复。",
+          "description": "收到请求后，LiveContext 收集背景并准备回复。团队在审核界面查看结果，再决定下一步行动。",
+          "heroRequest": "退款申请越积越多，我不想让系统自动退款，每一笔都要我亲自确认。",
+          "heroReply": "这是我搭好的流程：每一笔退款申请都会生成一份拟好的回复，出现在发送到你手机的审批界面上。你一确认，退款就通过 Stripe 发出，工单和客户同步更新，每个决定都会存进数据表。",
+          "studio": {
+              "cards": {
+                "agent": {
+                  "label": "分诊",
+                  "title": "在有人点开之前，请求已经被读过了",
+                  "summary": "智能体读完消息，从你的工具里取出账户、订单和历史记录，把案子连同上下文一起交出来。"
+                },
+                "screen": {
+                  "label": "复核",
+                  "title": "一块屏，而不是五个标签页",
+                  "summary": "上下文、拟好的回复和要做的决定都在一块屏上。没人点头，什么都不会发出去。"
+                },
+                "table": {
+                  "label": "历史",
+                  "title": "每个案子都会留下一行",
+                  "summary": "谁提的、怎么定的、谁定的、什么时候定的。记录是一张团队能打开的表，而不是一条要往上翻的消息流。"
+                },
+                "phone": {
+                  "label": "批准",
+                  "title": "在手机上两下就批了",
+                  "summary": "决定不必等人回到工位。它会送到人所在的地方，并带上做判断所需的一切。"
+                },
+                "micro": {
+                  "reads": "读取",
+                  "waiting": "等待决定"
+                }
+              }
+            },
+          "triggerLabel": "新请求",
+          "agentLabel": "准备回复",
+          "interfaceLabel": "审核回复",
+          "interfaceTitle": "客户请求",
+          "interfaceDescription": "检查背景和建议回复。",
+          "primaryAction": "批准回复",
+          "secondaryAction": "修改",
+          "statusLabel": "等待审核",
+          "items": {
+            "first": {
+              "title": "请求",
+              "detail": "客户咨询账单问题"
+            },
+            "second": {
+              "title": "背景",
+              "detail": "相关账单信息已收集"
+            },
+            "third": {
+              "title": "回复",
+              "detail": "回复草稿已准备好供团队查看"
+            }
+          },
+          "approvalLabel": "审批",
+          "approveAction": "批准",
+          "approvedStatus": "已批准",
+          "replayAction": "重播",
+          "pauseAction": "暂停",
+          "resumeAction": "继续",
+          "nextAction": "下一步",
+          "phoneTitle": "您的回复已准备好",
+          "phoneMessage": "客户回复已就绪。批准后将发送回复并更新支持工具。",
+          "destinationFirst": "Zendesk",
+          "destinationSecond": "Gmail",
+          "destinationThird": "Slack",
+          "previewTitle": "关于账单的问题",
+          "previewBody": "您好，可以帮我解释一下最新的账单吗？我想在付款前核对相关信息。",
+          "examples": {
+            "navigation": "选择示例",
+            "reply": {
+              "label": "账号访问",
+              "title": "有了正确背景，恢复访问更清晰",
+              "summary": "工作区访问请求的回复已准备好，等待审批。",
+              "customerName": "Emma Laurent",
+              "subject": "工作区访问 · #1042",
+              "customerMessage": "我可以登录，但看不到团队工作区。能帮我检查访问权限吗？",
+              "contextLabel": "访问检查",
+              "contextValue": "已找到账号 · 邀请待接受 · 工单 #1042",
+              "responseLabel": "已准备的回复",
+              "response": "Emma 您好，您的账号处于启用状态，工作区邀请尚未接受。接受邀请和恢复访问的操作步骤已准备好。",
+              "actionLabel": "批准回复",
+              "agentLabel": "检查访问权限",
+              "statusLabel": "等待批准",
+              "phoneTitle": "有了正确背景，恢复访问更清晰",
+              "phoneMessage": "工作区访问请求的回复已准备好，等待审批。",
+              "triggerLabel": "账号访问",
+              "approvalLabel": "批准回复",
+              "destinationFirst": "Zendesk",
+              "destinationSecond": "Gmail",
+              "destinationThird": "Slack",
+              "records": {
+                "first": {
+                  "label": "Emma Laurent",
+                  "value": "#1042",
+                  "detail": "工作空间访问"
+                },
+                "second": {
+                  "label": "Noah Chen",
+                  "value": "#1043",
+                  "detail": "重置密码"
+                },
+                "third": {
+                  "label": "Sofia Rossi",
+                  "value": "#1044",
+                  "detail": "用户邀请"
+                }
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "客服工单",
+                "description": "工作区访问请求的回复已准备好，等待审批。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "客户",
+                    "value": "Emma Laurent"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "工作区访问 · #1042"
+                  },
+                  "third": {
+                    "label": "访问检查",
+                    "value": "已找到账号 · 邀请待接受 · 工单 #1042"
+                  },
+                  "fourth": {
+                    "label": "已准备的回复",
+                    "value": "Emma 您好，您的账号处于启用状态，工作区邀请尚未接受。接受邀请和恢复访问的操作步骤已准备好。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准回复"
+                  }
+                }
+              }
+            },
+            "refund": {
+              "label": "取消订阅",
+              "title": "先审核取消申请，再退款",
+              "summary": "49 欧元订阅退款及取消回复已准备好，审批前不会转账。",
+              "customerName": "Emma Laurent",
+              "subject": "取消订阅 · #2087",
+              "customerMessage": "请取消我的订阅，并审核最近一笔 49 欧元扣款是否可以退款。",
+              "contextLabel": "订阅审核",
+              "contextValue": "月度方案 · 49 欧元 · 退款尚未发放",
+              "responseLabel": "已准备的确认",
+              "response": "Emma 您好，取消申请和 49 欧元退款已准备好供审核。获批并处理后，我们会向您确认。",
+              "actionLabel": "批准退款",
+              "agentLabel": "审核订阅",
+              "statusLabel": "等待批准",
+              "phoneTitle": "先审核取消申请，再退款",
+              "phoneMessage": "49 欧元订阅退款及取消回复已准备好，审批前不会转账。",
+              "triggerLabel": "取消订阅",
+              "approvalLabel": "批准退款",
+              "destinationFirst": "Stripe",
+              "destinationSecond": "Zendesk",
+              "destinationThird": "Gmail",
+              "records": {
+                "first": {
+                  "label": "客户",
+                  "value": "Emma Laurent",
+                  "detail": "月度方案"
+                },
+                "second": {
+                  "label": "金额",
+                  "value": "49 欧元",
+                  "detail": "退款尚未发放"
+                },
+                "third": {
+                  "label": "合计",
+                  "value": "49 欧元",
+                  "detail": "等待批准"
+                }
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "订阅取消",
+                "description": "49 欧元订阅退款及取消回复已准备好，审批前不会转账。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "客户",
+                    "value": "Emma Laurent"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "取消订阅 · #2087"
+                  },
+                  "third": {
+                    "label": "订阅审核",
+                    "value": "月度方案 · 49 欧元 · 退款尚未发放"
+                  },
+                  "fourth": {
+                    "label": "已准备的确认",
+                    "value": "Emma 您好，取消申请和 49 欧元退款已准备好供审核。获批并处理后，我们会向您确认。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准退款"
+                  }
+                }
+              }
+            },
+            "incident": {
+              "label": "API 事件",
+              "title": "向技术团队交接完整事件",
+              "summary": "API 故障报告和客户通知已准备好，等待批准升级处理。",
+              "customerName": "Alex Martin",
+              "subject": "API 错误 · #3175",
+              "customerMessage": "我们的 API 请求返回错误，订单同步因此中断。",
+              "contextLabel": "事件详情",
+              "contextValue": "订单同步受阻 · 已报告 API 错误 · 需要技术检查",
+              "responseLabel": "已准备的通知",
+              "response": "Alex 您好，您的报告已整理好供技术团队查看。获批后将升级处理事件，我们会及时向您更新进展。",
+              "actionLabel": "批准升级处理",
+              "agentLabel": "准备事件报告",
+              "statusLabel": "等待批准",
+              "phoneTitle": "向技术团队交接完整事件",
+              "phoneMessage": "API 故障报告和客户通知已准备好，等待批准升级处理。",
+              "triggerLabel": "API 事件",
+              "approvalLabel": "批准升级处理",
+              "destinationFirst": "Linear",
+              "destinationSecond": "Slack",
+              "destinationThird": "Zendesk",
+              "records": {
+                "first": {
+                  "label": "Orders API",
+                  "value": "订单同步受阻",
+                  "detail": "技术团队审核"
+                },
+                "second": {
+                  "label": "Gateway",
+                  "value": "请求失败",
+                  "detail": "日志已准备"
+                },
+                "third": {
+                  "label": "Sync worker",
+                  "value": "等待重试",
+                  "detail": "影响待确认"
+                }
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "技术事件",
+                "description": "API 故障报告和客户通知已准备好，等待批准升级处理。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "客户",
+                    "value": "Alex Martin"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "API 错误 · #3175"
+                  },
+                  "third": {
+                    "label": "事件详情",
+                    "value": "订单同步受阻 · 已报告 API 错误 · 需要技术检查"
+                  },
+                  "fourth": {
+                    "label": "已准备的通知",
+                    "value": "Alex 您好，您的报告已整理好供技术团队查看。获批后将升级处理事件，我们会及时向您更新进展。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准升级处理"
+                  }
+                }
+              }
+            }
+          },
+          "workbench": {
+            "workspace": "客服工作台",
+            "queue": "待办队列",
+            "overview": "概览",
+            "activity": "动态",
+            "details": "详情",
+            "prepared": "已准备",
+            "owner": "负责人",
+            "status": "状态",
+            "priority": "优先级",
+            "source": "来源",
+            "score": "评分",
+            "amount": "金额",
+            "total": "合计",
+            "items": "项目",
+            "timeline": "时间线",
+            "notes": "备注",
+            "review": "待审核",
+            "selected": "已选择",
+            "progress": "进度",
+            "search": "搜索",
+            "customer": "客户",
+            "message": "消息",
+            "channel": "渠道",
+            "nextStep": "下一步",
+            "sla": "SLA 达标",
+            "backlog": "待处理工单",
+            "firstResponse": "首次响应",
+            "mrrAtRisk": "风险月经常性收入",
+            "retentionRate": "留存率",
+            "refundsPending": "待处理退款",
+            "uptime": "可用率",
+            "impactedServices": "受影响服务",
+            "severity": "严重程度",
+            "slaMet": "符合 SLA",
+            "subscription": "订阅",
+            "refundStatus": "退款状态",
+            "retention": "留存方案",
+            "refund": "退款",
+            "requestReceived": "已收到请求",
+            "subscriptionChecked": "已核查订阅",
+            "refundPrepared": "退款已准备",
+            "liveIncident": "正在处理的事故",
+            "engineeringPaged": "已通知技术团队",
+            "customerUpdatePrepared": "客户通知已准备",
+            "statusPageUpdate": "状态页更新"
+          }
+        }
+      },
+      "creator": {
+        "workforce": {
+          "eyebrow": "您的内容工作室",
+          "title": "一支不漏掉任何一次发布的制作团队。",
+          "description": "脚本、短视频、视觉、字幕、发布：每个智能体负责一个环节，使用您已连接的账号，并在发布前等待您的审批。"
+        },
+        "name": "内容创作者",
+        "metaTitle": "内容创作与发布工作流 | LiveContext",
+        "metaDescription": "在可视工作流中使用 AI 智能体创建字幕内容，完成审批、排期和多平台发布，并查看完整日志与绩效指标。",
+        "eyebrow": "为内容创作者打造",
+        "title": "您提供灵感，LiveContext 负责发布。",
+        "description": "从脚本、图片和视频，到自动字幕与定时发布，LiveContext 借助您已连接的工具完成内容制作。创意方向始终由您掌控。",
+        "previewTitle": "让内容日历真正运转起来",
+        "previewDescription": "让您熟悉的工具协同工作。",
+        "previewColumns": {
+          "first": "周一 09:00",
+          "second": "周三 14:00",
+          "third": "周五 18:00"
+        },
+        "previewItems": {
+          "first": "短视频",
+          "second": "轮播图文",
+          "third": "短视频"
+        },
+        "previewStatuses": {
+          "first": "字幕已准备",
+          "second": "等待审批",
+          "third": "已排期"
+        },
+        "painpointsTitle": "专注创作，让日常事务继续推进。",
+        "benefits": {
+          "first": {
+            "title": "多种内容形式，同一创意方向。",
+            "description": "社交帖子、轮播图文、长短视频、字幕、文章和邮件通讯：将灵感交给 LiveContext，让您已连接的创作工具制作受众关注的内容形式。"
+          },
+          "second": {
+            "title": "让内容日历负责发布。",
+            "description": "安排内容和日期，由 LiveContext 通过受支持的社交账号发布。日历让每条作品从准备走向上线。"
+          },
+          "third": {
+            "title": "您的声音，您的最终决定。",
+            "description": "只要您希望把关，就可以在上线前审核内容。LiveContext 会将已批准的版本发布到受支持的已连接账号。"
+          }
+        },
+        "processTitle": "灵感变成内容，内容走向发布。",
+        "steps": {
+          "first": {
+            "title": "明确需求",
+            "description": "由您的主题、受众和语气确定创意方向。"
+          },
+          "second": {
+            "title": "创作",
+            "description": "LiveContext 通过您已连接的创作工具生成脚本、图片或视频。"
+          },
+          "third": {
+            "title": "准备",
+            "description": "自动字幕和格式调整让内容适合您的渠道。"
+          },
+          "fourth": {
+            "title": "排期并发布",
+            "description": "内容日历确定日期，LiveContext 通过受支持的已连接账号发布。"
+          }
+        },
+        "faq": {
+          "first": {
+            "question": "也能直接创作内容吗？",
+            "answer": "可以。LiveContext 使用您已连接的创作工具生成文字、图片或视频，并将内容从准备推进到发布。"
+          },
+          "second": {
+            "question": "可以先审核再发布吗？",
+            "answer": "可以。加入审批步骤，掌控最终发布的内容。"
+          },
+          "third": {
+            "question": "支持所有社交网络吗？",
+            "answer": "发布能力取决于可用集成和账号权限。构建工作流时请选择受支持的渠道。"
+          }
+        },
+        "ctaTitle": "把时间留给下一个灵感。",
+        "ctaDescription": "将创作、字幕、排期和发布交给 LiveContext。",
+        "agendaSchedules": {
+          "first": "生成脚本",
+          "second": "创作视觉内容",
+          "third": "自动字幕",
+          "fourth": "内容审核",
+          "fifth": "发布内容",
+          "sixth": "内容报告",
+          "seventh": "周末内容发布",
+          "eighth": "下周内容队列"
+        },
+        "team": {
+          "first": {
+            "name": "社交帖子",
+            "description": "根据您的想法和语气创作社交帖子。"
+          },
+          "second": {
+            "name": "轮播图文",
+            "description": "将主题转化为逐页展开的故事。"
+          },
+          "third": {
+            "name": "短视频",
+            "description": "为社交渠道准备短视频内容。"
+          },
+          "fourth": {
+            "name": "字幕",
+            "description": "根据视频音频生成字幕。"
+          },
+          "fifth": {
+            "name": "脚本",
+            "description": "撰写叙事清晰的视频脚本。"
+          },
+          "sixth": {
+            "name": "长视频",
+            "description": "借助已连接工具准备长视频内容。"
+          },
+          "seventh": {
+            "name": "文章",
+            "description": "将您的想法发展成完整文章。"
+          },
+          "eighth": {
+            "name": "邮件通讯",
+            "description": "为受众创作定期邮件内容。"
+          },
+          "ninth": {
+            "name": "视觉素材",
+            "description": "根据您的创意方向生成图片。"
+          },
+          "tenth": {
+            "name": "配文",
+            "description": "为每个渠道撰写合适的配文。"
+          },
+          "eleventh": {
+            "name": "日历",
+            "description": "组织内容和计划发布日期。"
+          },
+          "twelfth": {
+            "name": "发布",
+            "description": "将已批准内容发布到已连接账号。"
+          }
+        },
+        "workflowShowcase": {
+          "title": "从创意需求，到等待您审批的内容。",
+          "description": "LiveContext 根据需求，借助已连接工具创作帖子、轮播图文、视频或文章，准备自动字幕，并在发布前将结果提交到审核界面。",
+          "heroRequest": "把每个产品创意做成竖屏视频，自动剪辑，然后发布到所有平台。",
+          "heroReply": "已搭好：剪辑器生成 1080x1920 竖屏视频，先在你手机上给出预览供你确认，然后同时发布到 Instagram、TikTok、YouTube、LinkedIn、Reddit 和 X，每条发布都记入数据表。",
+          "studio": {
+            "briefLabel": "任务简述",
+            "postLabel": "可以发布了",
+            "subtitlesLabel": "字幕已生成并压制",
+"cards": {
+              "cutout": {
+                "label": "去背景",
+                "title": "一张供应商照片，一个可以上架的商品页",
+                "summary": "照片按拍摄时的样子送来，桌面杂乱。运行会把产品抠出来，放到干净的底上，并按每个平台要求的尺寸导出。",
+                "inputLabel": "收到时的样子",
+                "cutLabel": "已抠图"
+              },
+              "batch": {
+                "label": "批量",
+                "title": "四十张照片，一次运行",
+                "summary": "表格里每个产品一行。运行在每一行上重复同样的步骤并写回结果，你去做别的事，整份目录就做完了。"
+              },
+              "formats": {
+                "label": "重新构图",
+                "title": "拍一次，所有尺寸都有",
+                "summary": "同一条素材，按每个平台真正接受的比例裁切，封面图也在内。不用重拍。"
+              },
+              "subtitles": {
+                "label": "字幕",
+                "title": "说出来、写下来、压进画面",
+                "summary": "先转写片段，再生成字幕并压制到画面上，发布时字幕已经在里面。",
+                "stepOne": "转写",
+                "stepTwo": "已压制"
+              },
+              "formatNames": {
+                "thumb": "YouTube 封面",
+                "link": "LinkedIn 与 X 卡片",
+                "square": "方形帖子",
+                "feed": "Instagram 信息流",
+                "reel": "Reel 与 TikTok"
+              }
+            }
+          },
+          "triggerLabel": "内容需求",
+          "agentLabel": "创作内容",
+          "interfaceLabel": "审核内容",
+          "interfaceTitle": "等待审批的帖子",
+          "interfaceDescription": "发布前检查内容草稿。",
+          "primaryAction": "批准",
+          "secondaryAction": "修改",
+          "statusLabel": "等待审核",
+          "items": {
+            "first": {
+              "title": "短视频",
+              "detail": "脚本和自动字幕已准备"
+            },
+            "second": {
+              "title": "轮播图文",
+              "detail": "页面和配文已起草"
+            },
+            "third": {
+              "title": "文章",
+              "detail": "完整草稿可供审核"
+            }
+          },
+          "approvalLabel": "审批",
+          "approveAction": "批准",
+          "approvedStatus": "已批准",
+          "replayAction": "重播",
+          "pauseAction": "暂停",
+          "resumeAction": "继续",
+          "nextAction": "下一步",
+          "phoneTitle": "您的帖子已准备好",
+          "phoneMessage": "发布到社交渠道前，请先检查照片。",
+          "destinationFirst": "Instagram",
+          "destinationSecond": "LinkedIn",
+          "destinationThird": "Reddit",
+          "previewTitle": "一位虚构创作者看着镜头，展示一杯咖啡，拍摄用户生成内容风格的推荐",
+          "previewBody": "一杯咖啡，一个灵感，一个值得分享的瞬间。",
+          "annotations": {
+            "format": "UGC · 1080 × 1920",
+            "descriptionLabel": "文案已就绪",
+            "description": "我的咖啡小仪式：一杯香浓拿铁，一段独处时光，一个新灵感。你最喜欢什么咖啡？",
+            "hashtagsLabel": "已添加话题标签",
+            "hashtags": "#咖啡时光 #UGC创作者 #日常仪式"
+          },
+          "examples": {
+            "navigation": "选择内容示例",
+            "cafe": {
+              "label": "咖啡时光",
+              "title": "值得分享的咖啡时光",
+              "summary": "为虚构咖啡馆 Café Juniper 制作的照片推荐。",
+              "location": "Café Juniper · 里昂 · 虚构地点",
+              "description": "热情的招呼，一杯好咖啡，一个安静的角落。下一次在里昂歇歇脚，就来 Café Juniper。",
+              "hashtags": "#CafeJuniper #里昂咖啡 #咖啡时光",
+              "format": "照片",
+              "subtitleFirst": "发现一家新的咖啡馆",
+              "subtitleSecond": "留一点时间给自己",
+              "subtitleThird": "收藏起来，下次休息时来看看",
+              "phoneMessage": "Café Juniper 的照片和描述已准备好。发布前请检查这条虚构推荐。",
+              "descriptionLabel": "描述",
+              "hashtagsLabel": "话题标签",
+              "table": {
+                "createLabel": "创建行",
+                "name": "内容库",
+                "description": "为虚构咖啡馆 Café Juniper 制作的照片推荐。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "格式",
+                    "value": "照片"
+                  },
+                  "second": {
+                    "label": "地点 / 品牌",
+                    "value": "Café Juniper · 里昂 · 虚构地点"
+                  },
+                  "third": {
+                    "label": "描述",
+                    "value": "热情的招呼，一杯好咖啡，一个安静的角落。下一次在里昂歇歇脚，就来 Café Juniper。"
+                  },
+                  "fourth": {
+                    "label": "话题标签",
+                    "value": "#CafeJuniper #里昂咖啡 #咖啡时光"
+                  },
+                  "fifth": {
+                    "label": "审批",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "发布安排",
+                    "value": "批准后安排发布"
+                  }
+                }
+              }
+            },
+            "product": {
+              "label": "产品试用",
+              "title": "新的晨间仪式",
+              "summary": "为虚构咖啡品牌 Morrow 制作的产品试用示例。",
+              "location": "Morrow · 虚构咖啡品牌",
+              "description": "试试 Morrow 新推出的晨间拼配：打开包装，现磨咖啡豆，给自己一点慢下来的时间。",
+              "hashtags": "#Morrow咖啡 #晨间仪式 #咖啡试用",
+              "format": "照片",
+              "subtitleFirst": "一款新的晨间拼配",
+              "subtitleSecond": "研磨，冲泡，享受片刻",
+              "subtitleThird": "你的咖啡仪式是什么？",
+              "phoneMessage": "Morrow 的产品照片和试用描述已准备好。发布前请检查这个虚构示例。",
+              "descriptionLabel": "描述",
+              "hashtagsLabel": "话题标签",
+              "table": {
+                "createLabel": "创建行",
+                "name": "内容库",
+                "description": "为虚构咖啡品牌 Morrow 制作的产品试用示例。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "格式",
+                    "value": "照片"
+                  },
+                  "second": {
+                    "label": "地点 / 品牌",
+                    "value": "Morrow · 虚构咖啡品牌"
+                  },
+                  "third": {
+                    "label": "描述",
+                    "value": "试试 Morrow 新推出的晨间拼配：打开包装，现磨咖啡豆，给自己一点慢下来的时间。"
+                  },
+                  "fourth": {
+                    "label": "话题标签",
+                    "value": "#Morrow咖啡 #晨间仪式 #咖啡试用"
+                  },
+                  "fifth": {
+                    "label": "审批",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "发布安排",
+                    "value": "批准后安排发布"
+                  }
+                }
+              }
+            },
+            "reel": {
+              "label": "字幕短片",
+              "title": "几秒钟，开启下一次咖啡时光",
+              "summary": "为虚构咖啡馆 Café Juniper 制作的无声演示短片，配有示例字幕。",
+              "location": "Café Juniper · 里昂 · 虚构地点",
+              "description": "从咖啡豆到杯中香气。用几秒钟走进 Café Juniper，为下一次咖啡时光找点灵感。",
+              "hashtags": "#CafeJuniper #咖啡短片 #里昂咖啡",
+              "format": "短片 · 示例字幕",
+              "subtitleFirst": "你的下一次咖啡时光从这里开始",
+              "subtitleSecond": "新鲜研磨，用心冲泡",
+              "subtitleThird": "收藏这家店，下次再来",
+              "phoneMessage": "Café Juniper 的短片和示例字幕已准备好。发布前请检查这段无声演示。",
+              "descriptionLabel": "描述",
+              "hashtagsLabel": "话题标签",
+              "table": {
+                "createLabel": "创建行",
+                "name": "内容库",
+                "description": "为虚构咖啡馆 Café Juniper 制作的无声演示短片，配有示例字幕。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "格式",
+                    "value": "短片 · 示例字幕"
+                  },
+                  "second": {
+                    "label": "地点 / 品牌",
+                    "value": "Café Juniper · 里昂 · 虚构地点"
+                  },
+                  "third": {
+                    "label": "描述",
+                    "value": "从咖啡豆到杯中香气。用几秒钟走进 Café Juniper，为下一次咖啡时光找点灵感。"
+                  },
+                  "fourth": {
+                    "label": "话题标签",
+                    "value": "#CafeJuniper #咖啡短片 #里昂咖啡"
+                  },
+                  "fifth": {
+                    "label": "审批",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "发布安排",
+                    "value": "批准后安排发布"
+                  }
+                }
+              }
+            },
+            "cuts": {
+              "label": "剪辑与空等片段",
+              "title": "15 秒倒汁画面，剪成 8 秒短片",
+              "summary": "保留倒汁动作，剪去等待片段，制作适合 Reels 和 TikTok 的果汁广告。此为无声剪辑演示。",
+              "location": "Zeste · 虚构果汁品牌",
+              "descriptionLabel": "描述",
+              "description": "一抹橙色，一杯阳光。用八秒产品广告，认识 Zeste。",
+              "hashtagsLabel": "话题标签",
+              "hashtags": "#Zeste果汁 #橙汁 #产品短片",
+              "format": "剪辑演示",
+              "subtitleFirst": "一杯阳光",
+              "subtitleSecond": "留住清新",
+              "subtitleThird": "8 秒认识 Zeste",
+              "phoneMessage": "8 秒 Zeste 果汁广告已准备好。发布前请检查这段无声演示中选定的剪辑片段。",
+              "timelineTitle": "短片剪辑",
+              "keptLabel": "保留",
+              "removedLabel": "剪去",
+              "originalLabel": "原片 · 15秒",
+              "editedLabel": "短片 · 8秒",
+              "table": {
+                "createLabel": "创建行",
+                "name": "内容库",
+                "description": "保留倒汁动作，剪去等待片段，制作适合 Reels 和 TikTok 的果汁广告。此为无声剪辑演示。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "格式",
+                    "value": "剪辑演示"
+                  },
+                  "second": {
+                    "label": "地点 / 品牌",
+                    "value": "Zeste · 虚构果汁品牌"
+                  },
+                  "third": {
+                    "label": "描述",
+                    "value": "一抹橙色，一杯阳光。用八秒产品广告，认识 Zeste。"
+                  },
+                  "fourth": {
+                    "label": "话题标签",
+                    "value": "#Zeste果汁 #橙汁 #产品短片"
+                  },
+                  "fifth": {
+                    "label": "审批",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "发布安排",
+                    "value": "批准后安排发布"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "sales": {
+        "workforce": {
+          "eyebrow": "您的销售团队",
+          "title": "一个不漏掉任何一次跟进的销售台。",
+          "description": "线索、调研、资格判定、触达、跟进：每个智能体都有明确职责和可用工具，客户最终收到什么由您审批。"
+        },
+        "name": "销售",
+        "metaTitle": "销售跟进工作流 | LiveContext",
+        "metaDescription": "在受控工作流中使用 AI 智能体准备报价和销售跟进，包含审批、CRM 更新、完整运行日志和业务指标。",
+        "eyebrow": "为销售团队打造",
+        "title": "专注销售，让跟进持续推进。",
+        "description": "LiveContext 收集线索背景、准备个性化消息并更新已连接的 CRM，让您带着充分的信息开启下一次对话。",
+        "previewTitle": "每条商机都有下一步",
+        "previewDescription": "让您熟悉的工具协同工作。",
+        "previewColumns": {
+          "first": "新线索",
+          "second": "消息准备",
+          "third": "下一步行动"
+        },
+        "previewItems": {
+          "first": "演示申请",
+          "second": "个性化草稿",
+          "third": "CRM 跟进"
+        },
+        "previewStatuses": {
+          "first": "背景已收集",
+          "second": "待审核",
+          "third": "任务已创建"
+        },
+        "painpointsTitle": "把更多时间留给对话。",
+        "benefits": {
+          "first": {
+            "title": "了解正在与谁交谈。",
+            "description": "来自已连接来源的咨询会附带相关背景，便于团队按您的标准筛选线索。"
+          },
+          "second": {
+            "title": "下一步行动始终留在 CRM。",
+            "description": "跟进任务和记录随着对话更新，不必等到一天结束后再补录。"
+          },
+          "third": {
+            "title": "消息切中需求，随时可供审核。",
+            "description": "LiveContext 根据潜在客户背景和您的方案准备消息，由团队决定哪些内容可以发送。"
+          }
+        },
+        "processTitle": "从新线索到下一次对话。",
+        "steps": {
+          "first": {
+            "title": "收集",
+            "description": "从提交的表单或已连接的线索来源开始。"
+          },
+          "second": {
+            "title": "筛选",
+            "description": "应用您的标准并收集可用背景信息。"
+          },
+          "third": {
+            "title": "准备",
+            "description": "起草相关消息，交由您审核。"
+          },
+          "fourth": {
+            "title": "跟进",
+            "description": "发送已批准的消息，并在 CRM 中记录下一步行动。"
+          }
+        },
+        "faq": {
+          "first": {
+            "question": "可以继续使用现有 CRM 吗？",
+            "answer": "如果有合适的集成，就可以使用您现有的 CRM。"
+          },
+          "second": {
+            "question": "谁决定线索是否合格？",
+            "answer": "由您定义标准，也可以加入人工审核。"
+          },
+          "third": {
+            "question": "消息会自动发送吗？",
+            "answer": "仅在您这样配置时才会。需要时可在发送前加入审批。"
+          }
+        },
+        "ctaTitle": "为有价值的对话安排下一步。",
+        "ctaDescription": "让 LiveContext 准备消息并整理后续跟进。",
+        "agendaSchedules": {
+          "first": "新线索",
+          "second": "筛选线索",
+          "third": "联系消息草稿",
+          "fourth": "消息审核",
+          "fifth": "线索跟进",
+          "sixth": "更新 CRM",
+          "seventh": "周末线索收集",
+          "eighth": "周一跟进准备"
+        },
+        "team": {
+          "first": {
+            "name": "线索",
+            "description": "从已连接来源收集咨询。"
+          },
+          "second": {
+            "name": "调研",
+            "description": "在对话前收集有用的背景信息。"
+          },
+          "third": {
+            "name": "筛选",
+            "description": "应用团队的线索筛选标准。"
+          },
+          "fourth": {
+            "name": "联系",
+            "description": "为每位潜在客户起草相关消息。"
+          },
+          "fifth": {
+            "name": "跟进",
+            "description": "准备提醒和下一条联系消息。"
+          },
+          "sixth": {
+            "name": "会议",
+            "description": "协调会议请求和相关背景。"
+          },
+          "seventh": {
+            "name": "方案",
+            "description": "根据已批准的信息起草方案。"
+          },
+          "eighth": {
+            "name": "客户管理",
+            "description": "更新联系人记录和下一步行动。"
+          },
+          "ninth": {
+            "name": "交接",
+            "description": "将对话背景传递给团队成员。"
+          },
+          "tenth": {
+            "name": "重新联系",
+            "description": "为暂时搁置的商机准备消息。"
+          },
+          "eleventh": {
+            "name": "销售管道",
+            "description": "整理开放商机和后续行动。"
+          },
+          "twelfth": {
+            "name": "报告",
+            "description": "汇总已连接 CRM 中的活动。"
+          }
+        },
+        "workflowShowcase": {
+          "title": "从新线索，到清晰的客户资料页。",
+          "description": "LiveContext 调研潜在客户并整理有用信息。在客户资料页查看背景，决定如何继续跟进。",
+          "heroRequest": "客户索要报价时，我希望按我们的价目表拟好，由我过目，然后自动发出并归档。",
+          "heroReply": "已就绪：智能体在发送到你手机的审阅界面上拟好报价。你一确认，报价存入 Drive，商机在 HubSpot 更新，邮件发出，每份报价都记入数据表。",
+          "studio": {
+              "cards": {
+                "table": {
+                  "label": "记录",
+                  "title": "每一份报价都会留下一行",
+                  "summary": "谁问的、发了什么、多少钱、回了什么。跟进读的是同一张表，所以同一件事不会被追两次。"
+                },
+                "micro": {
+                  "waiting": "等待决定"
+                }
+              }
+            },
+          "triggerLabel": "新线索",
+          "agentLabel": "调研客户",
+          "interfaceLabel": "客户资料页",
+          "interfaceTitle": "潜在客户概览",
+          "interfaceDescription": "联系前先查看背景信息。",
+          "primaryAction": "批准消息",
+          "secondaryAction": "修改",
+          "statusLabel": "可供审核",
+          "items": {
+            "first": {
+              "title": "公司",
+              "detail": "可用客户资料已整理"
+            },
+            "second": {
+              "title": "背景",
+              "detail": "调研笔记已收集"
+            },
+            "third": {
+              "title": "下一条消息",
+              "detail": "个性化联系草稿已准备"
+            }
+          },
+          "approvalLabel": "审批",
+          "approveAction": "批准",
+          "approvedStatus": "已批准",
+          "replayAction": "重播",
+          "pauseAction": "暂停",
+          "resumeAction": "继续",
+          "nextAction": "下一步",
+          "phoneTitle": "您的联系消息已准备好",
+          "phoneMessage": "潜在客户摘要和消息已就绪。批准后将发送消息并更新 CRM。",
+          "destinationFirst": "HubSpot",
+          "destinationSecond": "Gmail",
+          "destinationThird": "Slack",
+          "previewTitle": "开启关于自动化的新对话",
+          "previewBody": "团队正在探索如何简化重复性的客户工作。",
+          "workbench": {
+            "workspace": "销售工作台",
+            "queue": "待办队列",
+            "overview": "概览",
+            "activity": "动态",
+            "details": "详情",
+            "prepared": "已准备",
+            "owner": "负责人",
+            "status": "状态",
+            "priority": "优先级",
+            "source": "来源",
+            "score": "评分",
+            "amount": "金额",
+            "total": "合计",
+            "items": "项目",
+            "timeline": "时间线",
+            "notes": "备注",
+            "review": "待审核",
+            "selected": "已选择",
+            "progress": "进度",
+            "search": "搜索",
+            "customer": "客户",
+            "message": "消息",
+            "channel": "渠道",
+            "nextStep": "下一步"
+          },
+          "examples": {
+            "navigation": "选择示例",
+            "prospect": {
+              "label": "线索筛选",
+              "title": "充分准备，让对话更有价值",
+              "summary": "Axion Studio 的需求和个性化联系消息已准备好供审核。",
+              "customerName": "Maya Chen",
+              "subject": "Axion Studio · 自动化",
+              "customerMessage": "我们希望自动生成客户报告，并及时更新 CRM。可以聊聊需求吗？",
+              "contextLabel": "筛选背景",
+              "contextValue": "Axion Studio · 代理机构 · 客户报告和 CRM",
+              "responseLabel": "已准备的联系消息",
+              "response": "Maya 您好，我们可以交流客户报告流程和 CRM 需求。这是一份为初次沟通准备的议程，方便聚焦您的需求。",
+              "actionLabel": "批准联系",
+              "agentLabel": "筛选潜在客户",
+              "statusLabel": "等待批准",
+              "phoneTitle": "充分准备，让对话更有价值",
+              "phoneMessage": "Axion Studio 的需求和个性化联系消息已准备好供审核。",
+              "triggerLabel": "线索筛选",
+              "approvalLabel": "批准联系",
+              "destinationFirst": "HubSpot",
+              "destinationSecond": "Gmail",
+              "destinationThird": "Slack",
+              "records": {
+                "first": {
+                  "label": "Axion Studio",
+                  "value": "已有意向",
+                  "detail": "CRM 报告"
+                },
+                "second": {
+                  "label": "Meridian Labs",
+                  "value": "需要审核",
+                  "detail": "项目交接"
+                },
+                "third": {
+                  "label": "Cedar Works",
+                  "value": "计划初步沟通",
+                  "detail": "销售跟进"
+                }
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "已整理的销售线索",
+                "description": "Axion Studio 的需求和个性化联系消息已准备好供审核。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "客户",
+                    "value": "Maya Chen"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "Axion Studio · 自动化"
+                  },
+                  "third": {
+                    "label": "筛选背景",
+                    "value": "Axion Studio · 代理机构 · 客户报告和 CRM"
+                  },
+                  "fourth": {
+                    "label": "已准备的联系消息",
+                    "value": "Maya 您好，我们可以交流客户报告流程和 CRM 需求。这是一份为初次沟通准备的议程，方便聚焦您的需求。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准联系"
+                  }
+                }
+              }
+            },
+            "quote": {
+              "label": "报价",
+              "title": "一份清晰的报价，等待审批",
+              "summary": "2,400 欧元报价已列明范围和项目，请在发送前审核。",
+              "customerName": "Maya Chen",
+              "subject": "Axion Studio · 报价 AX-024",
+              "customerMessage": "请为报告配置、CRM 连接和团队交接提供报价。",
+              "contextLabel": "报价范围",
+              "contextValue": "报告配置 1,200 欧元 · CRM 连接 800 欧元 · 交接 400 欧元",
+              "responseLabel": "已准备的消息",
+              "response": "Maya 您好，建议范围合计 2,400 欧元，包含报告配置、CRM 连接和团队交接。报价已准备好供您查看。",
+              "actionLabel": "批准报价",
+              "agentLabel": "准备报价",
+              "statusLabel": "等待批准",
+              "phoneTitle": "一份清晰的报价，等待审批",
+              "phoneMessage": "2,400 欧元报价已列明范围和项目，请在发送前审核。",
+              "triggerLabel": "报价",
+              "approvalLabel": "批准报价",
+              "destinationFirst": "HubSpot",
+              "destinationSecond": "Google Drive",
+              "destinationThird": "Gmail",
+              "records": {
+                "first": {
+                  "label": "报告配置",
+                  "value": "1,200 欧元",
+                  "detail": "已准备"
+                },
+                "second": {
+                  "label": "CRM 连接",
+                  "value": "800 欧元",
+                  "detail": "已准备"
+                },
+                "third": {
+                  "label": "交接",
+                  "value": "400 欧元",
+                  "detail": "已准备"
+                }
+              },
+              "totalValue": "2,400 欧元",
+              "document": {
+                "documentTitle": "销售报价单",
+                "companyName": "Northstar Consulting",
+                "companyAddress": "英国伦敦 Market Street 42号，EC2A 4NE",
+                "companyEmail": "hello@northstar.consulting",
+                "numberLabel": "报价单编号",
+                "number": "AX-024",
+                "issuedLabel": "开具日期",
+                "issuedValue": "2026年9月14日",
+                "validUntilLabel": "有效期至",
+                "validUntilValue": "2026年10月14日",
+                "clientLabel": "报价客户",
+                "clientCompany": "Axion Studio",
+                "clientAddress": "法国巴黎 Rue de Turenne 18号，75004",
+                "amountDueLabel": "应付总额",
+                "status": "等待批准",
+                "descriptionLabel": "项目说明",
+                "quantityLabel": "数量",
+                "unitPriceLabel": "单价",
+                "amountLabel": "金额",
+                "termsLabel": "付款条款",
+                "termsValue": "请在接受报价后30天内付款。",
+                "subtotalLabel": "小计",
+                "taxLabel": "增值税",
+                "taxValue": "0.00 欧元",
+                "totalLabel": "合计",
+                "notesLabel": "备注",
+                "notesValue": "本报价包括报告配置、CRM 连接和团队交接。",
+                "thankYou": "感谢您选择 Northstar Consulting。",
+                "signatureLabel": "授权签字",
+                "dateReceivedLabel": "接受日期",
+                "legal": "Northstar Consulting · 税号 GB 418 2207 55 · 注册号 09841122"
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "销售报价",
+                "description": "2,400 欧元报价已列明范围和项目，请在发送前审核。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "客户",
+                    "value": "Maya Chen"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "Axion Studio · 报价 AX-024"
+                  },
+                  "third": {
+                    "label": "报价范围",
+                    "value": "报告配置 1,200 欧元 · CRM 连接 800 欧元 · 交接 400 欧元"
+                  },
+                  "fourth": {
+                    "label": "已准备的消息",
+                    "value": "Maya 您好，建议范围合计 2,400 欧元，包含报告配置、CRM 连接和团队交接。报价已准备好供您查看。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准报价"
+                  }
+                }
+              }
+            },
+            "followup": {
+              "label": "商机跟进",
+              "title": "推进仍在等待的机会",
+              "summary": "Axion Studio 待决方案的跟进消息已准备好，等待审批。",
+              "customerName": "Maya Chen",
+              "subject": "Axion Studio · 方案待回复",
+              "customerMessage": "我们需要先在内部沟通后再决定，请下周再联系我们。",
+              "contextLabel": "商机背景",
+              "contextValue": "方案已发送 · 决策待定 · 跟进已准备",
+              "responseLabel": "已准备的跟进",
+              "response": "Maya 您好，想跟进一下方案进展。团队在决定前还有哪些问题需要澄清？我们可以一起确认范围。",
+              "actionLabel": "批准跟进",
+              "agentLabel": "准备商机跟进",
+              "statusLabel": "等待批准",
+              "phoneTitle": "推进仍在等待的机会",
+              "phoneMessage": "Axion Studio 待决方案的跟进消息已准备好，等待审批。",
+              "triggerLabel": "商机跟进",
+              "approvalLabel": "批准跟进",
+              "destinationFirst": "HubSpot",
+              "destinationSecond": "Gmail",
+              "destinationThird": "Slack",
+              "records": {
+                "first": {
+                  "label": "Axion Studio",
+                  "value": "提案已发送",
+                  "detail": "确认下次会议"
+                },
+                "second": {
+                  "label": "Meridian Labs",
+                  "value": "等待决定",
+                  "detail": "确认决策负责人"
+                },
+                "third": {
+                  "label": "Cedar Works",
+                  "value": "跟进消息已准备",
+                  "detail": "审核消息"
+                }
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "商机跟进",
+                "description": "Axion Studio 待决方案的跟进消息已准备好，等待审批。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "客户",
+                    "value": "Maya Chen"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "Axion Studio · 方案待回复"
+                  },
+                  "third": {
+                    "label": "商机背景",
+                    "value": "方案已发送 · 决策待定 · 跟进已准备"
+                  },
+                  "fourth": {
+                    "label": "已准备的跟进",
+                    "value": "Maya 您好，想跟进一下方案进展。团队在决定前还有哪些问题需要澄清？我们可以一起确认范围。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准跟进"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "marketing": {
+        "workforce": {
+          "eyebrow": "您的市场团队",
+          "title": "一支团队，覆盖所有渠道，同一场战役。",
+          "description": "简报、文案、视觉、落地页、发布：每个智能体负责战役的一部分，使用您已连接的渠道，并在发布前等待您的审阅。"
+        },
+        "name": "市场营销",
+        "metaTitle": "营销活动工作流 | LiveContext",
+        "metaDescription": "在可视工作流中使用 AI 智能体创建并发布营销活动，包含品牌检查、人工审批、排期、完整日志和绩效指标。",
+        "eyebrow": "为营销团队打造",
+        "title": "一场营销活动，所有渠道同步推进。",
+        "description": "LiveContext 将简报转化为不同版本的内容，协调审核，并通过已连接的营销工具安排分发。",
+        "previewTitle": "一份简报，协同交付",
+        "previewDescription": "让您熟悉的工具协同工作。",
+        "previewColumns": {
+          "first": "简报",
+          "second": "制作",
+          "third": "分发"
+        },
+        "previewItems": {
+          "first": "产品发布",
+          "second": "邮件和社交版本",
+          "third": "活动上线"
+        },
+        "previewStatuses": {
+          "first": "受众已定义",
+          "second": "待审核",
+          "third": "已排期"
+        },
+        "painpointsTitle": "工作量增长，品牌信息依然一致。",
+        "benefits": {
+          "first": {
+            "title": "一份简报，一个共同方向。",
+            "description": "当 LiveContext 准备活动内容时，受众、方案和品牌要求始终伴随制作过程。"
+          },
+          "second": {
+            "title": "今天审核通过，按时正式发布。",
+            "description": "在一处协调审核与发布日期，再通过已连接渠道分发已批准的内容。"
+          },
+          "third": {
+            "title": "渠道更多，品牌声音不变。",
+            "description": "把活动创意转化为邮件和社交内容版本，无需为每份素材从头改写。"
+          }
+        },
+        "processTitle": "从简报到正式上线。",
+        "steps": {
+          "first": {
+            "title": "定义",
+            "description": "明确受众、产品方案和活动目标。"
+          },
+          "second": {
+            "title": "制作",
+            "description": "生成素材草稿和不同渠道的版本。"
+          },
+          "third": {
+            "title": "审核",
+            "description": "将品牌和相关负责人的审批纳入工作流。"
+          },
+          "fourth": {
+            "title": "分发",
+            "description": "通过受支持的集成安排发布已批准的内容。"
+          }
+        },
+        "faq": {
+          "first": {
+            "question": "可以保留品牌语气吗？",
+            "answer": "将品牌指南和参考资料加入工作流。"
+          },
+          "second": {
+            "question": "负责人可以审批素材吗？",
+            "answer": "可以。在分发之前加入审核步骤。"
+          },
+          "third": {
+            "question": "可以连接哪些渠道？",
+            "answer": "根据账号权限，使用适用于您营销工具的可用集成。"
+          }
+        },
+        "ctaTitle": "为下一场营销活动留出空间。",
+        "ctaDescription": "让 LiveContext 围绕您的团队协调制作、审核和分发。",
+        "agendaSchedules": {
+          "first": "活动简报",
+          "second": "制作素材",
+          "third": "品牌审核",
+          "fourth": "邮件活动",
+          "fifth": "社交发布",
+          "sixth": "活动报告",
+          "seventh": "周末活动监测",
+          "eighth": "下周活动队列"
+        },
+        "team": {
+          "first": {
+            "name": "简报",
+            "description": "将活动目标整理为共享简报。"
+          },
+          "second": {
+            "name": "文案",
+            "description": "以您的品牌语气撰写活动文案。"
+          },
+          "third": {
+            "name": "社交内容",
+            "description": "为不同社交渠道创作内容版本。"
+          },
+          "fourth": {
+            "name": "邮件",
+            "description": "为受众准备营销邮件。"
+          },
+          "fifth": {
+            "name": "视觉素材",
+            "description": "根据活动简报生成视觉素材。"
+          },
+          "sixth": {
+            "name": "页面",
+            "description": "为您的方案撰写落地页内容。"
+          },
+          "seventh": {
+            "name": "内容改编",
+            "description": "将同一内容改编成新格式。"
+          },
+          "eighth": {
+            "name": "审核",
+            "description": "将素材发送给负责审批的人员。"
+          },
+          "ninth": {
+            "name": "日历",
+            "description": "组织上线时间和发布日期。"
+          },
+          "tenth": {
+            "name": "发布",
+            "description": "通过已连接工具分发已批准素材。"
+          },
+          "eleventh": {
+            "name": "监测",
+            "description": "从选定来源收集最新信息。"
+          },
+          "twelfth": {
+            "name": "报告",
+            "description": "汇总已连接工具中的活动结果。"
+          }
+        },
+        "workflowShowcase": {
+          "title": "从活动简报，到可供审批的内容。",
+          "description": "LiveContext 根据简报准备营销内容。团队在同一界面检查素材，然后批准分发。",
+          "heroRequest": "每周我都想要按渠道拟好的推广内容，等我确认，按最终样式预览，然后发布。",
+          "heroReply": "已搭好：智能体拟好这轮推广，停在发送到你手机的审批界面上，然后同时发布到 Mailchimp、Instagram 和 LinkedIn，每次发送都记入数据表。",
+          "studio": {
+              "cards": {
+                "table": {
+                  "label": "记录",
+                  "title": "每次上线都会留下一行",
+                  "summary": "渠道、受众、发送时间和触达范围。下一次活动从这张表开始，而不是凭着对上一次的印象。"
+                },
+                "micro": {
+                  "waiting": "等待决定"
+                }
+              }
+            },
+          "triggerLabel": "活动简报",
+          "agentLabel": "制作素材",
+          "interfaceLabel": "审核活动",
+          "interfaceTitle": "活动内容",
+          "interfaceDescription": "分发前检查素材。",
+          "primaryAction": "批准素材",
+          "secondaryAction": "修改",
+          "statusLabel": "等待审核",
+          "items": {
+            "first": {
+              "title": "邮件",
+              "detail": "活动邮件已起草"
+            },
+            "second": {
+              "title": "社交帖子",
+              "detail": "各渠道版本已准备"
+            },
+            "third": {
+              "title": "视觉素材",
+              "detail": "活动图片可供检查"
+            }
+          },
+          "approvalLabel": "审批",
+          "approveAction": "批准",
+          "approvedStatus": "已批准",
+          "replayAction": "重播",
+          "pauseAction": "暂停",
+          "resumeAction": "继续",
+          "nextAction": "下一步",
+          "phoneTitle": "您的活动已准备好",
+          "phoneMessage": "活动素材已就绪。批准后将分发到已连接的渠道。",
+          "destinationFirst": "Mailchimp",
+          "destinationSecond": "Instagram",
+          "destinationThird": "LinkedIn",
+          "previewTitle": "好创意，值得成长。",
+          "previewBody": "从每一个创意开始，让下一场活动真正落地。",
+          "workbench": {
+            "workspace": "营销工作台",
+            "queue": "待办队列",
+            "overview": "概览",
+            "activity": "动态",
+            "details": "详情",
+            "prepared": "已准备",
+            "owner": "负责人",
+            "status": "状态",
+            "priority": "优先级",
+            "source": "来源",
+            "score": "评分",
+            "amount": "金额",
+            "total": "合计",
+            "items": "项目",
+            "timeline": "时间线",
+            "notes": "备注",
+            "review": "待审核",
+            "selected": "已选择",
+            "progress": "进度",
+            "search": "搜索",
+            "customer": "客户",
+            "message": "消息",
+            "channel": "渠道",
+            "nextStep": "下一步"
+          },
+          "examples": {
+            "navigation": "选择示例",
+            "campaign": {
+              "label": "产品发布",
+              "title": "各渠道协调一致的发布",
+              "summary": "发布邮件、社交文案和分发步骤已准备好，等待品牌审核。",
+              "customerName": "Lena Ortiz",
+              "subject": "Northstar · 产品发布",
+              "customerMessage": "请为邮件和社交渠道准备产品发布内容，保持信息一致。",
+              "contextLabel": "活动简报",
+              "contextValue": "小型团队 · 邮件和社交渠道 · 内容已准备",
+              "responseLabel": "已准备的文案",
+              "response": "认识 Northstar：将团队日常工作集中到一处。探索新版本，看看它能简化哪些工作。",
+              "actionLabel": "批准活动",
+              "agentLabel": "准备发布素材",
+              "statusLabel": "等待批准",
+              "phoneTitle": "各渠道协调一致的发布",
+              "phoneMessage": "发布邮件、社交文案和分发步骤已准备好，等待品牌审核。",
+              "triggerLabel": "产品发布",
+              "approvalLabel": "批准活动",
+              "destinationFirst": "Mailchimp",
+              "destinationSecond": "Instagram",
+              "destinationThird": "LinkedIn",
+              "records": {
+                "first": {
+                  "label": "Mailchimp",
+                  "value": "产品发布公告",
+                  "detail": "已准备"
+                },
+                "second": {
+                  "label": "Instagram",
+                  "value": "团队工作流程预览",
+                  "detail": "已准备"
+                },
+                "third": {
+                  "label": "LinkedIn",
+                  "value": "产品介绍",
+                  "detail": "已准备"
+                }
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "发布活动",
+                "description": "发布邮件、社交文案和分发步骤已准备好，等待品牌审核。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "客户",
+                    "value": "Lena Ortiz"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "Northstar · 产品发布"
+                  },
+                  "third": {
+                    "label": "活动简报",
+                    "value": "小型团队 · 邮件和社交渠道 · 内容已准备"
+                  },
+                  "fourth": {
+                    "label": "已准备的文案",
+                    "value": "认识 Northstar：将团队日常工作集中到一处。探索新版本，看看它能简化哪些工作。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准活动"
+                  }
+                }
+              }
+            },
+            "seo": {
+              "label": "SEO 审核",
+              "title": "把审核变成具体改进",
+              "summary": "页面分析和优先 SEO 修改已准备好，等待编辑审批。",
+              "customerName": "Lena Ortiz",
+              "subject": "Northstar · 产品页面审核",
+              "customerMessage": "请审核产品页面，为搜索结果中的展示提出具体改进。",
+              "contextLabel": "审核发现",
+              "contextValue": "标题过于宽泛 · 缺少描述 · 可补充内部链接",
+              "responseLabel": "已准备的修改",
+              "response": "围绕产品用途明确页面标题，添加简洁描述，并链接到相关配置指南。",
+              "actionLabel": "批准修改",
+              "agentLabel": "审核搜索内容",
+              "statusLabel": "等待批准",
+              "phoneTitle": "把审核变成具体改进",
+              "phoneMessage": "页面分析和优先 SEO 修改已准备好，等待编辑审批。",
+              "triggerLabel": "SEO 审核",
+              "approvalLabel": "批准修改",
+              "destinationFirst": "Notion",
+              "destinationSecond": "Google Sheets",
+              "destinationThird": "Slack",
+              "records": {
+                "first": {
+                  "label": "标题过于宽泛",
+                  "value": "审核",
+                  "detail": "批准修改"
+                },
+                "second": {
+                  "label": "缺少描述",
+                  "value": "审核",
+                  "detail": "批准修改"
+                },
+                "third": {
+                  "label": "可补充内部链接",
+                  "value": "审核",
+                  "detail": "批准修改"
+                }
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "SEO 审核任务",
+                "description": "页面分析和优先 SEO 修改已准备好，等待编辑审批。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "客户",
+                    "value": "Lena Ortiz"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "Northstar · 产品页面审核"
+                  },
+                  "third": {
+                    "label": "审核发现",
+                    "value": "标题过于宽泛 · 缺少描述 · 可补充内部链接"
+                  },
+                  "fourth": {
+                    "label": "已准备的修改",
+                    "value": "围绕产品用途明确页面标题，添加简洁描述，并链接到相关配置指南。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准修改"
+                  }
+                }
+              }
+            },
+            "listening": {
+              "label": "品牌监测",
+              "title": "找到值得回应的提及",
+              "summary": "品牌提及已整理，一条有用的回复已准备好供审批。",
+              "customerName": "Lena Ortiz",
+              "subject": "Northstar · 社区提及",
+              "customerMessage": "请找到有关 Northstar 的问题，并为社区准备有帮助的回复。",
+              "contextLabel": "提及背景",
+              "contextValue": "产品问题 · 公开讨论 · 回复等待审核",
+              "responseLabel": "已准备的回复",
+              "response": "感谢您询问 Northstar。您想简化哪部分工作？我们可以为您推荐相关指南。",
+              "actionLabel": "批准回复",
+              "agentLabel": "审核品牌提及",
+              "statusLabel": "等待批准",
+              "phoneTitle": "找到值得回应的提及",
+              "phoneMessage": "品牌提及已整理，一条有用的回复已准备好供审批。",
+              "triggerLabel": "品牌监测",
+              "approvalLabel": "批准回复",
+              "destinationFirst": "Notion",
+              "destinationSecond": "Slack",
+              "destinationThird": "Gmail",
+              "records": {
+                "first": {
+                  "label": "Alex Martin",
+                  "value": "Reddit",
+                  "detail": "可以连接我们的 CRM 吗？"
+                },
+                "second": {
+                  "label": "Jamie Wilson",
+                  "value": "LinkedIn",
+                  "detail": "团队如何审批？"
+                },
+                "third": {
+                  "label": "Sam Kim",
+                  "value": "Instagram",
+                  "detail": "能定期生成每周报告吗？"
+                }
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "品牌提及",
+                "description": "品牌提及已整理，一条有用的回复已准备好供审批。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "客户",
+                    "value": "Lena Ortiz"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "Northstar · 社区提及"
+                  },
+                  "third": {
+                    "label": "提及背景",
+                    "value": "产品问题 · 公开讨论 · 回复等待审核"
+                  },
+                  "fourth": {
+                    "label": "已准备的回复",
+                    "value": "感谢您询问 Northstar。您想简化哪部分工作？我们可以为您推荐相关指南。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准回复"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "recruiting": {
+        "workforce": {
+          "eyebrow": "您的招聘团队",
+          "title": "一个让候选人持续推进的招聘台。",
+          "description": "接收、摘要、面试、提醒、更新：每个智能体都有明确职责和可用工具，发给候选人的每条消息都由您审批。"
+        },
+        "name": "招聘",
+        "metaTitle": "招聘协调工作流 | LiveContext",
+        "metaDescription": "在可审计工作流中使用 AI 智能体审核申请并协调面试，包含明确标准、人工审批、ATS 更新和结果指标。",
+        "eyebrow": "为招聘团队打造",
+        "title": "多些时间关注人，少些时间忙协调。",
+        "description": "LiveContext 整理申请、准备候选人消息并协调下一场面试。所有招聘决策始终由您的团队掌控。",
+        "previewTitle": "让候选人流程连贯推进",
+        "previewDescription": "让您熟悉的工具协同工作。",
+        "previewColumns": {
+          "first": "申请",
+          "second": "团队审核",
+          "third": "面试"
+        },
+        "previewItems": {
+          "first": "新候选人资料",
+          "second": "提交审核人员",
+          "third": "时间安排请求"
+        },
+        "previewStatuses": {
+          "first": "资料已整理",
+          "second": "已请求反馈",
+          "third": "准备协调"
+        },
+        "painpointsTitle": "减少事务协调，增加人文关怀。",
+        "benefits": {
+          "first": {
+            "title": "申请资料已整理，随时可以审核。",
+            "description": "提交的信息汇总为一致的摘要，让审核人员关注候选人，而不是忙着收集文件。"
+          },
+          "second": {
+            "title": "安排面试，不再反复沟通。",
+            "description": "已连接的日历、审核交接和时间请求，让下一次交流井然有序。"
+          },
+          "third": {
+            "title": "让候选人知道下一步。",
+            "description": "及时准备通知供您审批，让候选人了解团队正在推进的流程。"
+          }
+        },
+        "processTitle": "从一份申请到一次真实交流。",
+        "steps": {
+          "first": {
+            "title": "接收",
+            "description": "通过已连接的来源接收求职申请。"
+          },
+          "second": {
+            "title": "整理",
+            "description": "整理提交的资料，供人工审核。"
+          },
+          "third": {
+            "title": "协调",
+            "description": "请求反馈并准备面试安排。"
+          },
+          "fourth": {
+            "title": "沟通",
+            "description": "发送已批准的通知，并记录下一步。"
+          }
+        },
+        "faq": {
+          "first": {
+            "question": "AI 会做出招聘决策吗？",
+            "answer": "此工作流用于辅助协调。候选人评估和决策由您的团队负责。"
+          },
+          "second": {
+            "question": "可以使用现有工具吗？",
+            "answer": "在有可用集成时，连接您的招聘管理系统、表单和日历。"
+          },
+          "third": {
+            "question": "发送前可以审核消息吗？",
+            "answer": "可以。在向候选人发送消息前加入审批。"
+          }
+        },
+        "ctaTitle": "让下一步更有人情味。",
+        "ctaDescription": "将协调工作交给 LiveContext，让团队专注与人交流。",
+        "agendaSchedules": {
+          "first": "新申请",
+          "second": "候选人摘要",
+          "third": "审核反馈",
+          "fourth": "安排面试",
+          "fifth": "候选人通知",
+          "sixth": "招聘报告",
+          "seventh": "周末申请接收",
+          "eighth": "周一面试准备"
+        },
+        "team": {
+          "first": {
+            "name": "接收",
+            "description": "从已连接来源收集求职申请。"
+          },
+          "second": {
+            "name": "摘要",
+            "description": "准备格式一致的候选人摘要。"
+          },
+          "third": {
+            "name": "审核",
+            "description": "将申请提交给人工审核人员。"
+          },
+          "fourth": {
+            "name": "反馈",
+            "description": "收集团队在面试后的评价。"
+          },
+          "fifth": {
+            "name": "面试",
+            "description": "协调面试时间与参与人员。"
+          },
+          "sixth": {
+            "name": "提醒",
+            "description": "及时准备面试提醒。"
+          },
+          "seventh": {
+            "name": "通知",
+            "description": "起草候选人消息供审批。"
+          },
+          "eighth": {
+            "name": "职位信息",
+            "description": "根据简报准备职位描述。"
+          },
+          "ninth": {
+            "name": "联系",
+            "description": "为潜在候选人起草个性化消息。"
+          },
+          "tenth": {
+            "name": "交接",
+            "description": "与下一位面试官共享背景。"
+          },
+          "eleventh": {
+            "name": "记录",
+            "description": "整理已连接工具中的候选人记录。"
+          },
+          "twelfth": {
+            "name": "报告",
+            "description": "为团队汇总招聘活动。"
+          }
+        },
+        "workflowShowcase": {
+          "title": "从求职申请，到候选人评估界面。",
+          "description": "LiveContext 将提交的信息整理为候选人摘要。在专用界面查看资料，所有招聘决策仍由您的团队掌控。",
+          "heroRequest": "有人投递简历时，我希望按岗位要求筛选、打分，并把候选名单分享给面试组。",
+          "heroReply": "已完成：每份简历都会生成一张评分卡，由你在手机上确认，然后名单写入 Notion，候选人收到邮件，面试组在 Slack 收到提醒，每个决定都记入数据表。",
+          "studio": {
+              "cards": {
+                "table": {
+                  "label": "人才库",
+                  "title": "整份候选名单，一张带照片的表",
+                  "summary": "每位候选人、评分、走到了哪一步、谁在等谁。照片就是其中一列，和别的列一样。"
+                }
+              }
+            },
+          "triggerLabel": "新申请",
+          "agentLabel": "准备摘要",
+          "interfaceLabel": "评估候选人",
+          "interfaceTitle": "候选人摘要",
+          "interfaceDescription": "查看提交的信息并选择下一步。",
+          "primaryAction": "邀请面试",
+          "secondaryAction": "稍后审核",
+          "statusLabel": "需要人工评估",
+          "items": {
+            "first": {
+              "title": "申请",
+              "detail": "已概括候选人提交的经历"
+            },
+            "second": {
+              "title": "文件",
+              "detail": "候选人材料已收集"
+            },
+            "third": {
+              "title": "下一步",
+              "detail": "面试邀请可供审核"
+            }
+          },
+          "approvalLabel": "审批",
+          "approveAction": "批准",
+          "approvedStatus": "已批准",
+          "replayAction": "重播",
+          "pauseAction": "暂停",
+          "resumeAction": "继续",
+          "nextAction": "下一步",
+          "phoneTitle": "下一步已准备好",
+          "phoneMessage": "面试请求可供审核。批准后将协调邀请并通知您的团队。",
+          "destinationFirst": "Google Calendar",
+          "destinationSecond": "Gmail",
+          "destinationThird": "Slack",
+          "previewTitle": "客户体验专员",
+          "previewBody": "客户运营、清晰沟通与跨团队协作。",
+          "workbench": {
+            "workspace": "招聘工作台",
+            "queue": "待办队列",
+            "overview": "概览",
+            "activity": "动态",
+            "details": "详情",
+            "prepared": "已准备",
+            "owner": "负责人",
+            "status": "状态",
+            "priority": "优先级",
+            "source": "来源",
+            "score": "评分",
+            "amount": "金额",
+            "total": "合计",
+            "items": "项目",
+            "timeline": "时间线",
+            "notes": "备注",
+            "review": "待审核",
+            "selected": "已选择",
+            "progress": "进度",
+            "search": "搜索",
+            "customer": "候选人",
+            "message": "消息",
+            "channel": "渠道",
+            "nextStep": "下一步"
+          },
+          "examples": {
+            "navigation": "选择示例",
+            "shortlist": {
+              "label": "候选人审核",
+              "title": "相关经验，交由人工评估",
+              "summary": "职业经验摘要已准备好，下一步由您的团队决定。",
+              "customerName": "Alex Morgan",
+              "subject": "运营专员 · 求职申请",
+              "customerMessage": "我从事过客户运营、报告编制和跨团队协调工作。",
+              "contextLabel": "经验摘要",
+              "contextValue": "客户运营 · 报告编制 · 跨团队协调",
+              "responseLabel": "已准备的审核备注",
+              "response": "Alex 提交的经验涵盖该岗位的运营任务。请查看申请，并决定是否安排进一步交流。",
+              "actionLabel": "批准下一步",
+              "agentLabel": "总结职业经验",
+              "statusLabel": "等待批准",
+              "phoneTitle": "相关经验，交由人工评估",
+              "phoneMessage": "职业经验摘要已准备好，下一步由您的团队决定。",
+              "triggerLabel": "候选人审核",
+              "approvalLabel": "批准下一步",
+              "destinationFirst": "Notion",
+              "destinationSecond": "Gmail",
+              "destinationThird": "Slack",
+              "records": {
+                "first": {
+                  "label": "Alex Morgan",
+                  "value": "客户运营",
+                  "detail": "审核"
+                },
+                "second": {
+                  "label": "Jamie Wilson",
+                  "value": "报告编制",
+                  "detail": "审核"
+                },
+                "third": {
+                  "label": "Sam Kim",
+                  "value": "跨团队协调",
+                  "detail": "审核"
+                }
+              },
+              "resume": {
+                "role": "运营专员",
+                "location": "可远程工作",
+                "experienceTitle": "工作经历",
+                "skillsTitle": "专业技能",
+                "educationTitle": "教育背景",
+                "fitLabel": "AI 辅助岗位匹配",
+                "fitExplanation": "根据所列技能与经历展示的匹配示例。",
+                "humanReview": "招聘人员需审核此指标，它不决定录用结果。",
+                "experienceFirst": {
+                  "role": "运营协调专员",
+                  "company": "Meridian Labs",
+                  "dates": "2022 - 2026",
+                  "summary": "协调客户交接，为服务团队编制每周报告。"
+                },
+                "experienceSecond": {
+                  "role": "客户运营助理",
+                  "company": "Cedar Works",
+                  "dates": "2019 - 2022",
+                  "summary": "维护 CRM 记录，编写常规客服流程文档。"
+                },
+                "education": "工商管理文凭",
+                "skills": {
+                  "first": "CRM 运营",
+                  "second": "报告编制",
+                  "third": "团队协调"
+                }
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "候选人审核",
+                "description": "职业经验摘要已准备好，下一步由您的团队决定。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "候选人",
+                    "value": "Alex Morgan"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "运营专员 · 求职申请"
+                  },
+                  "third": {
+                    "label": "经验摘要",
+                    "value": "客户运营 · 报告编制 · 跨团队协调"
+                  },
+                  "fourth": {
+                    "label": "已准备的审核备注",
+                    "value": "Alex 提交的经验涵盖该岗位的运营任务。请查看申请，并决定是否安排进一步交流。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准下一步"
+                  }
+                }
+              }
+            },
+            "interview": {
+              "label": "面试安排",
+              "title": "面试协调，不遗漏环节",
+              "summary": "面试邀请及日历交接信息已准备好，等待审批。",
+              "customerName": "Alex Morgan",
+              "subject": "运营专员 · 面试",
+              "customerMessage": "我可以参加初步交流，请告知建议时间和参与人员。",
+              "contextLabel": "安排背景",
+              "contextValue": "初步面试 · 时间待确认 · 已选择参与人员",
+              "responseLabel": "已准备的邀请",
+              "response": "Alex 您好，我们希望安排一次初步面试。请确认建议的时间是否适合您。",
+              "actionLabel": "批准邀请",
+              "agentLabel": "准备面试",
+              "statusLabel": "等待批准",
+              "phoneTitle": "面试协调，不遗漏环节",
+              "phoneMessage": "面试邀请及日历交接信息已准备好，等待审批。",
+              "triggerLabel": "面试安排",
+              "approvalLabel": "批准邀请",
+              "destinationFirst": "Google Calendar",
+              "destinationSecond": "Gmail",
+              "destinationThird": "Notion",
+              "records": {
+                "first": {
+                  "label": "09:00",
+                  "value": "初步面试",
+                  "detail": "等待批准"
+                },
+                "second": {
+                  "label": "11:00",
+                  "value": "时间待确认",
+                  "detail": "等待批准"
+                },
+                "third": {
+                  "label": "14:00",
+                  "value": "已选择参与人员",
+                  "detail": "等待批准"
+                }
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "面试安排",
+                "description": "面试邀请及日历交接信息已准备好，等待审批。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "候选人",
+                    "value": "Alex Morgan"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "运营专员 · 面试"
+                  },
+                  "third": {
+                    "label": "安排背景",
+                    "value": "初步面试 · 时间待确认 · 已选择参与人员"
+                  },
+                  "fourth": {
+                    "label": "已准备的邀请",
+                    "value": "Alex 您好，我们希望安排一次初步面试。请确认建议的时间是否适合您。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准邀请"
+                  }
+                }
+              },
+              "meeting": {
+                "date": "2026年9月24日 11:00",
+                "timezone": "UTC",
+                "participantsLabel": "参与人员",
+                "interviewer": "Taylor Reed，招聘负责人",
+                "location": "视频会议",
+                "agendaFirst": "岗位与工作经历",
+                "agendaSecond": "讨论一个实际案例",
+                "agendaThird": "提问与后续安排"
+              }
+            },
+            "onboarding": {
+              "label": "入职安排",
+              "title": "让新同事清晰地开始",
+              "summary": "入职清单和欢迎消息已准备好，审批后再创建任务。",
+              "customerName": "Alex Morgan",
+              "subject": "新同事 · 运营团队",
+              "customerMessage": "请准备欢迎计划、访问权限清单和第一周见面安排。",
+              "contextLabel": "入职计划",
+              "contextValue": "访问权限清单 · 团队介绍 · 第一周计划",
+              "responseLabel": "已准备的欢迎消息",
+              "response": "欢迎您，Alex。第一周安排包含访问设置、团队介绍和与负责人的沟通。期待与您见面。",
+              "actionLabel": "批准入职安排",
+              "agentLabel": "准备欢迎计划",
+              "statusLabel": "等待批准",
+              "phoneTitle": "让新同事清晰地开始",
+              "phoneMessage": "入职清单和欢迎消息已准备好，审批后再创建任务。",
+              "triggerLabel": "入职安排",
+              "approvalLabel": "批准入职安排",
+              "destinationFirst": "Notion",
+              "destinationSecond": "Slack",
+              "destinationThird": "Gmail",
+              "records": {
+                "first": {
+                  "label": "访问权限清单",
+                  "value": "已准备",
+                  "detail": "Alex Morgan"
+                },
+                "second": {
+                  "label": "团队介绍",
+                  "value": "已准备",
+                  "detail": "Alex Morgan"
+                },
+                "third": {
+                  "label": "第一周计划",
+                  "value": "已准备",
+                  "detail": "Alex Morgan"
+                }
+              },
+              "table": {
+                "createLabel": "创建行",
+                "name": "入职计划",
+                "description": "入职清单和欢迎消息已准备好，审批后再创建任务。",
+                "status": "演示数据",
+                "fields": {
+                  "first": {
+                    "label": "候选人",
+                    "value": "Alex Morgan"
+                  },
+                  "second": {
+                    "label": "详情",
+                    "value": "新同事 · 运营团队"
+                  },
+                  "third": {
+                    "label": "入职计划",
+                    "value": "访问权限清单 · 团队介绍 · 第一周计划"
+                  },
+                  "fourth": {
+                    "label": "已准备的欢迎消息",
+                    "value": "欢迎您，Alex。第一周安排包含访问设置、团队介绍和与负责人的沟通。期待与您见面。"
+                  },
+                  "fifth": {
+                    "label": "状态",
+                    "value": "已在本演示中批准"
+                  },
+                  "sixth": {
+                    "label": "下一步",
+                    "value": "批准入职安排"
+                  }
+                }
+              },
+              "plan": {
+                "startLabel": "入职日期",
+                "startDate": "2026年9月28日",
+                "buddyLabel": "入职伙伴",
+                "buddy": "Jamie Wilson",
+                "teamLabel": "团队",
+                "team": "运营"
+              }
+            }
+          }
+        }
+      }
+    },
+    "agenda": {
+      "common": {
+        "cadence": {
+          "weekdays": "每个工作日 {time}",
+          "weekly": "每个{day} {time}",
+          "monthDays": "每月 {days} 日 {time}",
+          "everyNDays": "每 {count} 天 {time}"
+        }
+      }
+    },
+    "agents": {
+      "select": "选择 {name}",
+      "star": "收藏 {name}",
+      "unstar": "取消收藏 {name}",
+      "published": "已发布到市场",
+      "webhook": "Webhook 触发器已启用",
+      "scheduled": "定时触发器已启用"
+    },
+    "tablePreview": {
+      "open": "打开表格",
+      "close": "关闭表格",
+      "field": "字段",
+      "value": "值",
+      "photo": "头像",
+      "creator": {
+        "columns": {
+          "preview": "预览",
+          "content": "帖子",
+          "format": "格式",
+          "platforms": "平台",
+          "scheduledAt": "发布时间",
+          "status": "状态"
+        },
+        "statuses": {
+          "approved": "已批准",
+          "scheduled": "已安排",
+          "published": "已发布"
+        }
+      },
+      "support": {
+        "columns": {
+          "ticket": "工单",
+          "client": "客户",
+          "subject": "主题",
+          "priority": "优先级",
+          "sla": "SLA",
+          "status": "状态",
+          "account": "账户",
+          "mrr": "月度经常性收入",
+          "reason": "原因",
+          "action": "操作",
+          "incident": "事故",
+          "severity": "严重程度",
+          "service": "服务",
+          "duration": "时长",
+          "impact": "影响"
+        },
+        "rows": {
+          "reply": {
+            "first": "#1042|Emma Laurent|工作区访问|紧急|18分钟|回复已就绪",
+            "second": "#1043|Noah Chen|忘记密码|高|24分钟|处理中",
+            "third": "#1044|Sofia Rossi|用户邀请|普通|1小时|新建",
+            "fourth": "#1045|Liam Costa|双重身份验证|高|32分钟|已升级",
+            "fifth": "#1046|Chloé Bernard|角色错误|普通|2小时|回复已就绪",
+            "sixth": "#1047|Hugo Martin|会话过期|低|4小时|已解决"
+          },
+          "refund": {
+            "first": "#2087|Emma Laurent|€49|重复扣款|退款€49|已批准",
+            "second": "#2088|Noah Chen|€99|取消年付|按比例退款|待审核",
+            "third": "#2089|Sofia Rossi|€29|未使用附加项|账户入账|已批准",
+            "fourth": "#2090|Liam Costa|€199|服务不可用|退款€199|已升级",
+            "fifth": "#2091|Chloé Bernard|€79|套餐降级|调整账单|处理中",
+            "sixth": "#2092|Hugo Martin|€39|试用转付费|取消续订|已完成"
+          },
+          "incident": {
+            "first": "INC-3175|严重|订单API|46分钟|同步中断|调查中",
+            "second": "INC-3176|高|API网关|28分钟|请求失败|缓解中",
+            "third": "INC-3177|中|同步工作进程|1小时12分钟|导入延迟|监控中",
+            "fourth": "INC-3178|高|身份验证|19分钟|登录异常|已定位",
+            "fifth": "INC-3179|低|Webhook|2小时08分钟|投递延迟|已解决",
+            "sixth": "INC-3180|中|账单API|37分钟|账单延迟|调查中"
+          }
+        }
+      },
+      "sales": {
+        "columns": {
+          "quote": "报价单",
+          "client": "客户",
+          "company": "公司",
+          "amount": "金额",
+          "validUntil": "有效期至",
+          "owner": "负责人",
+          "status": "状态",
+          "contact": "联系人",
+          "score": "评分",
+          "source": "来源",
+          "stage": "阶段",
+          "nextStep": "下一步",
+          "lastContact": "最近联系",
+          "nextFollowup": "下次跟进",
+          "channel": "渠道"
+        },
+        "rows": {
+          "quote": {
+            "first": "报价-2408|Emma Laurent|北辰实验室|€12,480|2026-09-30|Liam Costa|已发送",
+            "second": "报价-2409|Noah Chen|海港公司|€8,950|2026-10-05|Sofia Rossi|草稿",
+            "third": "报价-2410|Maya Patel|雪松分析|€24,600|2026-10-12|Hugo Martin|已查看",
+            "fourth": "报价-2411|Lucas Weber|光线工作室|€6,750|2026-09-26|Chloé Bernard|协商中",
+            "fifth": "报价-2412|Inès Moreau|阿特拉斯出行|€18,200|2026-10-18|Noah Chen|已批准",
+            "sixth": "报价-2413|Daniel Kim|峰顶医疗|€31,900|2026-10-22|Emma Laurent|待跟进"
+          },
+          "prospect": {
+            "first": "极光食品|Mila Santos|94/100|网络研讨会|已确认资质|安排需求沟通|Liam Costa",
+            "second": "顶点能源|Jonas Keller|88/100|客户推荐|已联系|发送案例研究|Sofia Rossi",
+            "third": "枫叶金融|Olivia Martin|83/100|网站|新线索|确认预算|Hugo Martin",
+            "fourth": "新星零售|Mateo García|79/100|行业展会|持续培育|分享产品演示|Chloé Bernard",
+            "fifth": "绿途物流|Ava Thompson|91/100|合作伙伴|已确认资质|准备定制方案|Noah Chen",
+            "sixth": "蓝鸟传媒|Leo Dubois|76/100|主动开发|已联系|确认决策人|Emma Laurent"
+          },
+          "followup": {
+            "first": "北辰实验室|Emma Laurent|2026-09-12|2026-09-15|电子邮件|Liam Costa|今日到期",
+            "second": "海港公司|Noah Chen|2026-09-11|2026-09-16|电话|Sofia Rossi|已安排",
+            "third": "雪松分析|Maya Patel|2026-09-10|2026-09-17|视频通话|Hugo Martin|等待回复",
+            "fourth": "光线工作室|Lucas Weber|2026-09-08|2026-09-15|LinkedIn|Chloé Bernard|优先",
+            "fifth": "阿特拉斯出行|Inès Moreau|2026-09-13|2026-09-18|电子邮件|Noah Chen|已确认",
+            "sixth": "峰顶医疗|Daniel Kim|2026-09-09|2026-09-19|电话|Emma Laurent|待安排"
+          }
+        }
+      },
+      "recruiting": {
+        "columns": {
+          "photo": "照片",
+          "candidate": "候选人",
+          "role": "职位",
+          "score": "匹配度",
+          "experience": "经验",
+          "skills": "技能",
+          "status": "状态",
+          "stage": "阶段",
+          "interviewDate": "面试时间",
+          "panel": "面试官",
+          "startDate": "入职日期",
+          "progress": "进度",
+          "manager": "负责人"
+        },
+        "candidates": {
+          "alex": {
+            "name": "Alex Morgan",
+            "role": "运营专员",
+            "experience": "6年",
+            "skills": "运营|报告|协调",
+            "shortlistStatus": "高度匹配",
+            "interviewStatus": "已安排",
+            "onboardingStatus": "已就绪",
+            "stage": "招聘经理面试",
+            "panel": "Léa Bernard 和 Thomas Reed",
+            "manager": "Léa Bernard"
+          },
+          "sarah": {
+            "name": "Sarah Chen",
+            "role": "客户成功经理",
+            "experience": "5年",
+            "skills": "客户成功|SaaS|客户留存",
+            "shortlistStatus": "高度匹配",
+            "interviewStatus": "已确认",
+            "onboardingStatus": "准备中",
+            "stage": "岗位面试",
+            "panel": "Nora Petit 和 Marc Simon",
+            "manager": "Nora Petit"
+          },
+          "malik": {
+            "name": "Malik Benali",
+            "role": "收入分析师",
+            "experience": "4年",
+            "skills": "SQL|预测|仪表板",
+            "shortlistStatus": "待审核",
+            "interviewStatus": "已安排",
+            "onboardingStatus": "已就绪",
+            "stage": "案例分析",
+            "panel": "Julie Moreau 和 Liam Costa",
+            "manager": "Julie Moreau"
+          },
+          "emma": {
+            "name": "Emma Dubois",
+            "role": "项目经理",
+            "experience": "7年",
+            "skills": "交付|预算|利益相关方",
+            "shortlistStatus": "建议面试",
+            "interviewStatus": "待确认",
+            "onboardingStatus": "进行中",
+            "stage": "团队面试",
+            "panel": "Hugo Roy 和 Inès Vidal",
+            "manager": "Hugo Roy"
+          },
+          "lucas": {
+            "name": "Lucas Martin",
+            "role": "人事协调员",
+            "experience": "3年",
+            "skills": "招聘|人力资源系统|入职",
+            "shortlistStatus": "待审核",
+            "interviewStatus": "已安排",
+            "onboardingStatus": "准备中",
+            "stage": "终面",
+            "panel": "Clara Henry 和 Paul Meyer",
+            "manager": "Clara Henry"
+          },
+          "sofia": {
+            "name": "Sofia Rossi",
+            "role": "合作伙伴负责人",
+            "experience": "8年",
+            "skills": "合作伙伴|谈判|策略",
+            "shortlistStatus": "高度匹配",
+            "interviewStatus": "已确认",
+            "onboardingStatus": "尚未开始",
+            "stage": "文化沟通",
+            "panel": "Eva Lopez 和 Noah Klein",
+            "manager": "Eva Lopez"
+          }
+        }
+      },
+      "marketing": {
+        "columns": {
+          "campaign": "推广",
+          "channel": "渠道",
+          "audience": "受众",
+          "sendAt": "发送时间",
+          "reach": "触达",
+          "status": "状态",
+          "page": "页面",
+          "keyword": "关键词",
+          "position": "排名",
+          "volume": "搜索量",
+          "action": "动作",
+          "source": "来源",
+          "mention": "提及",
+          "sentiment": "情绪",
+          "postedAt": "发布时间"
+        },
+        "rows": {
+          "campaign": {
+            "first": "Northstar 发布|邮件|小团队|2026-09-16T09:00:00Z|12,400|已通过",
+            "second": "Northstar 发布|LinkedIn|创始人|2026-09-16T11:30:00Z|8,900|已排期",
+            "third": "秋季优惠|邮件|老客户|2026-09-18T08:00:00Z|21,500|待审阅",
+            "fourth": "秋季优惠|Instagram|创作者|2026-09-18T17:00:00Z|6,300|已排期",
+            "fifth": "直播邀请|邮件|试用账号|2026-09-22T10:00:00Z|4,100|已通过",
+            "sixth": "直播邀请|LinkedIn|运营负责人|2026-09-22T14:00:00Z|7,800|草稿"
+          },
+          "seo": {
+            "first": "/pricing|工作流自动化 价格|#7|2,400 /月|重写开头|就绪",
+            "second": "/integrations|zapier 替代|#12|5,100 /月|补充对比|进行中",
+            "third": "/blog/ai-agents|客服 ai 智能体|#4|1,800 /月|更新示例|就绪",
+            "fourth": "/marketplace|自动化模板|#18|3,300 /月|新增落地页板块|排队中",
+            "fifth": "/for/support|客服自动化|#9|900 /月|补充 FAQ 标记|就绪",
+            "sixth": "/compare/n8n|n8n 替代|#15|1,200 /月|更新数据|进行中"
+          },
+          "listening": {
+            "first": "Reddit|想要一个能看到智能体做了什么的工具|正面|12,000|2026-09-14T08:20:00Z|已回复",
+            "second": "LinkedIn|关于自动化定价的对比讨论|中性|8,400|2026-09-14T12:05:00Z|待回复",
+            "third": "X|吐槽竞品的限制|负面|15,200|2026-09-13T19:40:00Z|观察中",
+            "fourth": "Product Hunt|发布留言希望提供 API|正面|3,600|2026-09-13T16:10:00Z|已回复",
+            "fifth": "Slack 社区|询问自托管|中性|1,100|2026-09-12T09:55:00Z|待回复",
+            "sixth": "YouTube|测评视频提到了智能体|正面|22,800|2026-09-11T15:30:00Z|已分享"
+          }
+        }
+      },
+      "ops": {
+        "columns": {
+          "week": "周次",
+          "owner": "负责人",
+          "runs": "执行次数",
+          "onTime": "准时率",
+          "hoursSaved": "节省工时",
+          "status": "状态",
+          "client": "客户",
+          "plan": "方案",
+          "startDate": "开始日期",
+          "progress": "进度",
+          "sku": "货号",
+          "product": "商品",
+          "onHand": "现有库存",
+          "threshold": "阈值",
+          "supplier": "供应商"
+        },
+        "rows": {
+          "report": {
+            "first": "第 37 周|Claire Fontaine|34|97%|12 小时|已确认",
+            "second": "第 36 周|Claire Fontaine|28|95%|10.5 小时|已确认",
+            "third": "第 35 周|Luc Martin|31|92%|11 小时|已确认",
+            "fourth": "第 34 周|Claire Fontaine|26|98%|9 小时|已确认",
+            "fifth": "第 33 周|Luc Martin|24|90%|8.5 小时|待审阅",
+            "sixth": "第 32 周|Claire Fontaine|29|94%|10 小时|已确认"
+          },
+          "intake": {
+            "first": "Meridian Labs|Growth|Yanis Berger|2026-09-22|2 / 5|进行中",
+            "second": "Kite & Co|Starter|Sofia Rossi|2026-09-18|5 / 5|已完成",
+            "third": "Northwind Studio|Growth|Yanis Berger|2026-09-15|4 / 5|进行中",
+            "fourth": "Arcadia Foods|Scale|Luc Martin|2026-09-29|0 / 5|排队中",
+            "fifth": "Halcyon Health|Starter|Sofia Rossi|2026-09-11|5 / 5|已完成",
+            "sixth": "Lumen Works|Growth|Claire Fontaine|2026-10-02|1 / 5|进行中"
+          },
+          "stock": {
+            "first": "MRW-114|冷萃咖啡 250 毫升|8|25|Barrow & Sons|低于阈值",
+            "second": "MRW-231|滤纸 x100|12|30|Barrow & Sons|低于阈值",
+            "third": "MRW-087|意式拼配 1 千克|64|40|Verde Coffee|库存充足",
+            "fourth": "MRW-302|保温杯|41|20|Kiln Supply|库存充足",
+            "fifth": "MRW-145|低因拼配 1 千克|18|20|Verde Coffee|低于阈值",
+            "sixth": "MRW-410|纸杯 x50|96|50|Kiln Supply|库存充足"
+          }
+        }
+      }
+    },
+    "heroDemo": {
+      "composer": "描述你的任务",
+      "workflows": "工作流",
+      "run": "运行",
+      "ready": "就绪",
+      "running": "运行中",
+      "waiting": "等待中",
+      "completed": "已完成"
+    }
   }
 }

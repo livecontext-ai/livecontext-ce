@@ -86,7 +86,7 @@ class OpenAICompatibleProviderModelListingTest {
                 Map.of("id", "glm-5.3", "object", "model"),
                 Map.of("id", "glm-5.2", "object", "model")));
 
-        assertThat(OpenAICompatibleProvider.extractModelIds(body))
+        assertThat(provider("https://api.z.ai/v1/chat/completions").extractModelIds(body))
                 .containsExactly("glm-5.3", "glm-5.2");
     }
 
@@ -95,17 +95,17 @@ class OpenAICompatibleProviderModelListingTest {
     void parsesBareStringEntries() {
         Map<String, Object> body = Map.of("data", List.of("kimi-k3", "  kimi-k2.6  "));
 
-        assertThat(OpenAICompatibleProvider.extractModelIds(body))
+        assertThat(provider("https://api.z.ai/v1/chat/completions").extractModelIds(body))
                 .containsExactly("kimi-k3", "kimi-k2.6");
     }
 
     @Test
     @DisplayName("Unknown or empty shapes yield an empty list, never an exception")
     void toleratesUnknownShapes() {
-        assertThat(OpenAICompatibleProvider.extractModelIds(null)).isEmpty();
-        assertThat(OpenAICompatibleProvider.extractModelIds(Map.of())).isEmpty();
-        assertThat(OpenAICompatibleProvider.extractModelIds(Map.of("data", "nope"))).isEmpty();
-        assertThat(OpenAICompatibleProvider.extractModelIds(Map.of("data", List.of()))).isEmpty();
+        assertThat(provider("https://api.z.ai/v1/chat/completions").extractModelIds(null)).isEmpty();
+        assertThat(provider("https://api.z.ai/v1/chat/completions").extractModelIds(Map.of())).isEmpty();
+        assertThat(provider("https://api.z.ai/v1/chat/completions").extractModelIds(Map.of("data", "nope"))).isEmpty();
+        assertThat(provider("https://api.z.ai/v1/chat/completions").extractModelIds(Map.of("data", List.of()))).isEmpty();
     }
 
     @Test
@@ -119,6 +119,6 @@ class OpenAICompatibleProviderModelListingTest {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("data", List.of(withBlank, withoutId, Map.of("id", "glm-5.3")));
 
-        assertThat(OpenAICompatibleProvider.extractModelIds(body)).containsExactly("glm-5.3");
+        assertThat(provider("https://api.z.ai/v1/chat/completions").extractModelIds(body)).containsExactly("glm-5.3");
     }
 }

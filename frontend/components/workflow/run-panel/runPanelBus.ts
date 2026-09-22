@@ -8,8 +8,8 @@
  * SidePanel, mounted from the app layout - a different React tree with no common
  * provider. Same situation as the trigger / application configs, so we reuse the
  * exact same pattern those already use: a window CustomEvent plus a module-level
- * per-workflow cache so a panel that mounts late (or remounts when the user
- * reopens the panel) immediately has the latest snapshot instead of an empty one.
+ * per-surface cache so a panel that mounts late (or remounts when the user
+ * reopens it) immediately has its own latest snapshot instead of an empty one.
  *
  * Actions travel the other way through {@link requestRunAction}: the panel cannot
  * call the canvas' stop/cancel/reactivate handlers directly, so it names the
@@ -29,6 +29,12 @@ export const BIND_RUN_EVENT = 'workflowBindRun' as const;
 
 export interface RunPanelData {
   workflowId: string;
+  /**
+   * Identity of the canvas/panel pair publishing this snapshot. Omitted for the
+   * route-owned workflow page. A workflow can be mounted in several keep-alive
+   * side-panel tabs at once, so workflowId alone cannot identify its run.
+   */
+  surfaceId?: string;
   /** Run currently bound to the canvas (null in edit mode). */
   runId: string | null;
   runInfo: any | null;
@@ -54,6 +60,8 @@ export interface RunPanelActionDetail {
   action: RunPanelAction;
   workflowId?: string;
   runId?: string | null;
+  /** Route the action to the canvas paired with this side-panel surface. */
+  surfaceId?: string;
   /**
    * Set by the canvas that claimed the request, so the caller knows the action
    * was actually taken.
@@ -93,9 +101,10 @@ export interface RunPanelViewRequest {
   seq: number;
 }
 
-export function makeEmptyRunPanelData(workflowId: string): RunPanelData {
+export function makeEmptyRunPanelData(workflowId: string, surfaceId?: string): RunPanelData {
   return {
     workflowId,
+    surfaceId,
     runId: null,
     runInfo: null,
     isStepByStep: false,
@@ -109,13 +118,18 @@ export function makeEmptyRunPanelData(workflowId: string): RunPanelData {
 
 const cacheByWorkflow = new Map<string, RunPanelData>();
 
-/** Latest snapshot for a workflow (empty defaults when nothing was published yet). */
-export function getCachedRunPanelData(workflowId: string): RunPanelData {
-  return cacheByWorkflow.get(workflowId) ?? makeEmptyRunPanelData(workflowId);
+function snapshotCacheKey(workflowId: string, surfaceId?: string): string {
+  return JSON.stringify([workflowId, surfaceId ?? null]);
+}
+
+/** Latest snapshot for one workflow surface (empty defaults before publication). */
+export function getCachedRunPanelData(workflowId: string, surfaceId?: string): RunPanelData {
+  return cacheByWorkflow.get(snapshotCacheKey(workflowId, surfaceId))
+    ?? makeEmptyRunPanelData(workflowId, surfaceId);
 }
 
 /**
- * The run the canvas of this workflow is bound to.
+ * The run the canvas of this workflow surface is bound to.
  *
  * This is the id every run surface keys its per-run state off (the epoch the
  * user picked, above all), and the canvas resolves it from more than the
@@ -127,27 +141,30 @@ export function getCachedRunPanelData(workflowId: string): RunPanelData {
 export function boundRunId(
   workflowId: string | null | undefined,
   fallback?: string | null,
+  surfaceId?: string,
 ): string | null {
   if (!workflowId) return fallback ?? null;
-  return getCachedRunPanelData(workflowId).runId ?? fallback ?? null;
+  return getCachedRunPanelData(workflowId, surfaceId).runId ?? fallback ?? null;
 }
 
 /** Publish a fresh snapshot (canvas → panel). Also fills the late-mount cache. */
 export function publishRunPanelData(data: RunPanelData): void {
   if (typeof window === 'undefined' || !data.workflowId) return;
-  cacheByWorkflow.set(data.workflowId, data);
+  cacheByWorkflow.set(snapshotCacheKey(data.workflowId, data.surfaceId), data);
   window.dispatchEvent(new CustomEvent<RunPanelData>(RUN_PANEL_DATA_EVENT, { detail: data }));
 }
 
-/** Subscribe to snapshots for one workflow. Returns the unsubscribe function. */
+/** Subscribe to snapshots for one workflow surface. Returns the unsubscribe function. */
 export function subscribeRunPanelData(
   workflowId: string,
   onData: (data: RunPanelData) => void,
+  surfaceId?: string,
 ): () => void {
   if (typeof window === 'undefined') return () => {};
   const handler = (event: Event) => {
     const detail = (event as CustomEvent<RunPanelData>).detail;
     if (!detail || detail.workflowId !== workflowId) return;
+    if ((detail.surfaceId ?? null) !== (surfaceId ?? null)) return;
     onData(detail);
   };
   window.addEventListener(RUN_PANEL_DATA_EVENT, handler);

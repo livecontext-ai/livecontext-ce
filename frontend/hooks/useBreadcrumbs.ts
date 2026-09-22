@@ -7,6 +7,9 @@ import { Home, Table as TableIcon, Workflow, LayoutPanelTop, Zap, Bot } from 'lu
 import { useCurrentView } from '@/hooks/useCurrentView';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { orchestratorApi } from '@/lib/api';
+import type { DataSource } from '@/lib/api';
+import type { ResourceEditor } from '@/lib/api/orchestrator/types';
+import { loadWorkflowEditors } from '@/lib/api/orchestrator/version.service';
 import { publicationService } from '@/lib/api/orchestrator/publication.service';
 import { resolveApplicationPublication } from '@/app/[locale]/app/applications/[publicationId]/resolvePublication';
 import { projectService } from '@/lib/api/orchestrator/project.service';
@@ -33,6 +36,17 @@ import {
   type ResourceFolderTrailState,
 } from '@/lib/folders/foldersHeaderBus';
 import { samePageUrl, showSamePageUrl } from '@/lib/navigation/showSamePageUrl';
+
+/**
+ * What the crumb's info control shows about the open resource. Every field comes from the
+ * response the crumb already fetched to get the title, so carrying it costs no request.
+ */
+interface ResourceAttribution {
+  /** Row owner (its `tenantId`), resolved to a name by the popover. */
+  ownerId?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
 
 // Helper to build path with locale prefix. Kept local (not the shared
 // buildLocalePath): this one preserves the CURRENT prefix verbatim - when the
@@ -62,6 +76,12 @@ export interface BreadcrumbItem {
   alwaysClickable?: boolean;
   /** When set, renders a favorite-toggle star on this segment (see breadcrumb.tsx). */
   favorite?: { isFavorite: boolean; onToggle: () => void };
+  /** When set, renders the resource-info control on this segment (see breadcrumb.tsx). */
+  info?: ResourceAttribution & {
+    /** Identifies the resource, so the reused control drops the previous one's editors. */
+    resourceKey?: string;
+    loadEditors?: () => Promise<ResourceEditor[]>;
+  };
 }
 
 interface UseBreadcrumbsOptions {
@@ -150,6 +170,12 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
   const [interfaceDescription, setInterfaceDescription] = useState<string>('');
   const [interfaceType, setInterfaceType] = useState<string | null>(null);
   const [mcpInfo, setMcpInfo] = useState<{ title: string | null; toolName: string | null }>({ title: null, toolName: null });
+  // Attribution for the crumb's info control (owner + timestamps). Kept per resource kind
+  // rather than in one slot: the name fetches are independent effects, and a shared slot
+  // would let a stale interface answer paint under an open workflow.
+  const [workflowAttribution, setWorkflowAttribution] = useState<ResourceAttribution | null>(null);
+  const [dataSourceAttribution, setDataSourceAttribution] = useState<ResourceAttribution | null>(null);
+  const [interfaceAttribution, setInterfaceAttribution] = useState<ResourceAttribution | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
 
   // Determine view states from currentView
@@ -378,6 +404,7 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
 
   // Fetch data source name
   useEffect(() => {
+    setDataSourceAttribution(null);
     if (!dataSourceId || dataSourceId === 'new') {
       setDataSourceName('');
       return;
@@ -396,15 +423,25 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
     setDataSourceName(null);
     orchestratorApi.getDataSources()
       .then(dataSources => {
-        const current = dataSources.find((ds: { id: string; name?: string; description?: string }) => String(ds.id) === String(dsId));
+        const current = dataSources.find((ds: DataSource) => String(ds.id) === String(dsId));
         setDataSourceName(current?.name || 'Table');
         setDataSourceDescription(current?.description || '');
+        setDataSourceAttribution(current ? {
+          ownerId: current.tenantId ?? current.tenant_id ?? null,
+          // The list DTO serializes snake_case; the camelCase forms are kept for other
+          // producers (see the DataSource type), so read both rather than assume one.
+          createdAt: current.createdAt ?? current.created_at ?? null,
+          updatedAt: current.updatedAt ?? current.updated_at ?? null,
+        } : null);
       })
-      .catch(() => setDataSourceName('Table'));
+      .catch(() => { setDataSourceName('Table'); setDataSourceAttribution(null); });
   }, [dataSourceId, authLoading, isAuthenticated]);
 
   // Fetch workflow name
   useEffect(() => {
+    // Reset with the name: attribution belongs to the resource being left, and a crumb that
+    // kept it would date workflow B by workflow A until B's fetch lands.
+    setWorkflowAttribution(null);
     if (!workflowId || workflowId === 'new') {
       setWorkflowName('');
       return;
@@ -420,9 +457,15 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
     const primedName = recallWorkflowName(workflowId);
     setWorkflowName(primedName ?? null);
     orchestratorApi.getWorkflow(workflowId)
-      .then((workflow: { name?: string; description?: string }) => {
+      .then((workflow: { name?: string; description?: string; tenantId?: string; createdAt?: string; updatedAt?: string }) => {
         setWorkflowName(workflow.name || primedName || `Workflow ${workflowId}`);
         setWorkflowDescription(workflow.description || '');
+        // Free: the response the title already needed carries the attribution too.
+        setWorkflowAttribution({
+          ownerId: workflow.tenantId ?? null,
+          createdAt: workflow.createdAt ?? null,
+          updatedAt: workflow.updatedAt ?? null,
+        });
         // The server is reachable and has an authoritative name - the prime has
         // done its job; drop it so it can never resurface as a stale name later
         // (e.g. after a rename + re-navigation in the same session).
@@ -432,6 +475,7 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
         // The post-create getWorkflow round-trip can transiently fail; prefer the
         // primed name over the bare "Workflow {uuid}" fallback so the title stays correct.
         setWorkflowName(primedName || `Workflow ${workflowId}`);
+        setWorkflowAttribution(null);
       });
   }, [workflowId, authLoading, isAuthenticated]);
 
@@ -459,6 +503,7 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
 
   // Fetch interface name
   useEffect(() => {
+    setInterfaceAttribution(null);
     if (!isInterfacePage || !interfaceId) {
       setInterfaceName('');
       return;
@@ -470,12 +515,17 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
 
     setInterfaceName(null);
     orchestratorApi.getInterface(interfaceId)
-      .then((data: { name?: string; description?: string; interfaceType?: string }) => {
+      .then((data: { name?: string; description?: string; interfaceType?: string; tenantId?: string; createdAt?: string; updatedAt?: string }) => {
         setInterfaceName(data.name || `Interface ${interfaceId}`);
         setInterfaceDescription(data.description || '');
         setInterfaceType(data.interfaceType || null);
+        setInterfaceAttribution({
+          ownerId: data.tenantId ?? null,
+          createdAt: data.createdAt ?? null,
+          updatedAt: data.updatedAt ?? null,
+        });
       })
-      .catch(() => setInterfaceName(`Interface ${interfaceId}`));
+      .catch(() => { setInterfaceName(`Interface ${interfaceId}`); setInterfaceAttribution(null); });
   }, [isInterfacePage, interfaceId, authLoading, isAuthenticated]);
 
   // Fetch publication title (for marketplace preview, agent preview, or application detail page).
@@ -683,6 +733,13 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
             isFavorite: workflowFavorite.isFavorite,
             onToggle: workflowFavorite.toggle,
           } : undefined,
+          // Workflows are the one resource with a real edit history (their plan versions),
+          // so this is the only crumb that offers the "recent editors" section.
+          info: (!isLoading && workflowAttribution) ? {
+            resourceKey: `workflow:${workflowId}`,
+            ...workflowAttribution,
+            loadEditors: () => loadWorkflowEditors(workflowId),
+          } : undefined,
         });
 
         // Check for run page (only show if loaded)
@@ -740,6 +797,10 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
             isFavorite: tableFavorite.isFavorite,
             onToggle: tableFavorite.toggle,
           } : undefined,
+          // Same rule as the star: the table's own crumb, not a JSON subpath crumb.
+          info: (!isLoading && isLastDataItem && dataSourceAttribution)
+            ? { resourceKey: `table:${dataSourceId}`, ...dataSourceAttribution }
+            : undefined,
         });
 
         // Extract JSON path segments (only show if loaded)
@@ -854,6 +915,9 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
             isFavorite: interfaceFavorite.isFavorite,
             onToggle: interfaceFavorite.toggle,
           } : undefined,
+          info: (!isLoading && interfaceAttribution)
+            ? { resourceKey: `interface:${interfaceId}`, ...interfaceAttribution }
+            : undefined,
         });
       }
 
@@ -1028,6 +1092,12 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
     tableFavorite.toggle,
     interfaceFavorite.isFavorite,
     interfaceFavorite.toggle,
+    // Attribution for the crumb's info control. Without these the control would keep the
+    // (usually absent) attribution captured when the memo last ran, so it would never
+    // appear after the name fetch resolves.
+    workflowAttribution,
+    dataSourceAttribution,
+    interfaceAttribution,
   ]);
 
   const isAgentFleet = isAgentView && searchParams.get('view') === 'fleet';

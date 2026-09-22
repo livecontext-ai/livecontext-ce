@@ -23,6 +23,7 @@ import { apiClient, orchestratorApi } from '@/lib/api';
 import { useResourceQuery } from '@/lib/hooks/useResourceQuery';
 import { extractWebSearchUrls } from '@/lib/utils/extractWebSearchUrls';
 import type { ToolActivity } from './ActivityFeed';
+import { StepHistoryToggle, VISIBLE_STEPS } from './StepHistoryToggle';
 import { normalizeIconSlug } from '@/lib/credentials/iconSlug';
 import type { GroupedToolActivity } from '@/lib/utils/activityGrouping';
 import { getToolDescription, getToolIconType, getToolIconSlug } from '@/lib/utils/activityGrouping';
@@ -241,7 +242,18 @@ interface GroupedToolCardProps {
 
 export function GroupedToolCard({ group, isStreaming = false }: GroupedToolCardProps) {
   const [isExpanded, toggleExpanded] = useExpandedState(group.id, isStreaming, undefined, undefined, true);
+  // Older calls of THIS tool, hidden until asked for. The feed's cap counts
+  // steps, and a group is one step however many calls it holds: without this,
+  // a turn that calls one tool thirty times renders thirty expanded rows and
+  // walks straight past the cap.
+  //
+  // It is stored the same way the row's own expanded flag is, because this card
+  // is UNMOUNTED when the feed collapses: local state would silently lose a
+  // reveal that the feed-level control keeps, for the same promise to the reader.
+  const [showOlderCalls, toggleOlderCalls] = useExpandedState(`${group.id}:calls`);
   const { toolName, calls, overallStatus, totalDurationMs } = group;
+  const hiddenCalls = showOlderCalls ? 0 : Math.max(0, calls.length - VISIBLE_STEPS);
+  const visibleCalls = calls.slice(hiddenCalls);
 
   const isPending = overallStatus === 'pending';
   const pendingCount = calls.filter(c => c.status === 'pending').length;
@@ -305,11 +317,19 @@ export function GroupedToolCard({ group, isStreaming = false }: GroupedToolCardP
         {/* Sub-items */}
         {isExpanded && (
         <div className="mt-2 pl-1 min-w-0">
-          {calls.map((call, index) => (
+          {calls.length > VISIBLE_STEPS && (
+            <StepHistoryToggle
+              hiddenCount={hiddenCalls}
+              onToggle={toggleOlderCalls}
+              withTimelineChrome={false}
+              testId="call-history-toggle"
+            />
+          )}
+          {visibleCalls.map((call, index) => (
             <CallTimelineItem
               key={call.id}
               call={call}
-              index={index}
+              index={hiddenCalls + index}
               isStreaming={isStreaming}
             />
           ))}

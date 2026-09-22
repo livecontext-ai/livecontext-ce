@@ -89,7 +89,13 @@ describe('integrations directory page', () => {
     ) as CollectionJsonLd;
     expect(collection.mainEntity.itemListElement).toHaveLength(100);
     expect(collection.mainEntity.numberOfItems).toBe(100);
-  });
+    // A minute, against a default of twenty seconds. This renders 240 cards and then asks jsdom
+    // for the accessible name of every link on the page, which is real work: about nineteen
+    // seconds on an idle machine and past the default on a busy one. It failed in full-suite runs
+    // and passed alone, which reads as flakiness and is not - the assertion is sound, the budget
+    // was for a unit test. Shrinking the catalogue would be the other fix and would weaken what
+    // this proves, which is that a SECOND page of results is rendered rather than the first.
+  }, 60_000);
 
   it('walks the catalog rather than reading a single page', async () => {
     fetchAllIntegrations.mockResolvedValue({ integrations: [], totalElements: 0, truncated: false });

@@ -17,7 +17,7 @@ export function buildWorkflowPanelTab(workflowId: string): SidePanelTab {
     icon: <LayoutDashboard className="w-4 h-4" />,
     pinned: true,
     scope: ['/app/workflow/*'],
-    content: <WorkflowPanelContent workflowId={workflowId} />,
+    content: <WorkflowPanelContent workflowId={workflowId} hostTabId={WORKFLOW_PANEL_TAB_ID} />,
   };
 }
 

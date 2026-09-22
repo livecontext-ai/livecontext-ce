@@ -398,9 +398,9 @@ code[class*="language-"] {
        bright gold reads correctly on the dark ground but sits at 1.8:1 on white.
        Light mode therefore splits by ROLE rather than dimming everything to the
        strictest threshold, which is what made it read bronze:
-         - INK is text ("+X% over your plan"), so it needs AA 4.5:1. #9a6d04 is
+         - INK is text (the ring's "+"), so it needs AA 4.5:1. #9a6d04 is
            4.60:1 on white, the goldest hue that still clears it.
-         - ARC and FILL are graphical objects, which need only 3:1. #b8860b
+         - ARC is a graphical object, which needs only 3:1. #b8860b
            (darkgoldenrod) is 3.25:1 on white and reads as actual metal.
        The arc's contrast that matters is against the CARD it sits on, not
        against its own track: the track is a faint hint of the full circle, and
@@ -408,9 +408,6 @@ code[class*="language-"] {
     --credit-gold-ink: #9a6d04;
     --credit-gold-arc: #b8860b;
     --credit-gold-arc-track: rgba(184, 134, 11, 0.20);
-    --credit-gold-fill-from: #9a6d04;
-    --credit-gold-fill-to: #c9930a;
-    --credit-gold-track: rgba(184, 134, 11, 0.16);
     /* The ring is stroked with a metallic SWEEP, not a flat colour, and that is
        what finally makes it read as gold on white. A flat swatch cannot: any
        hue bright enough to look like metal sits under 3:1 there, so a single
@@ -449,9 +446,6 @@ code[class*="language-"] {
     --credit-gold-ink: #f0c43f;
     --credit-gold-arc: #f0c43f;
     --credit-gold-arc-track: rgba(240, 196, 63, 0.26);
-    --credit-gold-fill-from: #d4a017;
-    --credit-gold-fill-to: #ffe08a;
-    --credit-gold-track: rgba(255, 214, 122, 0.22);
     /* Same sweep on the dark ground, where there is headroom to go brighter. */
     --credit-gold-metal-1: #c08a16;
     --credit-gold-metal-2: #ffe9a8;
@@ -1823,36 +1817,166 @@ button:focus-visible,
   animation: shimmer-scan 1.5s ease-in-out infinite;
 }
 
-/* Pulsing BLUE "running" border - overlays the application area while its
-   workflow run is executing, keeping the app itself visible (RunningBorder).
-   The whole ring fades in/out with a soft glow to signal "this app's current
-   epoch is running". `box-shadow` (inset ring + glow) so it adds no layout. */
-.app-running-border {
+/* ── Application run-state indicator (RunStateIndicator) ──────────────────
+   Overlays the application area while its workflow run is EXECUTING or is
+   PARKED on something the person has to answer, keeping the app visible
+   underneath.
+
+   This used to be one blue ring fading 0.4 -> 1 -> 0.4 on a 1.6s loop, shown
+   for "running" and nothing else. Two problems, both reported 2026-09-17:
+   the breathing read as a selection highlight rather than as progress (the
+   shape never moves, and a slow opacity breath is what a focused frame does
+   elsewhere in the product); and the run row stays RUNNING the whole time a
+   node is parked on a signal, so the strongest "work is happening" cue in the
+   product was showing precisely while nothing was happening and the app was
+   waiting for the user.
+
+   So there are two states, and the colour vocabulary is the one the canvas
+   already settled: BLUE = executing, AMBER = blocked on a human.
+     - a STEADY ring, so the boundary is stated once and never flickers;
+     - a bar SWEEPING the top edge, the ordinary "in progress" cue - it is the
+       only moving part, and ONLY the running state has it. A waiting app must
+       not look busy;
+     - a labelled chip, so the state is also WRITTEN, not only drawn.
+   `box-shadow` for the ring so it still adds no layout. `overflow: hidden`
+   clips the sweep to the frame, including its rounded corners. */
+.app-run-state {
   position: absolute;
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
+  overflow: hidden;
   box-shadow:
-    inset 0 0 0 2px rgba(59, 130, 246, 0.90),  /* the ring */
-    inset 0 0 12px 0 rgba(59, 130, 246, 0.35), /* inner glow */
-    0 0 8px 0 rgba(59, 130, 246, 0.25);        /* soft outer glow */
-  animation: app-border-pulse 1.6s ease-in-out infinite;
+    inset 0 0 0 1.5px rgba(59, 130, 246, 0.75), /* the ring */
+    inset 0 0 14px 0 rgba(59, 130, 246, 0.18);  /* inner glow */
 }
 
-@keyframes app-border-pulse {
-  0%, 100% { opacity: 0.4; }
-  50%      { opacity: 1; }
-}
-
-.dark .app-running-border {
+.app-run-state[data-run-state="awaiting"] {
   box-shadow:
-    inset 0 0 0 2px rgba(96, 165, 250, 0.90),
-    inset 0 0 12px 0 rgba(96, 165, 250, 0.35),
-    0 0 8px 0 rgba(96, 165, 250, 0.25);
+    inset 0 0 0 1.5px rgba(245, 158, 11, 0.80),
+    inset 0 0 14px 0 rgba(245, 158, 11, 0.20);
 }
 
+/* Track of the indeterminate sweep: the app's top edge. It is a CHILD of the
+   overlay while the ring is an inset box-shadow, and a box-shadow paints below
+   its element's children, so the sweep draws OVER the ring where they meet. */
+.app-run-state__sweep {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  overflow: hidden;
+}
+
+/* The moving light itself. 40% of the track wide, so translating it to 250% of
+   its OWN width carries its left edge exactly off the right end of the track. */
+.app-run-state__sweep::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent 0%, rgb(59, 130, 246) 50%, transparent 100%);
+  /* LINEAR: an indeterminate bar carries no information about how far along
+     anything is, so easing at both ends reads as a shuttle going back and
+     forth rather than as work advancing. */
+  animation: app-run-sweep 1.5s linear infinite;
+}
+
+@keyframes app-run-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+/* State chip. Bottom-RIGHT on purpose: bottom-centre is the application
+   toolbar and the action bar, and top-centre is the preview toast, so this is
+   the one corner no other overlay of this surface claims. Under a declared
+   format it lands in the letterbox, clear of the app entirely. */
+.app-run-state__chip {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  color: rgb(29, 78, 216);
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.10);
+  backdrop-filter: blur(4px);
+}
+
+.app-run-state[data-run-state="awaiting"] .app-run-state__chip {
+  color: rgb(180, 83, 9);
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.app-run-state__dots {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.app-run-state__dots > span {
+  width: 3px;
+  height: 3px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: app-run-dot 1.2s ease-in-out infinite;
+}
+
+.app-run-state__dots > span:nth-child(2) { animation-delay: 0.15s; }
+.app-run-state__dots > span:nth-child(3) { animation-delay: 0.30s; }
+
+@keyframes app-run-dot {
+  0%, 60%, 100% { opacity: 0.25; }
+  30%           { opacity: 1; }
+}
+
+.dark .app-run-state {
+  box-shadow:
+    inset 0 0 0 1.5px rgba(96, 165, 250, 0.75),
+    inset 0 0 14px 0 rgba(96, 165, 250, 0.18);
+}
+
+.dark .app-run-state[data-run-state="awaiting"] {
+  box-shadow:
+    inset 0 0 0 1.5px rgba(251, 191, 36, 0.80),
+    inset 0 0 14px 0 rgba(251, 191, 36, 0.20);
+}
+
+.dark .app-run-state__sweep::after {
+  background: linear-gradient(90deg, transparent 0%, rgb(96, 165, 250) 50%, transparent 100%);
+}
+
+.dark .app-run-state__chip {
+  color: rgb(147, 197, 253);
+  background: rgba(15, 23, 42, 0.88);
+  border-color: rgba(96, 165, 250, 0.35);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.dark .app-run-state[data-run-state="awaiting"] .app-run-state__chip {
+  color: rgb(252, 211, 77);
+  border-color: rgba(251, 191, 36, 0.45);
+}
+
+/* Reduced motion keeps every STATEMENT and drops only the movement: the ring
+   and the chip are untouched, and the sweep becomes a steady dimmed bar across
+   the whole top edge instead of a travelling one. */
 @media (prefers-reduced-motion: reduce) {
-  .app-running-border { animation: none; opacity: 0.85; }
+  .app-run-state__sweep::after,
+  .app-run-state__dots > span {
+    animation: none;
+  }
+  .app-run-state__sweep::after { width: 100%; opacity: 0.55; }
+  .app-run-state__dots > span { opacity: 1; }
 }
 
 /* Sound bar animation for speech recognition */
@@ -1930,3 +2054,146 @@ button:focus-visible,
 }
 
 
+
+/* ===========================================================================
+   Studio look: "Darkroom"
+   ---------------------------------------------------------------------------
+   A second visual treatment for the studio surface ONLY, offered beside the
+   app's own and chosen by the reader (StudioLookSwitch, remembered per browser).
+
+   WHY a studio needs its own ground rather than the app's. Everywhere else the
+   content is text and controls, and the app's paper-white light theme is right
+   for them. Here the content is an IMAGE or a CLIP, and a bright chrome around
+   it does two things a media surface must not: it drags the eye off the asset,
+   and it shifts how the asset's own colour and exposure read. Galleries and
+   grading suites both answer this the same way - a neutral, desaturated
+   surround that gives the eye no reference of its own.
+
+   HOW it is expressed. It redefines the SAME tokens the whole app is built on
+   rather than adding a parallel set of class names, so every control already
+   inside the studio - the composer, the turn cards, the history - follows it
+   with no change of its own, and anything added later follows too. Nothing
+   outside an element carrying the class is touched.
+
+   A MENU does not inherit it, and that is not an oversight: a popover renders
+   in a portal on the document, outside whatever opened it, so it reads the
+   app's tokens however deeply nested its trigger was. `StudioPopoverContent`
+   carries the class onto those, through a context rather than through the DOM.
+
+   Both themes, deliberately. A "darkroom" that only existed in dark mode would
+   leave the light reader with the bright surround the treatment exists to
+   remove; the light half is a GALLERY WALL (a warm neutral, the asset card
+   staying the brightest thing on screen) and the dark half is the darkroom
+   proper (near-black, cooled a touch so it tints nothing).
+   ======================================================================== */
+
+.studio-darkroom {
+  /* Light: a gallery wall. The page is the wall, the card is the print, and
+     the print is the brightest surface on screen - which is the one ordering
+     the app's own light theme cannot express, since its page is already white. */
+  --bg-primary: #edecea;
+  --bg-secondary: #f7f6f5;
+  --bg-tertiary: #e3e1de;
+  --bg-hover: #dcdad6;
+  /* Muted text is DARKENED to pay for the darker ground. The app's #6b7280 sits
+     at 4.85:1 on white and at 4.09:1 on this wall, which is below AA - moving
+     the ground moves the contrast whether the treatment means to or not, and
+     muted is the app's most-used text colour (every count, label and price
+     note).
+     Measured on all THREE grounds this block defines, which the first value was
+     not: #5f6672 reached 4.90:1 on the wall and 5.36:1 on the card and then
+     4.43:1 on --bg-tertiary, below AA - and tertiary is where the price note,
+     the parameter pills and the running banner sit. #585f6b clears it on every
+     one: 5.45:1 / 5.96:1 / 4.93:1. */
+  --text-muted: #585f6b;
+  --border-color: #cbc8c3;
+  /* 3.22:1 on the wall: the asset frame, which has to be SEEN. See the
+     .studio-asset-frame rule for why it is not --border-color. */
+  --asset-frame-color: #888279;
+  --shadow-color: rgba(28, 25, 23, 0.16);
+  /* The two Tailwind grays the app's menu rows are written in literally.
+     `menuItemClass` uses `hover:bg-gray-100 dark:hover:bg-gray-800`, and the
+     model picker and the parameter menus mark a selected row the same way, so
+     those three controls did NOT follow the treatment: this block's own comment
+     claims every control inside the studio does, and hovering a row in a studio
+     menu painted the application's gray on the studio's ground.
+     Redefined rather than rewritten at each call site, because they are
+     Tailwind v4 COLOUR tokens (see the warm-stone overrides under `.dark`), so
+     one definition here reaches every utility that names them, including ones
+     written after this. Values track --bg-hover / --bg-tertiary so a row reads
+     the same whichever of the two spellings drew it. */
+  --color-gray-100: #dcdad6;
+  --color-gray-200: #e3e1de;
+  --color-gray-800: #dcdad6;
+  /* The ground is painted BY the treatment, so one class carries the whole look
+     and every surface that adopts it (this one, and the menus portalled out of
+     it) is grounded without a second class to remember. */
+  background-color: var(--bg-primary);
+}
+
+.dark .studio-darkroom {
+  /* Dark: the darkroom. Cooler and deeper than the app's warm neutral, because
+     a warm surround tints a clip's own whites - the app ground is #171614, and
+     a still graded against it reads a shade yellow next to the same still in a
+     player. */
+  --bg-primary: #0c0c0e;
+  --bg-secondary: #141417;
+  --bg-tertiary: #1c1c20;
+  --bg-hover: #26262b;
+  /* 3.29:1 on the darkroom ground, and still 5.9:1 against a white still, so the
+     frame reads on both sides of the edge it draws. */
+  --asset-frame-color: #63636e;
+  /* Restated, like every other token here: both selectors match the same element
+     in dark mode, so a gray declared only in the light half above would leak the
+     GALLERY value onto the darkroom ground. */
+  --color-gray-100: #26262b;
+  --color-gray-200: #1c1c20;
+  --color-gray-800: #26262b;
+  /* 2.69:1 on this ground, against the 2.64:1 the app's own border has on its own. It was #34343a
+     at 1.58:1, which is a REGRESSION the treatment introduced rather than inherited: the light
+     half is 1.41:1 where the app is 1.39:1 and so owes nothing, but a deeper ground needs a
+     lighter line to keep the same separation. Neither half reaches the 3:1 WCAG asks of a
+     component boundary, and that is the application's standard to move, not this class's - what
+     this class must not do is make it worse. */
+  --border-color: #56565f;
+  --shadow-color: rgba(0, 0, 0, 0.6);
+  /* Muted is RESTATED, not inherited. Both selectors match the same element in
+     dark mode, and the light half above declares `--text-muted` unconditionally,
+     so leaving it out here does not fall back to the app's value: it leaks the
+     GALLERY value onto the darkroom ground.
+
+     The first restatement here was the app's own #736f67, justified as "3.91:1,
+     better than the 3.62:1 the app itself has, so the treatment owes nothing".
+     That was measuring against the wrong thing. AA wants 4.5:1 and 3.91 is not
+     it, the app being worse is not a licence, and on --bg-tertiary the same
+     colour was 3.40:1 - which is where the price note and the parameter pills
+     sit. #8a857c clears AA on all three grounds of this block: 5.33:1 on the
+     ground, 5.01:1 on the card, 4.63:1 on tertiary - and then 4.11:1 on
+     --bg-hover, the FOURTH ground this block defines and the one the first two
+     passes both forgot. It is not only a hover state: the model picker and the
+     parameter menus paint the SELECTED row with it, permanently, and that row
+     carries muted text. #969188 clears AA on all four: 6.24:1 on the ground,
+     5.87:1 on the card, 5.42:1 on tertiary, 4.81:1 on hover. It is lighter than
+     the app's muted, which is what a deeper ground costs. */
+  --text-muted: #969188;
+  background-color: var(--bg-primary);
+}
+
+/* The asset itself gets the one piece of chrome the treatment adds: a hairline
+   that separates a white image from a light wall, and a black frame from a dark
+   one. Without it a white-background generation dissolves into the page and the
+   reader cannot see where their asset ends - the single most common complaint a
+   flat media surface produces. */
+.studio-darkroom .studio-asset-frame {
+  /* Its OWN colour, not --border-color.
+     The frame is the one piece of chrome this treatment adds, and it exists to
+     draw the edge of an asset against the ground. Drawn in --border-color it
+     measured 1.41:1 on the wall and 1.58:1 on the darkroom ground, against the
+     3:1 WCAG asks of a non-text boundary - so the line meant to stop a white
+     generation dissolving into the page very nearly dissolved itself.
+     --border-color is right for what it is used for everywhere else (separating
+     two panels of similar lightness, where a strong line would be noise) and
+     wrong here, which is why this takes a token of its own rather than moving
+     that one and darkening every border in the studio. */
+  box-shadow: 0 0 0 1px var(--asset-frame-color), 0 1px 2px var(--shadow-color);
+}

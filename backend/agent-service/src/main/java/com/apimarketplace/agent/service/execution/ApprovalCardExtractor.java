@@ -157,9 +157,29 @@ public class ApprovalCardExtractor {
             info.put("toolName", svc.get("toolName"));
             info.put("toolId", svc.get("toolId"));
             info.put("description", svc.get("description"));
+            // The scope gap, when the refusal carried one. Copied only if present, so an
+            // ordinary connect request is byte-identical to what it was.
+            //
+            // This whitelist is why the fields have to be named here at all: a key the
+            // producer sets and this method does not copy is dropped silently, somewhere
+            // between the tool result and the wire, and the card then renders "connect
+            // this" over an account that is already connected. Anything a service entry
+            // must carry to the browser belongs in this list.
+            copyIfPresent(svc, info, "requiredScopes");
+            copyIfPresent(svc, info, "grantedScopes");
+            copyIfPresent(svc, info, "missingScopes");
+            copyIfPresent(svc, info, "credentialType");
             infos.add(info);
         }
         return infos;
+    }
+
+    /** Carry a key over only when the producer set it, so absent stays absent rather than null. */
+    private static void copyIfPresent(Map<String, Object> from, Map<String, Object> to, String key) {
+        Object value = from.get(key);
+        if (value != null) {
+            to.put(key, value);
+        }
     }
 
     /** Stable signature for a set of services (sorted serviceTypes). */

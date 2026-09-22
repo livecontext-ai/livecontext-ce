@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl';
 import { Loader2 } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { versionService } from '@/lib/api/orchestrator/version.service';
+import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 
 interface ApplicationActivationButtonProps {
   /** The workflow id underlying this application (applications ARE workflows). */
@@ -66,6 +67,8 @@ export function ApplicationActivationButton({
     };
   }, [workflowId, initialPinnedVersion]);
 
+  const refreshAutomations = useRefreshHomeStatus();
+
   const onActivate = useCallback(async () => {
     setBusy(true);
     setError(null);
@@ -85,13 +88,20 @@ export function ApplicationActivationButton({
       }
       const res = await versionService.pinVersion(workflowId, latest);
       setPinnedVersion(res.pinnedVersion);
+      // Same reason as every other pin site: activation is what puts this app in the bell's
+      // Triggers rows and imminent-fire ring, and nothing else invalidates that payload.
+      // Gated on `success`, like the two pin sites that already were: a declined pin changed no
+      // row, and the ask is not free of consequence - it stamps "asked just now", which would
+      // then silence the visit-ask the user makes seconds later, the one moment the bell most
+      // needs to be able to correct itself.
+      if (res.success) refreshAutomations();
       onChange?.(res.pinnedVersion);
     } catch (e) {
       setError(e instanceof Error ? e.message : t('activationFailed'));
     } finally {
       setBusy(false);
     }
-  }, [workflowId, onChange, t]);
+  }, [workflowId, onChange, t, refreshAutomations]);
 
   const onDeactivate = useCallback(async () => {
     setBusy(true);
@@ -99,13 +109,14 @@ export function ApplicationActivationButton({
     try {
       const res = await versionService.pinVersion(workflowId, null);
       setPinnedVersion(res.pinnedVersion); // null
+      if (res.success) refreshAutomations();
       onChange?.(res.pinnedVersion);
     } catch (e) {
       setError(e instanceof Error ? e.message : t('deactivationFailed'));
     } finally {
       setBusy(false);
     }
-  }, [workflowId, onChange, t]);
+  }, [workflowId, onChange, t, refreshAutomations]);
 
   // Pre-mount fetch in flight: render a placeholder so the UI doesn't flicker.
   if (pinnedVersion === undefined) {

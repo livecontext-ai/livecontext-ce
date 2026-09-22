@@ -40,6 +40,11 @@ export type BudgetChipProps = {
    * withholds any claim that the automation is stopped.
    */
   spendIsCurrent?: boolean;
+  /**
+   * The server's verdict that this cap is refusing runs right now. Overrides the
+   * figure-based guess in the popover; see BudgetPopoverContentProps.blocked.
+   */
+  blocked?: boolean;
   /** Rendered small and muted inside a card meta row (default), or standalone. */
   className?: string;
   /**
@@ -72,6 +77,7 @@ export function BudgetChip({
   fallbackPeriod = 'monthly',
   resetsAt,
   spendIsCurrent = true,
+  blocked,
   className,
   showIcon = true,
 }: BudgetChipProps) {
@@ -90,9 +96,14 @@ export function BudgetChip({
 
   // Only a capped workflow can be "over": an uncapped one is just reporting.
   const ratio = hasCap ? spentValue / (cap as number) : 0;
+  // The server verdict colours the chip too, not just the popover. Otherwise a row whose
+  // hover says the automation is stopped is drawn in the calm grey, which is the case for
+  // an agent held back by credits an in-flight sub-agent is holding: the spend alone is
+  // well under the cap and the ratio below knows nothing about it.
+  const overCap = blocked ?? (hasCap && ratio >= 1);
   const tone = !hasCap
     ? 'text-theme-muted'
-    : ratio >= 1
+    : overCap
       ? 'text-red-600 dark:text-red-400'
       : ratio >= 0.8
         ? 'text-amber-600 dark:text-amber-400'
@@ -197,6 +208,7 @@ export function BudgetChip({
             fallbackPeriod={fallbackPeriod}
             resetsAt={resetsAt}
             spendIsCurrent={spendIsCurrent}
+            blocked={blocked}
           />
         </TooltipContent>
       </Tooltip>

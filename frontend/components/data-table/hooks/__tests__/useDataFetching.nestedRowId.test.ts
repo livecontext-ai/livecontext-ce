@@ -43,6 +43,7 @@ const setup = (jsonPath: string, showIdColumn = false) =>
       showIdColumn,
       addToast: vi.fn(),
       setPagination: vi.fn(),
+      setColumnOrder: vi.fn(),
       snapshotData: undefined,
     })
   );
@@ -246,6 +247,7 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
         showIdColumn: false,
         addToast: vi.fn(),
         setPagination: vi.fn(),
+        setColumnOrder: vi.fn(),
         snapshotData: undefined,
       })
     );
@@ -261,8 +263,32 @@ describe('useDataFetching nested workflow rows - real id preservation', () => {
     const { result } = setup('output.rows');
     await act(async () => {
       await result.current.fetchColumns();
+      await result.current.fetchData(1, 100);
     });
 
     expect(result.current.columns.map(c => c.field)).toContain('id');
+  });
+
+  it('does not lose an epoch-specific id column to an unfiltered schema sample', async () => {
+    mockFetch.mockImplementation((url: string) => Promise.resolve(okJson(url.includes('epoch=2')
+      ? detailedWithTableRows
+      : { rows: [{ output: { rows: [{ oldField: true }] } }], columns: [] })));
+    const { result } = setup('output.rows');
+    await act(async () => {
+      await result.current.fetchData(1, 20, null, null, { epoch: 2 });
+      await result.current.fetchColumns();
+    });
+    expect(result.current.columns.map(c => c.field)).toEqual(['id', 'email']);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result.current.rows[0].data.id).toBe(4711);
+  });
+
+  it('keeps nested columns from older pages and adds IDs first encountered on a later page', async () => {
+    mockFetch.mockResolvedValueOnce(okJson({ rows: [{ output: { rows: [{ title: 'No ID' }] } }], columns: [] }));
+    const { result } = setup('output.rows');
+    await act(async () => { await result.current.fetchData(1, 20); });
+    await act(async () => { await result.current.fetchData(2, 20, null, null, null, true); });
+    expect(result.current.columns.map(c => c.field).sort()).toEqual(['email', 'id', 'title']);
+    expect(result.current.rows.map(row => row.data.id)).toEqual([1, 4711, 4712]);
   });
 });

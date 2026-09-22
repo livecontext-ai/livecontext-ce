@@ -218,6 +218,23 @@ class LoopDetectorTest {
         }
 
         @Test
+        @DisplayName("Budget warnings preserve useful work until the configured hard stop")
+        void budgetWarningsDoNotEndProductiveWorkPrematurely() {
+            for (int i = 0; i < 25; i++) detector.recordConsecutiveCall();
+            assertThat(detector.generateConsecutiveMessage(LoopDetector.ConsecutiveResult.STRONG_RECOMMENDATION))
+                    .contains("completing and verifying", "15 calls")
+                    .doesNotContain("respond with results OR suggest workflow");
+
+            for (int i = 25; i < 35; i++) detector.recordConsecutiveCall();
+            assertThat(detector.generateConsecutiveMessage(LoopDetector.ConsecutiveResult.FINAL_WARNING))
+                    .contains("5 calls", "essential completion and verification", "unfinished steps")
+                    .doesNotContain("STOP tools", "RESPOND NOW", "1 iteration left");
+
+            for (int i = 35; i < 39; i++) detector.recordConsecutiveCall();
+            assertThat(detector.recordConsecutiveCall()).isEqualTo(LoopDetector.ConsecutiveResult.STOP);
+        }
+
+        @Test
         @DisplayName("generateConsecutiveMessage for OK should return null")
         void okMessageShouldReturnNull() {
             String msg = detector.generateConsecutiveMessage(LoopDetector.ConsecutiveResult.OK);

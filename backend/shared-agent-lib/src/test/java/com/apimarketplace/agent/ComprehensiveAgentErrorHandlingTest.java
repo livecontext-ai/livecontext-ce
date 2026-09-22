@@ -617,6 +617,7 @@ class ComprehensiveAgentErrorHandlingTest {
 
             String reminder = detector.generateConsecutiveMessage(LoopDetector.ConsecutiveResult.REMINDER);
             assertThat(reminder)
+                .contains("[INFO]")
                 .contains("15")
                 .contains("workflow");
 
@@ -626,10 +627,22 @@ class ComprehensiveAgentErrorHandlingTest {
             }
 
             String strong = detector.generateConsecutiveMessage(LoopDetector.ConsecutiveResult.STRONG_RECOMMENDATION);
+            // Pinned on what an agent acts on, not on the prose around it. This assertion
+            // asked for "SHOULD" and "respond", two words a later rewording of the message
+            // removed, and it stayed red without anyone seeing it because no CI job named
+            // this class. What has to hold at this level: it is marked more severely than
+            // the reminder, it says how many calls have been made, it says how many remain
+            // before the hard stop (the number an agent budgets on), and it says to finish
+            // the task rather than keep exploring.
             assertThat(strong)
+                .contains("[RECOMMEND]")
                 .contains("25")
-                .contains("SHOULD")
-                .contains("respond");
+                .contains(String.valueOf(
+                    LoopDetector.DEFAULT_CONSECUTIVE_STOP - LoopDetector.DEFAULT_CONSECUTIVE_STRONG))
+                .contains("completing");
+            assertThat(strong)
+                .as("an escalation an agent cannot tell apart from the lighter reminder is not an escalation")
+                .doesNotContain("[INFO]");
         }
 
         @Test

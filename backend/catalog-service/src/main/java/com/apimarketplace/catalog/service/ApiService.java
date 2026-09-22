@@ -71,7 +71,23 @@ public class ApiService {
     @Lazy
     private ApiService self;
 
-    private static final String PLATFORM_TENANT_ID = "PLATFORM";
+    private static final String PLATFORM_TENANT_ID =
+            com.apimarketplace.catalog.service.credential.PlatformTenant.ID;
+
+    /**
+     * Whether a standard connection could ever grant the scopes an endpoint needs.
+     * Setter-injected so the hand-built services in the unit tests keep compiling, and
+     * so a slice without the bean produces the refusal it produced before.
+     */
+    private com.apimarketplace.catalog.service.credential.EndpointCredentialCapabilityService
+            credentialCapability;
+
+    @Autowired(required = false)
+    public void setCredentialCapability(
+            com.apimarketplace.catalog.service.credential.EndpointCredentialCapabilityService
+                    credentialCapability) {
+        this.credentialCapability = credentialCapability;
+    }
 
     // ========== Tool Name Resolution ==========
 
@@ -196,16 +212,40 @@ public class ApiService {
             // a "reconnect to enable" banner without re-deriving anything from the user side.
             log.info("[ApiService] Preflight scope check failed for tool {}: missing {}",
                     toolName, e.getMissingScopes());
+            java.util.List<String> missing = new java.util.ArrayList<>(e.getMissingScopes());
+            // Which of the missing scopes a standard reconnect could never grant. Without
+            // it this refusal says "reconnect", and a reconnect that re-requests the same
+            // narrow scope set lands the reader back here having consented to nothing new.
+            java.util.List<String> needOwnClient = credentialCapability == null
+                    ? java.util.List.of()
+                    // getIntegration(), not getCredentialName(): the policy is filed under
+                    // the integration the executor resolves credentials by, which is what
+                    // the exception carries as its integration and what the payload two
+                    // lines down already reports. They coincide for the seeded catalog and
+                    // can diverge for a registered API.
+                    : credentialCapability.scopesNeedingOwnOAuthClient(e.getIntegration(), missing);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
             errorResult.put("errorCode", "insufficient_scopes");
-            errorResult.put("error", e.getMessage());
+            errorResult.put("error", needOwnClient.isEmpty()
+                    ? e.getMessage()
+                    : e.getMessage() + ". A standard reconnect can never grant "
+                            + String.join(", ", needOwnClient)
+                            + ": this provider treats those as restricted, so the user has to "
+                            + "connect this integration with their own OAuth client credentials "
+                            + "and grant those scopes there.");
             errorResult.put("toolName", toolName);
             errorResult.put("apiId", apiId);
             errorResult.put("credentialName", e.getCredentialName());
             errorResult.put("integration", e.getIntegration());
-            errorResult.put("missingScopes", new java.util.ArrayList<>(e.getMissingScopes()));
-            errorResult.put("remediation", "reconnect_credential");
+            errorResult.put("missingScopes", missing);
+            if (!needOwnClient.isEmpty()) {
+                errorResult.put("scopesNeedingOwnOAuthClient", needOwnClient);
+            }
+            // The remediation an interface branches on. "reconnect_credential" would send
+            // it to the Standard button, which is the one that cannot work here.
+            errorResult.put("remediation",
+                    needOwnClient.isEmpty() ? "reconnect_credential" : "connect_own_oauth_client");
             return errorResult;
         } catch (com.apimarketplace.catalog.service.exception.CredentialSelectionException e) {
             // Refusal, not a failure of the tool: the step named a credential for

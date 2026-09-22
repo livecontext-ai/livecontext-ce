@@ -55,8 +55,11 @@ vi.mock('@/lib/providers/smart-providers', () => ({
 // onStreamComplete (mid-stream route changes remounted the app layout and
 // dropped the live stream subscription).
 const routerReplaceMock = vi.fn();
+// Mutable: the URL sync is now deferred until the end-of-stream reconciliation settles, so a
+// test has to be able to move the user in the meantime.
+let currentPathname = '/app/chat';
 vi.mock('next/navigation', () => ({
-  usePathname: () => '/app/chat',
+  usePathname: () => currentPathname,
   useRouter: () => ({ replace: routerReplaceMock }),
 }));
 
@@ -104,6 +107,12 @@ describe('useMessageHandlersV2 - onStreamComplete stale-conversation guard', () 
   beforeEach(() => {
     vi.clearAllMocks();
     setSendError.mockReset();
+    // clearAllMocks wipes CALLS but keeps implementations, so a test that stubs one of these
+    // would otherwise leak its stub into every test after it.
+    loadMessages.mockReset();
+    loadMessages.mockImplementation(async () => {});
+    routerReplaceMock.mockReset();
+    currentPathname = '/app/chat';
     capturedCallbacks = null;
     stopStreamMock.mockResolvedValue(undefined);
     sendMessageMock.mockImplementation(async (_payload: any, callbacks: any) => {
@@ -176,11 +185,248 @@ describe('useMessageHandlersV2 - onStreamComplete stale-conversation guard', () 
       capturedCallbacks.onStreamComplete('conv-a');
     });
 
-    // loadMessages SHOULD be called for the matching conversation.
-    expect(loadMessages).toHaveBeenCalledWith('conv-a');
+    // loadMessages SHOULD be called for the matching conversation, and SILENTLY: this is a
+    // background reconciliation of the thread the user is reading, so it must not raise the
+    // loading flag, reset pagination or clear the list on failure (the end-of-stream "refresh").
+    expect(loadMessages).toHaveBeenCalledWith('conv-a', undefined, { silent: true });
     // URL sync is deferred to stream-complete (2c8524b39): still on the
     // new-chat URL, so the route is replaced to the created conversation.
     expect(routerReplaceMock).toHaveBeenCalledWith('/app/c/conv-a', { scroll: false });
+  });
+
+  it('syncs the URL only AFTER the silent reconciliation has landed', async () => {
+    // The route change swaps the chat page for a fresh instance, which paints from the
+    // snapshot the outgoing one left behind. Replacing the URL first would snapshot a thread
+    // still missing the persisted reply, and the answer would visibly appear a second time
+    // after the remount.
+    const order: string[] = [];
+    let releaseLoad!: () => void;
+    loadMessages.mockImplementation(() => new Promise<void>((resolve) => {
+      order.push('load:start');
+      releaseLoad = () => { order.push('load:end'); resolve(); };
+    }));
+    routerReplaceMock.mockImplementation(() => { order.push('router.replace'); });
+
+    const hookResult = renderHook(
+      (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+      { initialProps: defaultOptions({ inputValue: 'hello' }) },
+    );
+    await act(async () => {
+      await hookResult.result.current.handleSendMessage('hello');
+    });
+    hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+
+    await act(async () => {
+      capturedCallbacks.onStreamComplete('conv-a');
+    });
+    expect(order).toEqual(['load:start']);
+
+    await act(async () => {
+      releaseLoad();
+    });
+    await waitFor(() => expect(routerReplaceMock).toHaveBeenCalled());
+    expect(order).toEqual(['load:start', 'load:end', 'router.replace']);
+  });
+
+  it('still syncs the URL when the silent reconciliation FAILS', async () => {
+    // A transient 5xx on the background reload must not strand the conversation on the
+    // new-chat URL - it would not resolve on refresh, share or breadcrumb.
+    loadMessages.mockRejectedValue(new Error('503'));
+
+    const hookResult = renderHook(
+      (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+      { initialProps: defaultOptions({ inputValue: 'hello' }) },
+    );
+    await act(async () => {
+      await hookResult.result.current.handleSendMessage('hello');
+    });
+    hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+
+    await act(async () => {
+      capturedCallbacks.onStreamComplete('conv-a');
+    });
+
+    await waitFor(() =>
+      expect(routerReplaceMock).toHaveBeenCalledWith('/app/c/conv-a', { scroll: false }));
+  });
+
+  it('does not sync the URL when the user moved on while the reconciliation was in flight', async () => {
+    // Deferring the route change opens a window the synchronous version did not have: the
+    // user can start another conversation before the reload resolves. Yanking them back to
+    // the finished conversation's URL would be worse than the flash this change removes.
+    let releaseLoad!: () => void;
+    loadMessages.mockImplementation(() => new Promise<void>((resolve) => {
+      releaseLoad = resolve;
+    }));
+
+    const hookResult = renderHook(
+      (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+      { initialProps: defaultOptions({ inputValue: 'hello' }) },
+    );
+    await act(async () => {
+      await hookResult.result.current.handleSendMessage('hello');
+    });
+    hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+
+    await act(async () => {
+      capturedCallbacks.onStreamComplete('conv-a');
+    });
+
+    // User navigates to another conversation before the reload lands.
+    hookResult.rerender(defaultOptions({ currentConversationId: 'conv-b' }));
+    await act(async () => {
+      releaseLoad();
+    });
+
+    expect(routerReplaceMock).not.toHaveBeenCalled();
+  });
+
+  it('loads the existing thread SILENTLY before sending (a hiccup must not wipe it)', async () => {
+    // The explicit path clears the message list when the fetch fails, so a network blip at the
+    // moment the user pressed Enter used to empty the conversation they were writing into.
+    const hookResult = renderHook(
+      (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+      { initialProps: defaultOptions({ inputValue: 'hello', currentConversationId: 'conv-a' }) },
+    );
+
+    await act(async () => {
+      await hookResult.result.current.handleSendMessage('hello');
+    });
+
+    expect(loadMessages).toHaveBeenCalledWith('conv-a', undefined, { silent: true });
+  });
+
+  it('does not yank the user back when they leave the new-chat URL while the reply lands', async () => {
+    // The callbacks object handed to StreamingContext is frozen at send time, so a pathname
+    // read inside it describes where the user was when they pressed Enter. Deferring the sync
+    // widens that gap to the whole reconciliation, so the guard has to be re-read at navigation
+    // time - which is why it lives in an effect.
+    let releaseLoad!: () => void;
+    loadMessages.mockImplementation(() => new Promise<void>((resolve) => { releaseLoad = resolve; }));
+
+    const hookResult = renderHook(
+      (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+      { initialProps: defaultOptions({ inputValue: 'hello' }) },
+    );
+    await act(async () => {
+      await hookResult.result.current.handleSendMessage('hello');
+    });
+    hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+
+    await act(async () => {
+      capturedCallbacks.onStreamComplete('conv-a');
+    });
+
+    // The user walks off to a route that has nothing to do with conversations.
+    currentPathname = '/app/workflows';
+    hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+
+    await act(async () => {
+      releaseLoad();
+    });
+
+    expect(routerReplaceMock).not.toHaveBeenCalled();
+  });
+
+  it('retries the post-stream reconciliation once before giving up', async () => {
+    // The reconciliation is silent, not optional: until the persisted reply lands in messages[]
+    // ChatCore holds the queued-message drain on it, and there is no banner to explain the
+    // wait. A silent load REJECTS on failure precisely so this retry is possible - swallowing
+    // the error in useMessages would make this code unreachable.
+    loadMessages
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValueOnce(undefined);
+
+    const hookResult = renderHook(
+      (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+      { initialProps: defaultOptions({ inputValue: 'hello' }) },
+    );
+    await act(async () => {
+      await hookResult.result.current.handleSendMessage('hello');
+    });
+    hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+    loadMessages.mockClear();
+    loadMessages
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValueOnce(undefined);
+
+    await act(async () => {
+      capturedCallbacks.onStreamComplete('conv-a');
+    });
+
+    await waitFor(() => expect(loadMessages).toHaveBeenCalledTimes(2));
+    expect(loadMessages).toHaveBeenNthCalledWith(2, 'conv-a', undefined, { silent: true });
+  });
+
+  it('gives up after the retry rather than looping', async () => {
+    loadMessages.mockRejectedValue(new Error('503'));
+
+    const hookResult = renderHook(
+      (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+      { initialProps: defaultOptions({ inputValue: 'hello' }) },
+    );
+    await act(async () => {
+      await hookResult.result.current.handleSendMessage('hello');
+    });
+    hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+    loadMessages.mockClear();
+
+    await act(async () => {
+      capturedCallbacks.onStreamComplete('conv-a');
+    });
+
+    // Two attempts, and the URL still syncs: a conversation stranded on the new-chat URL would
+    // not resolve on refresh, share or breadcrumb.
+    await waitFor(() => expect(routerReplaceMock).toHaveBeenCalled());
+    expect(loadMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it('navigates once per request, not once per effect run', async () => {
+    // The request lives in a ref that the effect CONSUMES. Without that, any later re-run of
+    // the effect - it depends on pathname and router, both of which change on navigation -
+    // would replay the same request and yank the reader back to a conversation they had
+    // already left once.
+    const hookResult = renderHook(
+      (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+      { initialProps: defaultOptions({ inputValue: 'hello' }) },
+    );
+    await act(async () => {
+      await hookResult.result.current.handleSendMessage('hello');
+    });
+    hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+
+    await act(async () => {
+      capturedCallbacks.onStreamComplete('conv-a');
+    });
+    await waitFor(() => expect(routerReplaceMock).toHaveBeenCalledTimes(1));
+
+    // A dep of the effect changes - here the locale prefix of the very URL it just left.
+    currentPathname = '/fr/app/chat';
+    await act(async () => {
+      hookResult.rerender(defaultOptions({ currentConversationId: 'conv-a' }));
+    });
+
+    expect(routerReplaceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not touch the URL when the send came from an existing conversation', async () => {
+    // The guard that matters is in the effect and reads the LIVE pathname, so a send from
+    // /app/c/{id} resolves to "nothing to do" wherever the reader ends up.
+    currentPathname = '/app/c/conv-a';
+
+    const hookResult = renderHook(
+      (props: ReturnType<typeof defaultOptions>) => useMessageHandlersV2(props),
+      { initialProps: defaultOptions({ inputValue: 'hello', currentConversationId: 'conv-a' }) },
+    );
+    await act(async () => {
+      await hookResult.result.current.handleSendMessage('hello');
+    });
+
+    await act(async () => {
+      capturedCallbacks.onStreamComplete('conv-a');
+    });
+
+    expect(routerReplaceMock).not.toHaveBeenCalled();
   });
 
   it('keeps firstConversationStopVisibleWhileStreamCreationIsPending', async () => {

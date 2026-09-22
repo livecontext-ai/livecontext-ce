@@ -8,8 +8,12 @@ import type { PublicPublicationSummary } from '@/lib/marketplace/publicPublicati
 // The reader is `server-only` and talks to the gateway; the page's contract with
 // it is what this suite is about, so it is stubbed here.
 const fetchAllPublicPublications = vi.fn();
+const fetchVerifiedPublisherHandles =
+  vi.fn<(handles: Array<string | null | undefined>) => Promise<Set<string>>>();
 vi.mock('@/lib/marketplace/publicPublications', () => ({
   fetchAllPublicPublications: (...args: unknown[]) => fetchAllPublicPublications(...args),
+  fetchVerifiedPublisherHandles: (handles: Array<string | null | undefined>) =>
+    fetchVerifiedPublisherHandles(handles),
   fetchMarketplacePage: vi.fn(),
 }));
 
@@ -30,8 +34,13 @@ vi.mock('@/components/seo/JsonLd', () => ({
 
 // The card has its own suite. Here it only has to prove it was rendered.
 vi.mock('../_components/PublicationCardSsr', () => ({
-  default: ({ publication }: { publication: PublicPublicationSummary }) => (
-    <article data-testid="card">{publication.title}</article>
+  default: ({ publication, publisherVerified }: {
+    publication: PublicPublicationSummary;
+    publisherVerified?: boolean;
+  }) => (
+    <article data-testid="card" data-publisher-verified={publisherVerified ? 'true' : 'false'}>
+      {publication.title}
+    </article>
   ),
 }));
 
@@ -94,6 +103,8 @@ async function renderPage() {
 beforeEach(() => {
   jsonLd.length = 0;
   fetchAllPublicPublications.mockReset();
+  fetchVerifiedPublisherHandles.mockReset();
+  fetchVerifiedPublisherHandles.mockResolvedValue(new Set<string>());
 });
 
 describe('marketplace index page', () => {
@@ -180,6 +191,41 @@ describe('marketplace index page', () => {
 
     expect(screen.getByText(/No published listings right now/)).toBeTruthy();
     expect(screen.queryAllByTestId('card')).toHaveLength(0);
+  });
+
+  it('asks ONCE for every author on the page, and marks the verified ones', async () => {
+    // One call for the whole grid, not one per card. It hands over the handle of every
+    // listing, duplicates included - deduping is the reader's job and is covered where
+    // it lives (publicPublications.test.ts), not here, where the reader is mocked.
+    const byAda = publication(0);
+    const alsoAda = publication(1);
+    const byLinus = { ...publication(2), publisherHandle: 'linus', publisherName: 'Linus' };
+    fetchAllPublicPublications.mockResolvedValue({
+      publications: [byAda, alsoAda, byLinus],
+      truncated: false,
+    });
+    fetchVerifiedPublisherHandles.mockResolvedValue(new Set(['linus']));
+
+    await renderPage();
+
+    expect(fetchVerifiedPublisherHandles).toHaveBeenCalledTimes(1);
+    expect(fetchVerifiedPublisherHandles).toHaveBeenCalledWith(['ada', 'ada', 'linus']);
+    const cards = screen.getAllByTestId('card');
+    expect(cards.map((c) => c.getAttribute('data-publisher-verified')))
+        .toEqual(['false', 'false', 'true']);
+  });
+
+  it('matches an author case-insensitively, so a capitalised handle still gets its check', async () => {
+    // The lookup answers lowercased handles; a row may store any casing.
+    fetchAllPublicPublications.mockResolvedValue({
+      publications: [{ ...publication(0), publisherHandle: 'Ada' }],
+      truncated: false,
+    });
+    fetchVerifiedPublisherHandles.mockResolvedValue(new Set(['ada']));
+
+    await renderPage();
+
+    expect(screen.getByTestId('card').getAttribute('data-publisher-verified')).toBe('true');
   });
 
   it('warns when the walk stopped early, so a partial catalogue is never silent', async () => {

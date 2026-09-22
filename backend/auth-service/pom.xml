@@ -181,6 +181,13 @@
         </dependency>
 
         <!-- Spring Boot Starter Test -->
+        <!-- Shared scratch-Postgres gate for the SQL tests. Test scope only. -->
+        <dependency>
+            <groupId>com.apimarketplace</groupId>
+            <artifactId>test-support</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -191,6 +198,21 @@
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- agent-common, TEST SCOPE ONLY. auth-service decides how to READ a token
+             count (ModelPricingService.ProviderFamily) and agent-common decides how to
+             RE-EXPRESS one (TokenUsageConventions); the two must agree on which
+             providers count the cache beside the prompt, and a disagreement is silent
+             and expensive in both directions. TokenUsageConventionsFamilyParityTest is
+             the only thing that can see both, so it needs this on the test classpath.
+             Deliberately NOT a compile dependency: the billing service must not gain a
+             runtime edge to the agent stack. -->
+        <dependency>
+            <groupId>com.apimarketplace</groupId>
+            <artifactId>agent-common</artifactId>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
 

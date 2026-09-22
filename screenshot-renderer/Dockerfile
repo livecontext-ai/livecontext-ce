@@ -2,7 +2,7 @@
 # Runs as its own container; the orchestrator reaches it over service DNS via
 # SCREENSHOT_RENDERER_URL. See README.md.
 #
-# This file SHIPS PUBLICLY: it is the corresponding source of the AGPL-licensed
+# This file SHIPS PUBLICLY: it is the source behind the published
 # livecontext-ce-screenshot-renderer image, exported to the public CE repo as
 # screenshot-renderer/. Keep its comments English and free of internal paths,
 # cluster namespaces and CI workflow names - the public tree excludes deploy/,

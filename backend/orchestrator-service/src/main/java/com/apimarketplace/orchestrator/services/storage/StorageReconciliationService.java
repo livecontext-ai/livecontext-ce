@@ -20,16 +20,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigInteger;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalLong;
 
 /**
  * Full reconciliation service for storage breakdown.
  * Local categories (STEP_OUTPUTS, FILES, EXECUTION_DATA, CONFIGURATION) use native SQL.
  * Remote categories (AGENTS, INTERFACES, CONVERSATIONS, DATATABLES, PUBLICATIONS)
  * are fetched via HTTP clients from their respective services.
- * Triggered daily at 3 AM or on-demand via REST API.
+ * Triggered daily at 2 AM (see the cron on {@link #dailyReconciliation()}) or on demand.
  */
 @Service
 public class StorageReconciliationService {
@@ -37,7 +40,7 @@ public class StorageReconciliationService {
     private static final Logger log = LoggerFactory.getLogger(StorageReconciliationService.class);
 
     /**
-     * Per-tenant TTL throttle for {@link #refreshExecutionData(String)}. A hit within
+     * Per-tenant TTL throttle for {@link #refreshTenantBreakdown(String)}. A hit within
      * the window short-circuits the SQL - important because the storage dashboard
      * fires GET /quota + GET /breakdown in parallel ({@code Promise.all}) on every
      * mount, which would otherwise double the {@code pg_column_size} aggregate over
@@ -48,9 +51,9 @@ public class StorageReconciliationService {
      * absolute-set, so two replicas racing only cost an extra query, never
      * incorrect state.
      */
-    private static final Duration EXECUTION_DATA_REFRESH_TTL = Duration.ofSeconds(30);
-    private final Cache<String, Boolean> executionDataRefreshThrottle = Caffeine.newBuilder()
-            .expireAfterWrite(EXECUTION_DATA_REFRESH_TTL)
+    private static final Duration LOCAL_BREAKDOWN_REFRESH_TTL = Duration.ofSeconds(30);
+    private final Cache<String, Boolean> tenantBreakdownRefreshThrottle = Caffeine.newBuilder()
+            .expireAfterWrite(LOCAL_BREAKDOWN_REFRESH_TTL)
             .maximumSize(10_000)
             .build();
 
@@ -62,7 +65,7 @@ public class StorageReconciliationService {
      * saw 4.8MB in the breakdown while the gauge (computed fresh) reported 435MB.
      */
     private final Cache<String, Boolean> orgBreakdownRefreshThrottle = Caffeine.newBuilder()
-            .expireAfterWrite(EXECUTION_DATA_REFRESH_TTL)
+            .expireAfterWrite(LOCAL_BREAKDOWN_REFRESH_TTL)
             .maximumSize(10_000)
             .build();
 
@@ -145,19 +148,23 @@ public class StorageReconciliationService {
      *
      * <p>Re-aggregates org-owned categories and overwrites the corresponding
      * rows in {@code storage.org_storage_breakdown} via
-     * {@link StorageBreakdownService#setOrgUsage}. STEP_OUTPUTS and FILES come
-     * from {@code storage.storage} filtered by {@code organization_id} -
-     * the same column the gauge sums via
-     * {@code StorageRepository.calculateOrganizationUsage}, so the two views
-     * agree. EXECUTION_DATA and CONFIGURATION come from orchestrator-owned
-     * tables joined on {@code workflows.organization_id}.
+     * {@link StorageBreakdownService#setOrgUsage}, then refreshes the org gauge
+     * from those rows, exactly as {@link #reconcileTenant(String)} ends by
+     * refreshing the tenant one. STEP_OUTPUTS and FILES come from
+     * {@code storage.storage} filtered by {@code organization_id}, classified by
+     * {@code StorageRowCategories} so the two categories partition the rows and
+     * add up to what the workspace actually holds. EXECUTION_DATA and
+     * CONFIGURATION come from orchestrator-owned tables joined on
+     * {@code workflows.organization_id}.
      *
-     * <p>Remote categories (AGENTS, INTERFACES, CONVERSATIONS, DATATABLES,
-     * PUBLICATIONS) are NOT recomputed here - they have no organization_id
-     * column in their owning service yet, and a cross-schema sum from
-     * orchestrator would violate the inter-service boundary rule. Their
-     * incrementally tracked rows in org_storage_breakdown stay as-is until
-     * those services grow org awareness.
+     * <p>Remote categories (AGENTS, INTERFACES, CONVERSATIONS, DATATABLES, PUBLICATIONS) do not
+     * exist at org scope AT ALL, and saying they "stay as-is" was wrong: every producer of those
+     * rows calls the tenant-only 3-argument overload of the tracker, so no org row is ever written
+     * for them. A workspace's categories are therefore the four local ones, and its gauge
+     * under-reports by whatever its agents, interfaces, conversations, tables and publications
+     * hold (about 200 MB on the largest production workspace, against 21 GB of files). Closing
+     * that needs an org-scoped usage query in each of the five owning services; it is not a
+     * reconciliation change.
      */
     @Transactional
     public void reconcileOrganization(String organizationId) {
@@ -176,26 +183,66 @@ public class StorageReconciliationService {
         // CONFIGURATION = local workflows + plan versions joined on org_id.
         reconcileOrgConfiguration(organizationId);
 
+        // Refresh the gauge. Without this the nightly pass left the org gauge on yesterday's total
+        // until somebody opened the page, so the quota gate that decides whether a WRITE is
+        // allowed read a stale number in between. The tenant path has always ended this way.
+        //
+        // Guarded, unlike the tenant equivalent, because this one can INSERT: an org with no
+        // quota row yet gets one created here, and dailyReconciliation calls this method through
+        // `this.`, so self-invocation puts every scope of the night in ONE transaction. A primary
+        // key collision with a concurrent page view would otherwise abort that transaction, and
+        // every later scope would fail on "current transaction is aborted" while the pass still
+        // logged "completed". The nightly enumeration now covers scopes that have never had a
+        // quota row, so that collision became reachable with this change.
+        try {
+            quotaService.updateOrganizationUsage(organizationId);
+        } catch (Exception e) {
+            log.warn("[Reconciliation] Gauge refresh failed for org={}: {}", organizationId, e.getMessage());
+        }
+
         long elapsed = System.currentTimeMillis() - startTime;
         log.info("[Reconciliation] Org reconciliation completed for {}, in {}ms", organizationId, elapsed);
     }
 
     /**
-     * Daily reconciliation for all tenants that have breakdown data.
-     * Runs at 2 AM every day, before the 2:30 AM history snapshot, so the snapshot
-     * captures reconciled (authoritative) values rather than 24h of incremental drift.
+     * Daily reconciliation for every tenant and organization that holds anything, whether or not
+     * it has been reconciled before. Runs at 2 AM, ahead of the 2:30 AM history snapshot, so the
+     * snapshot captures reconciled values rather than 24h of incremental drift.
+     *
+     * <p>Failures are per scope and logged, never rethrown. Note the shape this sits in: the
+     * method is {@code @Transactional} and calls the per-scope methods through {@code this}, so
+     * self-invocation puts the whole pass in ONE transaction. A statement that errors therefore
+     * aborts it, every later statement fails on "current transaction is aborted", each one is
+     * caught and logged at WARN, and the method still logs "completed". Splitting that is a
+     * separate change; until then, anything added inside this loop that can throw needs its own
+     * guard.
      */
     @Scheduled(cron = "0 0 2 * * *")
     @SchedulerLock(name = "storage_daily_reconciliation", lockAtMostFor = "PT25M", lockAtLeastFor = "PT1M")
     @Transactional
     public void dailyReconciliation() {
+        // The scope lists are a UNION of "has a breakdown row" and "holds storage rows". Taking
+        // them from the breakdown table alone meant a scope that had never been reconciled could
+        // never BE reconciled, because the enumeration only ever found scopes it had already
+        // visited. Measured on production 2026-09-18: 31 organizations and 30 tenants held ACTIVE
+        // rows with no breakdown row at all, so none of their categories was ever computed.
+        //
+        // What this still does NOT cover: a scope holding only non-storage resources (workflows,
+        // conversations, agents, tables, interfaces, publications) and no storage row at all. Most
+        // of those tables belong to other services, so orchestrator cannot query them without
+        // breaking the schema boundary, and the one it CAN reach, orchestrator.workflows, adds
+        // exactly zero scopes today (measured: 84 tenants and 86 organizations with or without
+        // that arm), so it is left out rather than shipped as code that selects nothing.
+        //
+        // Cost of the wider list: 54 tenants to 84, each costing 5 HTTP calls to sibling services.
+        // The pass holds a 25-minute ShedLock, and 30 extra scopes do not approach it.
         log.info("[Reconciliation] Starting daily reconciliation");
         long startTime = System.currentTimeMillis();
 
         try {
             @SuppressWarnings("unchecked")
             java.util.List<String> tenantIds = entityManager
-                    .createNativeQuery("SELECT DISTINCT tenant_id FROM storage.tenant_storage_breakdown")
+                    .createNativeQuery(StorageReconciliationQueries.TENANTS_TO_RECONCILE)
                     .getResultList();
 
             log.info("[Reconciliation] Found {} tenants to reconcile", tenantIds.size());
@@ -211,11 +258,11 @@ public class StorageReconciliationService {
             log.error("[Reconciliation] Daily reconciliation failed: {}", e.getMessage(), e);
         }
 
-        // Issue #149 - same pass for orgs that have breakdown data.
+        // Issue #149 - same pass for organizations, enumerated the same way.
         try {
             @SuppressWarnings("unchecked")
             java.util.List<String> orgIds = entityManager
-                    .createNativeQuery("SELECT DISTINCT organization_id FROM storage.org_storage_breakdown")
+                    .createNativeQuery(StorageReconciliationQueries.ORGS_TO_RECONCILE)
                     .getResultList();
 
             log.info("[Reconciliation] Found {} organizations to reconcile", orgIds.size());
@@ -236,7 +283,8 @@ public class StorageReconciliationService {
     }
 
     /**
-     * On-demand single-category refresh for EXECUTION_DATA.
+     * On-demand inline refresh of the 3 local categories (STEP_OUTPUTS, FILES,
+     * EXECUTION_DATA) for a tenant, before the dashboard reads them.
      *
      * <p>EXECUTION_DATA drifts silently between daily reconciliation runs because
      * per-run create/delete hooks intentionally skip incremental tracking (see
@@ -245,47 +293,66 @@ public class StorageReconciliationService {
      * negative drift because state_snapshot grows during execution"). The
      * result: the breakdown row can sit at 0 even when {@code workflow_runs}
      * hold non-trivial {@code state_snapshot} JSONB, while history snapshots
-     * taken on prior days still show the real value - visible to users as the
-     * 0-vs-500KB discrepancy between the breakdown card and the trends chart.
+     * taken on prior days still show the real value.
      *
-     * <p>The query is a single aggregate over {@code workflow_runs} filtered by
-     * {@code tenant_id}, supported by {@code idx_workflow_runs_tenant_created}.
-     * Cost grows with row count and {@code pg_column_size} over the TOAST'd
-     * JSONB columns; for large tenants this is not free, so a 30s per-tenant
-     * throttle ({@link #EXECUTION_DATA_REFRESH_TTL}) absorbs dashboard polling
-     * and the {@code Promise.all} 2× hit per page load.
+     * <p>2026-09-18 - STEP_OUTPUTS and FILES were added here so that the tenant
+     * scope refreshes exactly what {@link #refreshOrgBreakdown(String)} already
+     * refreshed. They used to wait for the 02:00 cron, so the SAME page showed
+     * numbers up to a day apart depending on which workspace it was scoped to,
+     * and a corrected classification would have taken a day to appear. Whether a
+     * figure is current must not depend on the scope it is read in.
      *
-     * <p>Throttle hits are silent and very cheap (Caffeine in-memory map lookup);
-     * throttle misses run the SQL and update {@code QuotaService} which in turn
-     * evicts both the {@code quotaStatus} and {@code tenantQuota} caches so the
-     * downstream {@code getQuota} read sees the fresh value (see
-     * {@code QuotaService#updateUsage}).
+     * <p>The queries are single aggregates over {@code storage.storage} and
+     * {@code workflow_runs} filtered by {@code tenant_id}. Cost grows with row
+     * count and {@code pg_column_size} over the TOAST'd JSONB columns; for large
+     * tenants this is not free, so a 30s per-tenant throttle
+     * ({@link #LOCAL_BREAKDOWN_REFRESH_TTL}) absorbs dashboard polling and the
+     * {@code Promise.all} 2x hit per page load. Measured on the largest
+     * production tenant (168k rows, 21 GB): 80 ms for the FILES aggregate.
+     *
+     * <p>Throttle hits return immediately: a Caffeine lookup and nothing else, which is what this
+     * path has always done. The tenant gauge is the sum of these rows, and every writer that
+     * changes them refreshes it on the way out ({@code StorageService.trackUsageBestEffort}), so
+     * there is nothing for a throttled read to correct. The org path differs on purpose: its
+     * gauge is an independent {@code SUM(size_bytes)} that moves without the categories moving,
+     * so it refreshes even on a throttle hit.
+     *
+     * <p>Throttle misses run the SQL and update {@code QuotaService}, which evicts both the
+     * {@code quotaStatus} and {@code tenantQuota} caches so the downstream {@code getQuota} read
+     * sees the fresh value (see {@code QuotaService#updateUsage}).
      */
     @Transactional
-    public void refreshExecutionData(String tenantId) {
-        if (executionDataRefreshThrottle.getIfPresent(tenantId) != null) {
+    public void refreshTenantBreakdown(String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) {
             return;
         }
-        // Throttle entry is recorded ONLY on SQL success. A transient DB failure
-        // (lock-wait timeout, brief connectivity loss) must not poison the 30s
-        // window - the next caller should be free to retry. quotaService.updateUsage
-        // is still called regardless so the quota total stays consistent with
-        // whatever breakdown rows hold (defense-in-depth on cache eviction).
-        boolean refreshed = runLocalQuery(tenantId, "EXECUTION_DATA", StorageReconciliationQueries.EXECUTION_DATA);
+        if (tenantBreakdownRefreshThrottle.getIfPresent(tenantId) != null) {
+            return;
+        }
+        // The throttle entry is recorded if at least one query succeeded, so a total DB failure
+        // (lock-wait timeout, brief connectivity loss) leaves the window open for the next caller
+        // to retry. A PARTIAL failure does arm it, and that is deliberate rather than an
+        // oversight: requiring all three would mean a single permanently failing category makes
+        // every page load re-run the other two forever. The cost is that the failed category can
+        // be up to 30s staler than its siblings. quotaService.updateUsage runs regardless so the
+        // quota total stays consistent with whatever the breakdown rows hold.
+        boolean anyRefreshed = false;
+        for (Map.Entry<String, String> entry : LOCAL_QUERIES.entrySet()) {
+            if (runLocalQuery(tenantId, entry.getKey(), entry.getValue())) {
+                anyRefreshed = true;
+            }
+        }
         quotaService.updateUsage(tenantId);
-        if (refreshed) {
-            executionDataRefreshThrottle.put(tenantId, Boolean.TRUE);
+        if (anyRefreshed) {
+            tenantBreakdownRefreshThrottle.put(tenantId, Boolean.TRUE);
         }
     }
 
     /**
      * On-demand inline refresh of the 3 local categories (STEP_OUTPUTS, FILES,
-     * EXECUTION_DATA) for an organization. Symmetric to
-     * {@link #refreshExecutionData(String)} on the tenant path but covers ALL
-     * three volatile local categories because the org breakdown read path is
-     * called less frequently than the tenant one - fewer dashboard refreshes
-     * means we can afford to recompute the full local set on each call (still
-     * 30s-throttled).
+     * EXECUTION_DATA) for an organization. The exact mirror of
+     * {@link #refreshTenantBreakdown(String)}: same categories, same 30s
+     * throttle, so the two scopes are equally fresh.
      *
      * <p>2026-05-21 fix - pre-fix, the org breakdown endpoint read from
      * {@code org_storage_breakdown} which is only repopulated by the daily
@@ -306,6 +373,10 @@ public class StorageReconciliationService {
             return;
         }
         if (orgBreakdownRefreshThrottle.getIfPresent(organizationId) != null) {
+            // The gauge is a direct SUM over storage.storage, so it moves whenever a file is
+            // written even though the categories are throttled. Refreshing it here is what keeps
+            // the number above the bar current inside the 30s window. (Removing this call was
+            // tried while the gauge was derived from the categories; both changes are reverted.)
             quotaService.updateOrganizationUsage(organizationId);
             return;
         }
@@ -336,7 +407,7 @@ public class StorageReconciliationService {
     /**
      * @return true if the query ran and breakdown was written, false if any
      *         exception was caught. Daily reconciliation ignores this; the
-     *         inline {@link #refreshExecutionData} path uses it to skip the
+     *         inline {@link #refreshTenantBreakdown} path uses it to skip the
      *         throttle entry on failure (so a transient DB failure does not
      *         block retry for 30s).
      */
@@ -410,23 +481,23 @@ public class StorageReconciliationService {
             long workflowBytes = toBigInteger(result[0]).longValue();
             int workflowCount = toBigInteger(result[1]).intValue();
 
-            // Remote: skills AND long-term memories from agent-service (both ride on
-            // the AGENTS response, under the "SKILLS" and "MEMORIES" keys). Both are
-            // authored text the account accumulates on purpose, so both belong to
-            // CONFIGURATION - giving memory its own quota line would make a user
-            // reason about two numbers for one behaviour. One call serves both; an
-            // older agent-service that predates the key simply reports zero.
-            long skillsBytes = 0;
-            long memoryBytes = 0;
-            try {
-                Map<String, Object> agentUsage = agentClient.getAgentStorageUsage(tenantId);
-                skillsBytes = readUsedBytes(agentUsage.get("SKILLS"));
-                memoryBytes = readUsedBytes(agentUsage.get("MEMORIES"));
-            } catch (Exception e) {
-                log.warn("[Reconciliation] Failed to get skills/memory storage for tenant={}: {}", tenantId, e.getMessage());
+            // CONFIGURATION is an absolute sum. Both remote measurements must be known;
+            // an omitted key can mean an older service OR a query failure, never proven zero.
+            // During a rolling upgrade, keep the last complete total until both keys arrive.
+            // Do not change the wire contract: this also protects calls to older producers
+            // that already omit failed categories.
+            Map<String, Object> agentUsage = agentClient.getAgentStorageUsage(tenantId);
+            OptionalLong skills = readUsedBytes(agentUsage == null ? null : agentUsage.get("SKILLS"));
+            OptionalLong memories = readUsedBytes(agentUsage == null ? null : agentUsage.get("MEMORIES"));
+            if (skills.isEmpty() || memories.isEmpty()) {
+                log.warn("[Reconciliation] Incomplete skills/memory measurement for tenant={}; "
+                        + "keeping the stored CONFIGURATION value (skillsMeasured={}, memoriesMeasured={})",
+                        tenantId, skills.isPresent(), memories.isPresent());
+                return;
             }
-
-            long totalBytes = Math.max(0, workflowBytes) + Math.max(0, skillsBytes) + Math.max(0, memoryBytes);
+            long skillsBytes = skills.getAsLong();
+            long memoryBytes = memories.getAsLong();
+            long totalBytes = Math.addExact(Math.addExact(Math.max(0, workflowBytes), skillsBytes), memoryBytes);
             breakdownService.setUsage(tenantId, "CONFIGURATION", totalBytes, Math.max(0, workflowCount));
             log.debug("[Reconciliation] tenant={}, CONFIGURATION: {} bytes (workflows={}, skills={}, memories={}), {} items",
                     tenantId, totalBytes, workflowBytes, skillsBytes, memoryBytes, workflowCount);
@@ -438,12 +509,18 @@ public class StorageReconciliationService {
 
     // ========== Remote categories via HTTP ==========
 
-    /** Pull {@code usedBytes} out of one category entry of the agent-service usage map; 0 when absent or malformed. */
-    private static long readUsedBytes(Object categoryEntry) {
+    /** An absent or invalid measurement must remain distinct from an explicitly measured zero. */
+    private static OptionalLong readUsedBytes(Object categoryEntry) {
         if (categoryEntry instanceof Map<?, ?> map && map.get("usedBytes") instanceof Number n) {
-            return n.longValue();
+            try {
+                long bytes = new BigDecimal(n.toString()).longValueExact();
+                return bytes >= 0 ? OptionalLong.of(bytes) : OptionalLong.empty();
+            } catch (ArithmeticException | NumberFormatException e) {
+                // Fractional, non-finite or overflowing byte counts are not measurements.
+                return OptionalLong.empty();
+            }
         }
-        return 0L;
+        return OptionalLong.empty();
     }
 
     private void reconcileAgents(String tenantId) {
@@ -461,9 +538,39 @@ public class StorageReconciliationService {
         }
     }
 
+    /**
+     * True only when the remote service actually reported a figure.
+     *
+     * <p>The map-based clients (interface, datasource, publication) degrade to an EMPTY
+     * map rather than throwing, so "the service is unreachable" and "this tenant stores
+     * nothing" arrive here identically - and {@link StorageBreakdownService#setUsage} is
+     * an ABSOLUTE set, so writing the empty case erases the last good figure for that
+     * tenant. Skip instead: a stale number is strictly better than a wrong zero, and the
+     * next nightly run repairs it. {@code reconcileConversations} makes the same
+     * distinction through an Optional, since its client is typed.
+     *
+     * <p>{@code reconcileAgents} already skipped on a shape it did not recognise, but
+     * silently; the four categories here log the skip, so a permanently stale figure
+     * leaves a trace instead of none. AGENTS is the remaining category whose unmeasured
+     * night says nothing at all.
+     */
+    private static boolean hasMeasurement(Map<String, Object> usage) {
+        // Both keys, and both numeric. A non-empty check would accept a partial payload
+        // such as {"itemCount": 3} and write usedBytes as 0 - the wrong-zero this exists
+        // to prevent, arriving through a slightly different door.
+        return usage != null
+                && usage.get("usedBytes") instanceof Number
+                && usage.get("itemCount") instanceof Number;
+    }
+
     private void reconcileInterfaces(String tenantId) {
         try {
             Map<String, Object> usage = interfaceClient.getInterfaceStorageUsage(tenantId);
+            if (!hasMeasurement(usage)) {
+                log.warn("[Reconciliation] No INTERFACES measurement for tenant={}; keeping the stored value",
+                        tenantId);
+                return;
+            }
             long bytes = usage.get("usedBytes") instanceof Number n ? n.longValue() : 0;
             int count = usage.get("itemCount") instanceof Number n ? n.intValue() : 0;
             breakdownService.setUsage(tenantId, "INTERFACES", Math.max(0, bytes), Math.max(0, count));
@@ -475,7 +582,13 @@ public class StorageReconciliationService {
 
     private void reconcileConversations(String tenantId) {
         try {
-            StorageUsageDto usage = conversationStorageClient.getStorageUsage(tenantId);
+            Optional<StorageUsageDto> measured = conversationStorageClient.getStorageUsage(tenantId);
+            if (measured.isEmpty()) {
+                log.warn("[Reconciliation] No CONVERSATIONS measurement for tenant={}; keeping the stored value",
+                        tenantId);
+                return;
+            }
+            StorageUsageDto usage = measured.get();
             // Defensive Math.max(0, ...): mirrors the 4 sibling reconcilers and ensures
             // the V184 CHECK (used_bytes >= 0, item_count >= 0) never trips if the
             // remote conversation-service ever returns a negative count under drift.
@@ -491,6 +604,11 @@ public class StorageReconciliationService {
     private void reconcileDatatables(String tenantId) {
         try {
             Map<String, Object> usage = dataSourceClient.getDataSourceStorageUsage(tenantId);
+            if (!hasMeasurement(usage)) {
+                log.warn("[Reconciliation] No DATATABLES measurement for tenant={}; keeping the stored value",
+                        tenantId);
+                return;
+            }
             long bytes = usage.get("usedBytes") instanceof Number n ? n.longValue() : 0;
             int count = usage.get("itemCount") instanceof Number n ? n.intValue() : 0;
             breakdownService.setUsage(tenantId, "DATATABLES", Math.max(0, bytes), Math.max(0, count));
@@ -503,6 +621,11 @@ public class StorageReconciliationService {
     private void reconcilePublications(String tenantId) {
         try {
             Map<String, Object> usage = publicationClient.getPublicationStorageUsage(tenantId);
+            if (!hasMeasurement(usage)) {
+                log.warn("[Reconciliation] No PUBLICATIONS measurement for tenant={}; keeping the stored value",
+                        tenantId);
+                return;
+            }
             long bytes = usage.get("usedBytes") instanceof Number n ? n.longValue() : 0;
             int count = usage.get("itemCount") instanceof Number n ? n.intValue() : 0;
             breakdownService.setUsage(tenantId, "PUBLICATIONS", Math.max(0, bytes), Math.max(0, count));

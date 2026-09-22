@@ -161,6 +161,18 @@ public class WorkflowBuilderViewer {
                 + "with mock_mode='off'. Production fires never apply it.");
         }
 
+        // Surface the node's execution policy the same way. Read back here after
+        // modify(nodePolicy=...), and it is also what explains a node that took far longer than
+        // its provider did, or a run that carried on past a FAILED step.
+        Object policyBlock = node.get(com.apimarketplace.orchestrator.domain.workflow.NodePolicy.JSON_KEY);
+        if (policyBlock instanceof Map<?, ?> policyMap && !policyMap.isEmpty()) {
+            result.put("nodePolicy", policyBlock);
+            result.put("node_policy_hint", "Governs this node's failure behaviour on every run, editor "
+                + "and production alike. Replace the whole block: workflow(action='modify', node='"
+                + label + "', nodePolicy={...}), or nodePolicy={} to remove it. "
+                + "workflow(action='help', topics=['node_policy']) explains each field.");
+        }
+
         // Expose modifiable fields so LLM knows what can be changed and with which param keys
         if (!desc.modifiableFields().isEmpty()) {
             Map<String, Object> modFields = new LinkedHashMap<>();

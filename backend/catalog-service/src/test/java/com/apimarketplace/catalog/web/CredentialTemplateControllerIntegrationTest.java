@@ -27,6 +27,22 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("CredentialTemplateController Integration Tests")
 class CredentialTemplateControllerIntegrationTest {
 
+    /**
+     * The native-core OR-clause, derived rather than spelled out.
+     *
+     * <p>It used to be the literal {@code "c.credential_name IN ('smtp','imap')"}, in four
+     * assertions. That made adding a core-node credential fail four tests for saying the right
+     * thing, which is the shape of a test that gets edited to agree with whatever the code now
+     * does.
+     *
+     * <p>Be clear about what this buys and what it costs. Both sides now move together, so this
+     * can no longer catch a WRONG list: that job belongs to {@code NativeCoreCredentialsTest},
+     * which pins the names as literals. What it still catches is the clause going missing or
+     * being rewritten into a different shape, which is the regression this file is about.
+     */
+    private static final String NATIVE_IN_LIST = "c.credential_name IN ("
+            + com.apimarketplace.catalog.service.credential.NativeCoreCredentials.sqlInList() + ")";
+
     @Mock
     private JdbcTemplate jdbcTemplate;
 
@@ -283,6 +299,123 @@ class CredentialTemplateControllerIntegrationTest {
         }
 
         @Test
+        @DisplayName("Keeps a configured-disabled oauth2 variant in the list, because turning off the shared app leaves BYOK, which is the only path the user has left")
+        void configuredDisabledOAuth2VariantStaysVisibleForByok() throws Exception {
+            // Pipedrive shape: oauth2 (shared app) + api_key (user's own token). The admin
+            // turned the shared app off because it is not published yet, so nobody should be
+            // sent to it. Pre-fix the oauth2 variant vanished from this list, and with it the
+            // CredentialWizard BYOK fallback that is written for exactly this case - the user
+            // was left with api_key only and no way to register their own OAuth client.
+            Map<String, Object> pipedrive = createSampleCredential();
+            pipedrive.put("credential_name", "pipedrive");
+            pipedrive.put("display_name", "Pipedrive");
+            pipedrive.put("auth_type", "oauth2");
+            pipedrive.put("variant", "oauth2");
+            pipedrive.put("variants", new ArrayList<>(List.of(
+                    Map.of("variant", "api_key", "auth_type", "api_key"),
+                    Map.of("variant", "oauth2", "auth_type", "oauth2"))));
+
+            when(jdbcTemplate.queryForObject(anyString(), eq(Integer.class))).thenReturn(1);
+            when(jdbcTemplate.queryForList(anyString(), eq(20), eq(0))).thenReturn(List.of(pipedrive));
+
+            // Configured (a client secret was saved) AND disabled: the exact row shape the
+            // May 2026 placeholder-gate lets through, so this is not the phantom case.
+            com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto disabled =
+                    new com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto();
+            disabled.setName("pipedrive");
+            disabled.setVariant("oauth2");
+            disabled.setEnabled(false);
+            disabled.setHasClientSecret(true);
+            when(credentialClient.listPlatformCredentials()).thenReturn(List.of(disabled));
+
+            mockMvc.perform(get("/api/catalog/credentials"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.credentials", hasSize(1)))
+                    .andExpect(jsonPath("$.credentials[0].variants", hasSize(2)))
+                    .andExpect(jsonPath("$.credentials[0].variants[*].variant",
+                            containsInAnyOrder("api_key", "oauth2")));
+        }
+
+        @Test
+        @DisplayName("Disabling both variants of one integration hides the api_key and keeps the oauth2 - the carve-out discriminates instead of switching the whole filter off")
+        void disabledOAuth2SurvivesWhileDisabledApiKeyOnSameIntegrationDrops() throws Exception {
+            // Without this case the three tests above would all still pass if
+            // fetchDisabledVariantKeys simply returned an empty set: each of them only
+            // proves something was NOT hidden. Here one variant must drop and the other
+            // must stay, in the same response, so the filter has to still be running.
+            Map<String, Object> pipedrive = createSampleCredential();
+            pipedrive.put("credential_name", "pipedrive");
+            pipedrive.put("display_name", "Pipedrive");
+            pipedrive.put("auth_type", "oauth2");
+            pipedrive.put("variant", "oauth2");
+            pipedrive.put("variants", new ArrayList<>(List.of(
+                    Map.of("variant", "api_key", "auth_type", "api_key"),
+                    Map.of("variant", "oauth2", "auth_type", "oauth2"))));
+
+            when(jdbcTemplate.queryForObject(anyString(), eq(Integer.class))).thenReturn(1);
+            when(jdbcTemplate.queryForList(anyString(), eq(20), eq(0))).thenReturn(List.of(pipedrive));
+
+            com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto disabledOAuth =
+                    new com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto();
+            disabledOAuth.setName("pipedrive");
+            disabledOAuth.setVariant("oauth2");
+            disabledOAuth.setEnabled(false);
+            disabledOAuth.setHasClientSecret(true);
+
+            com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto disabledKey =
+                    new com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto();
+            disabledKey.setName("pipedrive");
+            disabledKey.setVariant("api_key");
+            disabledKey.setEnabled(false);
+            disabledKey.setHasApiKey(true);
+
+            when(credentialClient.listPlatformCredentials())
+                    .thenReturn(List.of(disabledOAuth, disabledKey));
+
+            mockMvc.perform(get("/api/catalog/credentials"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.credentials", hasSize(1)))
+                    .andExpect(jsonPath("$.credentials[0].variants", hasSize(1)))
+                    .andExpect(jsonPath("$.credentials[0].variants[0].variant").value("oauth2"));
+
+            verify(credentialClient).listPlatformCredentials();
+        }
+
+        @Test
+        @DisplayName("A single-variant oauth2 integration survives its only variant being disabled - dropping the row would hide the integration outright, not just one auth method")
+        void singleVariantOAuth2IntegrationSurvivesItsOnlyVariantBeingDisabled() throws Exception {
+            // The harsher half of the same defect: with oauth2 as the ONLY variant, filtering
+            // it left zero, and the caller drops a zero-variant row from the list entirely.
+            // The integration disappeared from the user's settings page rather than offering
+            // the BYOK form.
+            Map<String, Object> hubspot = createSampleCredential();
+            hubspot.put("credential_name", "hubspot");
+            hubspot.put("display_name", "HubSpot");
+            hubspot.put("auth_type", "oauth2");
+            hubspot.put("variant", "oauth2");
+            hubspot.put("variants", new ArrayList<>(List.of(
+                    Map.of("variant", "oauth2", "auth_type", "oauth2"))));
+
+            when(jdbcTemplate.queryForObject(anyString(), eq(Integer.class))).thenReturn(1);
+            when(jdbcTemplate.queryForList(anyString(), eq(20), eq(0))).thenReturn(List.of(hubspot));
+
+            com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto disabled =
+                    new com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto();
+            disabled.setName("hubspot");
+            disabled.setVariant("oauth2");
+            disabled.setEnabled(false);
+            disabled.setHasClientSecret(true);
+            when(credentialClient.listPlatformCredentials()).thenReturn(List.of(disabled));
+
+            mockMvc.perform(get("/api/catalog/credentials"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.credentials", hasSize(1)))
+                    .andExpect(jsonPath("$.credentials[0].credential_name").value("hubspot"))
+                    .andExpect(jsonPath("$.credentials[0].variants", hasSize(1)))
+                    .andExpect(jsonPath("$.credentials[0].variants[0].variant").value("oauth2"));
+        }
+
+        @Test
         @DisplayName("Mixed configured-disabled + phantom-disabled on a multi-variant API - the configured variant drops, the phantom is ignored, the other variants survive")
         void multiVariantMixedConfiguredAndPhantomDisable() throws Exception {
             // Three-variant API: basic_auth is admin-disabled-with-secrets (must drop),
@@ -432,7 +565,7 @@ class CredentialTemplateControllerIntegrationTest {
 
             String sql = sqlCaptor.getValue();
             org.junit.jupiter.api.Assertions.assertTrue(
-                    sql.contains("c.credential_name IN ('smtp','imap')"),
+                    sql.contains(NATIVE_IN_LIST),
                     "User-facing list SQL must OR-in the native core credentials, got: " + sql);
             org.junit.jupiter.api.Assertions.assertTrue(
                     sql.contains("a.platform_credential_name = c.credential_name")
@@ -442,7 +575,7 @@ class CredentialTemplateControllerIntegrationTest {
             // allow-list too - otherwise totalItems would diverge from the page slice and
             // pagination would drift. Lock it explicitly.
             org.junit.jupiter.api.Assertions.assertTrue(
-                    countSqlCaptor.getValue().contains("c.credential_name IN ('smtp','imap')"),
+                    countSqlCaptor.getValue().contains(NATIVE_IN_LIST),
                     "Count SQL must apply the same native-core filter as the list, got: " + countSqlCaptor.getValue());
         }
 
@@ -458,7 +591,7 @@ class CredentialTemplateControllerIntegrationTest {
 
             String sql = sqlCaptor.getValue();
             org.junit.jupiter.api.Assertions.assertFalse(
-                    sql.contains("c.credential_name IN ('smtp','imap')"),
+                    sql.contains(NATIVE_IN_LIST),
                     "Admin list must not apply the native-core allow-list, got: " + sql);
             // `a.is_active = true` is the active-catalog-API filter's distinctive marker -
             // unlike `a.platform_credential_name = c.credential_name`, it never appears in the
@@ -484,7 +617,7 @@ class CredentialTemplateControllerIntegrationTest {
 
             String sql = sqlCaptor.getValue();
             org.junit.jupiter.api.Assertions.assertTrue(
-                    sql.contains("c.credential_name IN ('smtp','imap')"),
+                    sql.contains(NATIVE_IN_LIST),
                     "Search path must retain the native-core OR-clause, got: " + sql);
             // The 4 ILIKE bind placeholders from the search filter must still be present -
             // the native names are inlined literals, so they must NOT change the positional
@@ -598,6 +731,31 @@ class CredentialTemplateControllerIntegrationTest {
             row.put("variant", variant);
             row.put("auth_type", authType);
             return row;
+        }
+
+        @Test
+        @DisplayName("Keeps the oauth2 tab when its shared app is disabled - this endpoint renders the wizard's variant strip, so losing the tab here strands the user even though the template resolves")
+        void keepsDisabledOAuth2TabSoTheWizardCanStillOfferByok() throws Exception {
+            // The last consumer a real user traverses: resolving the template by name is
+            // not enough if the tab that selects the oauth2 variant has been filtered out.
+            // The admin dialog reads the same endpoint.
+            Map<String, Object> apiKey = createVariantRow("api_key", "api_key");
+            Map<String, Object> oauth2 = createVariantRow("oauth2", "oauth2");
+            when(jdbcTemplate.queryForList(anyString(), eq("gmail")))
+                    .thenReturn(List.of(apiKey, oauth2));
+
+            com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto disabled =
+                    new com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto();
+            disabled.setName("gmail");
+            disabled.setVariant("oauth2");
+            disabled.setEnabled(false);
+            disabled.setHasClientSecret(true);
+            when(credentialClient.listPlatformCredentials()).thenReturn(List.of(disabled));
+
+            mockMvc.perform(get("/api/catalog/credentials/{name}/variants", "gmail"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(2)))
+                    .andExpect(jsonPath("$[*].variant", containsInAnyOrder("api_key", "oauth2")));
         }
 
         @Test
@@ -773,6 +931,34 @@ class CredentialTemplateControllerIntegrationTest {
         }
 
         @Test
+        @DisplayName("by-name lookup still resolves an oauth2-only integration whose shared app is disabled - the wizard fetches the template by name, so a 404 here is what emptied the form")
+        void byNameResolvesOAuth2OnlyIntegrationWithDisabledSharedApp() throws Exception {
+            // Same defect seen from the endpoint the wizard actually calls first: pre-fix the
+            // single oauth2 variant was filtered out, remaining==0, and the lookup answered
+            // 404. The user got no form at all rather than the BYOK one.
+            Map<String, Object> hubspot = new LinkedHashMap<>(createSampleCredential());
+            hubspot.put("credential_name", "hubspot");
+            hubspot.put("auth_type", "oauth2");
+            hubspot.put("variant", "oauth2");
+            hubspot.put("variants", new ArrayList<>(List.of(
+                    Map.of("variant", "oauth2", "auth_type", "oauth2"))));
+            when(jdbcTemplate.queryForList(anyString(), eq("hubspot"))).thenReturn(List.of(hubspot));
+
+            com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto disabled =
+                    new com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto();
+            disabled.setName("hubspot");
+            disabled.setVariant("oauth2");
+            disabled.setEnabled(false);
+            disabled.setHasClientSecret(true);
+            when(credentialClient.listPlatformCredentials()).thenReturn(List.of(disabled));
+
+            mockMvc.perform(get("/api/catalog/credentials").param("name", "hubspot"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.variants", hasSize(1)))
+                    .andExpect(jsonPath("$.variants[0].variant").value("oauth2"));
+        }
+
+        @Test
         @DisplayName("by-name lookup respects includeInactive so the admin page can still resolve a single credential whose only variant has been disabled")
         void byNameSkipsFilterForAdmin() throws Exception {
             Map<String, Object> ably = new LinkedHashMap<>(createSampleCredential());
@@ -815,6 +1001,35 @@ class CredentialTemplateControllerIntegrationTest {
 
             mockMvc.perform(get("/api/catalog/credentials/{id}", CREDENTIAL_ID))
                     .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("Still resolves an oauth2-only template whose shared app is disabled - this is the lookup OAuth2Service uses on connect and refresh, so a 404 here broke BYOK server-side too")
+        void resolvesOAuth2OnlyTemplateWithDisabledSharedApp() throws Exception {
+            // OAuth2Service.fetchCredentialTemplate calls this endpoint without
+            // includeInactive, so pre-fix both initiate and the template-based refresh
+            // failed with "Credential template not found" for exactly these templates -
+            // the user could not even complete a BYOK connect once they had the form.
+            Map<String, Object> hubspot = createSampleCredential();
+            hubspot.put("credential_name", "hubspot");
+            hubspot.put("auth_type", "oauth2");
+            hubspot.put("variant", "oauth2");
+            hubspot.put("variants", new ArrayList<>(List.of(
+                    Map.of("variant", "oauth2", "auth_type", "oauth2"))));
+            when(jdbcTemplate.queryForList(anyString(), any(UUID.class))).thenReturn(List.of(hubspot));
+
+            com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto disabled =
+                    new com.apimarketplace.credential.client.dto.PlatformCredentialStatusDto();
+            disabled.setName("hubspot");
+            disabled.setVariant("oauth2");
+            disabled.setEnabled(false);
+            disabled.setHasClientSecret(true);
+            when(credentialClient.listPlatformCredentials()).thenReturn(List.of(disabled));
+
+            mockMvc.perform(get("/api/catalog/credentials/{id}", CREDENTIAL_ID))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.variants", hasSize(1)))
+                    .andExpect(jsonPath("$.variants[0].variant").value("oauth2"));
         }
     }
 }

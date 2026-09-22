@@ -11,8 +11,10 @@ import { publicationService } from '@/lib/api/orchestrator/publication.service';
 import { ShowcasePreview } from '@/components/marketplace/ShowcasePreview';
 import { InterfacePreview, type InterfaceSnapshotLike } from '@/components/marketplace/InterfacePreview';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
+import { VerifiedBadge } from '@/components/profile/VerifiedBadge';
 import { CeExclusiveBadge } from '@/components/marketplace/CeExclusiveBadge';
 import { isCeExclusiveBlocked } from '@/lib/marketplace/ceExclusive';
+import { useMarketplaceDemoInstall } from '@/lib/marketplace/demoInstallMode';
 import { UserActionMenu } from '@/components/profile/UserActionMenu';
 import { WorkflowNodeIcons } from '@/components/WorkflowNodeIcons';
 import { AvatarDisplay } from '@/components/agents';
@@ -263,7 +265,14 @@ export const PublicationCard = memo(function PublicationCard({ publication, curr
   const displayMode = publication.displayMode || 'WORKFLOW';
   const isAgent = displayMode === 'AGENT';
   const hasInterfacePreview = displayMode !== 'WORKFLOW';
-  const isOwn = ownedByMe ?? (!!currentUserId && publication.publisherId === currentUserId);
+  const isOwnReal = ownedByMe ?? (!!currentUserId && publication.publisherId === currentUserId);
+  // Admin demo mode hides the two reasons a card refuses to offer Install:
+  // "you published it" and "you already have it". It deliberately does NOT touch
+  // ceExclusiveBlocked, which is a true statement about where the publication can
+  // run, not an artefact of who is looking at it.
+  const demoInstall = useMarketplaceDemoInstall();
+  const isOwn = isOwnReal && !demoInstall;
+  const isAcquiredForUi = !!isAcquired && !demoInstall;
   const isFree = !publication.creditsPerUse || publication.creditsPerUse === 0;
   const isInstalling = installProgress != null;
   const clampedProgress = isInstalling ? Math.min(100, Math.max(0, installProgress)) : 0;
@@ -281,8 +290,13 @@ export const PublicationCard = memo(function PublicationCard({ publication, curr
   // CE-exclusive on managed cloud: the acquire endpoint would 403, so the card
   // shows the badge instead of an Install button that cannot succeed.
   const ceExclusiveBlocked = isCeExclusiveBlocked(publication);
-  const canAcquire = !isOwn && !isAcquired && !!onAcquire && !isInstalling && !ceExclusiveBlocked;
-  const showOpen = !!openHref && !isInstalling;
+  const canAcquire = !isOwn && !isAcquiredForUi && !!onAcquire && !isInstalling && !ceExclusiveBlocked;
+  // Open outranks the Install slot, so an installed card would keep showing Open
+  // in demo mode and never offer an install to demonstrate. It gives way only
+  // when there is actually an Install to put in its place: on a surface with no
+  // acquire handler (My Purchases rows that cannot be reinstalled) dropping Open
+  // would leave the card with no button at all.
+  const showOpen = !!openHref && !isInstalling && !(demoInstall && canAcquire);
 
   // Preview destination: agents open the dedicated agent-preview page; every other
   // publication type goes through the unified /preview route.
@@ -316,7 +330,7 @@ export const PublicationCard = memo(function PublicationCard({ publication, curr
           credits_per_use: publication.creditsPerUse,
           is_free: isFree,
           is_acquired: !!isAcquired,
-          is_own: isOwn,
+          is_own: isOwnReal,
         });
       }}
     >
@@ -358,7 +372,7 @@ export const PublicationCard = memo(function PublicationCard({ publication, curr
         </div>
 
         {/* Top-right: status badge - owner = publisher already has access, visually equivalent to installed */}
-        {isAcquired || isOwn ? (
+        {isAcquiredForUi || isOwn ? (
           <span className="absolute top-3 right-3 z-20 inline-flex items-center gap-1 h-[22px] px-2 rounded-lg text-[11px] font-medium bg-emerald-500 text-white shadow-sm">
             <CheckCircle className="h-3 w-3" />
             {t('installed')}
@@ -516,6 +530,9 @@ export const PublicationCard = memo(function PublicationCard({ publication, curr
             <span className="text-xs text-theme-secondary truncate">
               {publication.publisherName || t('anonymous')}
             </span>
+            {/* Verified check sits immediately right of the name, never inside the
+                truncating span - a truncated name must not be able to clip it away. */}
+            <VerifiedBadge userId={publication.publisherId} size="xs" />
           </UserActionMenu>
           {/* Node/integration icons sit right next to the publisher (not pushed to the
               far edge): they read as "published by X, built with these integrations". */}

@@ -84,6 +84,16 @@ spring:
       # local dev (Mailhog on localhost:1025) keeps working by host-allowlist.
       mail.smtp.auth: ${SMTP_AUTH:true}
       mail.smtp.starttls.enable: ${SMTP_STARTTLS:true}
+      # JavaMail defaults ALL THREE of these to infinite. Verification codes and
+      # invitations are sent ON the request thread, so an SMTP host that accepts
+      # the TCP connection and then never answers pins one request thread per
+      # call, with nothing to release it, until the pool is exhausted and the
+      # service is down. Password reset mail is the one path that is detached
+      # (see PasswordResetMailer), where the same host instead fills a bounded
+      # queue and the mails are dropped. Both need a bound.
+      mail.smtp.connectiontimeout: ${SMTP_CONNECT_TIMEOUT_MS:10000}
+      mail.smtp.timeout: ${SMTP_READ_TIMEOUT_MS:10000}
+      mail.smtp.writetimeout: ${SMTP_WRITE_TIMEOUT_MS:10000}
 
   flyway:
     enabled: false
@@ -129,19 +139,15 @@ gateway:
       - /api/auth/openid-configuration
     hmac-required-paths:
       - /api/credits/
-      - /api/internal/credentials/access-token
-      - /api/internal/credentials/data-map
-      - /api/internal/credentials/force-refresh-token
-      - /api/internal/credentials/refresh-token
-      - /api/internal/credentials/by-integration
-      - /api/internal/credentials/platform
-      # FOLLOW-UP (CRED-1, parity audit 2026-06-16): the lookup resolvers /all, /default, /{id},
-      # /scopes return DECRYPTED Credential objects but are NOT HMAC-gated here. Widening to the
-      # whole /api/internal/credentials/ prefix is the right end-state, but several in-cluster
-      # callers still hit them UNSIGNED (conversation-service findExistingCredential -> /default;
-      # catalog-import -> /pricing-versions/bootstrap), so it must be done AFTER those callers sign.
-      # External access is already blocked (gateway does not route /api/internal/**); this is
-      # in-cluster defense-in-depth only.
+      # CRED-1 DONE (2026-09-18). This used to name six individual credential paths, leaving the
+      # lookup resolvers (/all, /default, /{id}, /scopes) ungated even though they return DECRYPTED
+      # Credential objects. The note here said widening to the whole prefix was the right end-state
+      # but had to wait for two in-cluster callers to sign; both now do
+      # (ConversationToolExecutionService signs in internalHeaders, and its /default call no longer
+      # bypasses that helper; ApiMigrationImporter signs the pricing-versions/bootstrap call), so
+      # the prefix is gated as a whole and a new endpoint added under it is gated by default
+      # instead of by remembering to list it.
+      - /api/internal/credentials/
       - /api/internal/auth/workspace/
 
 oauth2:
@@ -195,22 +201,82 @@ billing:
   provider: stripe
   # --- Unit-economics levers: internal pricing configuration ---
   # 1 credit = $0.001 of provider LIST price; every LLM call is billed
-  # providerCost × llm.cloud-multiplier. The cache multipliers weight cached tokens
-  # DOWN to what providers actually charge, BEFORE the cloud multiplier, so
-  # cloud-multiplier is the pricing multiplier. cloud-multiplier moved 1.8 -> 1.11 on
-  # 2026-09-03 (deliberate margin cut on LLM/conversation billing); the cache weights
-  # are unchanged provider-true values. PROD-effective values pinned in values-prod.yaml
-  # (services.auth.env) so margin is declared & diff-tracked. See the project docs.
+  # providerCost × llm.cloud-multiplier, and cloud-multiplier is the ONLY margin.
+  # cloud-multiplier moved 1.8 -> 1.11 on 2026-09-03 (deliberate margin cut),
+  # 1.11 -> 2.0 on 2026-09-16 (50% gross margin per request) and 2.0 -> 1.333333 on
+  # 2026-09-17 (25% gross margin per request).
+  #
+  # The 2026-09-17 cut did NOT re-scale the cost profiles, unlike the 2026-09-16 rise
+  # which shrank the unit so the published price stayed put. The point of a cut is that
+  # a user pays less, so every published figure fell with it by the exact factor
+  # 1.333333/2.0 - see frontend/lib/billing/pricing-constants.ts, whose published
+  # figures are re-priced in the same commit and pinned to this value by
+  # frontend/lib/billing/__tests__/margin-repricing.test.ts. Since 2026-09-21 those
+  # figures are priced on a LIGHTWEIGHT model (a named DeepSeek Flash catalogue row)
+  # rather than on Claude Sonnet 5, so a credit figure quoted there is no longer
+  # comparable with one quoted here without converting for the model.
+  #
+  # The five cache multipliers are a FALLBACK since V491, not the tariff. A cached token
+  # is priced at the MODEL's own rate (auth.model_pricing.cache_read_rate /
+  # cache_write_rate, mirrored from the catalog feed); these weights apply only to a model
+  # whose cache price is unknown. Most catalog models now carry one, so changing a value
+  # here moves the bill for the REMAINDER only - re-price the model, not the family.
+  #
+  # PROD-effective values pinned in values-prod.yaml (services.auth.env) so margin is
+  # declared & diff-tracked. See the project docs.
   llm:
-    cloud-multiplier: ${BILLING_LLM_CLOUD_MULTIPLIER:1.11}
+    cloud-multiplier: ${BILLING_LLM_CLOUD_MULTIPLIER:1.333333}
     anthropic-cache-write-multiplier: ${BILLING_LLM_ANTHROPIC_CACHE_WRITE_MULTIPLIER:1.25}
     anthropic-cache-read-multiplier: ${BILLING_LLM_ANTHROPIC_CACHE_READ_MULTIPLIER:0.1}
     openai-cached-multiplier: ${BILLING_LLM_OPENAI_CACHED_MULTIPLIER:0.5}
     gemini-cached-multiplier: ${BILLING_LLM_GEMINI_CACHED_MULTIPLIER:0.25}
     deepseek-cached-multiplier: ${BILLING_LLM_DEEPSEEK_CACHED_MULTIPLIER:0.1}
+    # Per-provider override of cloud-multiplier, spelled provider=multiplier,provider=...
+    # EMPTY AS SHIPPED: every provider bills at the global lever, the decision provider
+    # (TypeSafe Jev) included, so the platform has ONE margin and one number to move.
+    #
+    # WHY THE MECHANISM EXISTS, and why it is not used. cloud-multiplier is a PERCENTAGE,
+    # and a percentage of a provider cost that collapsed by an order of magnitude is a
+    # margin that rounds to nothing: Jev prices input at $0.042/1M against Claude Sonnet
+    # 5's $2.00 and bills no output at all, so the classification that costs 2.6 credits
+    # of provider cost on Claude Sonnet 5 (the 2026-09-03 median, n=2,649) costs about
+    # 0.048 credits there, and the global lever earns 0.016 credits on it against 0.87 on
+    # the LLM path. That 2.6 is quoted here as the Sonnet-5 measurement it is: do NOT read
+    # it off MEASURED_PROVIDER_COST.classifyStep, which is neither the same workload
+    # (it carries LlmCostProfile.CLASSIFY_STEP, 1,200/60, against the 1,150/30 measured
+    # here) nor the same basis (a lightweight catalogue model since 2026-09-21).
+    # It carried typesafe=10 for two days on that argument. The decision since
+    # 2026-09-20 is that the same multiplier is what the USER pays: an engine whose whole
+    # value is costing almost nothing must not be the one row billed at four times the
+    # house rate, so the saving is passed on in full and the margin stays uniform.
+    #
+    # A malformed or non-positive entry is dropped with a WARN and that provider bills at
+    # the global lever - the failure direction is the standard margin, never a free call.
+    #
+    # The default matches the prod pin exactly (EconomicsConfigPinTest asserts it), so
+    # reading either file tells the truth about what is charged. The two disagreeing
+    # would mean the two files disagree about a margin, which is the drift that test
+    # exists to prevent - empty here therefore requires empty in values-prod.yaml.
+    provider-multipliers: ${BILLING_LLM_PROVIDER_MULTIPLIERS:}
   websearch:
     credits-per-search: ${BILLING_WEBSEARCH_CREDITS_PER_SEARCH:1}
     credits-per-fetch: ${BILLING_WEBSEARCH_CREDITS_PER_FETCH:1}
+  # Flat platform fee for ONE agent turn that ran on the tenant's OWN provider key (their
+  # provider bills them the tokens). Keyed on the model's price band (output USD/1M:
+  # budget <1.50, mid <5, high <15, top >=15; unknown = no pricing row).
+  # The debit is min(this fee, what the platform route would have billed), so a turn shorter
+  # than its own fee can never cost more for bringing your own key; these numbers therefore
+  # price the AVERAGE turn of the band, not a floor. Calibrated 2026-09-18 on 414 real agent
+  # turns against cloud-multiplier 1.333333 (median real cost: 7.7 / 8.7 / 95 / 391 credits).
+  # MOVING cloud-multiplier ABOVE RE-OPENS THESE NUMBERS: re-run scripts/billing/byok-fee-calibration.sql
+  # before changing either. PROD values pinned in values-prod.yaml.
+  own-key:
+    credits-per-turn:
+      budget: ${BILLING_OWNKEY_CREDITS_BUDGET:1}
+      mid: ${BILLING_OWNKEY_CREDITS_MID:2}
+      high: ${BILLING_OWNKEY_CREDITS_HIGH:5}
+      top: ${BILLING_OWNKEY_CREDITS_TOP:10}
+      unknown: ${BILLING_OWNKEY_CREDITS_UNKNOWN:2}
   stripe:
     secretKey: ${STRIPE_SECRET_KEY}
     webhookSecret: ${STRIPE_WEBHOOK_SECRET}
@@ -231,6 +297,12 @@ billing:
 # Embedded auth (CE mode) - set auth.mode=embedded to enable
 auth:
   mode: ${AUTH_MODE:keycloak}
+  # Billing nonce (Stripe checkout client_reference_id). The key MUST be shared by every
+  # auth replica and survive restarts: unset, NonceUtil generates an ephemeral per-pod key
+  # and a webhook landing on the other replica cannot decode the nonce (a PAYG top-up then
+  # relies on the Stripe-customer fallback + PaygTopupReconciler). Prod: livecontext-prod-secrets.
+  nonce:
+    encryption-key: ${NONCE_ENCRYPTION_KEY:}
   jwt:
     issuer: ${AUTH_JWT_ISSUER:livecontext}
     keys-path: ${AUTH_JWT_KEYS_PATH:./data/keys}
@@ -263,7 +335,14 @@ jwt:
 
 logging:
   pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    # Carries the level, the thread and the logger, like every other service. The
+    # previous "%d - %msg%n" omitted all three, which mattered most here: this is the
+    # billing service, so a credit or Stripe failure arrived in the log viewer with no
+    # severity at all and could not be told apart from a routine line.
+    # console only: this service ships its own logback-spring.xml whose <root> references
+    # CONSOLE alone, and its audit appender carries a hardcoded "%msg%n". A file pattern here
+    # would be config that looks load-bearing and is not.
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{36}] - %msg%n"
   file:
     name: logs/auth-service.log
 

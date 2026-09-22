@@ -543,6 +543,11 @@ class DownloadFileNodeTest {
             NodeExecutionResult result = node.execute(context);
 
             assertTrue(result.isFailure());
+            // The wording matters as much as the refusal. Falling into the generic
+            // "Download failed:" catch reads like an outage worth retrying, and this is
+            // the path most users reach the rule through.
+            assertTrue(result.errorMessage().orElse("").startsWith("Refused to download "),
+                "expected a refusal, got: " + result.errorMessage().orElse("<none>"));
             // FileDownloader should never be called for blocked URLs
             verifyNoInteractions(mockFileDownloader);
         }

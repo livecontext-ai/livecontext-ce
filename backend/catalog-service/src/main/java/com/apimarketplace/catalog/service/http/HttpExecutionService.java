@@ -1,5 +1,6 @@
 package com.apimarketplace.catalog.service.http;
 
+import com.apimarketplace.common.scope.GrantedScopes;
 import com.apimarketplace.catalog.domain.ApiEntity;
 import com.apimarketplace.catalog.domain.ApiToolEntity;
 import com.apimarketplace.catalog.domain.ApiToolParameterEntity;
@@ -102,7 +103,8 @@ public class HttpExecutionService {
     private com.apimarketplace.catalog.service.execution.FileAttachmentResolver fileAttachmentResolver;
 
     // Platform tenant ID for shared credentials
-    private static final String PLATFORM_TENANT_ID = "PLATFORM";
+    private static final String PLATFORM_TENANT_ID =
+            com.apimarketplace.catalog.service.credential.PlatformTenant.ID;
 
     /**
      * Credential-data field names whose value IS the resolved "primary" token. A field-aware
@@ -269,11 +271,13 @@ public class HttpExecutionService {
         if (resp.getType() == null || !"oauth2".equalsIgnoreCase(resp.getType())) {
             return;
         }
-        Set<String> granted = resp.getScopes() != null
-                ? new HashSet<>(resp.getScopes())
-                : Collections.emptySet();
-        Set<String> missing = new HashSet<>(required);
-        missing.removeAll(granted);
+        // Re-split the STORED list rather than trusting its shape. auth-service parses the
+        // provider's answer at connect time, but it only learned to split on a comma in Sep
+        // 2026 and never re-parses on refresh, so every credential connected before that holds
+        // one comma-joined blob and would be refused here on a grant that is entirely correct.
+        // An ordinary list passes through untouched, so this repairs the old rows without a
+        // migration and without a detection step. See GrantedScopes.
+        Set<String> missing = GrantedScopes.missingFrom(required, resp.getScopes());
         if (!missing.isEmpty()) {
             throw new InsufficientScopesException(
                     tool.getToolNameId(),
@@ -626,45 +630,39 @@ public class HttpExecutionService {
      */
     /** A credential that carries no system-set integration at all. */
     private static boolean isBlankIdentifier(String value) {
-        return value == null || value.isBlank();
+        return CredentialIdentityMatcher.isBlankIdentifier(value);
     }
 
     /**
      * True when two credential identifiers name the same thing.
      *
-     * <p>Collapsed to the canonical icon slug first, the same normalisation
-     * the credential templates and the pickers are keyed on, so a difference
-     * that is only punctuation ({@code stability-ai} against
-     * {@code stabilityai}) does not read as a different provider.
+     * <p>Delegates to {@link CredentialIdentityMatcher}, which holds the rule now
+     * that a second reader asks the same question without executing anything (the
+     * capability answer that says which accounts could run an endpoint). Kept as a
+     * method here so the call sites below read as they did.
      */
     private static boolean sameCredentialIdentity(String a, String b) {
-        if (a == null || b == null || a.isBlank() || b.isBlank()) {
-            return false;
-        }
-        String left = com.apimarketplace.catalog.util.IconSlugNormalizer.normalizeForKey(a);
-        String right = com.apimarketplace.catalog.util.IconSlugNormalizer.normalizeForKey(b);
-        return !left.isBlank() && left.equals(right);
+        return CredentialIdentityMatcher.sameCredentialIdentity(a, b);
     }
 
     /**
      * Whether a credential's own identifiers say it belongs to the integration this
      * endpoint requires.
      *
-     * <p>One matcher, used by both ways of choosing a credential (by id and by
-     * name), because a name path that matched more loosely than the id path would
-     * be a way to reach a credential the id path exists to keep out. The rules it
-     * encodes are documented at its caller
-     * {@link #resolvePinnedCredentialOwnership}: {@code integration} is system-set
-     * and decides whenever it is present; the label is admitted only for a
-     * credential that carries no integration at all, which is how the
-     * workflow-native connectors identify themselves.
+     * <p>One matcher, used by every way of choosing a credential (by id, by name,
+     * and by the capability listing), because a path that matched more loosely than
+     * the id path would be a way to reach a credential the id path exists to keep
+     * out. The rules it encodes are documented at its caller
+     * {@link #resolvePinnedCredentialOwnership} and on
+     * {@link CredentialIdentityMatcher}: {@code integration} is system-set and
+     * decides whenever it is present; the label is admitted only for a credential
+     * that carries no integration at all, which is how the workflow-native
+     * connectors identify themselves.
      */
     private static boolean credentialIdentityMatchesRequirement(
             String integration, String requirement, String foundIntegration, String foundName) {
-        return sameCredentialIdentity(integration, foundIntegration)
-                || sameCredentialIdentity(requirement, foundIntegration)
-                || (isBlankIdentifier(foundIntegration)
-                        && sameCredentialIdentity(requirement, foundName));
+        return CredentialIdentityMatcher.matchesRequirement(
+                integration, requirement, foundIntegration, foundName);
     }
 
     private boolean pinnedCredentialBelongsTo(String userId, Long credentialId, String credentialName) {
@@ -1210,11 +1208,33 @@ public class HttpExecutionService {
      */
     private <T> ResponseEntity<T> exchangeWithRetry(java.util.function.Supplier<ResponseEntity<T>> send,
                                                    String url, ApiToolEntity tool, ApiEntity api) {
+        // The caller's budget can only TIGHTEN the platform's, never raise it. A node that paces
+        // itself sends 0, which refuses every wait and therefore every retry: the author owns the
+        // retrying, and the platform must not multiply their requests underneath them.
+        //
+        // The clamp is the load-bearing half. Our caller waits on ONE HTTP read window (the
+        // orchestrator's is 30s), and it does not know how long we intend to sleep. Sleep past it
+        // and the caller gives up while WE go on to re-send the call, succeed, store the result and
+        // commit the charge: the customer is billed for a step the run reports as failed, and
+        // nothing releases it because from here nothing failed. That is not hypothetical - it is
+        // written up in the orchestrator's own RestTemplateConfig, which met it once with a
+        // generation call. The platform's configured budget is chosen to fit inside that window, so
+        // honouring a larger one would be honouring a request to break the caller.
+        Long callerBudget = ProviderRetryContext.getMaxWaitMs();
+        long platformBudgetMs = errorPolicyEngine.getMaxWaitMs();
+        long budgetMs = callerBudget == null ? platformBudgetMs : Math.min(callerBudget, platformBudgetMs);
+        boolean budgetWasCapped = callerBudget != null && callerBudget > platformBudgetMs;
+
         long sleptMs = 0L;
         for (int attempt = 0; ; attempt++) {
             try {
                 return send.get();
             } catch (org.springframework.web.client.HttpStatusCodeException e) {
+                // The engine is asked only WHETHER this refusal is retryable and for how long the
+                // provider asked to wait. The budget is applied below, on the running total, which
+                // is strictly stronger than a per-wait cap and needs no change to a shared engine
+                // signature: a caller can only ever tighten, so a wait the engine allows and the
+                // budget does not is refused here, before anything is slept.
                 ErrorPolicyEngine.Verdict verdict = errorPolicyEngine.classify(
                         e.getStatusCode().value(),
                         e.getResponseBodyAsString(),
@@ -1230,11 +1250,20 @@ public class HttpExecutionService {
                 // The budget is the TOTAL wait for this call, not a per-wait cap: two allowed
                 // retries of the cap each would hold the thread for twice what the cap promises,
                 // and this request thread is also paying for the dispatches between the waits.
-                if (sleptMs + verdict.waitMs() > errorPolicyEngine.getMaxWaitMs()) {
+                if (sleptMs + verdict.waitMs() > budgetMs) {
+                    // Logged here and nowhere else. A capped budget is an ordinary, documented,
+                    // user-configured state that the UI invites, so warning merely because it was
+                    // capped would emit one line per node execution - a thousand per run inside a
+                    // split, none of them actionable. The moment it decides anything is the moment
+                    // a retry is refused, and that is what this says.
                     log.warn("[HttpExecutionService] {} {} answered {} and asked for {}ms more, "
-                                    + "over the {}ms budget already {}ms spent - not retrying",
+                                    + "over the {}ms budget already {}ms spent - not retrying{}",
                             tool.getMethod(), stripQueryString(url), e.getStatusCode().value(),
-                            verdict.waitMs(), errorPolicyEngine.getMaxWaitMs(), sleptMs);
+                            verdict.waitMs(), budgetMs, sleptMs,
+                            budgetWasCapped
+                                    ? " (the caller asked for " + callerBudget + "ms, capped at the "
+                                            + "platform's " + platformBudgetMs + "ms)"
+                                    : "");
                     throw e;
                 }
 
@@ -1244,6 +1273,10 @@ public class HttpExecutionService {
                         verdict.waitMs(), attempt + 1, errorPolicyEngine.getMaxRetries());
 
                 countRetry(api, e.getStatusCode().value());
+                // Travels back to the node, which stamps it on the step output: the wait happens
+                // inside one tool call, so without this a re-sent call is indistinguishable from a
+                // slow one.
+                ProviderRetryContext.recordRetry();
 
                 try {
                     Thread.sleep(verdict.waitMs());
@@ -2836,10 +2869,12 @@ public class HttpExecutionService {
     }
 
     /**
-     * Headers owned by the HTTP client / transport layer - a tool param must never set these
-     * (a stale Content-Length or a wrong Host corrupts the request). Lower-cased for case-insensitive match.
+     * Headers the HTTP client owns; a caller-supplied value corrupts the request, so they are
+     * dropped before sending. PUBLIC because registration refuses a declared header param whose
+     * name appears here (it validates against this list UNION its own static-header skip list):
+     * accepting a name that is then silently discarded here is exactly the failure this prevents.
      */
-    private static final Set<String> TRANSPORT_MANAGED_HEADERS = Set.of(
+    public static final Set<String> TRANSPORT_MANAGED_HEADERS = Set.of(
         // computed/transport headers
         "content-length", "host", "connection", "transfer-encoding", "expect", "upgrade",
         // hop-by-hop headers (RFC 7230 §6.1) - never carried end-to-end, never from a tool param
@@ -3679,7 +3714,15 @@ public class HttpExecutionService {
                     return failure(0, "Multipart body encoder not available", tool);
                 }
                 Map<String, Object> paramsMap = jsonNodeToFlatMap(filteredParameters);
-                body = multipartBodyEncoder.encode(executionSpec.path("request").path("multipartFields"), paramsMap, tenantId);
+                try {
+                    body = multipartBodyEncoder.encode(executionSpec.path("request"), paramsMap, tenantId);
+                } catch (com.apimarketplace.catalog.service.execution.ByteRangeException e) {
+                    // A part that asked for a slice must not go out whole or empty. Fail the
+                    // call and name the missing bounds: `required: true` on them is read only
+                    // at authoring time, so a step saved before the endpoint gained its range
+                    // reaches here and this is the only place left to stop it.
+                    return failure(0, e.getMessage(), tool);
+                }
                 // Spring needs the right Content-Type for multipart so the boundary is set automatically.
                 headers.setContentType(org.springframework.http.MediaType.MULTIPART_FORM_DATA);
             } else if ("multipart_related".equals(bodyType) || "multipart-related".equals(bodyType)) {
@@ -3715,7 +3758,11 @@ public class HttpExecutionService {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> bodyMap = (prepared instanceof Map<?, ?>) ? (Map<String, Object>) prepared : java.util.Map.of();
                 JsonNode requestSpec = executionSpec.path("request");
-                body = rawBinaryBodyEncoder.encode(requestSpec, bodyMap, tenantId);
+                try {
+                    body = rawBinaryBodyEncoder.encode(requestSpec, bodyMap, tenantId);
+                } catch (com.apimarketplace.catalog.service.execution.ByteRangeException e) {
+                    return failure(0, e.getMessage(), tool);
+                }
                 String declaredCt = rawBinaryBodyEncoder.resolveContentType(requestSpec);
                 try {
                     headers.setContentType(org.springframework.http.MediaType.parseMediaType(declaredCt));

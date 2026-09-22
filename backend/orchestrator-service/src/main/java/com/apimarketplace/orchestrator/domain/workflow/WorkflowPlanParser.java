@@ -129,18 +129,19 @@ public final class WorkflowPlanParser {
     static Map<String, NodePolicy> parseNodePolicies(Map<String, Object> planData) {
         Map<String, NodePolicy> policies = new HashMap<>();
         collectNodePolicies(policies, (List<Map<String, Object>>) planData.get("mcps"),
-                data -> keyFromLabel("mcp", firstNonBlank(safeString(data.get("label")), safeString(data.get("alias")))), null);
+                data -> keyFromLabel("mcp", firstNonBlank(safeString(data.get("label")), safeString(data.get("alias")))),
+                null, true);
         collectNodePolicies(policies, (List<Map<String, Object>>) planData.get("tables"),
-                data -> keyFromLabel("table", safeString(data.get("label"))), null);
+                data -> keyFromLabel("table", safeString(data.get("label"))), null, false);
         collectNodePolicies(policies, (List<Map<String, Object>>) planData.get("agents"),
-                data -> keyFromLabel("agent", safeString(data.get("label"))), null);
+                data -> keyFromLabel("agent", safeString(data.get("label"))), null, false);
         collectNodePolicies(policies, (List<Map<String, Object>>) planData.get("cores"),
                 WorkflowPlanParser::coreKeyFromRaw,
                 ((java.util.function.BiConsumer<Map<String, Object>, NodePolicy>)
                         WorkflowPlanParser::rejectContinueOnFailureOnBranchingCore)
-                    .andThen(WorkflowPlanParser::rejectExecuteOnceOnIncompatibleCore));
+                    .andThen(WorkflowPlanParser::rejectExecuteOnceOnIncompatibleCore), false);
         collectNodePolicies(policies, (List<Map<String, Object>>) planData.get("interfaces"),
-                data -> keyFromLabel("interface", safeString(data.get("label"))), null);
+                data -> keyFromLabel("interface", safeString(data.get("label"))), null, false);
         return policies;
     }
 
@@ -148,7 +149,8 @@ public final class WorkflowPlanParser {
             Map<String, NodePolicy> policies,
             List<Map<String, Object>> entries,
             java.util.function.Function<Map<String, Object>, String> keyFn,
-            java.util.function.BiConsumer<Map<String, Object>, NodePolicy> validator) {
+            java.util.function.BiConsumer<Map<String, Object>, NodePolicy> validator,
+            boolean carriesProviderCalls) {
         if (entries == null) return;
         for (Map<String, Object> data : entries) {
             if (data == null || !data.containsKey(NodePolicy.JSON_KEY)) continue;
@@ -161,10 +163,54 @@ public final class WorkflowPlanParser {
             if (validator != null) {
                 validator.accept(data, policy);
             }
+            policy = withoutInapplicableProviderRetry(policy, key, carriesProviderCalls);
             if (!policy.isDefault()) {
                 policies.put(key, policy);
             }
         }
+    }
+
+    /**
+     * Drops {@code providerRetryMaxWaitSec} from an entry that makes no catalog tool call.
+     *
+     * <p>Only {@code StepNode} carries this budget to the provider, and only {@code mcps} entries
+     * become StepNodes. Keeping it on an agent, table, core or interface entry would leave the
+     * PARSED policy claiming something the engine cannot honour, which is how a reader comes to
+     * believe a workflow paces itself when it does not.
+     *
+     * <p>Dropped rather than thrown on, deliberately: the tool actions refuse it up front (see
+     * {@code NodePolicyApplier}), so a plan reaching here with it is one hand-written or imported
+     * before that refusal existed, and a parse-time throw would make such a workflow impossible to
+     * OPEN and therefore impossible to repair. A WARN records it.
+     */
+    private static NodePolicy withoutInapplicableProviderRetry(NodePolicy policy, String key,
+                                                               boolean carriesProviderCalls) {
+        if (carriesProviderCalls || policy.providerRetryMaxWaitSec() == null) {
+            return policy;
+        }
+        logger.warn("Ignoring nodePolicy.providerRetryMaxWaitSec on '{}': only a catalog tool step "
+                + "makes a provider call, so nothing would read it there", key);
+        return new NodePolicy(policy.retryCount(), policy.retryBackoffMs(), policy.continueOnFailure(),
+                policy.timeoutMs(), policy.executeOnce(), null);
+    }
+
+    /**
+     * The same rule as a message, for the tool layer to refuse a plan BEFORE it is stored.
+     *
+     * @return the message, or {@code null} when the budget is applicable (or absent).
+     */
+    public static String providerRetryRejection(String nodeKey, NodePolicy policy,
+                                                boolean carriesProviderCalls) {
+        if (policy == null || policy.providerRetryMaxWaitSec() == null || carriesProviderCalls) {
+            return null;
+        }
+        return "Invalid nodePolicy for node '" + nodeKey + "': providerRetryMaxWaitSec applies to a "
+                + "catalog tool step only (a 'mcps' entry). It bounds the wait after a PROVIDER "
+                + "answers 'too many requests', which only a tool call receives; an AI node, a core "
+                + "node (http_request included), a table node and an interface node each retry on "
+                + "their own terms, so use retryCount and retryBackoffMs there. Remove "
+                + "providerRetryMaxWaitSec from this node, or set it on the tool step that calls "
+                + "the provider.";
     }
 
     /**
@@ -174,17 +220,30 @@ public final class WorkflowPlanParser {
      * {@code retryCount}/{@code retryBackoffMs} remain allowed on these nodes.
      */
     private static void rejectContinueOnFailureOnBranchingCore(Map<String, Object> data, NodePolicy policy) {
-        if (!policy.continueOnFailure()) return;
-        String type = safeString(data.get("type"));
-        if (type != null && SINGLE_PORT_BRANCHING_CORE_TYPES.contains(type.toLowerCase(Locale.ROOT))) {
-            String key = coreKeyFromRaw(data);
-            throw new IllegalArgumentException(
-                "Invalid nodePolicy for node '" + key + "': continueOnFailure=true is not supported on "
-                    + "branching nodes (core type '" + type + "'). A failed " + type + " selects no port, so "
-                    + "continuing past the failure would traverse ALL its ports at once (every branch/case/choice). "
-                    + "Remove continueOnFailure from this node (retryCount is still allowed) or handle the "
-                    + "failure on the nodes upstream/downstream of the branch instead.");
+        String message = continueOnFailureRejection(safeString(data.get("type")), policy, coreKeyFromRaw(data));
+        if (message != null) {
+            throw new IllegalArgumentException(message);
         }
+    }
+
+    /**
+     * The rejection itself, as a message rather than an exception, so the builder tools can refuse
+     * a policy the moment an agent sends it instead of letting it become an unparseable plan. One
+     * rule, one wording, one place: a second copy in the tool layer is how a tool comes to accept
+     * what the engine refuses.
+     *
+     * @return the message, or {@code null} when the policy is acceptable on that core type.
+     */
+    public static String continueOnFailureRejection(String coreType, NodePolicy policy, String nodeKey) {
+        if (policy == null || !policy.continueOnFailure()) return null;
+        if (coreType == null || !SINGLE_PORT_BRANCHING_CORE_TYPES.contains(coreType.toLowerCase(Locale.ROOT))) {
+            return null;
+        }
+        return "Invalid nodePolicy for node '" + nodeKey + "': continueOnFailure=true is not supported on "
+                + "branching nodes (core type '" + coreType + "'). A failed " + coreType + " selects no port, so "
+                + "continuing past the failure would traverse ALL its ports at once (every branch/case/choice). "
+                + "Remove continueOnFailure from this node (retryCount is still allowed) or handle the "
+                + "failure on the nodes upstream/downstream of the branch instead.";
     }
 
     /**
@@ -194,10 +253,22 @@ public final class WorkflowPlanParser {
      * The other policy fields stay allowed on these nodes.
      */
     private static void rejectExecuteOnceOnIncompatibleCore(Map<String, Object> data, NodePolicy policy) {
-        if (!policy.executeOnce()) return;
-        String type = safeString(data.get("type"));
+        String message = executeOnceRejection(safeString(data.get("type")), policy, coreKeyFromRaw(data));
+        if (message != null) {
+            throw new IllegalArgumentException(message);
+        }
+    }
+
+    /**
+     * Same as {@link #continueOnFailureRejection}, for {@code executeOnce}.
+     *
+     * @return the message, or {@code null} when the policy is acceptable on that core type.
+     */
+    public static String executeOnceRejection(String coreType, NodePolicy policy, String nodeKey) {
+        if (policy == null || !policy.executeOnce()) return null;
+        String type = coreType;
         if (type != null && EXECUTE_ONCE_INCOMPATIBLE_CORE_TYPES.contains(type.toLowerCase(Locale.ROOT))) {
-            String key = coreKeyFromRaw(data);
+            String key = nodeKey;
             String reason = switch (type.toLowerCase(Locale.ROOT)) {
                 case "split" -> "the split node produces the split items and already executes once per workflow item - "
                     + "put executeOnce on a node INSIDE the split scope instead";
@@ -209,11 +280,11 @@ public final class WorkflowPlanParser {
                     + "('first iteration only'?) is ambiguous, so it is rejected rather than guessed. A node inside "
                     + "a loop body still re-executes every iteration regardless of executeOnce";
             };
-            throw new IllegalArgumentException(
-                "Invalid nodePolicy for node '" + key + "': executeOnce=true is not supported on core type '"
+            return "Invalid nodePolicy for node '" + key + "': executeOnce=true is not supported on core type '"
                     + type + "': " + reason + ". Remove executeOnce from this node "
-                    + "(retryCount/retryBackoffMs/timeoutMs remain allowed).");
+                    + "(retryCount/retryBackoffMs/timeoutMs remain allowed).";
         }
+        return null;
     }
 
     // ===== NODE MOCKS =====

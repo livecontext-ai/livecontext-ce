@@ -9,8 +9,10 @@ import { Button } from '@/components/ui/button';
 import { useTranslations } from 'next-intl';
 import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 import { isCeMode } from '@/lib/format-cost';
+import { useMarketplaceDemoInstall } from '@/lib/marketplace/demoInstallMode';
 import { ceExclusiveFeatureKeys, isCeExclusiveBlocked } from '@/lib/marketplace/ceExclusive';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
+import { VerifiedBadge } from '@/components/profile/VerifiedBadge';
 import { track } from '@/lib/analytics/analytics';
 import { useMarketplaceInstallStore } from '@/lib/stores/marketplace-install-store';
 import { InstalledResourcesList } from '@/components/marketplace/InstallSummaryModal';
@@ -39,6 +41,17 @@ interface AcquirePublicationModalProps {
   /** CE remote mode: acquire from cloud marketplace instead of local */
   ceMode?: boolean;
   /**
+   * Whether admin demo mode may SIMULATE this install (see
+   * `lib/marketplace/demoInstallMode`). Marketplace browsing surfaces opt in;
+   * the chat's agent-driven install must NOT, because that modal answers a real
+   * tool authorization in a real conversation: a simulated success leaves
+   * `onSuccess` unfired (there is no acquired id), and closing the modal then
+   * DENIES the authorization, telling the agent the user refused right after
+   * showing them an "Installed" screen. Default false, so a new consumer never
+   * inherits the simulation by accident.
+   */
+  demoEligible?: boolean;
+  /**
    * Inline-progress mode (marketplace grid + preview header): confirming the
    * install CLOSES the modal instead of showing the in-modal progress bar -
    * the caller renders the same progress on the publication CARD (the
@@ -63,6 +76,7 @@ export default function AcquirePublicationModal({
   publication,
   onSuccess,
   ceMode,
+  demoEligible = false,
   inlineProgress,
   onInstallStarted,
 }: AcquirePublicationModalProps) {
@@ -89,6 +103,10 @@ export default function AcquirePublicationModal({
   const active = useMarketplaceInstallStore((s) => s.active);
   const startInstall = useMarketplaceInstallStore((s) => s.startInstall);
   const clearInstall = useMarketplaceInstallStore((s) => s.clear);
+  // Admin demo mode: this modal is the SINGLE entry point into the install
+  // machine, so gating it here is enough to guarantee that no acquire call is
+  // ever made while the mode is on.
+  const demoInstall = useMarketplaceDemoInstall() && demoEligible;
   const isMyInstall = active?.publication.id === publication.id;
   const state: ModalState = isMyInstall
     ? active.status === 'installing'
@@ -98,6 +116,9 @@ export default function AcquirePublicationModal({
   const progress = isMyInstall ? active.progress : 0;
   const error = isMyInstall ? active.error : null;
   const acquiredId = isMyInstall ? active.acquiredId : null;
+  // This particular install is a rehearsal (the flag is read off the machine, not
+  // off the toggle, so a mode switched mid-install cannot rewrite what happened).
+  const isDemoInstall = isMyInstall ? active.demo : false;
   // What the acquire reported creating - drives the success screen's recap.
   const resources = isMyInstall ? active.resources : {};
   // Editable copy outcome for the success screen (see the confirm-screen opt-in).
@@ -196,6 +217,7 @@ export default function AcquirePublicationModal({
       ceMode,
       inline: Boolean(inlineProgress),
       withEditableCopy: canRequestEditableCopy && withEditableCopy,
+      demo: demoInstall,
     });
     if (!started) return; // another install is running - keep the modal as-is
     if (inlineProgress && fromConfirm) {
@@ -218,11 +240,15 @@ export default function AcquirePublicationModal({
   };
 
   const handleGoToApplications = () => {
-    track('app_post_install_opened', {
-      publication_id: publication.id,
-      publication_type: publication.publicationType ?? null,
-      acquired_id: acquiredId,
-    });
+    // Nothing was installed in demo mode, so this is a plain navigation, not a
+    // post-install event.
+    if (!isDemoInstall) {
+      track('app_post_install_opened', {
+        publication_id: publication.id,
+        publication_type: publication.publicationType ?? null,
+        acquired_id: acquiredId,
+      });
+    }
     handleClose();
     // Route to the post-install destination that matches the resource type so
     // the user lands on the page that actually shows what they just installed.
@@ -600,6 +626,7 @@ export default function AcquirePublicationModal({
               <span className="text-xs text-theme-secondary">
                 {publication.publisherName || t('anonymous')}
               </span>
+              <VerifiedBadge userId={publication.publisherId} size="xs" />
             </div>
           </div>
         </div>

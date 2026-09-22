@@ -168,6 +168,31 @@ export const fetchToolDetails = async (toolSlug: string) => {
   return apiClient.get<any>(`/workflow-inspector/tools/${encodeURIComponent(toolSlug)}/details`);
 };
 
+/** Resolve an operation within its integration before creating a configured node. */
+export const fetchCatalogTool = async (apiName: string, operationName: string) => {
+  const apis: ApiSystem[] = [];
+  let page = 0;
+  while (true) {
+    const result = await fetchApis({ pageParam: page, searchQuery: apiName });
+    apis.push(...result.content);
+    if (result.last || page + 1 >= result.totalPages || !result.content.length) break;
+    page += 1;
+  }
+  const api = apis.find((candidate) => candidate.apiName.toLowerCase() === apiName.toLowerCase());
+  if (!api) throw new Error(`Integration unavailable: ${apiName}`);
+  const tools = await fetchApiTools(api.slug);
+  const matches = tools.filter((candidate) => candidate.name === operationName);
+  if (matches.length !== 1) throw new Error(`Operation unavailable or ambiguous: ${apiName}/${operationName}`);
+  const tool = matches[0];
+  const details = await fetchToolDetails(tool.slug);
+  if (!details || !Array.isArray(details.parameters)) {
+    throw new Error(`Tool details unavailable: ${tool.slug}`);
+  }
+  return { api, tool, details };
+};
+
+export type CatalogTool = Awaited<ReturnType<typeof fetchCatalogTool>>;
+
 export const useMcpToolDetails = (toolSlug: string | null) => {
     return useQuery({
         queryKey: ['mcp-tool-details', toolSlug],

@@ -79,6 +79,110 @@ class CatalogRegisterModuleTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void registerApiNamesTheCredentialItsToolsWillRequire() {
+        // A flat "registered successfully" was the whole reply, so an API that needs a key looked
+        // ready and was not. The first sign of trouble was a 401 from the provider several steps
+        // later, with nothing connecting it back to a missing connection.
+        Map<String, Object> apiDef = Map.of(
+                "apiName", "Weather API",
+                "baseUrl", "https://api.test.com",
+                "authType", "bearer",
+                "endpoints", List.of(Map.of("name", "get", "endpoint", "/", "method", "GET"))
+        );
+        when(registrationService.registerCustomApi(any(), eq("tenant-1")))
+                .thenReturn(mockApiResponse("Weather API"));
+
+        var result = module.execute("register_api", Map.of("api_definition", apiDef), "tenant-1", null);
+
+        assertTrue(result.get().success());
+        Map<String, Object> data = (Map<String, Object>) result.get().data();
+        assertEquals("weatherapi", data.get("credential_name"),
+                "the reply must name the credential the tools look for, derived the same way");
+        assertTrue(((String) data.get("next_step")).contains("weatherapi"),
+                "the next step must quote that same name so the agent can act on it");
+        assertTrue(((String) data.get("next_step")).contains("credential(action='require'"),
+                "the next step must name an action the agent can actually call");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void registerApiSaysNothingAboutCredentialsWhenNoneAreNeeded() {
+        // A keyless API is usable immediately. Telling an agent to go and request a credential
+        // for it would send it after a connection that does not exist and is not required.
+        Map<String, Object> apiDef = Map.of(
+                "apiName", "Public Data",
+                "baseUrl", "https://api.test.com",
+                "endpoints", List.of(Map.of("name", "get", "endpoint", "/", "method", "GET"))
+        );
+        when(registrationService.registerCustomApi(any(), eq("tenant-1")))
+                .thenReturn(mockApiResponse("Public Data"));
+
+        var result = module.execute("register_api", Map.of("api_definition", apiDef), "tenant-1", null);
+
+        Map<String, Object> data = (Map<String, Object>) result.get().data();
+        assertFalse(data.containsKey("credential_name"));
+        assertFalse(data.containsKey("next_step"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void updateApiWarnsThatToolIdsChangeAndThatTheKeySurvives() {
+        // The warning used to mention only the tool IDs, while the update ALSO deleted the
+        // author's stored key. The key is kept now, and the warning has to say both things: what
+        // still breaks, and what no longer does.
+        // An AUTHENTICATING definition, deliberately: the sentence about the key being kept only
+        // applies when there is a key, and asserting it against a keyless API would certify the
+        // warning while the credential_name it points at is absent from the response.
+        Map<String, Object> apiDef = Map.of(
+                "apiName", "Test",
+                "baseUrl", "https://api.test.com",
+                "authType", "bearer",
+                "endpoints", List.of(Map.of("name", "get", "endpoint", "/", "method", "GET"))
+        );
+        when(registrationService.updateCustomApi(eq("api-1"), any(), eq("tenant-1")))
+                .thenReturn(mockApiResponse("Test"));
+
+        var result = module.execute("update_api",
+                Map.of("api_id", "api-1", "api_definition", apiDef), "tenant-1", null);
+
+        Map<String, Object> data = (Map<String, Object>) result.get().data();
+        String warning = (String) data.get("warning");
+        assertTrue(warning.contains("tool IDs"), "a step on an old tool ID still stops resolving");
+        assertTrue(warning.contains("kept"), "the stored key survives an update and that must be said");
+        assertTrue(warning.toLowerCase().contains("renam"),
+                "renaming moves the credential name, which is the one case the key does not follow");
+        assertTrue(warning.contains("node type"),
+                "renaming also moves the icon slug, which re-keys already-placed workflow nodes");
+        assertEquals("test", data.get("credential_name"),
+                "the warning points at credential_name, so the field must be in the response");
+        assertTrue(warning.contains((String) data.get("credential_name")),
+                "and it must quote the same value the response carries");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void updateApiDoesNotPromiseACredentialNameForAKeylessApi() {
+        // The other branch. A keyless API has no credential_name in the result, so the warning
+        // must not send the agent looking for one.
+        Map<String, Object> apiDef = Map.of(
+                "apiName", "Test",
+                "baseUrl", "https://api.test.com",
+                "endpoints", List.of(Map.of("name", "get", "endpoint", "/", "method", "GET"))
+        );
+        when(registrationService.updateCustomApi(eq("api-1"), any(), eq("tenant-1")))
+                .thenReturn(mockApiResponse("Test"));
+
+        var result = module.execute("update_api",
+                Map.of("api_id", "api-1", "api_definition", apiDef), "tenant-1", null);
+
+        Map<String, Object> data = (Map<String, Object>) result.get().data();
+        assertFalse(data.containsKey("credential_name"));
+        assertFalse(((String) data.get("warning")).contains("credential_name"),
+                "no field, no reference to it");
+    }
+
+    @Test
     void registerApiReturnsFailureOnIllegalArgument() {
         Map<String, Object> apiDef = Map.of("apiName", "Test");
         when(registrationService.registerCustomApi(any(), eq("tenant-1")))
@@ -305,6 +409,17 @@ class CatalogRegisterModuleTest {
                 id, name, "desc", "/endpoint", "GET", "HTTP", null,
                 null, null, null, null, null,
                 false, 0L, 0L, List.of(), List.of(), "inactive", null);
+    }
+
+    private ApiResponse mockApiResponse(String apiName) {
+        ApiResponse base = mockApiResponse();
+        return new ApiResponse(
+                base.id(), apiName, base.apiSlug(), base.description(), base.baseUrl(),
+                base.categoryId(), base.categoryName(), base.subcategoryId(), base.subcategoryName(),
+                base.isActive(), base.isLocal(), base.createdAt(), base.updatedAt(), base.createdBy(),
+                base.tools(), base.healthcheckEndpoint(), base.visibility(), base.isPublic(),
+                base.authType(), base.authHeaderName(), base.authHeaderValue(), base.pricingModel(),
+                base.status(), base.platformCredentialMissing());
     }
 
     private ApiResponse mockApiResponse() {

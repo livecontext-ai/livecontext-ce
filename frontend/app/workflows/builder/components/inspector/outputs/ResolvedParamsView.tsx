@@ -18,7 +18,7 @@
 'use client';
 
 import * as React from 'react';
-import { AlertTriangle, Database } from 'lucide-react';
+import { Database } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { useRunData } from '../../../hooks/useRunData';
@@ -27,11 +27,9 @@ import { ItemNavigator, ALL_STATUSES_VALUE } from './ItemNavigator';
 import { JsonValueTree, PrimitiveValue } from './JsonDataTree';
 import { NodeRunStateNotice } from './NodeRunStateNotice';
 import { RunDataViewTabs, RawJsonView, JsonTableView, type RunDataViewMode } from './RunDataViews';
-import { hasTableView, pickTabularValue } from './runValueUtils';
+import { hasTableView } from './runValueUtils';
 import {
-  buildParamAlignment,
   mergeResolvedAliases,
-  type ParamAlignmentEntry,
 } from './runParamAlignment';
 import { collectDeclaredParams } from './declaredParams';
 import type { StatusType } from '@/components/ui/StatusBadge';
@@ -161,26 +159,38 @@ export function ResolvedParamsView({
   );
 
   const { liveState, pendingSignals } = useNodeLiveState(node, { isRunMode });
-
-  // What the node declares in edit mode, read through the REAL plan generator
-  // so it is exactly what the backend was handed. An MCP tool node is excluded
-  // on purpose: its parameters come from the selected tool's schema, and the
-  // catalog decides their names, so this comparison has nothing to say there.
-  // Keyed on what the plan generator actually reads - node.id, node.data and
-  // node.type - rather than the node object: ReactFlow re-creates that object
-  // on every status tick and every drag frame, and this runs the REAL plan
-  // generator. `nodeType` is not a substitute for `node.type`: detectNodeType
-  // collapses several node.type values onto one inspector type, so a change
-  // between two of them would leave a stale plan entry.
-  // Suppressed rather than satisfied: both rules want `node` itself in the deps,
-  // which is the bug - ReactFlow hands back a new object every tick. Passing a
-  // reconstructed `{id, type, data}` would silence them honestly but would also
-  // feed the plan generator a node this file invented, so the narrower lie is
+  // What the node declares in edit mode, read through the REAL plan generator so it is
+  // exactly what the backend was handed. This is the panel's answer while there is no step
+  // row yet: the node is still executing, or parked on a signal, or it left no row at all.
+  //
+  // MCP tool nodes are INCLUDED. They were excluded, and the reason given was that the
+  // catalog owns their parameter names so a drift comparison has nothing to say about them.
+  // That reason is about the COMPARISON; this value only feeds the display. The cost of the
+  // confusion fell on the one node that spends real time RUNNING, because it is the one
+  // waiting on a third party: a catalog step showed an empty Params column for the whole
+  // call, and again afterwards on any path that leaves no row. Its labels already come from
+  // the tool's own schema through `toolParamLabels`, so there was nothing for the exclusion
+  // to protect.
+  //
+  // Every other node family already answers from the node alone, verified type by type
+  // against the generator's own field names: `processEdgesV2` registers decision, switch,
+  // split, option, fork, approval and while-group by walking the NODES, so their
+  // configuration is here without the graph. A `merge` reports nothing because it has no
+  // parameters of its own, which is honest rather than blind.
+  //
+  // Keyed on what the plan generator actually reads - node.id, node.data and node.type -
+  // rather than the node object: ReactFlow re-creates that object on every status tick and
+  // every drag frame, and this runs the REAL plan generator. `nodeType` is not a substitute
+  // for `node.type`: detectNodeType collapses several node.type values onto one inspector
+  // type, so a change between two of them would leave a stale plan entry.
+  // Suppressed rather than satisfied: both rules want `node` itself in the deps, which is
+  // the bug. Passing a reconstructed `{id, type, data}` would silence them honestly but
+  // would also feed the plan generator a node this file invented, so the narrower lie is
   // the suppression.
   /* eslint-disable react-hooks/exhaustive-deps, react-hooks/memo-dependencies */
   const configuredParams = React.useMemo(
-    () => (nodeType === 'tool' ? {} : collectDeclaredParams(node)),
-    [nodeType, node.id, node.type, node.data],
+    () => collectDeclaredParams(node, nodeType),
+    [node.id, node.type, node.data, nodeType],
   );
   /* eslint-enable react-hooks/exhaustive-deps, react-hooks/memo-dependencies */
 
@@ -189,10 +199,6 @@ export function ResolvedParamsView({
     [data],
   );
 
-  const alignment = React.useMemo(
-    () => (merged ? buildParamAlignment(configuredParams, merged, nodeType) : null),
-    [configuredParams, merged, nodeType],
-  );
 
   if (isLoading) {
     return (
@@ -232,10 +238,21 @@ export function ResolvedParamsView({
             )}
           </>
         ) : (
-          <div className="py-4 text-center">
-            <Database className="h-6 w-6 mx-auto mb-2 text-slate-300 dark:text-slate-600" />
-            <p className="text-sm text-slate-500">{t('noResolvedParams')}</p>
-          </div>
+          <>
+            <div className="py-4 text-center">
+              <Database className="h-6 w-6 mx-auto mb-2 text-slate-300 dark:text-slate-600" />
+              <p className="text-sm text-slate-500">{t('noResolvedParams')}</p>
+            </div>
+            {/* The configuration, under its own heading, when this run left no row for the
+                node: it was skipped, or the branch was never taken, or the run ended above
+                it. An empty panel makes the reader open the node in edit mode to learn what
+                it would have run with, and says nothing about WHY there is no row. The
+                heading keeps the two apart: this is what the node is configured with, not
+                what it resolved. */}
+            {configuredEntries.length > 0 && (
+              <ConfiguredParamsList entries={configuredEntries} getLabel={getLabel} />
+            )}
+          </>
         )}
       </div>
     );
@@ -280,7 +297,9 @@ export function ResolvedParamsView({
           ) : effectiveViewMode === 'json' ? (
             <RawJsonView data={merged} />
           ) : effectiveViewMode === 'table' ? (
-            <JsonTableView data={pickTabularValue(merged)} />
+            // The WHOLE payload - see the note in RunDataPreview: pre-picking here
+            // is what made the table an unlabelled subset of the tree.
+            <JsonTableView data={merged} />
           ) : (
             <JsonValueTree
               data={merged}
@@ -291,9 +310,6 @@ export function ResolvedParamsView({
               labelForKey={getLabel}
             />
           )}
-          {alignment && alignment.mismatches.length > 0 && (
-            <ParamMismatchSection mismatches={alignment.mismatches} getLabel={getLabel} />
-          )}
         </>
       ) : data !== null ? (
         <PrimitiveValue value={data} />
@@ -303,6 +319,22 @@ export function ResolvedParamsView({
     </div>
   );
 }
+
+/**
+ * The same ceiling the backend puts on a reported value, applied to the configured one.
+ *
+ * A code node keeps its whole source in the plan and an sftp upload its whole payload, and
+ * this list renders on every node the run left no row for. Without a cap a skipped code node
+ * prints its entire source inline. The number matches ResolvedValuePreview.MAX_SCALAR_CHARS,
+ * so a value reads the same length here as it does once the node has run.
+ */
+const MAX_CONFIGURED_CHARS = 120;
+
+function shortenConfigured(value: unknown): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value) ?? '';
+  return text.length > MAX_CONFIGURED_CHARS ? `${text.slice(0, MAX_CONFIGURED_CHARS)}…` : text;
+}
+
 
 /**
  * The parameters a node was launched with, shown while it is still running:
@@ -331,7 +363,7 @@ function ConfiguredParamsList({
           </span>
           <span className="flex-shrink-0 text-slate-400">:</span>
           <span className="min-w-0 break-all font-mono text-sm text-slate-600 dark:text-slate-300">
-            {typeof expression === 'string' ? expression : JSON.stringify(expression)}
+            {shortenConfigured(expression)}
           </span>
         </div>
       ))}
@@ -339,53 +371,3 @@ function ConfiguredParamsList({
   );
 }
 
-/**
- * Configured parameters the run did not report under their own key.
- *
- * `renamed` is the actionable one: the value IS in the payload, under a
- * differently-formatted key, which means the form and the node disagree on the
- * parameter's name. `not_reported` means the node never echoed it at all.
- */
-function ParamMismatchSection({
-  mismatches,
-  getLabel,
-}: {
-  mismatches: ParamAlignmentEntry[];
-  getLabel: (key: string) => string;
-}) {
-  const t = useTranslations('workflowBuilder.inspector.runData');
-  const [isOpen, setIsOpen] = React.useState(false);
-
-  return (
-    <div
-      data-testid="param-alignment-mismatches"
-      className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"
-    >
-      <button
-        type="button"
-        onClick={() => setIsOpen((v) => !v)}
-        aria-expanded={isOpen}
-        className="flex w-full items-center gap-2 px-2.5 py-2 text-left text-sm font-medium text-amber-700 dark:text-amber-300"
-      >
-        <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
-        <span>{t('mismatchTitle', { count: mismatches.length })}</span>
-      </button>
-      {isOpen && (
-        <ul className="space-y-1.5 px-2.5 pb-2">
-          {mismatches.map((entry) => (
-            <li key={entry.key} className="text-sm text-amber-800 dark:text-amber-200">
-              <span className="font-medium">{getLabel(entry.key)}</span>
-              <span className="opacity-75"> ({entry.key})</span>
-              <p className="opacity-90">
-                {entry.status === 'renamed'
-                  ? t('mismatchRenamed', { runtimeKey: entry.runtimeKey ?? '' })
-                  : t('mismatchNotReported')}
-              </p>
-              <p className="break-all font-mono text-sm opacity-75">{entry.configuredExpression}</p>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}

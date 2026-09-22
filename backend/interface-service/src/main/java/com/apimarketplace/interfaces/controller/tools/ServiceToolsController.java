@@ -106,10 +106,18 @@ public class ServiceToolsController {
         copyIfPresent(request, "streamId", credentials, "__streamId__");
         copyIfPresent(request, "toolCallId", credentials, "__toolCallId__");
         // Access mode keys for ToolAccessControl (read/write per resource)
-        for (String am : List.of("tableAccessMode", "workflowAccessMode", "interfaceAccessMode",
-                "agentAccessMode", "applicationAccessMode", "skillAccessMode", "fileAccessMode",
-                "memoryAccessMode")) {
+        for (String am : com.apimarketplace.agent.config.ToolAccessControl.ACCESS_MODE_KEYS) {
             copyIfPresent(request, am, credentials, am);
+        }
+        // Resource allow-lists go into credentials TOO, because that is where the shared
+        // resolver (ToolAccessControl.getAllowedIds) looks and where every other resource
+        // service puts them. They stay in `variables` as well: that map is part of this
+        // relay's published shape, so dropping a key from it is a separate, riskier change
+        // than adding one here.
+        for (String allowedKey : List.of("allowedToolIds", "allowedWorkflowIds",
+                "allowedApplicationIds", "allowedTableIds", "allowedInterfaceIds",
+                "allowedAgentIds", "allowedFileIds")) {
+            copyIfPresent(request, allowedKey, credentials, allowedKey);
         }
 
         // Extract approvedServices
@@ -124,7 +132,24 @@ public class ServiceToolsController {
         String orgId = resolveHeader(httpRequest, "X-Organization-ID");
         String orgRole = resolveHeader(httpRequest, "X-Organization-Role");
         if (orgId == null) orgId = (String) request.get("orgId");
-        if (orgRole == null) orgRole = (String) request.get("orgRole");
+        // The ROLE is never taken from the request body. This endpoint is gateway-routed, and the
+        // gateway strips the caller's own identity HEADERS but not the body, so a user whose
+        // gateway resolved no active org could name a workspace AND assert OWNER in it in one
+        // request. Every legitimate internal caller already sends X-Organization-Role as a HEADER
+        // from the same source it filled the body field with (RemoteToolExecutionService
+        // .applyOrgHeaders, and the conversation relay's own forwarding), so dropping the body
+        // read costs them nothing. An absent role resolves to MEMBER, the safe direction.
+        //
+        // The role GRANTS as well as refuses, which is why this is not cosmetic:
+        // OrgAccessGuardImpl.getRestrictedResourceIds and getWriteRestrictedResourceIds return
+        // Set.of() for OWNER/ADMIN, skipping the auth-service lookup entirely, so a body-asserted
+        // OWNER did not merely avoid the VIEWER refusal, it bypassed that workspace's whole
+        // restricted-resource list. Do not re-read this as "the role only ever refuses" and
+        // restore the fallback.
+        //
+        // orgId is STILL read from the body, and that is a compatibility decision, not a safety
+        // one: it is forgeable by the same route. Closing it needs the internal callers to name
+        // the workspace by header first, which is a separate change.
 
         ToolExecutionContext context = new ToolExecutionContext(
             tenantId, credentials, variables, approvedServices,

@@ -8,15 +8,15 @@ import { COMPARISONS } from './_lib/comparisons';
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://livecontext.ai';
 
 export const metadata: Metadata = {
-  title: 'Compare LiveContext vs Zapier, n8n and Make',
+  title: 'Compare LiveContext with automation and AI agent platforms',
   description:
-    'How LiveContext compares to Zapier, n8n and Make (Integromat): honest feature-by-feature tables, pricing models, self-hosting, AI agents and migration guides.',
+    'Sourced comparisons of LiveContext with automation platforms, personal agents and cloud AI teammates, including cost, security and self-hosting.',
   alternates: { canonical: `${SITE_URL}/compare` },
   openGraph: {
     siteName: 'LiveContext',
-    title: 'Compare LiveContext vs Zapier, n8n and Make',
+    title: 'Compare LiveContext with automation and AI agent platforms',
     description:
-      'How LiveContext compares to Zapier, n8n and Make (Integromat): honest feature-by-feature tables, pricing models, self-hosting, AI agents and migration guides.',
+      'Sourced comparisons of LiveContext with automation platforms, personal agents and cloud AI teammates, including cost, security and self-hosting.',
     url: `${SITE_URL}/compare`,
     type: 'website',
     images: [
@@ -42,8 +42,8 @@ export default function CompareIndexPage() {
           How LiveContext compares
         </h1>
         <p className="mt-6 text-lg leading-relaxed max-w-2xl" style={{ color: 'var(--text-secondary)' }}>
-          Feature-by-feature comparisons with the automation tools teams evaluate most,
-          including where each of them is the better fit. Every page is kept honest and dated.
+          Sourced comparisons with automation platforms, local agents and cloud AI teammates,
+          including where each product is the better fit. Every page is dated and links to official documentation.
         </p>
         <div className="mt-12 grid gap-4">
           {COMPARISONS.map((comparison) => (

@@ -419,14 +419,67 @@ public class StorageClient {
     }
 
     /**
+     * Ask whether {@code bytes} more could be stored in this scope, without writing anything.
+     *
+     * <p>For callers that SPEND before they store. Media generation charges the customer inside
+     * the provider call and stores the asset afterwards, so an account with no room left pays for
+     * something the quota gate then refuses. Asking first is the only point at which that is
+     * preventable.
+     *
+     * <p><b>Fails OPEN.</b> An unreachable or erroring storage-service returns {@code true}, and
+     * that is deliberate: this is an advisory pre-check, not the gate. The real gate still runs at
+     * write time and still refuses. Failing closed would convert a storage-service blip into a
+     * total generation outage for everyone, which is a far worse failure than the one this guards
+     * against. A refusal is only ever reported when storage-service actually said "no room".
+     *
+     * @param bytes how much is about to be added. Probe with 1 to ask "is there ANY room left":
+     *              a 0-byte probe passes even at exactly the ceiling, because the quota compares
+     *              {@code used <= hardLimit}.
+     */
+    public boolean hasRoomFor(String tenantId, String organizationId, long bytes) {
+        String url = UriComponentsBuilder.fromHttpUrl(baseUrl)
+            .path("/api/internal/storage/quota/check")
+            .queryParam("tenantId", tenantId)
+            .queryParam("bytes", bytes)
+            .queryParamIfPresent("organizationId",
+                java.util.Optional.ofNullable(organizationId).filter(s -> !s.isBlank()))
+            .toUriString();
+        try {
+            HttpEntity<Void> entity = new HttpEntity<>(buildHeaders(tenantId, organizationId));
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.GET, entity, Map.class);
+            Object allowed = response.getBody() == null ? null : response.getBody().get("allowed");
+            // Anything other than an explicit false is treated as "there is room" - see the
+            // fail-open contract above. A malformed body is a storage-service problem, not a
+            // reason to refuse a paid call.
+            return !Boolean.FALSE.equals(allowed);
+        } catch (Exception e) {
+            log.warn("Storage quota pre-check unavailable (treating as room available): tenant={}, org={}, error={}",
+                tenantId, organizationId, e.getMessage());
+            return true;
+        }
+    }
+
+    /**
      * Push an organization's storage limit to storage-service. Best-effort (see
      * {@link #updateTenantStorageLimits}).
      */
     public boolean updateOrganizationStorageLimits(String organizationId, long maxBytes, double softRatio) {
+        return updateOrganizationStorageLimits(organizationId, maxBytes, softRatio, null);
+    }
+
+    /**
+     * Same, carrying the account that owns the workspace so the storage side can enforce one
+     * allowance across every workspace that account owns. A null {@code accountId} is simply not
+     * sent, and storage then leaves any existing attribution alone.
+     */
+    public boolean updateOrganizationStorageLimits(String organizationId, long maxBytes, double softRatio,
+                                                   String accountId) {
         String url = UriComponentsBuilder.fromHttpUrl(baseUrl)
             .path("/api/internal/storage/quota/org/{organizationId}/limits")
             .queryParam("maxBytes", maxBytes)
             .queryParam("softRatio", softRatio)
+            .queryParamIfPresent("accountId",
+                java.util.Optional.ofNullable(accountId).filter(s -> !s.isBlank()))
             .buildAndExpand(organizationId)
             .toUriString();
         try {

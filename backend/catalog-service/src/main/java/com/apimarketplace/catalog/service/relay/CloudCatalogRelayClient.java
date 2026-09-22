@@ -63,7 +63,15 @@ public class CloudCatalogRelayClient {
      * @throws CatalogRelayException when the relay itself refuses the call (non-2xx with
      *         an {@code {"error": ...}} body) or answers with an empty/unusable body
      */
-    @SuppressWarnings("unchecked")
+    /**
+     * Back-compat shape, from before a node could say anything about the provider retry. Resolves
+     * to "the node said nothing", which leaves the cloud's own budget in place: the exact meaning
+     * every call had before the field existed.
+     *
+     * <p><b>Trap for tests:</b> stubbing this overload on a MOCK does not catch a production call,
+     * which uses the full signature - a mock never runs the delegating body, so the call comes back
+     * null. Stub the 8-argument method.
+     */
     public ToolExecutionResponse execute(CloudLlmRuntimeCredentials credentials,
                                          String apiSlug,
                                          String toolSlug,
@@ -71,6 +79,19 @@ public class CloudCatalogRelayClient {
                                          List<String> expand,
                                          Integer maxItems,
                                          Boolean inlineBinaries) {
+        return execute(credentials, apiSlug, toolSlug, parameters, expand, maxItems,
+                inlineBinaries, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    public ToolExecutionResponse execute(CloudLlmRuntimeCredentials credentials,
+                                         String apiSlug,
+                                         String toolSlug,
+                                         Map<String, Object> parameters,
+                                         List<String> expand,
+                                         Integer maxItems,
+                                         Boolean inlineBinaries,
+                                         Integer providerRetryMaxWaitSeconds) {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(credentials.accessToken());
         headers.set(INSTALL_HEADER, credentials.installId());
@@ -82,6 +103,9 @@ public class CloudCatalogRelayClient {
         body.put("expand", expand);
         body.put("maxItems", maxItems);
         body.put("inlineBinaries", inlineBinaries);
+        // The node's own decision about the provider retry. Absent leaves the cloud's budget in
+        // place; 0 is how a workflow that paces itself stops the cloud re-sending underneath it.
+        body.put("providerRetryMaxWaitSeconds", providerRetryMaxWaitSeconds);
 
         ResponseEntity<Map> response;
         try {

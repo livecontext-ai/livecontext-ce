@@ -71,6 +71,16 @@ public class CreditConsumptionDeadLetterService implements CreditDeadLetterHandl
                                           String provider, String model,
                                           Integer promptTokens, Integer completionTokens,
                                           String errorReason, String organizationId) {
+        persistFailedConsumption(tenantId, sourceType, sourceId, provider, model,
+                promptTokens, completionTokens, errorReason, organizationId, null);
+    }
+
+    /** Same, keeping the key route so the replay bills the turn the way it was meant to be. */
+    @Override
+    public void persistFailedConsumption(String tenantId, String sourceType, String sourceId,
+                                          String provider, String model,
+                                          Integer promptTokens, Integer completionTokens,
+                                          String errorReason, String organizationId, String keyRoute) {
         Objects.requireNonNull(organizationId,
             "organizationId required for dead-letter persist (post-V263 NOT NULL)");
         try {
@@ -84,6 +94,7 @@ public class CreditConsumptionDeadLetterService implements CreditDeadLetterHandl
             entry.setPromptTokens(promptTokens);
             entry.setCompletionTokens(completionTokens);
             entry.setErrorReason(errorReason);
+            entry.setKeyRoute(keyRoute);
             repository.save(entry);
             log.warn("Dead-letter entry created for failed credit consumption: tenant={}, source={}/{}, org={}",
                     tenantId, sourceType, sourceId, organizationId);
@@ -127,7 +138,8 @@ public class CreditConsumptionDeadLetterService implements CreditDeadLetterHandl
                 Map<String, Object> result = creditClient.consumeCredits(
                         entry.getTenantId(), entry.getSourceType(), entry.getSourceId(),
                         entry.getProvider(), entry.getModel(),
-                        entry.getPromptTokens(), entry.getCompletionTokens());
+                        entry.getPromptTokens(), entry.getCompletionTokens(),
+                        /* imageCount */ null, /* cacheTokens */ null, entry.getKeyRoute());
 
                 if (Boolean.TRUE.equals(result.get("success"))) {
                     entry.setStatus(Status.RECONCILED);

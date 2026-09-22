@@ -17,6 +17,10 @@ import { renderToString } from 'react-dom/server';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RESOURCE_ACCENT, STATUS_ACCENT } from '@/components/agenda/agendaVisuals';
+import { NextIntlClientProvider } from 'next-intl';
+import en from '@/messages/en.json';
+import fr from '@/messages/fr.json';
+import { PERSONA_KEYS, type PersonaKey } from '@/components/landing/personas/personas';
 
 import AgendaShowcase from '../AgendaShowcase';
 
@@ -45,6 +49,15 @@ function showList() {
   fireEvent.click(screen.getByRole('button', { name: 'List' }));
 }
 
+function renderPersona(persona: PersonaKey, locale: 'en' | 'fr' = 'en') {
+  return render(
+    <NextIntlClientProvider locale={locale} messages={locale === 'fr' ? fr : en} onError={(error) => { throw error; }}>
+      <AgendaShowcase nowIso={NOW} persona={persona} locale={locale} />
+    </NextIntlClientProvider>,
+  );
+}
+
+
 describe('AgendaShowcase', () => {
   beforeEach(() => {
     // Only Date: faking timers wholesale would take React's scheduler with it.
@@ -58,6 +71,19 @@ describe('AgendaShowcase', () => {
   afterAll(() => {
     if (ORIGINAL_TZ === undefined) delete process.env.TZ;
     else process.env.TZ = ORIGINAL_TZ;
+  });
+
+  /**
+   * The calendar is CROPPED, not scrollable: a landing that carries a second scroll surface
+   * traps the thumb that lands in it on a phone, and the list view is thousands of pixels
+   * tall, so its height cannot be allowed to set the section's.
+   */
+  it('cuts the calendar off instead of scrolling it', () => {
+    const { container } = renderPersona('support');
+    const box = Array.from(container.querySelectorAll('div')).find((node) => node.className.includes('h-[35rem]'));
+    expect(box, 'the fixed-height calendar box').toBeDefined();
+    expect(box!.className).toContain('overflow-hidden');
+    expect(box!.className).not.toContain('overflow-y-auto');
   });
 
   it('opens on the month the visitor is in, with today marked', () => {
@@ -343,5 +369,167 @@ describe('AgendaShowcase', () => {
     expect(screen.getByTitle('Agenda')).toHaveAttribute('data-active', 'true');
     expect(screen.getByTitle('Marketplace')).not.toHaveAttribute('data-active');
     expect(screen.getByTitle('Account')).toBeInTheDocument();
+  });
+
+  it.each(PERSONA_KEYS)('projects all eight %s schedules instead of the homepage demo tasks', (persona) => {
+    renderPersona(persona);
+    showList();
+    const names = en.PersonaLanding.personas[persona].agendaSchedules;
+    for (const name of Object.values(names)) expect(screen.getAllByText(name).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Backups')).not.toBeInTheDocument();
+    expect(screen.queryByText('Invoices')).not.toBeInTheDocument();
+  });
+
+  it.each(PERSONA_KEYS)('keeps Saturday and Sunday work in the %s calendar across months', (persona) => {
+    renderPersona(persona);
+    const names = en.PersonaLanding.personas[persona].agendaSchedules;
+    expect(within(cell('2026-09-19')).getByTitle(new RegExp(names.seventh))).toBeInTheDocument();
+    expect(within(cell('2026-09-20')).getByTitle(new RegExp(names.eighth))).toBeInTheDocument();
+    expect(within(cell('2026-09-18')).queryByTitle(new RegExp(names.seventh))).not.toBeInTheDocument();
+    expect(within(cell('2026-09-21')).queryByTitle(new RegExp(names.eighth))).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: en.agenda.nav.next }));
+    expect(within(cell('2026-10-03')).getByTitle(new RegExp(names.seventh))).toBeInTheDocument();
+    expect(within(cell('2026-10-04')).getByTitle(new RegExp(names.eighth))).toBeInTheDocument();
+    showList();
+    for (const row of screen.getAllByText(names.seventh)) expect(within(row.closest('li')!).getByText('09:00')).toBeInTheDocument();
+    for (const row of screen.getAllByText(names.eighth)) expect(within(row.closest('li')!).getByText('17:00')).toBeInTheDocument();
+  });
+
+  it('localizes the creator agenda with the app locale and keeps the resource filters interactive', () => {
+    renderPersona('creator', 'fr');
+    const names = fr.PersonaLanding.personas.creator.agendaSchedules;
+    expect(screen.getByText('septembre 2026')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: fr.agenda.view.list }));
+    expect(screen.getAllByText(names.fifth).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: fr.agenda.resource.workflow }));
+    expect(screen.queryByText(names.fifth)).not.toBeInTheDocument();
+    expect(screen.getAllByText(names.first).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: fr.agenda.resource.agent }));
+    fireEvent.click(screen.getByRole('button', { name: fr.agenda.resource.application }));
+    expect(screen.getByText(fr.agenda.empty.allFilteredTitle)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: fr.agenda.resource.workflow }));
+    expect(screen.getAllByText(names.fifth).length).toBeGreaterThan(0);
+  });
+
+  it('projects creator publishing into later months while preserving the selected recurrence', () => {
+    renderPersona('creator');
+    fireEvent.click(screen.getByRole('button', { name: en.agenda.nav.next }));
+    showList();
+    const rows = screen.getAllByText(en.PersonaLanding.personas.creator.agendaSchedules.fifth);
+    // October 2026 has 22 weekdays. All planned posts retain their 18:00 slot.
+    expect(rows).toHaveLength(22);
+    for (const row of rows) expect(within(row.closest('li')!).getByText('18:00')).toBeInTheDocument();
+    expect(screen.getByText('October 2026')).toBeInTheDocument();
+  });
+
+  it('moves a translated creator publication to a later day using the existing drag interaction', () => {
+    renderPersona('creator', 'fr');
+    const name = fr.PersonaLanding.personas.creator.agendaSchedules.fifth;
+    const source = cell('2026-09-16');
+    fireEvent.click(within(source).getByRole('button'));
+    const chip = within(source).getByTitle(new RegExp(name));
+    expect(chip).toHaveAttribute('draggable', 'true');
+    const dataTransfer = transfer();
+    fireEvent.dragStart(chip, { dataTransfer });
+    fireEvent.dragOver(cell('2026-09-19'), { dataTransfer });
+    fireEvent.drop(cell('2026-09-19'), { dataTransfer });
+    expect(within(source).queryByTitle(new RegExp(name))).not.toBeInTheDocument();
+    expect(within(cell('2026-09-19')).getByTitle(`18:00 ${name} - ${fr.agenda.movedBadge}`)).toBeInTheDocument();
+  });
+
+  it('preserves the homepage toolbar button classes on persona calendars', () => {
+    render(<AgendaShowcase nowIso={NOW} />);
+    const homepagePrevious = screen.getByRole('button', { name: 'Previous period' }).className;
+    const homepageList = screen.getByRole('button', { name: 'List' }).className;
+    cleanup();
+    renderPersona('creator', 'fr');
+    expect(screen.getByRole('button', { name: fr.agenda.nav.previous }).className).toBe(homepagePrevious);
+    expect(screen.getByRole('button', { name: fr.agenda.view.list }).className).toBe(homepageList);
+  });
+  /**
+   * What a narrow window gets.
+   *
+   * Seven columns inside this frame are 31px on a phone and 72px on a tablet, and a chip
+   * needs 4.5rem before its dot appears and 6.5rem before its name does. Measured on
+   * livecontext.ai at both widths: 0 of 107 names and 0 of 107 dots were drawn, so the
+   * section was 42 boxes of clipped times. The replica now does what a phone calendar does,
+   * and these pin the two halves of that: which view opens, and what the grid draws when
+   * somebody asks for it anyway.
+   *
+   * jsdom has no matchMedia at all, which is why the component guards for it and why every
+   * other test in this file still sees the desktop month grid.
+   */
+  describe('on a window too narrow for a month grid', () => {
+    function pretendWidth(narrow: boolean) {
+      vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+        matches: narrow && query.includes('900px'),
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })));
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('opens on the list, where a name and a time still fit', () => {
+      pretendWidth(true);
+      render(<AgendaShowcase nowIso={NOW} />);
+
+      expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('button', { name: 'Month' })).toHaveAttribute('aria-pressed', 'false');
+      // The point of the switch: the reader can actually read a run.
+      expect(screen.getAllByText('Inbox triage').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('06:45').length).toBeGreaterThan(0);
+    });
+
+    it('draws the month as dots when it is asked for anyway, and keeps every sentence', () => {
+      pretendWidth(true);
+      render(<AgendaShowcase nowIso={NOW} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Month' }));
+
+      // Still a whole month, still six weeks, so paging cannot make the page jump.
+      expect(document.querySelectorAll('[data-day]')).toHaveLength(42);
+      // A 31px cell cannot hold a time, so it no longer pretends to: the runs are dots.
+      expect(within(cell('2026-09-15')).queryByText('06:45')).not.toBeInTheDocument();
+      const dots = within(cell('2026-09-15')).getAllByTitle(/Inbox triage/);
+      expect(dots.length).toBeGreaterThan(0);
+      // Nothing is LOST with the text: the full sentence stays on each dot, which is what a
+      // screen reader and a hover both read.
+      expect(dots[0].getAttribute('title')).toMatch(/06:45 Inbox triage/);
+      // One letter per weekday: "Wed" clipped to "We" would be worse than "W".
+      expect(screen.getAllByText('W').length).toBeGreaterThan(0);
+      expect(screen.queryByText('Wed')).not.toBeInTheDocument();
+    });
+
+    it('lets the visitor overrule the width, in both directions', () => {
+      pretendWidth(true);
+      const narrow = render(<AgendaShowcase nowIso={NOW} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Month' }));
+      expect(screen.getByRole('button', { name: 'Month' })).toHaveAttribute('aria-pressed', 'true');
+      narrow.unmount();
+
+      pretendWidth(false);
+      render(<AgendaShowcase nowIso={NOW} />);
+      expect(screen.getByRole('button', { name: 'Month' })).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.click(screen.getByRole('button', { name: 'List' }));
+      expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('leaves a wide window exactly as it was: chips, times and drag', () => {
+      pretendWidth(false);
+      render(<AgendaShowcase nowIso={NOW} />);
+
+      expect(screen.getByRole('button', { name: 'Month' })).toHaveAttribute('aria-pressed', 'true');
+      const chip = within(cell('2026-09-15')).getByTitle(/Inbox triage/);
+      expect(within(chip).getByText('06:45')).toBeInTheDocument();
+      expect(screen.getAllByText('Wed').length).toBeGreaterThan(0);
+    });
   });
 });

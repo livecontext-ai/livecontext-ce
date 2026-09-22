@@ -6,13 +6,13 @@ import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.state.SplitState;
 import com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter;
 import com.apimarketplace.orchestrator.services.TemplateEngine;
+import com.apimarketplace.orchestrator.services.template.ResolvedValuePreview;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.apimarketplace.orchestrator.execution.v2.engine.OutputUnwrapper;
 
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -91,14 +91,16 @@ public class SplitNode extends BaseNode {
                 errorOutput.put("error", reason);
                 errorOutput.put("node_type", "SPLIT");
                 errorOutput.put("split_id", nodeId);
-                errorOutput.put("resolved_params", buildInputSnapshot(null));
+                Map<String, Object> failedParams = buildInputSnapshot(null, evalResult.resolvedPreview());
+                SplitParamsReport.putError(failedParams, reason);
+                errorOutput.put("resolved_params", failedParams);
                 return new NodeExecutionResult(nodeId, NodeStatus.FAILED, errorOutput,
                     java.util.Optional.of(reason), Map.of(), 0);
             }
 
             if (items.isEmpty()) {
                 logger.info("Split list evaluated to empty list: nodeId={}", nodeId);
-                return createExitResult(0, items.size(), "empty_list");
+                return createExitResult(0, items.size(), "empty_list", evalResult.resolvedPreview());
             }
 
             // Limit items if maxItems is set
@@ -111,12 +113,16 @@ public class SplitNode extends BaseNode {
             logger.info("Split initialized: nodeId={}, itemCount={}, maxItems={}, strategy={}, mode=PARALLEL",
                 nodeId, items.size(), maxItems, splitStrategy);
 
-            // Build resolved_params snapshot for inspector visibility
-            Map<String, Object> resolvedParams = new LinkedHashMap<>();
-            resolvedParams.put("list", resolveTemplateString(list, context));
-            resolvedParams.put("itemCount", items.size());
-            resolvedParams.put("maxItems", maxItems);
-            resolvedParams.put("splitStrategy", splitStrategy);
+            // Build resolved_params snapshot for inspector visibility.
+            //
+            // `list` is the CONFIGURED expression here, as it is on every other path of
+            // this node and in SplitNodeExecutor. It used to be resolveTemplateString(list,
+            // context) on this path alone: a second resolution, rendering the same setting
+            // as a value on one row and as a template on the next, and coercing a list of
+            // rows into the String "[{id=1}, {id=2}]" on the way. What it resolved to is
+            // reported beside it, typed by the evaluation that decided.
+            Map<String, Object> resolvedParams =
+                buildInputSnapshot(items, evalResult.resolvedPreview());
 
             // Return result with items to spawn (parallel mode)
             Map<String, Object> output = new HashMap<>();
@@ -157,7 +163,7 @@ public class SplitNode extends BaseNode {
         // Check if we've processed all items
         if (currentIndex >= items.size()) {
             logger.info("Split completed: nodeId={}, totalItems={}", nodeId, items.size());
-            return createExitResult(currentIndex, items.size(), "all_items_processed");
+            return createExitResult(currentIndex, items.size(), "all_items_processed", null);
         }
 
         // Split continues - prepare for this item
@@ -166,7 +172,7 @@ public class SplitNode extends BaseNode {
             nodeId, currentIndex, currentItem);
 
         Map<String, Object> output = new HashMap<>();
-        output.put("resolved_params", buildInputSnapshot(items));
+        output.put("resolved_params", buildInputSnapshot(items, null));
         output.put(ExecutionMetadataKeys.NODE_TYPE, "SPLIT");
         output.put("split_id", nodeId);
         output.put(ExecutionMetadataKeys.CURRENT_INDEX, currentIndex);
@@ -254,7 +260,7 @@ public class SplitNode extends BaseNode {
     private EvaluationResult evaluateListExpression(ExecutionContext context) {
         if (list == null || list.isBlank()) {
             logger.warn("Split list is null or blank: nodeId={}", nodeId);
-            return EvaluationResult.failure("Split `list` expression is null or blank.");
+            return EvaluationResult.failure("Split `list` expression is null or blank.", null);
         }
 
         Object result;
@@ -271,14 +277,19 @@ public class SplitNode extends BaseNode {
             logger.error("Split list evaluation threw: nodeId={}, expression={}, error={}",
                 nodeId, list, e.getMessage(), e);
             return EvaluationResult.failure(
-                "Split `list` expression `" + list + "` threw during evaluation: " + e.getMessage());
+                "Split `list` expression `" + list + "` threw during evaluation: " + e.getMessage(), null);
         }
+
+        // What the expression resolved to, described once and carried to every exit path.
+        // It comes from THIS evaluation, the one that decides how many items are spawned.
+        String resolvedPreview = ResolvedValuePreview.describe(result);
 
         // null result: missing step output or unresolved template - distinct from "empty list".
         if (result == null) {
             return EvaluationResult.failure(
                 "Split `list` expression `" + list + "` resolved to null. "
-                    + "Check the upstream node has completed and the reference path matches its output schema.");
+                    + "Check the upstream node has completed and the reference path matches its output schema.",
+                resolvedPreview);
         }
 
         // Happy path: List/Collection/array → use as-is via tryUnwrapToList's pass-through.
@@ -288,10 +299,10 @@ public class SplitNode extends BaseNode {
         // wrap is exactly the silent bug we are closing).
         Optional<List<Object>> extracted = OutputUnwrapper.tryUnwrapToList(result);
         if (extracted.isPresent()) {
-            return EvaluationResult.success(extracted.get());
+            return EvaluationResult.success(extracted.get(), resolvedPreview);
         }
 
-        return EvaluationResult.failure(buildShapeDiagnostic(result));
+        return EvaluationResult.failure(buildShapeDiagnostic(result), resolvedPreview);
     }
 
     /**
@@ -308,21 +319,22 @@ public class SplitNode extends BaseNode {
      * Replaces the prior {@code null}-or-list duality so callers can surface the actual reason
      * to the failure output instead of a generic "Failed to evaluate list" string.
      */
-    private record EvaluationResult(List<Object> items, String diagnostic) {
-        static EvaluationResult success(List<Object> items) {
-            return new EvaluationResult(items, null);
+    private record EvaluationResult(List<Object> items, String diagnostic, String resolvedPreview) {
+        static EvaluationResult success(List<Object> items, String resolvedPreview) {
+            return new EvaluationResult(items, null, resolvedPreview);
         }
-        static EvaluationResult failure(String diagnostic) {
-            return new EvaluationResult(null, diagnostic);
+        static EvaluationResult failure(String diagnostic, String resolvedPreview) {
+            return new EvaluationResult(null, diagnostic, resolvedPreview);
         }
     }
 
     /**
      * Create exit result when split terminates.
      */
-    private NodeExecutionResult createExitResult(int finalIndex, int totalItems, String exitReason) {
+    private NodeExecutionResult createExitResult(int finalIndex, int totalItems, String exitReason,
+                                                 String listResolved) {
         Map<String, Object> output = new HashMap<>();
-        output.put("resolved_params", buildInputSnapshot(null));
+        output.put("resolved_params", buildInputSnapshot(null, listResolved));
         output.put(ExecutionMetadataKeys.NODE_TYPE, "SPLIT");
         output.put("split_id", nodeId);
         output.put(ExecutionMetadataKeys.CURRENT_INDEX, finalIndex);
@@ -335,25 +347,21 @@ public class SplitNode extends BaseNode {
         return NodeExecutionResult.success(nodeId, output);
     }
 
-    /** Builds a snapshot of the split's resolved configuration for inspector visibility. */
-    private Map<String, Object> buildInputSnapshot(List<Object> items) {
-        // Same keys AND the same presence rules as SplitNodeExecutor.createSuccessResult:
-        // an unset maxItems (0) or an absent strategy is not a configured value, and
-        // rendering it would tell the reader they set something they did not.
-        Map<String, Object> resolvedParams = new LinkedHashMap<>();
-        if (list != null) {
-            resolvedParams.put("list", list);
-        }
-        if (maxItems > 0) {
-            resolvedParams.put("maxItems", maxItems);
-        }
-        if (splitStrategy != null) {
-            resolvedParams.put("splitStrategy", splitStrategy);
-        }
-        if (items != null) {
-            resolvedParams.put("itemCount", items.size());
-        }
-        return resolvedParams;
+    /**
+     * Builds a snapshot of the split's configuration for inspector visibility.
+     *
+     * <p>Shares {@link SplitParamsReport} with {@code SplitNodeExecutor}, so the two
+     * producers of a split's parameters cannot describe one node two ways. The presence
+     * rules live there: an unset maxItems (0) or an absent strategy is not a configured
+     * value, and rendering it would tell the reader they set something they did not.
+     *
+     * @param listResolved what the list expression evaluated to, null on a path that
+     *                     evaluated nothing (the legacy sequential iteration below, which
+     *                     reads items the first execution already resolved)
+     */
+    private Map<String, Object> buildInputSnapshot(List<Object> items, String listResolved) {
+        return SplitParamsReport.build(list, maxItems, splitStrategy, listResolved,
+            items != null ? items.size() : null);
     }
 
     /**

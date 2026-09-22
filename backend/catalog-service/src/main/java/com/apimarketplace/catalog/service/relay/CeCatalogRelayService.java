@@ -8,8 +8,11 @@ import com.apimarketplace.catalog.domain.dto.ToolExecutionResponse;
 import com.apimarketplace.catalog.repository.ApiRepository;
 import com.apimarketplace.catalog.repository.ApiToolRepository;
 import com.apimarketplace.catalog.service.CatalogV1Service;
+import com.apimarketplace.catalog.service.ToolExecutionManager;
+import com.apimarketplace.catalog.service.billing.CatalogToolBillingService;
 import com.apimarketplace.catalog.service.generation.RelayedGenerationMeasurement;
 import com.apimarketplace.catalog.service.http.CredentialModeContext;
+import com.apimarketplace.catalog.service.http.ProviderRetryContext;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.apimarketplace.common.credit.SourceIdBuilder;
 import com.apimarketplace.credential.client.CredentialClient;
@@ -25,6 +28,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -176,13 +180,21 @@ public class CeCatalogRelayService {
         // priced as an unmeasurable one and refused. It is the same body that
         // is about to be executed, so the size that is billed is the size that
         // runs.
-        Optional<BigDecimal> markupOpt =
+        Optional<PricedCall> markupOpt =
                 resolveMarkup(platformCredentialId, tool.getId(), request.getParameters());
         if (markupOpt.isEmpty()) {
             // MANDATORY pricing: no published positive markup → refuse (no free ride).
             return RelayResult.of(RelayResult.Status.PLATFORM_NOT_AVAILABLE);
         }
-        BigDecimal markup = markupOpt.get();
+        BigDecimal markup = markupOpt.get().markup();
+        // What the ledger row is called. A generation names its MODEL, because the endpoint does
+        // not identify what was bought; everything else keeps naming the endpoint. Same rule, and
+        // the same reason, as the direct execution path - a linked install's spend lands on the
+        // cloud account's usage page beside the cloud's own, and one of the two naming its rows
+        // differently would make the model filter answer half a question.
+        String ledgerModel = markupOpt.get().modelId() != null && !markupOpt.get().modelId().isBlank()
+                ? markupOpt.get().modelId()
+                : toolSlug;
 
         // Server-generated billing key: never derived from CE input (a
         // client-controlled key would let an install replay one key for
@@ -191,7 +203,7 @@ public class CeCatalogRelayService {
         // key is built from the public markup prefix directly.
         String sourceId = SourceIdBuilder.MARKUP_DEBIT_PREFIX + ":CE:" + UUID.randomUUID();
         CreditConsumptionClient.ScopeReserveResult reserve = creditClient.scopeReserve(
-                cloudUserId, sourceId, api.getApiName(), toolSlug,
+                cloudUserId, sourceId, api.getApiName(), ledgerModel,
                 markup, null, reserveTtlMinutes,
                 CE_RELAY_SCOPE_KIND, installId, false);
         if (!reserve.success()) {
@@ -205,6 +217,11 @@ public class CeCatalogRelayService {
         // to the pool.
         CredentialModeContext.setExplicitSource("platform");
         CredentialModeContext.setSelectedCredentialId(null);
+        // Second entry point into the execution funnel, so it owns the retry context exactly as
+        // the controller does. begin() also resets the RE-SEND COUNT, which does not self-heal the
+        // way the budget does: a count left on a pooled thread would be reported on the NEXT
+        // request through that thread, for a different tenant, as a re-send that never happened.
+        ProviderRetryContext.begin(request.getProviderRetryMaxWaitSeconds());
         try {
             response = catalogV1Service.executeTool(
                     toolId,
@@ -226,11 +243,12 @@ public class CeCatalogRelayService {
                     .build(), BigDecimal.ZERO);
         } finally {
             CredentialModeContext.clear();
+            ProviderRetryContext.clear();
         }
 
         if (response != null && response.isSuccess()) {
-            creditClient.scopeCommit(sourceId, markup, api.getApiName(), toolSlug);
-            return RelayResult.ok(response, markup);
+            String outcome = creditClient.scopeCommit(sourceId, markup, api.getApiName(), ledgerModel);
+            return RelayResult.ok(withBilledCredits(response, outcome, markup), markup);
         }
         creditClient.scopeRelease(sourceId, "ce-relay upstream failure");
         if (response == null) {
@@ -241,6 +259,33 @@ public class CeCatalogRelayService {
                     .build();
         }
         return RelayResult.ok(response, BigDecimal.ZERO);
+    }
+
+    /**
+     * Put the amount the linked account was charged onto the answer the install reads.
+     *
+     * <p>The relay bills on its own, BEFORE handing the execution to the ordinary path with
+     * {@code billingOwnedByCaller}, so that path reserves nothing and reports no amount. Without
+     * this the one edition where the charge is least visible - a self-hosted install spending a
+     * cloud balance it cannot see - would be the only one whose generated assets could not say what
+     * they cost. Same key and same rule as the direct path, so the install's own code reads one
+     * shape whichever way the call was routed.
+     *
+     * <p>Nothing is added unless the commit took the whole amount: a partial charge is smaller than
+     * {@code markup} and its real figure is not returned, so reporting the reserved one would state
+     * a price nobody paid.
+     */
+    private static ToolExecutionResponse withBilledCredits(ToolExecutionResponse response,
+                                                            String commitOutcome, BigDecimal markup) {
+        if (!CatalogToolBillingService.commitTookTheWholeAmount(commitOutcome)
+                || markup == null || markup.signum() <= 0) {
+            return response;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>(
+                response.getMetadata() == null ? Map.of() : response.getMetadata());
+        metadata.put(ToolExecutionManager.BILLED_CREDITS_KEY, markup);
+        response.setMetadata(metadata);
+        return response;
     }
 
     /**
@@ -273,6 +318,28 @@ public class CeCatalogRelayService {
      */
     public PlatformInfo platformInfo(String integrationName, UUID apiToolId,
                                       String modelId, BigDecimal quantity) {
+        return platformInfo(integrationName, apiToolId, modelId, quantity, null);
+    }
+
+    /**
+     * The same probe, told what the call's own CHOICES do to the rate.
+     *
+     * <p>The EXECUTING path derives that factor itself, out of the body it is
+     * sent, and charges it. A probe that could not be told about it answered
+     * with the unmodified rate, so an install quoted one amount and was billed
+     * another for the same request: the two are only ever compared by the
+     * customer, after the fact, which is the worst possible place.
+     *
+     * <p>Nothing here is trusted for EXECUTION. This door only reads, and an
+     * install that understated its own factor would misquote a price to itself
+     * and still be charged the real one.
+     *
+     * @param priceMultiplier factor for the call being quoted, or null for one
+     *                        at the published rate
+     */
+    public PlatformInfo platformInfo(String integrationName, UUID apiToolId,
+                                      String modelId, BigDecimal quantity,
+                                      BigDecimal priceMultiplier) {
         Optional<ApiEntity> apiOpt = apiRepository.findByPlatformCredentialName(integrationName)
                 .filter(api -> Boolean.TRUE.equals(api.getIsActive()));
         boolean relayEligible = apiOpt.isPresent()
@@ -287,7 +354,8 @@ public class CeCatalogRelayService {
         Long platformCredentialId = credential.get().getId();
 
         BigDecimal markup = apiToolId != null
-                ? resolveMarkup(platformCredentialId, apiToolId, modelId, quantity).orElse(null)
+                ? resolveMarkup(platformCredentialId, apiToolId, modelId, quantity, priceMultiplier)
+                        .orElse(null)
                 : credentialClient.getLatestPricingVersion(platformCredentialId)
                         .map(PricingVersionDto::getDefaultMarkupCredits)
                         .filter(m -> m.signum() > 0)
@@ -338,10 +406,24 @@ public class CeCatalogRelayService {
      * its own, because nothing downstream would ever reveal the disagreement.
      */
     private Optional<BigDecimal> resolveMarkup(Long platformCredentialId, UUID apiToolId) {
-        return resolveMarkup(platformCredentialId, apiToolId, null);
+        // The probe asks one question - is this tool sold, and for how much - and has no body to
+        // measure, so it wants the price alone. The model that comes back beside it is null here by
+        // construction.
+        return resolveMarkup(platformCredentialId, apiToolId, null).map(PricedCall::markup);
     }
 
-    private Optional<BigDecimal> resolveMarkup(Long platformCredentialId, UUID apiToolId,
+    /**
+     * A priced relayed call: what it costs, and WHICH model that price is for.
+     *
+     * <p>The model travels out with the price because the ledger row needs it as its label. One
+     * endpoint backs several models at several rates (Gemini's generate_content serves a 78-credit
+     * image model and a 268-credit one), so a row that names the endpoint writes the same two words
+     * over purchases that differ by a factor of three, and the usage page's model filter cannot
+     * tell them apart. Null for every ordinary endpoint, which then labels by endpoint as before.
+     */
+    private record PricedCall(BigDecimal markup, String modelId) {}
+
+    private Optional<PricedCall> resolveMarkup(Long platformCredentialId, UUID apiToolId,
                                                 Map<String, Object> upstreamParams) {
         // Only generations are held to the stricter rule, so only look the tool
         // up when the answer can change something.
@@ -354,7 +436,8 @@ public class CeCatalogRelayService {
         RelayedGenerationMeasurement.Measured measured = generation
                 ? RelayedGenerationMeasurement.measure(generationSpecOf(apiToolId), upstreamParams)
                 : RelayedGenerationMeasurement.Measured.NOTHING;
-        return priceFor(platformCredentialId, apiToolId, generation, measured);
+        return priceFor(platformCredentialId, apiToolId, generation, measured)
+                .map(markup -> new PricedCall(markup, measured.modelId()));
     }
 
     /**
@@ -367,7 +450,8 @@ public class CeCatalogRelayService {
      * quantity misquotes a price to itself and changes nothing that is charged.
      */
     private Optional<BigDecimal> resolveMarkup(Long platformCredentialId, UUID apiToolId,
-                                                String modelId, BigDecimal quantity) {
+                                                String modelId, BigDecimal quantity,
+                                                BigDecimal priceMultiplier) {
         boolean generation = isGeneration(apiToolId);
         // The unit is DERIVED from the model rather than taken from the caller,
         // exactly as the executing path derives it from the body. The probe
@@ -378,16 +462,44 @@ public class CeCatalogRelayService {
                 ? RelayedGenerationMeasurement.platformUnitFor(generationSpecOf(apiToolId), modelId)
                 : null;
         return priceFor(platformCredentialId, apiToolId, generation,
-                new RelayedGenerationMeasurement.Measured(modelId, quantity, quantityUnit));
+                new RelayedGenerationMeasurement.Measured(modelId, quantity, quantityUnit,
+                        priceMultiplier));
     }
 
+    /**
+     * <b>This leg prices against the LATEST published version; the direct path
+     * prices against a PINNED one.</b> Not introduced here and not changed by
+     * the price factor, but worth naming, because the two are easy to read as
+     * one mechanism and they are not.
+     *
+     * <p>A direct call resolves through {@code resolveScopeMarkupRate}, which
+     * takes the pricing version PINNED to the run or stream when it began, so
+     * an administrator republishing a rate mid-session cannot move the amount a
+     * call in flight is charged. A relayed call has no such scope: it arrives
+     * as a single request from an install, with no run to have pinned anything,
+     * so it resolves the latest version each time. The consequence is real and
+     * narrow: the same generation, run twice within one session across a rate
+     * change, is charged the old rate locally and the new rate through the
+     * relay.
+     *
+     * <p>The factor rides both paths identically, so it neither causes this nor
+     * widens it. Closing it would mean giving a relayed call a scope to pin
+     * against, which is a decision about the relay's billing model rather than
+     * about pricing, and it is not taken here.
+     */
     private Optional<BigDecimal> priceFor(Long platformCredentialId, UUID apiToolId,
                                            boolean generation,
                                            RelayedGenerationMeasurement.Measured measured) {
         return credentialClient.getLatestPricingVersion(platformCredentialId)
                 .map(PricingVersionDto::getPricingVersionId)
                 .flatMap(versionId -> credentialClient.resolveFrozenMarkup(
-                        versionId, apiToolId, measured.modelId(), measured.quantity()))
+                        versionId, apiToolId, measured.modelId(), measured.quantity(),
+                        // What this call's own choices do to the rate, read back
+                        // out of the body rather than declared by the install.
+                        // Null for every ordinary endpoint and every model with
+                        // no declared modifiers, and the amount is then the one
+                        // this path resolved before they existed.
+                        measured.priceMultiplier()))
                 // A per-unit row resolved without a quantity is an amount for ONE
                 // unit. Charging it would sell a ten second video for the price
                 // of one second, so refuse instead: an amount nobody could
@@ -488,6 +600,8 @@ public class CeCatalogRelayService {
                 .expand(request.getExpand())
                 .maxItems(request.getMaxItems())
                 .inlineBinaries(request.getInlineBinaries())
+                // The install's node decided this; the cloud caps it at its own budget.
+                .providerRetryMaxWaitSeconds(request.getProviderRetryMaxWaitSeconds())
                 // Server-resolved, authoritative: never taken from CE input.
                 .credentialSource("platform")
                 .platformCredentialId(platformCredentialId)

@@ -359,6 +359,41 @@ class BridgeLoopDispatcherTest {
         }
 
         @Test
+        @DisplayName("bridge failure response still carries the tokens the run spent before it stopped")
+        void failureResponsePreservesUsage() {
+            // A Stop / kill / crash does not refund the model calls already made. The bridge
+            // reports them; this converter used to drop them on the failure branch, so the
+            // observability row - and the credit debit built from it - read zero. The
+            // direct-API loop has always returned usage on its cancel path, which is why a
+            // stopped deepseek turn billed and a stopped bridge turn did not.
+            AgentExecutionResponseDto stopped = new AgentExecutionResponseDto(
+                false, null, null, List.of(), 0,
+                Map.of("promptTokens", 15255, "completionTokens", 40, "totalTokens", 15295),
+                null, 86180L, "codex", "gpt-5.6-sol",
+                List.of(), AgentStopReason.STOPPED_BY_USER.name(),
+                Map.of(),
+                List.of(Map.of("promptTokens", 15255, "completionTokens", 40, "totalTokens", 15295)),
+                List.of(), List.of(),
+                List.of(), List.of(), null);
+            when(bridgeClient.execute(any())).thenReturn(stopped);
+
+            AgentLoopContext context = AgentLoopContext.builder()
+                .provider("codex").model("gpt-5.6-sol")
+                .systemPrompt("s").userPrompt("u").maxIterations(1).build();
+
+            AgentLoopResult result = dispatcher.execute(context);
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.usage()).isNotNull();
+            assertThat(result.usage().promptTokens()).isEqualTo(15255);
+            assertThat(result.usage().completionTokens()).isEqualTo(40);
+            // The per-iteration breakdown travels too: observability builds its iteration
+            // rows from it, and an empty list there is the same silence one level down.
+            assertThat(result.usagePerIteration()).hasSize(1);
+            assertThat(result.usagePerIteration().get(0).promptTokens()).isEqualTo(15255);
+        }
+
+        @Test
         @DisplayName("bridge client unavailable → execute returns ERROR without calling HTTP")
         void withoutClientReturnsError() {
             BridgeLoopDispatcher unwired = new BridgeLoopDispatcher();
@@ -528,6 +563,105 @@ class BridgeLoopDispatcherTest {
 
             // The denial must abort before forwarding to the bridge.
             verify(bridgeClient, org.mockito.Mockito.never()).execute(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("a bridge the caller CHOSE is gated; one an execution link ROUTED to is not")
+    class ChosenVsRouted {
+
+        private static final AgentExecutionResponseDto OK = new AgentExecutionResponseDto(
+            true, "ok", "ok", List.of(), 1, Map.of(), null, 10L,
+            "claude-code", "claude-fable-5", List.of(),
+            AgentStopReason.COMPLETED.name(), Map.of(),
+            List.of(), List.of(), List.of(), List.of(), List.of(), null);
+
+        private AgentLoopContext nonAdminContext() {
+            return AgentLoopContext.builder()
+                .provider("claude-code").model("claude-fable-5")
+                .systemPrompt("system").userPrompt("scan the agenda")
+                .maxIterations(1).tenantId("121").userRoles("USER").build();
+        }
+
+        private AgentExecutionRequestDto nonAdminRequest() {
+            return new AgentExecutionRequestDto(
+                "Hi", "system", "claude-code", "claude-fable-5", 0.7, 4096,
+                null, false, null, 10, 600, null,
+                "121", null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null);
+        }
+
+        private BridgeAccessGuard denyingGuard() {
+            BridgeAccessGuard guard = org.mockito.Mockito.mock(BridgeAccessGuard.class);
+            // lenient: in the ROUTED cases this stub is meant to go unused - that is the
+            // behaviour under test, and verify(never()) is what asserts it. Strict stubbing
+            // would otherwise report the unused denial as a test defect.
+            org.mockito.Mockito.lenient().doThrow(new BridgeAccessDeniedException(
+                    "claude-code", BridgeAccessDecision.REASON_NOT_ADMIN, null))
+                .when(guard).enforce(any(), any(), eq("claude-code"), anyBoolean());
+            dispatcher.setBridgeAccessGuard(guard);
+            return guard;
+        }
+
+        @Test
+        @DisplayName("execute: a chosen bridge is refused and never reaches the CLI")
+        void executeChosenIsGated() {
+            denyingGuard();
+
+            assertThatThrownBy(() -> dispatcher.execute(nonAdminContext(), false))
+                .isInstanceOf(BridgeAccessDeniedException.class);
+            verify(bridgeClient, org.mockito.Mockito.never()).execute(any());
+        }
+
+        @Test
+        @DisplayName("execute: a routed run skips the selection policy and reaches the CLI")
+        void executeRoutedIsNotGated() {
+            BridgeAccessGuard guard = denyingGuard();
+            when(bridgeClient.execute(any())).thenReturn(OK);
+
+            // Production's Agenda Scout: stored on anthropic, sent here by link 7, owned by a
+            // non-admin. The guard answers "may this user SELECT this CLI" - the wrong question for
+            // a run that asked for anthropic and is billed for it. Same USER roles, same tenant,
+            // same provider as the test above: the ONLY difference is who chose the CLI.
+            AgentLoopResult result = dispatcher.execute(nonAdminContext(), true);
+
+            assertThat(result.success()).isTrue();
+            verify(guard, org.mockito.Mockito.never()).enforce(any(), any(), any(), anyBoolean());
+            verify(bridgeClient).execute(any());
+        }
+
+        @Test
+        @DisplayName("dispatchRaw: a chosen bridge is refused and never reaches the CLI")
+        void dispatchRawChosenIsGated() {
+            denyingGuard();
+
+            assertThatThrownBy(() -> dispatcher.dispatchRaw(nonAdminRequest(), "USER", false))
+                .isInstanceOf(BridgeAccessDeniedException.class);
+            verify(bridgeClient, org.mockito.Mockito.never()).execute(any());
+        }
+
+        @Test
+        @DisplayName("dispatchRaw: a routed run skips the selection policy and reaches the CLI")
+        void dispatchRawRoutedIsNotGated() {
+            BridgeAccessGuard guard = denyingGuard();
+            when(bridgeClient.execute(any())).thenReturn(OK);
+
+            AgentExecutionResponseDto response = dispatcher.dispatchRaw(nonAdminRequest(), "USER", true);
+
+            assertThat(response).isSameAs(OK);
+            verify(guard, org.mockito.Mockito.never()).enforce(any(), any(), any(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("the legacy single-argument forms mean CHOSEN, so nothing that used them got looser")
+        void legacyFormsMeanChosen() {
+            denyingGuard();
+
+            assertThatThrownBy(() -> dispatcher.execute(nonAdminContext()))
+                .isInstanceOf(BridgeAccessDeniedException.class);
+            assertThatThrownBy(() -> dispatcher.dispatchRaw(nonAdminRequest(), "USER"))
+                .isInstanceOf(BridgeAccessDeniedException.class);
         }
     }
 }

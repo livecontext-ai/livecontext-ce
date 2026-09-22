@@ -86,6 +86,8 @@ class CliAgentServiceTest {
             assertThat(captor.getValue().getAgentType()).isEqualTo("CLI");
             assertThat(captor.getValue().getStatus()).isEqualTo("COMPLETED");
             assertThat(captor.getValue().getStopReason()).isEqualTo("COMPLETED");
+            // A CLI holds no API key: the row is pinned PLATFORM, never left for the debit to guess.
+            assertThat(captor.getValue().getKeyRoute()).isEqualTo("PLATFORM");
         }
 
         @Test

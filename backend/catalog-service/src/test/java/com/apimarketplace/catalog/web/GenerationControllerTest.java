@@ -91,6 +91,29 @@ class GenerationControllerTest {
                 "seedance", "async_poll", inherited);
     }
 
+    /** A model whose price moves with a choice and with the files attached to it. */
+    private static GenerationRegistry.GenerationModel modulatedModel() {
+        GenerationSpec.Model model = new GenerationSpec.Model(
+                "seedance-2.0-tiered", "seedance/tiered", "Seedance 2.0 Tiered",
+                java.util.Set.of("prompt", "duration_seconds", "resolution", "reference_image"),
+                java.util.Set.of("prompt", "resolution"),
+                Map.of("resolution", new GenerationSpec.Constraint(
+                        List.of("720p", "1080p"), null, null)),
+                new GenerationSpec.Price("second", BigDecimal.ZERO, BigDecimal.valueOf(60), null, null,
+                        List.of(new GenerationSpec.PriceModifier("resolution",
+                                        Map.of("720p", BigDecimal.ONE, "1080p", BigDecimal.valueOf(2)), null),
+                                new GenerationSpec.PriceModifier("reference_image", null,
+                                        new BigDecimal("0.05")))));
+
+        GenerationSpec spec = new GenerationSpec("video", "model", "content.video_url",
+                Map.of(), Map.of(), List.of(model));
+
+        return new GenerationRegistry.GenerationModel(
+                "seedance-2.0-tiered", "video", model, spec, TOOL_ID,
+                "seedance/create-video", "seedance", "Seedance", "seedance",
+                "seedance", "async_poll", Map.of());
+    }
+
     // ── models ──────────────────────────────────────────────────────────────
 
     @Test
@@ -130,6 +153,54 @@ class GenerationControllerTest {
         assertThat(price.get("unit")).isEqualTo("second");
         assertThat(price.get("unitCredits")).isEqualTo("60");
         assertThat(price.get("baseCredits")).isEqualTo("0");
+    }
+
+    @Test
+    @DisplayName("publishes the factor TABLE, so a surface can price the form without a round trip")
+    void reportsPriceModifiers() {
+        // The rule, not one result of it. This route is what the studio composer and the workflow
+        // inspector read to work out what the choices currently in the form do to the rate; the
+        // amount itself is still the server's. Emitted only here, a surface that shows a total
+        // which is not rate x size has nothing to explain it with, and the reader cannot tell a
+        // surcharge from an arithmetic error without spending.
+        when(registry.list(null)).thenReturn(List.of(modulatedModel()));
+        when(registry.kinds()).thenReturn(List.of("video"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows =
+                (List<Map<String, Object>>) controller.models(null).getBody().get("models");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> price = (Map<String, Object>) rows.get(0).get("price");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> modifiers = (Map<String, Object>) price.get("modifiers");
+
+        // The SAME wire names the agent listing uses, from the same method: two spellings of one
+        // table is how a surface prices a call the tool prices differently.
+        assertThat(modifiers).containsOnlyKeys("resolution", "reference_image");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> byValue = (Map<String, Object>) modifiers.get("resolution");
+        assertThat(byValue).containsEntry(
+                "by_value", Map.of("720p", BigDecimal.ONE, "1080p", BigDecimal.valueOf(2)));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> perFile = (Map<String, Object>) modifiers.get("reference_image");
+        assertThat(perFile).containsEntry("per_file", new BigDecimal("0.05"));
+    }
+
+    @Test
+    @DisplayName("says nothing about factors for a model whose price depends only on its size")
+    void reportsNoModifiersForAPlainModel() {
+        // Which is every model that existed before factors did. An empty table published as `{}`
+        // would have a surface draw an explanation slot on every row in the catalogue.
+        when(registry.list(null)).thenReturn(List.of(videoModel()));
+        when(registry.kinds()).thenReturn(List.of("video"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows =
+                (List<Map<String, Object>>) controller.models(null).getBody().get("models");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> price = (Map<String, Object>) rows.get(0).get("price");
+
+        assertThat(price).doesNotContainKey("modifiers");
     }
 
     @Test

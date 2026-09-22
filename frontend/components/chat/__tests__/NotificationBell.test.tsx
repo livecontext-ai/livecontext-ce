@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import * as React from 'react';
-import { NotificationBell } from '../NotificationBell';
+import { NotificationBell, TRIGGERS_ROWS_FRESH_FOR_MS } from '../NotificationBell';
 import type { NotificationItem } from '@/lib/api/orchestrator/home-status.service';
 import { TRIGGER_ROW_ACTIONS_YIELD } from '../TriggerRowActions';
 
@@ -58,9 +58,21 @@ type AutomationMock = {
     // Present on a real armed schedule, and what the row menu keys off: a row without it
     // renders no menu, which is the case the yield rule must not touch.
     scheduleId?: string;
+    /** Still true while a spending cap holds the schedule back: the two are separate facts. */
+    armed?: boolean;
+    /** The server's verdict that a spending cap is refusing this schedule's fires. */
+    budgetBlocked?: boolean;
+    /** When that cap lifts by itself; absent when it never does. */
+    budgetBlockedUntil?: string;
   };
   /** Agent webhooks carry a method; workflow ones may not. Presence is what the row reads. */
   webhook?: { httpMethod?: string };
+  /**
+   * Backend-computed: the RESOURCE is disabled, so none of its triggers will run
+   * (`ActiveAutomationsService` reads `agent.isActive` for an AGENT and the production
+   * run's CANCELLED status for a workflow/application).
+   */
+  resourcePaused?: boolean;
   lastRunAt?: string;
   lastRunStatus?: string;
   productionRunIdPublic?: string;
@@ -89,12 +101,23 @@ const homeStatusMock = vi.hoisted(() => ({
     markAllRead: vi.fn(async () => undefined),
   },
 }));
+// Two callers here: the row menu asks after acting on a schedule, and the Triggers tab asks
+// on every visit. The real hook reaches for a QueryClient this suite has no provider for, so
+// it is a spy - what it does with the key and the freshness bound is pinned against a real
+// client in TriggerRowActions' and useHomeStatus' own tests. A single shared spy, returned
+// by identity, so the bell's visit effect does not re-fire on every render.
+const refreshHomeStatusMock = vi.hoisted(() => vi.fn());
+// One spy, but handed out through a per-workspace wrapper, exactly as the real hook does: its
+// identity changes when the active workspace does. That is what lets a test check the bell
+// re-asks after a switch - with a single shared function the effect could not tell.
+const refreshByOrg = vi.hoisted(() => new Map<string, () => void>());
 vi.mock('@/hooks/useHomeStatus', () => ({
   useHomeStatus: () => homeStatusMock.current,
-  // The row menu asks for the automations again after acting on a schedule, and the real
-  // hook reaches for a QueryClient this suite has no provider for. Its behaviour is pinned
-  // in TriggerRowActions' own tests, against a real client and the org-scoped key.
-  useRefreshHomeStatus: () => () => {},
+  useRefreshHomeStatus: () => {
+    const org = currentOrgMock.current.currentOrgId ?? '__personal__';
+    if (!refreshByOrg.has(org)) refreshByOrg.set(org, (...args: unknown[]) => refreshHomeStatusMock(...args));
+    return refreshByOrg.get(org)!;
+  },
 }));
 
 // Inbox items live behind useNotificationsPaged (split out from useHomeStatus
@@ -197,6 +220,7 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
     hookEnabledCalls.activity = [];
     hookEnabledCalls.shared = [];
     homeStatusMock.current.markAllRead.mockReset();
+    refreshHomeStatusMock.mockReset();
     inboxMock.current.deleteBuckets.mockReset();
     // Reset org + recent-activity mocks to baseline so each test runs from
     // "personal scope, no recent edits" unless it overrides explicitly.
@@ -283,6 +307,90 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
     expect(screen.getByText('Daily Digest')).toBeTruthy();
     // Mark-all stays off - switching tabs is not "I've seen this".
     expect(homeStatusMock.current.markAllRead).not.toHaveBeenCalled();
+  });
+
+  it('Landing on the Triggers tab asks for the rows again (regression: the tab read one step behind a just-pinned workflow)', () => {
+    // The rows ride the always-on home-status query and NO mutation invalidates it, so
+    // pinning a workflow or arming a trigger left the tab showing the payload from before
+    // the action, for as long as the 60s poll had left to run.
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+
+    // The bell lands on Inbox here (the inbox mock has an item) and Inbox does not read
+    // automations - nothing to top up yet.
+    expect(refreshHomeStatusMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('triggersTab'));
+
+    expect(refreshHomeStatusMock).toHaveBeenCalledTimes(1);
+    // Asked WITH a freshness bound, not unconditionally: a bare ask would be a request per tab
+    // click. The bound is read from the component so this pins the contract, not a literal.
+    expect(refreshHomeStatusMock).toHaveBeenCalledWith({ freshForMs: TRIGGERS_ROWS_FRESH_FOR_MS });
+    // Pinned exactly, not bracketed. The value is argued in the component: long enough to make
+    // tab-flipping free, short enough that a user reading the tab to check their own action
+    // never reads the state from before it. Both ends matter, so a change to it is a decision
+    // that comes here to be re-argued rather than one that slips through a range.
+    expect(TRIGGERS_ROWS_FRESH_FOR_MS).toBe(2_000);
+  });
+
+  it('Leaving and coming back to the Triggers tab asks again (one ask per visit)', () => {
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+
+    fireEvent.click(screen.getByText('triggersTab'));
+    fireEvent.click(screen.getByText('inboxTab'));
+    fireEvent.click(screen.getByText('triggersTab'));
+
+    // Twice, not three times: the Inbox detour is not a visit to Triggers.
+    expect(refreshHomeStatusMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('Asks again when the workspace changes while the Triggers tab is open', () => {
+    // The rows are per workspace, so switching while looking at them must ask for the new
+    // workspace's. The effect can only notice through the refresh's identity, which the hook
+    // re-creates per workspace - so an effect that depends on the visible flag alone goes quiet
+    // here and leaves the previous workspace's rows on screen.
+    const { rerender } = render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+    fireEvent.click(screen.getByText('triggersTab'));
+    expect(refreshHomeStatusMock).toHaveBeenCalledTimes(1);
+
+    currentOrgMock.current = { ...currentOrgMock.current, currentOrgId: 'org-2' };
+    rerender(<NotificationBell />);
+
+    expect(refreshHomeStatusMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('Opening the bell straight onto Triggers through the empty-inbox fallback asks too', () => {
+    // The landing tab is chosen from `automations` when the inbox is empty, so this path never
+    // goes through a tab click - and it is the one a user with a quiet inbox always takes.
+    inboxMock.current = { ...inboxMock.current, items: [], unreadCount: 0 };
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+
+    expect(screen.getByText('Daily Digest')).toBeTruthy();
+    expect(refreshHomeStatusMock).toHaveBeenCalledTimes(1);
+    expect(refreshHomeStatusMock).toHaveBeenCalledWith({ freshForMs: TRIGGERS_ROWS_FRESH_FOR_MS });
+  });
+
+  it('Does not ask while the Triggers tab is off screen, and asks again when the bell reopens onto it', () => {
+    render(<NotificationBell />);
+    const bell = screen.getByRole('button', { name: 'title' });
+
+    fireEvent.click(bell);
+    fireEvent.click(screen.getByText('triggersTab'));
+    expect(refreshHomeStatusMock).toHaveBeenCalledTimes(1);
+
+    // Closing the popover keeps `tab` on Triggers but takes it off screen - a hidden tab
+    // must cost nothing.
+    fireEvent.click(bell);
+    expect(refreshHomeStatusMock).toHaveBeenCalledTimes(1);
+
+    // Reopening lands straight back on Triggers: that IS a visit, and it is the exact
+    // moment the user expects to be looking at current rows.
+    fireEvent.click(bell);
+    expect(refreshHomeStatusMock).toHaveBeenCalledTimes(2);
   });
 
   it('Triggers row click navigates to the resource', () => {
@@ -818,6 +926,55 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
     expect(pushMock).toHaveBeenCalledWith('/app/applications/pub-abc');
     // Guard against re-introducing the workflow-id route that fails to load.
     expect(pushMock).not.toHaveBeenCalledWith('/app/applications/wf-app-1');
+  });
+
+  it('Activity tab AGENT row opens the agent panel instead of a route that 404s', () => {
+    // Agents have no page of their own: `/app/agent/<id>` is a 404, and the board reads the
+    // query to know which agent to open.
+    recentActivityMock.current = {
+      ...recentActivityMock.current,
+      items: [
+        {
+          kind: 'AGENT',
+          resourceId: 'ag-7',
+          name: 'Nova',
+          lastEditedAt: new Date(Date.now() - 60_000).toISOString(),
+          actorId: '1',
+          actorDisplayName: 'Me',
+        },
+      ],
+    };
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+    fireEvent.click(screen.getByText('activityTab'));
+    fireEvent.click(screen.getByText('Nova'));
+
+    expect(pushMock).toHaveBeenCalledWith('/app/agent?openAgent=ag-7');
+    expect(pushMock).not.toHaveBeenCalledWith('/app/agent/ag-7');
+  });
+
+  it('Activity tab SKILL row lands among the skills, not on the agents board', () => {
+    // Skills share the agent shell but live on their own tab. Without naming it the row
+    // dropped the user on the list of agents, with no sign of the skill they clicked.
+    recentActivityMock.current = {
+      ...recentActivityMock.current,
+      items: [
+        {
+          kind: 'SKILL',
+          resourceId: 'sk-3',
+          name: 'Summarise',
+          lastEditedAt: new Date(Date.now() - 120_000).toISOString(),
+          actorId: '1',
+          actorDisplayName: 'Me',
+        },
+      ],
+    };
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+    fireEvent.click(screen.getByText('activityTab'));
+    fireEvent.click(screen.getByText('Summarise'));
+
+    expect(pushMock).toHaveBeenCalledWith('/app/agent?view=skills');
   });
 
   it('Activity tab APPLICATION row with no publicationId falls back to the workflow editor', () => {
@@ -1555,6 +1712,530 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
       fireEvent.click(screen.getByRole('button', { name: 'title' }));
       expect(screen.queryByTestId('inbox-approval-open')).toBeNull();
       expect(screen.queryByTestId('inbox-approval-review')).toBeNull();
+    });
+  });
+
+  /**
+   * A disabled resource keeps its armed schedule row: the cron row stays enabled in
+   * trigger-service and the daemon still claims each slot, it just refuses at dispatch
+   * ("Agent X is inactive, skipping schedule"). So `nextFireAt` keeps advancing on a
+   * resource that will never run, and the bell - the one surface whose whole job is to
+   * say what is ABOUT to happen - counted down to it and pulsed blue for it.
+   *
+   * Prod, 2026-09-17: an agent was disabled at 18:34:47 and the engine correctly skipped
+   * 18:35 and 18:36, while the bell kept advertising it as armed.
+   */
+  describe('a schedule held back by a spending cap', () => {
+    // A cap and a pause both keep nextFireAt accurate while the run is refused, so the
+    // bell has to suppress the countdown for both. They must NOT share a badge: a pause is
+    // undone by re-enabling the resource, a cap by raising it or waiting for the period to
+    // roll, and one word for both sends the reader to the wrong switch.
+    const inOneHour = () => new Date(Date.now() + 60 * 60_000).toISOString();
+    const inOneMinute = () => new Date(Date.now() + 60_000).toISOString();
+
+    const cappedAgentSchedule = (nextFireAt: string): AutomationMock => ({
+      resourceType: 'AGENT',
+      resourceId: 'agent-capped',
+      name: 'Reporter',
+      triggerType: 'SCHEDULE',
+      schedule: {
+        cronExpression: '* * * * *',
+        timezone: 'UTC',
+        executionCount: 4,
+        nextFireAt,
+        scheduleId: 'sched-capped',
+        armed: true,
+        budgetBlocked: true,
+      },
+    });
+
+    const openTriggers = () => {
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+    };
+
+    it('states the cap instead of counting down to a fire that will be refused', () => {
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [cappedAgentSchedule(inOneHour())],
+      };
+      openTriggers();
+
+      expect(screen.getByText('budgetBlockedBadge')).toBeTruthy();
+      // And NOT the pause word, which would point at a switch that is already on.
+      expect(screen.queryByText('pausedBadge')).toBeNull();
+    });
+
+    it('does not pulse the closed bell for a fire that will not happen', () => {
+      inboxMock.current = { ...inboxMock.current, items: [], unreadCount: 0 };
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [cappedAgentSchedule(inOneMinute())],
+      };
+      render(<NotificationBell />);
+
+      expect(document.body.querySelector('span.bg-blue-500.animate-ping')).toBeNull();
+    });
+
+    it('counts down normally when the cap lifts BEFORE the next fire', () => {
+      // budgetBlocked is true NOW; this row draws the NEXT fire. A monthly cap reached on
+      // 30 September lifts at midnight and the 1 October fire runs, so labelling that row
+      // capped, dimming it and hiding the countdown would be wrong about a run that is
+      // going to happen. Reading only the boolean is what produces that.
+      const liftsAt = new Date(Date.now() + 30 * 60_000).toISOString();
+      const fireAfterThat = new Date(Date.now() + 90 * 60_000).toISOString();
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{
+          ...cappedAgentSchedule(fireAfterThat),
+          schedule: {
+            ...cappedAgentSchedule(fireAfterThat).schedule!,
+            budgetBlockedUntil: liftsAt,
+          },
+        }],
+      };
+      openTriggers();
+
+      expect(screen.queryByText('budgetBlockedBadge')).toBeNull();
+    });
+
+    it('still says capped when the next fire is INSIDE the blocked window', () => {
+      // The other side of the same comparison: the cap lifts after this fire, so the fire
+      // will be refused and the row must say so.
+      const liftsAt = new Date(Date.now() + 90 * 60_000).toISOString();
+      const fireBeforeThat = new Date(Date.now() + 30 * 60_000).toISOString();
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{
+          ...cappedAgentSchedule(fireBeforeThat),
+          schedule: {
+            ...cappedAgentSchedule(fireBeforeThat).schedule!,
+            budgetBlockedUntil: liftsAt,
+          },
+        }],
+      };
+      openTriggers();
+
+      expect(screen.getByText('budgetBlockedBadge')).toBeTruthy();
+    });
+
+    it('says capped with NO lift date, which is how a cumulative cap reads', () => {
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [cappedAgentSchedule(inOneHour())],
+      };
+      openTriggers();
+
+      expect(screen.getByText('budgetBlockedBadge')).toBeTruthy();
+    });
+    it('a PAUSED resource says paused, not capped, even when both hold', () => {
+      // The two are undone by different actions: a pause by re-enabling, a cap by raising
+      // it or waiting. One word for both sends the reader to the wrong switch, so the
+      // order of the two branches is load-bearing and pinned here.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{ ...cappedAgentSchedule(inOneHour()), resourcePaused: true }],
+      };
+      openTriggers();
+
+      expect(screen.getByText('pausedBadge')).toBeTruthy();
+      expect(screen.queryByText('budgetBlockedBadge')).toBeNull();
+    });
+
+    it('an unreadable lift date still suppresses the countdown', () => {
+      // The server said blocked. A date this row cannot parse is not a reason to promise
+      // a run: the fallback has to be the safe direction, not the optimistic one.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{
+          ...cappedAgentSchedule(inOneHour()),
+          schedule: { ...cappedAgentSchedule(inOneHour()).schedule!, budgetBlockedUntil: 'soon' },
+        }],
+      };
+      openTriggers();
+
+      expect(screen.getByText('budgetBlockedBadge')).toBeTruthy();
+    });
+
+    it('a row with a lift date but no next fire still suppresses', () => {
+      // Nothing to compare the lift date against, so the same safe direction applies.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{
+          ...cappedAgentSchedule(inOneHour()),
+          schedule: {
+            ...cappedAgentSchedule(inOneHour()).schedule!,
+            nextFireAt: undefined,
+            budgetBlockedUntil: new Date(Date.now() + 60_000).toISOString(),
+          },
+        }],
+      };
+      openTriggers();
+
+      expect(screen.getByText('budgetBlockedBadge')).toBeTruthy();
+    });
+
+    it('still counts down when no cap is holding the schedule', () => {
+      // The regression a suppression rule causes: every ordinary row goes quiet.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{
+          ...cappedAgentSchedule(inOneHour()),
+          schedule: { ...cappedAgentSchedule(inOneHour()).schedule!, budgetBlocked: false },
+        }],
+      };
+      openTriggers();
+
+      expect(screen.queryByText('budgetBlockedBadge')).toBeNull();
+    });
+  });
+  describe('disabled resource (resourcePaused)', () => {
+    /** Far enough out that an ACTIVE row would render a countdown rather than the ping. */
+    const inOneHour = () => new Date(Date.now() + 60 * 60_000).toISOString();
+    /** Inside the imminent window, which is what draws the blue ping on bell and row. */
+    const inOneMinute = () => new Date(Date.now() + 60_000).toISOString();
+
+    const pausedAgentSchedule = (nextFireAt: string): AutomationMock => ({
+      resourceType: 'AGENT',
+      resourceId: 'agent-off',
+      name: 'Novass',
+      triggerType: 'SCHEDULE',
+      resourcePaused: true,
+      schedule: {
+        cronExpression: '* * * * *',
+        timezone: 'UTC',
+        executionCount: 4,
+        nextFireAt,
+        scheduleId: 'sched-off',
+      },
+    });
+
+    it('states "disabled" instead of counting down to a fire that will not happen', () => {
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [pausedAgentSchedule(inOneHour())],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+
+      expect(screen.getByText('pausedBadge')).toBeTruthy();
+      // The countdown the row used to print: t('inHours', { n: 1 }) through this
+      // suite's translator mock. Its presence WAS the bug.
+      expect(screen.queryByText('1 item(s)')).toBeNull();
+    });
+
+    it('does NOT pulse the closed bell when its next slot is imminent', () => {
+      // The reported symptom, and the only one visible without opening the popover:
+      // a blue ping on the bell icon announcing a run that the engine will refuse.
+      inboxMock.current = { ...inboxMock.current, items: [], unreadCount: 0 };
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [pausedAgentSchedule(inOneMinute())],
+      };
+      render(<NotificationBell />);
+
+      expect(document.body.querySelector('span.bg-blue-500.animate-ping')).toBeNull();
+    });
+
+    it('draws neither the blue row highlight nor the row ping when imminent', () => {
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [pausedAgentSchedule(inOneMinute())],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+
+      // No lastRunStatus on this row, so EpochStatusIcon contributes no pulse of its
+      // own and every animate-ping left in the tree would be the imminent one.
+      expect(document.body.querySelectorAll('span.animate-ping')).toHaveLength(0);
+      expect(document.body.querySelector('div.bg-blue-50\\/60')).toBeNull();
+    });
+
+    it('states "disabled" on a WEBHOOK row instead of "live"', () => {
+      // Not cosmetic symmetry: AgentWebhookDispatchService answers "Agent is inactive"
+      // on a disabled agent, so "live" on that endpoint is false.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{
+          resourceType: 'AGENT' as const,
+          resourceId: 'agent-off',
+          name: 'Novass',
+          triggerType: 'WEBHOOK' as const,
+          resourcePaused: true,
+          webhook: { httpMethod: 'POST' },
+        }],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+      fireEvent.click(screen.getByRole('button', { name: 'kindLabel.webhook' }));
+
+      expect(screen.getByText('pausedBadge')).toBeTruthy();
+      expect(screen.queryByText('liveBadge')).toBeNull();
+    });
+
+    it('leaves an ACTIVE row untouched - countdown and imminent pulse both survive', () => {
+      // The other half of the fix: `resourcePaused` is absent on the vast majority of
+      // rows, and this pins that the new branch is inert for them.
+      inboxMock.current = { ...inboxMock.current, items: [], unreadCount: 0 };
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{ ...pausedAgentSchedule(inOneMinute()), resourcePaused: false }],
+      };
+      render(<NotificationBell />);
+
+      expect(document.body.querySelector('span.bg-blue-500.animate-ping')).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+      // t('inMinutes', { n: 1 }) through this suite's translator mock: the countdown
+      // this row is entitled to, and the one the paused row above must not print.
+      expect(screen.getByText('1 item(s)')).toBeTruthy();
+      expect(screen.queryByText('pausedBadge')).toBeNull();
+    });
+
+    it('dims the row CONTENT and not the row, so the action menu keeps full contrast', () => {
+      // Opacity on the row would be a ceiling its children cannot exceed, and it would
+      // take the row menu down with it - the menu being the only way back
+      // ("Reactivate agent"). Pinning WHERE the dim lands, not just that it exists.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [pausedAgentSchedule(inOneHour())],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+
+      const row = screen.getByText('Novass').closest('div.group')!;
+      expect(row.className).not.toContain('opacity-50');
+      // Exactly the three content spans - avatar, name column, label column. A floor of
+      // "at least one" would stay green if a refactor dropped two of them.
+      expect(row.querySelectorAll('.opacity-50')).toHaveLength(3);
+      // The menu is a sibling of the dimmed spans, never inside one.
+      const menu = row.querySelector('button[aria-label="label"]');
+      expect(menu).toBeTruthy();
+      expect(menu!.closest('.opacity-50')).toBeNull();
+    });
+
+    it('pairs every dim with pointer-events-none, or the row stops being clickable', () => {
+      // Not a style preference. An opacity below 1 gives the span its own stacking context,
+      // so it paints - and hit-tests - above the row's `absolute inset-0 z-0` click target.
+      // Without the pairing, clicking the agent name on a disabled row lands on nothing,
+      // on the one row whose whole purpose is "go deal with this". jsdom loads no stylesheet
+      // and resolves no paint order, so no render-and-click test in this file could catch
+      // it; the class pairing is the invariant that can be pinned here.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [pausedAgentSchedule(inOneHour())],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+
+      const row = screen.getByText('Novass').closest('div.group')!;
+      const dimmed = Array.from(row.querySelectorAll('.opacity-50'));
+      expect(dimmed).not.toHaveLength(0);
+      for (const el of dimmed) {
+        expect(el.className).toContain('pointer-events-none');
+      }
+    });
+
+    it('does not compound its dim with the "Last:" line\'s own opacity', () => {
+      // Opacity multiplies through the tree. The last-run line carries opacity-70 of its
+      // own, so leaving both on would render the popover's smallest text at 0.55 x 0.70 =
+      // 0.385 - around 1.7:1 on the light ground, unreadable rather than inactive. The row
+      // is dimmed once, by the level that owns the decision.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [pausedAgentSchedule(inOneHour())],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+
+      const lastRun = screen.getByText(/lastRan/).closest('span')!;
+      expect(lastRun.className).not.toContain('opacity-70');
+      // Replaced, not stacked: the line still steps back, once.
+      expect(lastRun.className).toContain('opacity-50');
+    });
+
+    it('leaves the badge itself at full strength - it is the reason for the dim', () => {
+      // The row is dimmed to say "this will not run". The badge is the only NEW word on
+      // that row and the explanation of the dim, so dimming it too would drop the one
+      // thing worth reading to roughly 2:1 against the popover ground, LESS legible than
+      // the countdown it replaced. The dim covers what the row was already saying.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [pausedAgentSchedule(inOneHour())],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+
+      expect(screen.getByText('pausedBadge').closest('.opacity-50')).toBeNull();
+    });
+
+    it('dims a paused row that HAS already run, without disturbing its verdict icon', () => {
+      // The commonest real disabled row: someone switches off an automation that has been
+      // running for weeks. Every other fixture here has never fired, so this is the only
+      // one that renders the last-run verdict and its screen-reader twin under the dim.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{
+          ...pausedAgentSchedule(inOneHour()),
+          lastRunAt: new Date(Date.now() - 2 * 60_000).toISOString(),
+          lastRunStatus: 'COMPLETED',
+        }],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+
+      expect(screen.getByText('pausedBadge')).toBeTruthy();
+      // The verdict still reaches a screen reader: the dim is visual, and a row being
+      // disabled says nothing about how its last run ended.
+      expect(document.body.querySelector('[data-last-run-status="COMPLETED"]')?.textContent)
+        .toBe('status.completed');
+      // Still the same three dimmed spans, and the row is still not the dimmed one.
+      const row = screen.getByText('Novass').closest('div.group')!;
+      expect(row.className).not.toContain('opacity-50');
+      expect(row.querySelectorAll('.opacity-50')).toHaveLength(3);
+    });
+
+    it('a paused row does not silence the bell for a DIFFERENT row that really is imminent', () => {
+      // `hasImminentFire` is a `.some()` over every automation, so one disabled row must
+      // not decide for the list. Structurally safe, worth pinning: this is the failure
+      // that would turn a bell fix into a bell that never rings.
+      inboxMock.current = { ...inboxMock.current, items: [], unreadCount: 0 };
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [
+          pausedAgentSchedule(inOneMinute()),
+          { ...pausedAgentSchedule(inOneMinute()), resourceId: 'agent-on', name: 'Live one', resourcePaused: false },
+        ],
+      };
+      render(<NotificationBell />);
+
+      expect(document.body.querySelector('span.bg-blue-500.animate-ping')).toBeTruthy();
+    });
+
+    it('keeps the "Last:" line at opacity-70 on an ACTIVE row', () => {
+      // The other side of the branch above: the muted treatment this line has always had
+      // must survive for every row that is not disabled.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{ ...pausedAgentSchedule(inOneHour()), resourcePaused: false }],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+
+      expect(screen.getByText(/lastRan/).closest('span')!.className).toContain('opacity-70');
+    });
+
+    it('leaves an ACTIVE row entirely undimmed', () => {
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{ ...pausedAgentSchedule(inOneHour()), resourcePaused: false }],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+
+      const row = screen.getByText('Novass').closest('div.group')!;
+      expect(row.querySelectorAll('.opacity-50')).toHaveLength(0);
+    });
+
+    it('states "disabled" on a declared-kind row, which used to carry no label at all', () => {
+      // The 6 declared kinds (MANUAL, CHAT, FORM, DATASOURCE, WORKFLOW, ERROR) print an
+      // empty forward-looking label, so this is the largest per-row change in the fix: from
+      // nothing to a word. The claim is true here - ChatDispatchService and its siblings all
+      // refuse on a CANCELLED production run.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{
+          resourceType: 'WORKFLOW' as const,
+          resourceId: 'wf-off',
+          name: 'Cancelled flow',
+          triggerType: 'MANUAL' as const,
+          resourcePaused: true,
+          // The backend derives resourcePaused FROM a resolved production run, so a row
+          // carrying the flag always carries the run id too. Fixture kept that shape.
+          productionRunIdPublic: 'run_cancelled',
+        }],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+      fireEvent.click(screen.getByRole('button', { name: 'kindLabel.manual' }));
+
+      expect(screen.getByText('pausedBadge')).toBeTruthy();
+    });
+
+    it('does NOT claim "disabled" on an ERROR row - that lane ignores the production run', () => {
+      // ErrorTriggerDispatchService resolves the newest NON-TERMINAL run and says in its own
+      // comment that it "does NOT consult production_run_id", so a workflow whose production
+      // run is CANCELLED still dispatches its error handler. Printing "disabled" there would
+      // be the same green-when-wrong defect this whole change exists to remove, pointing the
+      // other way: the bell asserting a refusal the engine does not make.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{
+          resourceType: 'WORKFLOW' as const,
+          resourceId: 'wf-err',
+          name: 'Error handler',
+          triggerType: 'ERROR' as const,
+          resourcePaused: true,
+          productionRunIdPublic: 'run_cancelled',
+        }],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+      fireEvent.click(screen.getByRole('button', { name: 'kindLabel.error' }));
+
+      expect(screen.queryByText('pausedBadge')).toBeNull();
+      const row = screen.getByText('Error handler').closest('div.group')!;
+      expect(row.querySelectorAll('.opacity-50')).toHaveLength(0);
+    });
+
+    it('dims a paused WORKFLOW row too - the flag means a CANCELLED production run there', () => {
+      // Every other test in this block uses an AGENT, where `resourcePaused` is
+      // `isActive=false`. On a workflow it is computed from an entirely different fact, and
+      // it is also the type whose row menu is conditional on having a production run id.
+      homeStatusMock.current = {
+        ...homeStatusMock.current,
+        automations: [{
+          resourceType: 'WORKFLOW' as const,
+          resourceId: 'wf-off',
+          name: 'Cancelled flow',
+          triggerType: 'SCHEDULE' as const,
+          resourcePaused: true,
+          productionRunIdPublic: 'run_cancelled',
+          // No scheduleId on purpose: hasTriggerRowActions is satisfied here by the
+          // production run id alone, which is the branch this row exists to exercise.
+          schedule: {
+            cronExpression: '0 8 * * *',
+            timezone: 'UTC',
+            executionCount: 3,
+            nextFireAt: inOneHour(),
+          },
+        }],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByText('triggersTab'));
+
+      expect(screen.getByText('pausedBadge')).toBeTruthy();
+      expect(screen.queryByText('1 item(s)')).toBeNull();
+      const row = screen.getByText('Cancelled flow').closest('div.group')!;
+      expect(row.querySelectorAll('.opacity-50')).toHaveLength(3);
+      // The menu still reaches full contrast on this shape too, where it is gated on the
+      // production run id rather than on a schedule id.
+      expect(row.querySelector('button[aria-label="label"]')!.closest('.opacity-50')).toBeNull();
     });
   });
 });

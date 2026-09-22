@@ -8,13 +8,14 @@ import { credentialService } from "@/lib/api/orchestrator/credential.service";
 import { cloudLinkService, type CloudLinkStatus } from "@/lib/api/cloud-link.service";
 import { clearModelsCache } from "@/hooks/useModels";
 import { Button } from "@/components/ui/button";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import ProviderCard from "./components/ProviderCard";
 import BridgeSetupPanel from "./components/BridgeSetupPanel";
 import BridgeAccessPanel from "./components/BridgeAccessPanel";
 import ModelManagementPanel from "./components/ModelManagementPanel";
 import ModelExecutionLinksPanel from "./components/ModelExecutionLinksPanel";
+import UserKeysPanel from "./components/UserKeysPanel";
 import { ModelBundleSyncButton } from "./components/ModelBundleSyncButton";
 import type { LlmProviderStatus, LlmProviderDefinition } from "@/lib/api/orchestrator/types";
 import { IS_CE, IS_CLOUD } from "@/lib/edition";
@@ -113,6 +114,25 @@ const PROVIDER_DEFINITIONS: LlmProviderDefinition[] = [
     docsUrl: "https://platform.minimax.io/user-center/basic-information/interface-key",
     placeholder: "eyJ...",
   },
+  {
+    // A DECISION provider, not a chat one: its model returns a typed choice among the
+    // categories a Classify node declares and cannot produce text. It has no place in a
+    // chat or agent picker, and the catalogue keeps it out of them - but the KEY is
+    // entered here like every other provider's, so it belongs in this list.
+    //
+    // Without an entry here the card simply does not render: the page intersects these
+    // definitions with the backend status list, so a provider the backend advertises and
+    // this file omits is dropped in silence, leaving no way to key it from the UI.
+    providerName: "typesafe",
+    integrationName: "llm_typesafe",
+    displayName: "TypeSafe (Jev)",
+    // The card labels this link "Get API key", so it points at the console where a key
+    // is issued, not at the API reference (docs.typesafe.ai/api), which describes the
+    // request and never says where the key comes from. The key's own format is not
+    // published, so the placeholder promises no prefix rather than inventing one.
+    docsUrl: "https://console.typesafe.ai/",
+    placeholder: "...",
+  },
 ];
 
 function LoadingDot() {
@@ -124,8 +144,14 @@ export default function AiProvidersPage() {
   const { loginWithRedirect, hasRole } = useAuth();
   const t = useTranslations("aiProviders");
   const tSettings = useTranslations("settings");
+  const locale = useLocale();
+  // The pricing page the "upgrade" prompt of the own-keys panel leads to.
+  const pricingHref = `/${locale}/app/settings/pricing`;
+  // The providers a cloud user may bring a key for: the same list the admin manages, minus
+  // the ones never offered to end users (aggregators the platform prices on its own).
+  const userKeyDefinitions = PROVIDER_DEFINITIONS.filter((def) => !isProviderHiddenInCe(def.providerName));
 
-  const [connectionMode, setConnectionMode] = useState<"api_key" | "claude_code" | "codex" | "gemini_cli" | "mistral_vibe" | "models" | "execution_links">("api_key");
+  const [connectionMode, setConnectionMode] = useState<"api_key" | "claude_code" | "codex" | "gemini_cli" | "mistral_vibe" | "models" | "execution_links" | "your_keys">("api_key");
   const [statuses, setStatuses] = useState<LlmProviderStatus[]>([]);
   const [cloudLinkStatus, setCloudLinkStatus] = useState<CloudLinkStatus | null>(null);
   const [llmSource, setLlmSource] = useState<"CLOUD" | "BYOK">("BYOK");
@@ -145,6 +171,11 @@ export default function AiProvidersPage() {
     // Execution links are a CLOUD-only monetization feature: hide the tab in CE.
     ...(IS_CLOUD
       ? [{ id: "execution_links" as const, label: t("mode.executionLinks"), icon: Route, iconSrc: null as string | null }]
+      : []),
+    // A cloud user's OWN provider keys (from PRO): the admin sees the tab among the others,
+    // a non-admin cloud user sees this panel alone (below).
+    ...(IS_CLOUD
+      ? [{ id: "your_keys" as const, label: t("mode.yourKeys"), icon: User, iconSrc: null as string | null }]
       : []),
   ];
 
@@ -187,12 +218,14 @@ export default function AiProvidersPage() {
 
   useEffect(() => {
     if (isAuthChecking) return;
-    if (isAuthenticated) {
+    if (isAuthenticated && hasRole('ADMIN')) {
+      // The platform status is an admin view (the endpoint answers 403 to anyone else);
+      // a cloud user on their own-keys panel has nothing to fetch here.
       fetchStatus();
     } else {
       setLoading(false);
     }
-  }, [isAuthChecking, isAuthenticated, fetchStatus]);
+  }, [isAuthChecking, isAuthenticated, fetchStatus, hasRole]);
 
   const fetchCloudLlmSource = useCallback(async () => {
     if (!IS_CE) return;
@@ -311,6 +344,30 @@ export default function AiProvidersPage() {
     );
   }
 
+  if (!hasRole('ADMIN') && IS_CLOUD) {
+    // Not the platform's providers, only the user's own keys: the one part of this page
+    // that is theirs to configure.
+    return (
+      <div className="space-y-6">
+        {/* The icon is a fixed 40px tile, so it must be told not to shrink: in a flex row
+            beside text it is the flexible item, and in the settings column - a third of the
+            width on desktop, all of it on a phone - it was being squeezed into a sliver.
+            The title carries `min-w-0` for the same reason, so long words wrap instead of
+            pushing the row wider than its parent. */}
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 flex-shrink-0 bg-theme-tertiary rounded-xl flex items-center justify-center">
+            <BotMessageSquare className="w-5 h-5 text-theme-primary" />
+          </div>
+          {/* The intro used to be repeated here AND at the top of the panel below, two
+              paragraphs of the same sentence a few pixels apart. The panel states it once,
+              where the price and the providers are. */}
+          <h2 className="min-w-0 text-lg font-semibold text-theme-primary">{t("mode.yourKeys")}</h2>
+        </div>
+        <UserKeysPanel definitions={userKeyDefinitions} t={t} pricingHref={pricingHref} />
+      </div>
+    );
+  }
+
   if (!hasRole('ADMIN')) {
     return (
       <div className="min-h-[300px] flex items-center justify-center">
@@ -327,11 +384,11 @@ export default function AiProvidersPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-theme-tertiary rounded-xl flex items-center justify-center">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 flex-shrink-0 bg-theme-tertiary rounded-xl flex items-center justify-center">
             <BotMessageSquare className="w-5 h-5 text-theme-primary" />
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-1.5">
               <h2 className="text-lg font-semibold text-theme-primary">{t("title")}</h2>
               <div className="relative group">
@@ -518,6 +575,10 @@ export default function AiProvidersPage() {
 
       {IS_CLOUD && connectionMode === "execution_links" && (
         <ModelExecutionLinksPanel />
+      )}
+
+      {IS_CLOUD && connectionMode === "your_keys" && (
+        <UserKeysPanel definitions={userKeyDefinitions} t={t} pricingHref={pricingHref} />
       )}
     </div>
   );

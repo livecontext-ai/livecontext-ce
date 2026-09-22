@@ -1,8 +1,10 @@
 package com.apimarketplace.agent.service;
 
+import com.apimarketplace.agent.bridge.BridgeAllowlist;
 import com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess;
 import com.apimarketplace.agent.cloud.CloudRelaySupport;
 import com.apimarketplace.agent.credential.LlmCredentialRepository;
+import com.apimarketplace.agent.domain.BridgeProviders;
 import com.apimarketplace.agent.domain.ModelCategory;
 import com.apimarketplace.agent.domain.ModelCategorySettingsEntity;
 import com.apimarketplace.agent.domain.ModelCategorySettingsId;
@@ -12,7 +14,9 @@ import com.apimarketplace.agent.domain.ReasoningEffortResolver;
 import com.apimarketplace.agent.factory.BridgeAvailabilityFilter;
 import com.apimarketplace.agent.factory.LLMProviderFactory;
 import com.apimarketplace.agent.repository.ModelCategorySettingsRepository;
+import com.apimarketplace.agent.domain.ModelProviderSettingsEntity;
 import com.apimarketplace.agent.repository.ModelConfigOverrideRepository;
+import com.apimarketplace.agent.repository.ModelProviderSettingsRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,6 +60,7 @@ public class ModelCatalogService {
      * `bridgeUrl` is read from config - we capture the value at construction.
      */
     private final BridgeAvailabilityFilter bridgeAvailabilityFilter;
+    private final ModelProviderSettingsRepository providerSettingsRepository;
 
     /**
      * Production constructor (Spring). {@code models.bridge-availability.strict}
@@ -73,7 +78,9 @@ public class ModelCatalogService {
                                       CachedModelRateLimitProvider cachedRateLimitProvider,
                                       @Value("${conversation.bridge.url:}") String bridgeUrl,
                                       AuthPricingSyncClient authPricingSyncClient,
-                                      @Value("${models.bridge-availability.strict:true}") boolean bridgeAvailabilityStrict) {
+                                      @Value("${models.bridge-availability.strict:true}") boolean bridgeAvailabilityStrict,
+                                      ModelProviderSettingsRepository providerSettingsRepository) {
+        this.providerSettingsRepository = providerSettingsRepository;
         this.repository = repository;
         this.categoryRepository = categoryRepository;
         this.llmProviderFactory = llmProviderFactory;
@@ -99,8 +106,11 @@ public class ModelCatalogService {
                                       CachedModelRateLimitProvider cachedRateLimitProvider,
                                       String bridgeUrl,
                                       AuthPricingSyncClient authPricingSyncClient) {
+        // null provider settings: no provider is switched off, which is the state every one of
+        // these tests was written against. The behaviour has its own tests, on the constructor
+        // production uses.
         this(repository, categoryRepository, llmProviderFactory, credentialRepository,
-                cachedRateLimitProvider, bridgeUrl, authPricingSyncClient, false);
+                cachedRateLimitProvider, bridgeUrl, authPricingSyncClient, false, null);
     }
 
     /**
@@ -147,9 +157,55 @@ public class ModelCatalogService {
         return getModelsForCategory(category, null, true);
     }
 
+    /**
+     * The API providers this install exposes at least one model for, whether or not a key
+     * exists for them yet, lower-cased and never including a CLI bridge.
+     *
+     * <p>Answers a question the picker catalogue cannot. That one DROPS every provider the
+     * caller holds no key for, so a user without a Mistral key is told nothing about Mistral,
+     * and the own-keys panel would otherwise have to invite a key from a hardcoded list, for a
+     * provider that may serve nothing once the key is saved. Here the availability filter is
+     * skipped on purpose and only the admin's exposure decision is left: a provider whose
+     * models are all switched off vanishes from that panel exactly as it has already vanished
+     * from every picker, and the user is never told it exists.
+     *
+     * <p>CLI bridges are excluded unconditionally, on every edition. They hold no key a user
+     * could paste, so naming one here would be an invitation to nothing, and on the hosted
+     * product they are the operator's subscription and not a user's business at all.
+     *
+     * <p>What is left is not a secret: it is the shape of the price list, which any signed-in
+     * user already reads for the providers they do hold a key for.
+     */
+    public List<String> providersOfferingModels() {
+        Map<String, Object> catalog = getPublicModelsForCategory(null);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> providers = (List<Map<String, Object>>) catalog.get("providers");
+        if (providers == null) {
+            return List.of();
+        }
+        List<String> offering = new ArrayList<>();
+        for (Map<String, Object> provider : providers) {
+            String name = (String) provider.get("name");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> models = (List<Map<String, Object>>) provider.get("models");
+            if (name == null || name.isBlank() || models == null || models.isEmpty()) {
+                continue;
+            }
+            if (isBridgeProviderName(name)) {
+                continue;
+            }
+            offering.add(name.toLowerCase(Locale.ROOT));
+        }
+        return offering;
+    }
+
     private Map<String, Object> getModelsForCategory(String category, String tenantId, boolean includeUnconfigured) {
         Map<String, Object> base = getAvailableProvidersBase(tenantId, includeUnconfigured);
         filterUnavailableBridgeProviders(base);
+        // Read once for the whole build: the base list below and the custom injection further
+        // down both need it, and this path already walks every override row.
+        Set<String> disabledForThisBuild = disabledProviders();
+        filterDisabledProviders(base, disabledForThisBuild);
         // V156/V158: filter the YAML/Bridge base catalog to only models whose
         // mode matches the category contract, so chat / browser_agent completion
         // lists do NOT show image-gen rows. (A <format>_generation category admits
@@ -273,8 +329,17 @@ public class ModelCatalogService {
         for (Map<String, Object> p : providers) {
             existingProviders.add((String) p.get("name"));
         }
+        Set<String> disabledForInjection = disabledForThisBuild;
         for (var entry : customByProvider.entrySet()) {
             if (existingProviders.contains(entry.getKey())) continue;
+            // A provider switched off must not come BACK through this door. The filter above
+            // runs on the YAML/base list, which a provider whose only rows are custom never
+            // appears in, so without this the switch was a no-op for exactly those providers
+            // and silently partial for any other that carried one custom row.
+            if (entry.getKey() != null
+                    && disabledForInjection.contains(entry.getKey().toLowerCase(Locale.ROOT))) {
+                continue;
+            }
             List<ModelConfigOverrideEntity> trueCustoms = entry.getValue().stream()
                     .filter(ModelConfigOverrideEntity::isCustom)
                     .toList();
@@ -416,6 +481,126 @@ public class ModelCatalogService {
         });
     }
 
+
+    @Autowired(required = false)
+    private com.apimarketplace.common.web.AppEditionProvider appEditionProvider;
+
+    /** Visible for tests. */
+    public void setAppEditionProvider(com.apimarketplace.common.web.AppEditionProvider provider) {
+        this.appEditionProvider = provider;
+    }
+
+    /**
+     * Whether this install runs its own CLI. Resolved from {@code AppEditionProvider}, which
+     * knows the difference between CE_FREE, SELF_HOSTED_ENTERPRISE (self-hosted, but running
+     * keycloak) and the hosted product - a difference {@code auth.mode} alone cannot express, and
+     * getting it wrong would ban an enterprise operator from the CLI they installed themselves.
+     *
+     * <p>The bean comes from common-lib auto-configuration and is present in every service. It is
+     * optional only so test slices need not raise it; absent, the check falls back to
+     * {@code auth.mode=embedded}, which is right for the CE monolith and is the value every
+     * pre-existing test already sets.
+     */
+    private boolean isSelfHostedInstall() {
+        if (appEditionProvider != null) {
+            return appEditionProvider.isSelfHosted();
+        }
+        return "embedded".equalsIgnoreCase(authMode == null ? "" : authMode.trim());
+    }
+
+    /** True on the hosted product, i.e. not a self-hosted install of any tier. */
+    private boolean isCloudEdition() {
+        return !isSelfHostedInstall();
+    }
+
+    /**
+     * CLOUD-only: strip the CLI bridges from a catalog served as a declared PUBLIC read.
+     *
+     * <p>Narrow on purpose, and the narrowness is the correction of an earlier, broader version of
+     * this method that filtered every caller. {@code /api/internal/agent/models} is SHARED: the
+     * nested shape it returns also feeds {@code ModelCatalogEnricher}, which rewrites the
+     * {@code provider.enum} that {@code NodeParamsValidator} enforces at WRITE time, and it backs
+     * {@code SmartDefaultsEngine}, {@code ChatDispatchService} and the cloud-only admin panel that
+     * creates {@code agent.model_execution_links}. Filtering it for everyone made a classify node
+     * on a bridge unsaveable and emptied the very panel that points a billed pair at a CLI, which
+     * is the mechanism that makes hiding the bridges harmless in the first place.
+     *
+     * <p>A declared public read is none of those. It is the anonymous browser hitting
+     * {@code /api/v3/chat/models}, which was advertising {@code claude-code} (9 models) and
+     * {@code codex} (7) as {@code configured} to anyone who asked, along with the bridge host's
+     * LAN address. The caller DECLARES it; this never infers it from a missing {@code X-User-ID},
+     * because that header is equally absent on any internal call made off a request thread, and
+     * inferring would make node validation depend on which thread asked. Nothing authenticated
+     * changes here; per-surface hiding for signed-in users belongs in the picker, which already
+     * has the granularity to exempt the admin surfaces that need the bridges.
+     *
+     * <p>No-op on CE, where a bridge is the self-hoster's own CLI under their own login.
+     *
+     * <p>{@code defaultProvider}/{@code defaultModel} are recomputed rather than left pointing at
+     * a removed entry: a picker whose default names a provider absent from the list has no valid
+     * selection at all. {@code bridgeUrl} goes with them, being an internal address that addresses
+     * nothing once the bridges are gone.
+     *
+     * <p>Applied to an AUTHENTICATED read too since 2026-09-18, for any caller who is not a
+     * platform admin: the CLI bridges are the operator's own subscription and must never be
+     * named to an end user. Until then the authenticated payload carried them and only the
+     * frontend hid them, so the guarantee lived in one React hook and any surface that forgot
+     * it leaked the list. The admin panels that legitimately need the bridges
+     * ({@code ModelExecutionLinksPanel}, {@code AddModelDialog}) are admin-only, so an admin
+     * still receives the whole catalogue.
+     *
+     * @return the same map, mutated, for call-site chaining
+     */
+    public Map<String, Object> hideBridgeProviders(Map<String, Object> catalog) {
+        if (catalog == null) {
+            return null;
+        }
+        if (!isSelfHostedInstall() && catalog.containsKey("bridgeUrl")) {
+            // FIRST, before any early return. bridgeUrl is written whenever conversation.bridge.url
+            // is configured, independently of whether any provider list exists or any bridge
+            // survived the availability filter - so both the providers==null path and the
+            // "every CLI unverified, none listed" state were still publishing the host's LAN
+            // address, exactly where nothing else would have triggered the removal.
+            catalog = withoutBridgeUrl(catalog);
+        }
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> providers = (List<Map<String, Object>>) catalog.get("providers");
+        if (providers == null) {
+            return catalog;
+        }
+        // A NEW list rather than removeIf on the caller's: this runs on whatever map the catalog
+        // pipeline handed over, and an immutable one (List.of, or a future cached snapshot) would
+        // throw UnsupportedOperationException from inside a read endpoint.
+        List<Map<String, Object>> kept = providers.stream()
+                .filter(p -> !(p.get("name") instanceof String name
+                        && BridgeProviders.isHiddenFromUser(isSelfHostedInstall(), false, name)))
+                .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+        if (kept.size() == providers.size()) {
+            return catalog;
+        }
+        catalog.put("providers", kept);
+        recalculateDefaults(catalog);
+        log.debug("Public catalog: hid CLI bridge providers, default is now {}/{}",
+                catalog.get("defaultProvider"), catalog.get("defaultModel"));
+        return catalog;
+    }
+
+    /**
+     * The catalogue minus {@code bridgeUrl}, in place when the map allows it and as a copy when it
+     * does not. {@code Map.of} throws from {@code remove} unconditionally, and this class already
+     * carries the scar of a 500 on this very endpoint from mutating an immutable map.
+     */
+    private static Map<String, Object> withoutBridgeUrl(Map<String, Object> catalog) {
+        try {
+            catalog.remove("bridgeUrl");
+            return catalog;
+        } catch (UnsupportedOperationException immutable) {
+            Map<String, Object> copy = new java.util.LinkedHashMap<>(catalog);
+            copy.remove("bridgeUrl");
+            return copy;
+        }
+    }
+
     static void markCloudProviders(List<Map<String, Object>> providers) {
         if (providers == null) return;
         for (Map<String, Object> provider : providers) {
@@ -480,9 +665,15 @@ public class ModelCatalogService {
         // the default. In BYOK mode any provider kind, including a bridge, may be the overall
         // default. cloudMode reads base.llmSource, set just above before this call; absent
         // (direct recalculateDefaults callers / tests) ⇒ legacy "any provider" behaviour.
-        boolean cloudMode = "CLOUD".equals(base.get("llmSource"));
+        // The HOSTED product excludes bridges from the overall default for a second, independent
+        // reason: there the four CLIs share ONE operator subscription, so making one of them the
+        // pair every omitted model_provider resolves to is what silently put users on it. This is
+        // the root of the production state - claude-code ranked first, so defaultProvider WAS
+        // claude-code and anything that omitted a provider inherited it. It is edition, not
+        // llmSource: a self-hosted install may legitimately default to the CLI it is running.
+        boolean bridgeUnfitAsDefault = "CLOUD".equals(base.get("llmSource")) || isCloudEdition();
         applyBest(base, providers,
-                cloudMode ? p -> !"bridge".equals(p.get("providerKind")) : p -> true,
+                bridgeUnfitAsDefault ? p -> !"bridge".equals(p.get("providerKind")) : p -> true,
                 "defaultProvider", "defaultModel");
 
         // Direct-API default = lowest global displayOrder excluding bridges.
@@ -800,6 +991,34 @@ public class ModelCatalogService {
     }
 
     /**
+     * The model's total context window in tokens for a {@code (provider, modelId)} pair, or
+     * {@code null} when the catalog carries no value.
+     *
+     * <p>Read from this catalog and NOT from the pricing snapshot, which is the neighbouring
+     * table and the obvious-looking choice. The pricing snapshot only gained a
+     * {@code context_window} column late and almost nothing backfills it: in production 744 of
+     * its 816 rows are null, {@code deepseek-v4-pro} among them. A context monitor sourced from
+     * there would therefore report "window unknown" for the very models it was built to watch,
+     * and look fixed because it had gone quiet. This catalog has it for 779 of 805 rows.
+     *
+     * <p>Reads the override row DIRECTLY rather than scanning {@link #listAvailableModels()} as
+     * {@link #resolveMaxOutputTokens} does: one indexed lookup instead of ~800 rows plus a yml
+     * merge. It cuts both ways: a model present only in {@code application.yml} with no DB row
+     * reports an unknown window here while still reporting an output cap there, and a DISABLED
+     * model reports a window here while reporting no cap there (that listing filters on enabled
+     * / category / bridge availability). For an observability read the latter is the better
+     * behaviour - a stale agent config can still be executing a disabled model.
+     */
+    public Integer resolveContextWindow(String provider, String modelId) {
+        if (provider == null || modelId == null) {
+            return null;
+        }
+        return repository.findByProviderAndModelId(provider, modelId)
+            .map(ModelConfigOverrideEntity::getContextWindow)
+            .orElse(null);
+    }
+
+    /**
      * Get the effective config for each model (yml merged with DB) for the admin UI.
      * Includes disabled models (with enabled=false flag) so admins can re-enable them.
      */
@@ -871,6 +1090,9 @@ public class ModelCatalogService {
         // Compute which bridges are actually installed right now so we can
         // annotate rows rather than drop them.
         Map<String, Boolean> bridgeInstalled = bridgeAvailabilityFilter.installedMap();
+        // Read once for the whole response, like the map above: called per row, a TTL
+        // lapse mid-list would let two rows report different availability for the same CLI.
+        Map<String, Boolean> bridgeRunnable = bridgeAvailabilityFilter.runnableMap();
         // V156/V158: scope the YAML/bridge base + overrides by category mode, so
         // a row only surfaces under a category its mode is eligible for. This is
         // the same filter applied by getModelsForCategory(), so picker and admin
@@ -963,6 +1185,9 @@ public class ModelCatalogService {
                 // Rendered by the admin Models panel on cloud only; harmless
                 // extra field for CE readers.
                 entry.put("bundleEnabled", override != null ? override.getBundleEnabled() : null);
+                // freeTierEnabled is NOT stamped here: applyOverride above already set it
+                // via applyEnrichmentFields, which is the one helper both catalog paths
+                // share. Re-writing it here would be a second place to keep in step.
                 entry.put("providerKind",
                         override != null && override.getProviderKind() != null
                                 ? override.getProviderKind()
@@ -970,6 +1195,7 @@ public class ModelCatalogService {
                 if (cliId != null) {
                     entry.put("bridgeAvailable", bridgeAvailable);
                 }
+                stampCliCounterpart(entry, providerName, modelId, bridgeRunnable);
                 result.add(entry);
             }
 
@@ -990,11 +1216,14 @@ public class ModelCatalogService {
                     entry.put("enabled", !Boolean.FALSE.equals(custom.getEnabled()));
                     entry.put("available", providerAvailable);
                     entry.put("bundleEnabled", custom.getBundleEnabled());
+                    // freeTierEnabled: stamped by buildModelInfo above, same as on the
+                    // YAML path. Same rule, same reason - one place to keep in step.
                     entry.put("providerKind",
                             custom.getProviderKind() != null ? custom.getProviderKind() : "byok");
                     if (cliId != null) {
                         entry.put("bridgeAvailable", bridgeAvailable);
                     }
+                    stampCliCounterpart(entry, providerName, custom.getModelId(), bridgeRunnable);
                     result.add(entry);
                 }
             }
@@ -1030,11 +1259,13 @@ public class ModelCatalogService {
                     // platform key needed) - treat as available.
                     e.put("available", true);
                     e.put("bundleEnabled", custom.getBundleEnabled());
+                    // freeTierEnabled: stamped by buildModelInfo above.
                     e.put("providerKind",
                             custom.getProviderKind() != null ? custom.getProviderKind() : "byok");
                     if (cliId != null) {
                         e.put("bridgeAvailable", bridgeAvailable);
                     }
+                    stampCliCounterpart(e, providerName, custom.getModelId(), bridgeRunnable);
                     result.add(e);
                 }
             }
@@ -1051,6 +1282,44 @@ public class ModelCatalogService {
         result.sort(Comparator.comparingInt(m -> (int) ((Map<String, Object>) m).getOrDefault("displayOrder", 999)));
 
         return result;
+    }
+
+    /**
+     * Admin-panel hint: the CLI bridge that could EXECUTE this billed model, so the
+     * Models panel can offer a one-click execution link (billed price kept, run
+     * dispatched to the CLI subscription) instead of making the admin retype the
+     * pair in the Execution links tab.
+     *
+     * <p>Stamped ONLY when {@link BridgeAllowlist} says that CLI routes this model's
+     * family, which keeps the panel from offering a link to a CLI that has no idea
+     * what the model is. It is NOT a promise that the binary on the bridge host is
+     * already new enough for a freshly-released id: that gap is irreducible (no CLI
+     * exposes a model list) and is the same one the catalog itself lives with.
+     *
+     * <p>{@code cliBridgeAvailable} says whether that CLI could RUN right now: it reads
+     * the strict signal (installed AND authenticated), not the looser {@code installed}
+     * flag behind the neighbouring {@code bridgeAvailable} badge, because here the
+     * answer drives a decision - an installed-but-logged-out CLI runs nothing. {@code
+     * null} = unknown (bridge unreachable or URL unset; on a bridge too old to report
+     * {@code authenticated} it degrades to the installed flag). It matters before the click,
+     * not after: a bridge route is dropped back to the billed pair only when the whole
+     * bridge TRANSPORT is unwired ({@code ExecutionLinkRouter} plus {@code
+     * BridgeLoopDispatcher.isAvailable}), so with a wired bridge and an unusable CLI
+     * the run is dispatched and FAILS.
+     *
+     * <p>Both keys are ABSENT for a model with no CLI counterpart - the panel renders
+     * the button off their presence. Harmless extra fields for CE readers, where
+     * execution links are disabled entirely.
+     */
+    private void stampCliCounterpart(Map<String, Object> entry, String providerName, String modelId,
+                                     Map<String, Boolean> bridgeRunnable) {
+        String bridge = BridgeAllowlist.cliCounterpart(providerName, modelId);
+        if (bridge == null) {
+            return;
+        }
+        entry.put("cliBridgeProvider", bridge);
+        String cliId = BridgeAvailabilityFilter.BRIDGE_PROVIDER_TO_CLI_ID.get(bridge);
+        entry.put("cliBridgeAvailable", cliId != null ? bridgeRunnable.get(cliId) : null);
     }
 
     @Transactional
@@ -1081,6 +1350,12 @@ public class ModelCatalogService {
         if (input.isBundleEnabledExplicitlySet()) {
             entity.setBundleEnabled(input.getBundleEnabled());
         }
+        // Free-tier opening (V493). Same contract and same reason as bundleEnabled:
+        // cloud-only, never travels in a bundle payload, so it is not tracked in
+        // userModifiedFields and only an explicit key in the request changes it.
+        if (input.isFreeTierEnabledExplicitlySet()) {
+            entity.setFreeTierEnabled(input.isFreeTierEnabled());
+        }
         if (input.getDisplayName() != null) { entity.setDisplayName(input.getDisplayName()); entity.addUserModifiedField("displayName"); }
         if (input.getTier() != null) { entity.setTier(input.getTier()); entity.addUserModifiedField("tier"); }
         // Per-model default reasoning effort: an explicit empty/blank string clears it
@@ -1097,6 +1372,12 @@ public class ModelCatalogService {
         if (input.getRecommended() != null) { entity.setRecommended(input.getRecommended()); entity.addUserModifiedField("recommended"); }
         if (input.getPriceInput() != null) { entity.setPriceInput(input.getPriceInput()); entity.addUserModifiedField("priceInput"); }
         if (input.getPriceOutput() != null) { entity.setPriceOutput(input.getPriceOutput()); entity.addUserModifiedField("priceOutput"); }
+        // Cache prices are billing inputs like the other two since V491 (they decide what a
+        // cached token costs), so a supplied value must be persisted and protected from the
+        // next feed sync rather than dropped on the floor. CatalogMergeService already
+        // honours both names in its protected-field list.
+        if (input.getPriceCacheRead() != null) { entity.setPriceCacheRead(input.getPriceCacheRead()); entity.addUserModifiedField("priceCacheRead"); }
+        if (input.getPriceCacheWrite() != null) { entity.setPriceCacheWrite(input.getPriceCacheWrite()); entity.addUserModifiedField("priceCacheWrite"); }
         // Rate limit fields: when explicitly set (even to null = "clear"), overwrite unconditionally
         if (input.isRateLimitsExplicitlySet()) {
             entity.setRateLimitTpm(input.getRateLimitTpm());
@@ -1109,7 +1390,30 @@ public class ModelCatalogService {
             entity.addUserModifiedField("rateLimitRpmPerTenant");
         }
 
-        requirePriceBeforeEnabling(entity, Boolean.TRUE.equals(entity.getEnabled()));
+        // BOTH guards test what THIS REQUEST is doing, not what the row already was.
+        //
+        // They used to read the merged row, so a rename on a model that was ALREADY enabled
+        // and carries no price of its own threw before the save, and the @Transactional method
+        // rolled the whole thing back: the new name AND its "the user edited this" marker
+        // never reached Postgres. The admin saw a generic banner at the top of a long table,
+        // the cell snapped back to the server value, and after a refresh the model still wore
+        // the name the upstream feed gave it. Reported as "my alias reverts on refresh".
+        //
+        // Such rows are ordinary: a model discovered from a provider's own endpoint arrives
+        // unpriced, and the panel still shows a price for it because that comes from the
+        // catalogue overlay rather than the row's own columns.
+        requirePriceBeforeEnabling(entity, Boolean.TRUE.equals(input.getEnabled()));
+        // Also when the request MOVES a price, not only when it opens the free tier. A model
+        // already open to it can be repriced, and an unbillable value there is refused by the
+        // mirror while the catalogue keeps it: the page would show a price billing never took,
+        // with a WARN log as the only trace. That is the silent lie this guard exists to stop,
+        // so narrowing it to the free-tier key alone gave the lie a second door.
+        // carriesAPrice covers exactly the two rates the guard below validates. The cache
+        // rates are deliberately NOT in it: the guard does not check them, so counting them
+        // would imply a refusal that never comes.
+        if (input.isFreeTierEnabledExplicitlySet() || carriesAPrice(input)) {
+            requirePriceBeforeFreeTier(entity);
+        }
 
         ModelConfigOverrideEntity saved = repository.save(entity);
 
@@ -1118,10 +1422,50 @@ public class ModelCatalogService {
         // list price and CreditService bills them at that rate (see
         // CreditService.consumeForChat Javadoc). The providerKind is propagated so
         // the billing mirror keeps the catalog-origin discriminator for reporting.
+        // V493: free_tier_enabled rides the same sync, and therefore inherits its
+        // precondition - the row must carry a price. A priceless row can no longer be
+        // opened to the free tier at all (requirePriceBeforeFreeTier rejects the save),
+        // which is what closes the hole this guard would otherwise leave: the chip would
+        // read lit, nothing would reach the mirror, and isFreeTierModel would keep
+        // answering false off the synthetic default row. Do NOT read the condition below
+        // as "syncs on every save" - an unpriced row still saves, it just cannot be open.
         if (saved.getPriceInput() != null || saved.getPriceOutput() != null) {
-            authPricingSyncClient.sync(saved.getProvider(), saved.getModelId(),
+            boolean mirrored = authPricingSyncClient.sync(saved.getProvider(), saved.getModelId(),
                     saved.getPriceInput(), saved.getPriceOutput(),
-                    saved.getProviderKind());
+                    saved.getProviderKind(),
+                    saved.getPriceCacheRead(), saved.getPriceCacheWrite(),
+                    saved.isFreeTierEnabled());
+            // V493: a dropped RATE write is recoverable (reconciliation squares the ledger
+            // up, and the next save re-sends it). A dropped ACCESS write is not: the gate
+            // reads the mirror, so the catalog would say "open" forever while every free
+            // account is refused, and nobody would know to save the row a second time.
+            // Failing here rolls this transaction back, which keeps the two sides equal and
+            // tells the admin to retry - the only outcome that is not a silent lie.
+            //
+            // Note this refuses CLOSING too, not just opening: against an auth-service pod
+            // that predates the column there is no echo either way, so the flag cannot be
+            // moved at all until the rollout finishes. Deliberate - a close that the mirror
+            // did not take is the same lie wearing the other hat - and self-resolving.
+            if (!mirrored && input.isFreeTierEnabledExplicitlySet()) {
+                // One compensating close before giving up, and only when we were OPENING.
+                // "Not mirrored" covers a response we never received, and auth-service may
+                // have committed the TRUE before the connection dropped - in which case
+                // rolling this transaction back alone would leave the mirror OPEN for a
+                // model the catalog says is closed, which is the one direction that costs
+                // money. Pushing FALSE makes the rollback true on both sides. If the
+                // original write never landed, this is a no-op on an already-false row.
+                if (saved.isFreeTierEnabled()) {
+                    authPricingSyncClient.sync(saved.getProvider(), saved.getModelId(),
+                            saved.getPriceInput(), saved.getPriceOutput(),
+                            saved.getProviderKind(),
+                            saved.getPriceCacheRead(), saved.getPriceCacheWrite(), false);
+                }
+                throw new IllegalStateException(
+                        "Could not mirror the free-tier setting for " + saved.getProvider() + ":"
+                                + saved.getModelId() + " to billing, so it was not saved. The"
+                                + " free-tier gate reads the billing mirror, not this row."
+                                + " Retry once auth-service is reachable.");
+            }
         }
 
         invalidateModelCaches();
@@ -1241,9 +1585,13 @@ public class ModelCatalogService {
         if (!ModelCategory.isValidShape(category)) {
             throw new IllegalArgumentException("Invalid category key: " + category);
         }
-        ModelConfigOverrideEntity parent = repository.findByProviderAndModelId(provider, modelId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Unknown model: " + provider + ":" + modelId));
+        // A model can be listed in the admin panel with NO row of its own: the panel shows the
+        // YAML-declared catalogue too, and a row is only written the first time something is
+        // saved about that model. The global toggle creates it (saveOverride does), and so does
+        // drag-and-drop reordering, but this one used to throw "Unknown model" instead, so a
+        // category tab could not disable exactly the models nobody had touched yet. That is
+        // what the admin saw as "Failed to save changes" with no further explanation.
+        ModelConfigOverrideEntity parent = findOrCreateOverrideRow(provider, modelId);
         if (enabled) {
             // Same rule as the global enable - a category sidecar is the other
             // door into the picker, so an unpriced model must not slip through it.
@@ -1262,6 +1610,37 @@ public class ModelCatalogService {
         setting.setEnabled(enabled);
         categoryRepository.save(setting);
         invalidateModelCaches();
+    }
+
+    /**
+     * The override row for a model, created and persisted when the model exists in the
+     * catalogue but has never been saved.
+     *
+     * <p>Still refuses an unknown pair, which is the guard the plain {@code orElseThrow} was
+     * there for: a typo must not quietly create a row for a model that does not exist. What it
+     * no longer refuses is the ordinary case of a model the admin simply has not edited yet.
+     *
+     * <p>Persisted before returning because the per-category sidecar is keyed by the parent's
+     * id, which a transient row does not have.
+     */
+    private ModelConfigOverrideEntity findOrCreateOverrideRow(String provider, String modelId) {
+        Optional<ModelConfigOverrideEntity> existing =
+                repository.findByProviderAndModelId(provider, modelId);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        String key = provider + ":" + modelId;
+        Map<String, String> catalogNames = collectCatalogDisplayNames();
+        if (!catalogNames.containsKey(key)) {
+            throw new IllegalArgumentException("Unknown model: " + key);
+        }
+        ModelConfigOverrideEntity created = new ModelConfigOverrideEntity();
+        created.setProvider(provider);
+        created.setModelId(modelId);
+        // display_name is NOT NULL since V109; the catalogue name is the honest default.
+        created.setDisplayName(catalogNames.get(key));
+        created.setProviderKind(inferProviderKind(provider, null));
+        return repository.save(created);
     }
 
     /**
@@ -1288,6 +1667,65 @@ public class ModelCatalogService {
      *        is typically null on a freshly discovered model). Reading the
      *        parent's own flag there would let every category enable through.
      */
+    /**
+     * Refuse to open a model to the free tier while it has no price (V493).
+     *
+     * <p>The free-tier flag only reaches {@code auth.model_pricing.free_tier} through the
+     * pricing sync below, and that sync needs a price. Without this guard the save
+     * succeeds, the chip lights up, and the gate keeps answering "not on the free tier"
+     * forever, with no error and no log - the admin's switch silently does nothing.
+     *
+     * <p>{@link #requirePriceBeforeEnabling} does not already cover it: it only fires when
+     * {@code enabled} is explicitly TRUE, while a row created by the drag-and-drop re-rank
+     * path carries {@code enabled == null}, which every read treats as enabled. Such a row
+     * is offered to users AND unpriced, which is exactly the case that used to fall through.
+     *
+     * <p>Pricing it is not busywork either: an unpriced model bills at the platform default
+     * rate, so an open one would drain the allowance at a rate nobody chose.
+     *
+     * <p>"Unpriced" means THIS ROW, not the effective figure the panel renders: the panel
+     * overlays the catalogue's YAML price onto a row that has none, and the sync pushes the
+     * row's own columns. So an admin can be looking at "3.00 / 15.00" and still be refused
+     * here, which is why the message says which of the two prices it means.
+     */
+    private static void requirePriceBeforeFreeTier(ModelConfigOverrideEntity entity) {
+        if (!entity.isFreeTierEnabled()) {
+            return;
+        }
+        if (AuthPricingSyncClient.outOfBillingRange(entity.getPriceInput())
+                || AuthPricingSyncClient.outOfBillingRange(entity.getPriceOutput())) {
+            // The other permanent refusal, and the one that used to masquerade as a
+            // transport failure: the mirror REJECTS a rate it cannot store (a catalog
+            // sentinel such as the openrouter/auto "-1" list price, or anything above
+            // the NUMERIC(10,6) ceiling), so the sync answers "not mirrored" and the
+            // save below would tell the admin to retry when auth-service is reachable.
+            // It is reachable. Retrying forever is not a fix; pricing the model is.
+            throw new IllegalArgumentException(
+                    "Cannot open " + entity.getProvider() + ":" + entity.getModelId()
+                            + " to the free tier - its price (" + entity.getPriceInput() + " / "
+                            + entity.getPriceOutput() + " USD per 1M) is outside what billing can "
+                            + "store (0 to " + AuthPricingSyncClient.maxBillableRate() + "). Some "
+                            + "catalog feeds publish a sentinel such as -1 for a router model. Set "
+                            + "a real price first, or leave the model closed to the free tier.");
+        }
+        if (entity.getPriceInput() != null || entity.getPriceOutput() != null) {
+            return;
+        }
+        throw new IllegalArgumentException(
+                "Cannot open " + entity.getProvider() + ":" + entity.getModelId()
+                        + " to the free tier - this model's OWN row carries no price. A price "
+                        + "may still be showing in the panel: that one comes from the catalogue "
+                        + "and is not what gets mirrored. Billing is written from this row, so "
+                        + "set priceInput and priceOutput here first - otherwise the allowance "
+                        + "would be spent at the platform default rate rather than the "
+                        + "provider's.");
+    }
+
+    /** Whether this request sets either of the two billing rates the free-tier guard reads. */
+    private static boolean carriesAPrice(ModelConfigOverrideEntity input) {
+        return input.getPriceInput() != null || input.getPriceOutput() != null;
+    }
+
     private static void requirePriceBeforeEnabling(ModelConfigOverrideEntity entity,
                                                    boolean becomingEnabled) {
         if (!becomingEnabled) {
@@ -1337,7 +1775,12 @@ public class ModelCatalogService {
     private Map<String, String> collectCatalogDisplayNames() {
         Map<String, String> names = new HashMap<>();
         try {
-            Map<String, Object> base = getAvailableProvidersBase();
+            // The FULL catalogue, unconfigured providers included, because that is what the
+            // admin panel lists and therefore what an admin can act on. Reading the
+            // availability-filtered view here meant a model of a provider with no key yet was
+            // "unknown" to the category toggle, which is the same "Failed to save the change"
+            // this lookup was added to end, for a large part of the same population.
+            Map<String, Object> base = getAvailableProvidersBase(null, true);
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> providers = (List<Map<String, Object>>) base.get("providers");
             if (providers == null) return names;
@@ -1360,16 +1803,54 @@ public class ModelCatalogService {
         return names;
     }
 
+    /**
+     * Drop an override row.
+     *
+     * <p>V493: this CLOSES the model in the billing mirror on the way out. The free-tier
+     * gate reads {@code auth.model_pricing.free_tier}, not this table, so deleting the
+     * row of an opened model would otherwise leave it funded by the free allowance
+     * forever while the admin panel draws the chip OFF (no row, no flag). That is the
+     * same catalog/mirror divergence {@code saveOverride} refuses to commit, except it
+     * fails OPEN and costs money. Best-effort on purpose: the row is already gone, and
+     * a mirror left open for a model that no longer carries an override is still bounded
+     * by the allowance, so a failed push must not block the delete. It is logged loudly.
+     */
     @Transactional
     public void deleteOverride(String provider, String modelId) {
+        closeFreeTierMirror(repository.findByProviderAndModelId(provider, modelId).orElse(null));
         repository.deleteByProviderAndModelId(provider, modelId);
         invalidateModelCaches();
     }
 
+    /** Same contract as {@link #deleteOverride}, for every row at once. */
     @Transactional
     public void resetAll() {
+        for (ModelConfigOverrideEntity row : repository.findAllByOrderByRankingAsc()) {
+            closeFreeTierMirror(row);
+        }
         repository.deleteAll();
         invalidateModelCaches();
+    }
+
+    /** Push {@code free_tier = false} for a row that was open, so the gate stops funding it. */
+    private void closeFreeTierMirror(ModelConfigOverrideEntity row) {
+        if (row == null || !row.isFreeTierEnabled()) {
+            return;
+        }
+        if (row.getPriceInput() == null && row.getPriceOutput() == null) {
+            // Nothing was ever mirrored for a priceless row (the sync needs a price), so
+            // there is nothing open to close.
+            return;
+        }
+        boolean mirrored = authPricingSyncClient.sync(row.getProvider(), row.getModelId(),
+                row.getPriceInput(), row.getPriceOutput(), row.getProviderKind(),
+                row.getPriceCacheRead(), row.getPriceCacheWrite(), false);
+        if (!mirrored) {
+            log.error("Deleted the override for {}:{} but could NOT close it in the billing mirror."
+                            + " The free-tier allowance may keep funding it until the row is"
+                            + " re-created and closed, or the mirror is corrected directly.",
+                    row.getProvider(), row.getModelId());
+        }
     }
 
     /**
@@ -1440,6 +1921,23 @@ public class ModelCatalogService {
      * always overwrites - admin edits are the source of truth.
      */
     private void applyEnrichmentFields(Map<String, Object> model, ModelConfigOverrideEntity override) {
+        // V493: which models a FREE-plan allowance may fund. Stamped HERE because this
+        // is the ONE helper both payload builders run through - applyOverride (the
+        // YAML-backed rows) and buildModelInfo (admin-added custom rows) - and both
+        // catalog entry points therefore carry it: getEffectiveModelList (the admin
+        // Models panel) and getModelsForCategory (what /api/v3/chat/models actually
+        // serves the chat and agent pickers).
+        //
+        // Setting it in only one of those was the whole feature silently doing
+        // nothing: the admin saw the chip lit, while the picker's free-tier-first
+        // ordering matched no model, every row kept its upgrade badge, and the
+        // "do not open on a model whose first turn is refused" guard never fired -
+        // because the key was simply absent from the payload the frontend reads.
+        // Unconditional, unlike the fields below, so the two catalog payloads agree in
+        // shape wherever an override row exists. A model with NO override row never
+        // reaches this helper at all and the key is genuinely absent - harmless, since
+        // the client reads `=== true` and a model can only be opened by creating a row.
+        model.put("freeTierEnabled", override.isFreeTierEnabled());
         if (override.getContextWindow() != null) {
             model.put("contextWindow", override.getContextWindow());
         }
@@ -1580,6 +2078,102 @@ public class ModelCatalogService {
     }
 
     /**
+     * Drop every provider an admin has switched off entirely (V508).
+     *
+     * <p>Applied to the PICKER catalogue only. The admin list keeps showing a disabled
+     * provider, or there would be no way to switch it back on, and each model's own flag is
+     * left alone so turning the provider on again restores the curated selection rather than
+     * enabling everything.
+     *
+     * <p>Defaults are recomputed for the same reason the bridge filter recomputes them: a
+     * picker whose default names a provider that is no longer in the list has no valid
+     * selection at all.
+     */
+    private void filterDisabledProviders(Map<String, Object> base, Set<String> disabled) {
+        if (disabled.isEmpty()) {
+            return;
+        }
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> providers = (List<Map<String, Object>>) base.get("providers");
+        if (providers == null) {
+            return;
+        }
+        boolean removed = providers.removeIf(p -> {
+            String name = (String) p.get("name");
+            return name != null && disabled.contains(name.toLowerCase(Locale.ROOT));
+        });
+        if (removed) {
+            recalculateDefaults(base);
+        }
+    }
+
+    /**
+     * The providers switched off, lower-cased. Only exceptions are stored, so this is empty on
+     * an install where nobody has touched the switch.
+     *
+     * <p>Reads through on every catalogue build rather than caching: the table holds a handful
+     * of rows at most, on a path that already loads every model override. An unreadable table
+     * leaves every provider ON, which is the same direction every other gate here fails and
+     * the only one that cannot make the picker mysteriously empty.
+     */
+    private Set<String> disabledProviders() {
+        if (providerSettingsRepository == null) {
+            return Set.of();
+        }
+        try {
+            Set<String> off = new HashSet<>();
+            for (ModelProviderSettingsEntity row : providerSettingsRepository.findAll()) {
+                if (Boolean.FALSE.equals(row.getEnabled()) && row.getProvider() != null) {
+                    off.add(row.getProvider().toLowerCase(Locale.ROOT));
+                }
+            }
+            return off;
+        } catch (Exception e) {
+            log.warn("Provider switches unreadable, treating every provider as enabled: {}",
+                    e.getMessage());
+            return Set.of();
+        }
+    }
+
+    /**
+     * The providers an admin has switched off, lower-cased, for the Models panel.
+     *
+     * <p>Only the exceptions: everything absent from this list is on. The panel already knows
+     * the full provider list from the catalogue, so sending the short list keeps the two from
+     * disagreeing about which providers exist.
+     */
+    public List<String> disabledProviderNames() {
+        return new ArrayList<>(disabledProviders());
+    }
+
+    /**
+     * Switch a whole provider on or off.
+     *
+     * <p>Stores only exceptions: switching one back ON deletes its row rather than writing
+     * {@code true}, so the table stays the short list of what an admin has deliberately
+     * removed instead of growing to catalogue size saying nothing.
+     */
+    @Transactional
+    public void setProviderEnabled(String provider, boolean enabled) {
+        String name = provider == null ? "" : provider.trim().toLowerCase(Locale.ROOT);
+        // The length bound is the column's (VARCHAR(64)): without it an over-long name is a
+        // constraint violation at flush, which reaches the admin as a 500 rather than as the
+        // 400 that says what is wrong.
+        if (name.length() > 64 || !name.matches("^[a-z][a-z0-9_-]*$")) {
+            throw new IllegalArgumentException("Invalid provider name: " + provider);
+        }
+        if (providerSettingsRepository == null) {
+            throw new IllegalStateException("Provider switches are not available on this install");
+        }
+        if (enabled) {
+            providerSettingsRepository.deleteById(name);
+        } else {
+            providerSettingsRepository.save(new ModelProviderSettingsEntity(name, false));
+        }
+        invalidateModelCaches();
+    }
+
+    /**
      * Effective mode-filter key for a (possibly null) category. The legacy
      * GLOBAL path ({@code category == null}) backs both the admin "Chat / Agent"
      * tab and the main chat picker / flat LLM catalog - it must apply the SAME
@@ -1619,10 +2213,13 @@ public class ModelCatalogService {
         for (Map<String, Object> provider : providers) {
             List<Map<String, Object>> models = (List<Map<String, Object>>) provider.get("models");
             if (models == null) continue;
-            // YAML-derived rows do NOT carry a 'mode' field today (the column
-            // landed in V125 on the DB side only). Treat absent as null and
-            // let acceptsMode decide - chat-eligibility of a YAML row is the
-            // legacy default for chat/browser_agent and excludes image-gen.
+            // A YAML-derived row carries the mode its PROVIDER declares
+            // (LLMProvider.getModelMode, stamped by LLMProviderFactory), which is null
+            // for every chat provider and therefore chat-eligible - the legacy default.
+            // Before that existed the key was absent here for every YAML row, so this
+            // filter read null unconditionally and a non-chat provider declared in YAML
+            // survived it: dropping its DB override from the overlay does NOT remove the
+            // YAML model, so it stayed in the chat picker and the default-model pick.
             models.removeIf(m -> !ModelCategory.acceptsMode(category, (String) m.get("mode")));
         }
     }
@@ -1801,6 +2398,15 @@ public class ModelCatalogService {
         c.setDeprecatedAt(src.getDeprecatedAt());
         c.setMode(src.getMode());
         c.setCustom(src.isCustom());
+        // V493: freeTierEnabled is now read in a read-path (applyEnrichmentFields), so
+        // by this method's own rule it must be carried. Without it, a category tab that
+        // has a sidecar row renders the chip OFF for a model whose column is TRUE - and
+        // the default Chat/Agent tab is category=null, which takes the no-sidecar path,
+        // so the lie only shows on the tabs nobody checks first.
+        c.setFreeTierEnabled(src.isFreeTierEnabled());
+        // Same omission, pre-existing: bundleEnabled is read by CatalogBundlePayload and
+        // rendered by the admin panel, and was never copied here either.
+        c.setBundleEnabled(src.getBundleEnabled());
         return c;
     }
 

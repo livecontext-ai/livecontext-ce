@@ -1,5 +1,7 @@
 package com.apimarketplace.agent.controller;
 
+import com.apimarketplace.agent.repository.AgentExecutionRepository;
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.agent.repository.AgentRepository;
 import com.apimarketplace.agent.repository.AgentSkillRepository;
 import com.apimarketplace.agent.repository.AgentWebhookTokenRepository;
@@ -37,6 +39,8 @@ class InternalAgentControllerActivitySnapshotTest {
 
     @Mock private AgentService agentService;
     @Mock private AgentRepository agentRepository;
+    @Mock private AgentExecutionRepository agentExecutionRepository;
+    @Mock private OrgAccessGuard orgAccessService;
     @Mock private AgentSkillRepository agentSkillRepository;
     @Mock private AgentWebhookTokenRepository webhookTokenRepository;
     @Mock private SkillRepository skillRepository;
@@ -52,7 +56,7 @@ class InternalAgentControllerActivitySnapshotTest {
     @BeforeEach
     void setUp() {
         controller = new InternalAgentController(
-                agentService, agentRepository, agentSkillRepository, webhookTokenRepository,
+                agentService, agentRepository, agentExecutionRepository, orgAccessService, agentSkillRepository, webhookTokenRepository,
                 skillRepository, skillService, skillFolderService, observabilityService,
                 tenantResolver, new RequestParameterExtractor(), conversationStopCascadeService,
                 agentActivitySnapshotService);

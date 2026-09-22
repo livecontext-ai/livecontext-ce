@@ -32,6 +32,120 @@ class LlmCredentialRepositoryTest {
     }
 
     @Test
+    @DisplayName("hasUsableUserKey is true for a default no_proxy credential carrying an api_key")
+    void hasUsableUserKeyTrueForDirectCredentialWithKey() {
+        CredentialSummaryDto userCred = new CredentialSummaryDto();
+        userCred.setCredentialData(Map.of("api_key", "sk-user", "mode", "no_proxy"));
+        when(credentialClient.getDefaultCredential("user-42", "llm_openai"))
+                .thenReturn(Optional.of(userCred));
+
+        assertThat(repository.hasUsableUserKey("user-42", "openai")).isTrue();
+        verify(credentialClient, never()).getPlatformCredentialForIntegration(any());
+    }
+
+    @Test
+    @DisplayName("hasUsableUserKey treats an absent mode as no_proxy (existing credentials predate the field)")
+    void hasUsableUserKeyTrueWhenModeAbsent() {
+        CredentialSummaryDto userCred = new CredentialSummaryDto();
+        userCred.setCredentialData(Map.of("api_key", "sk-user"));
+        when(credentialClient.getDefaultCredential("user-42", "llm_openai"))
+                .thenReturn(Optional.of(userCred));
+
+        assertThat(repository.hasUsableUserKey("user-42", "openai")).isTrue();
+    }
+
+    @Test
+    @DisplayName("hasUsableUserKey is false for a proxy-mode credential: the user opted into the platform key")
+    void hasUsableUserKeyFalseForProxyMode() {
+        CredentialSummaryDto userCred = new CredentialSummaryDto();
+        userCred.setCredentialData(Map.of("api_key", "sk-user", "mode", "proxy"));
+        when(credentialClient.getDefaultCredential("user-42", "llm_openai"))
+                .thenReturn(Optional.of(userCred));
+
+        assertThat(repository.hasUsableUserKey("user-42", "openai")).isFalse();
+    }
+
+    @Test
+    @DisplayName("hasUsableUserKey is false when the credential has a blank api_key")
+    void hasUsableUserKeyFalseForBlankKey() {
+        CredentialSummaryDto userCred = new CredentialSummaryDto();
+        userCred.setCredentialData(Map.of("api_key", "   "));
+        when(credentialClient.getDefaultCredential("user-42", "llm_openai"))
+                .thenReturn(Optional.of(userCred));
+
+        assertThat(repository.hasUsableUserKey("user-42", "openai")).isFalse();
+    }
+
+    @Test
+    @DisplayName("hasUsableUserKey is false when the user has no default credential for the provider")
+    void hasUsableUserKeyFalseWhenNoCredential() {
+        when(credentialClient.getDefaultCredential("user-42", "llm_openai"))
+                .thenReturn(Optional.empty());
+
+        assertThat(repository.hasUsableUserKey("user-42", "openai")).isFalse();
+    }
+
+    @Test
+    @DisplayName("hasUsableUserKey is false (never throws) when the credential client fails")
+    void hasUsableUserKeyFalseWhenClientThrows() {
+        when(credentialClient.getDefaultCredential("user-42", "llm_openai"))
+                .thenThrow(new RuntimeException("auth-service down"));
+
+        assertThat(repository.hasUsableUserKey("user-42", "openai")).isFalse();
+    }
+
+    @Test
+    @DisplayName("findUserApiKeyByProviderName returns the user's own key and NEVER falls back to the platform key")
+    void findUserApiKeyNeverFallsBackToPlatform() {
+        when(credentialClient.getDefaultCredential("user-42", "llm_openai"))
+                .thenReturn(Optional.empty());
+
+        assertThat(repository.findUserApiKeyByProviderName("user-42", "openai")).isEmpty();
+        // The whole point of this accessor: an OWN_KEY-pinned call must not be handed the
+        // platform key when the user's own is missing.
+        verify(credentialClient, never()).getPlatformCredentialForIntegration(any());
+    }
+
+    @Test
+    @DisplayName("findUserApiKeyByProviderName returns the saved key for a direct-mode credential")
+    void findUserApiKeyReturnsDirectKey() {
+        CredentialSummaryDto userCred = new CredentialSummaryDto();
+        userCred.setCredentialData(Map.of("api_key", "sk-user"));
+        when(credentialClient.getDefaultCredential("user-42", "llm_openai"))
+                .thenReturn(Optional.of(userCred));
+
+        assertThat(repository.findUserApiKeyByProviderName("user-42", "openai")).contains("sk-user");
+    }
+
+    @Test
+    @DisplayName("clearHasDbKeyCache(userId, provider) drops only that user's slot; other users keep theirs")
+    void clearHasDbKeyCacheForOneUserOnly() {
+        // Two users, both cached as "has key" for openai.
+        when(credentialClient.getPlatformCredentialForIntegration("llm_openai"))
+                .thenReturn(Optional.of("sk-platform"));
+        assertThat(repository.hasDbKey("openai")).isTrue();      // platform slot (no request bound)
+        verify(credentialClient, times(1)).getPlatformCredentialForIntegration("llm_openai");
+
+        repository.clearHasDbKeyCache("some-other-user", "openai");
+        assertThat(repository.hasDbKey("openai")).isTrue();
+        verify(credentialClient, times(1)).getPlatformCredentialForIntegration("llm_openai"); // still cached
+
+        repository.clearHasDbKeyCache(null, "openai");            // null user: no-op, never throws
+        assertThat(repository.hasDbKey("openai")).isTrue();
+        verify(credentialClient, times(1)).getPlatformCredentialForIntegration("llm_openai");
+    }
+
+    @Test
+    @DisplayName("hasUsableUserKey is false without a lookup for a blank user or an unknown provider")
+    void hasUsableUserKeyFalseWithoutLookupForBlankInputs() {
+        assertThat(repository.hasUsableUserKey(null, "openai")).isFalse();
+        assertThat(repository.hasUsableUserKey("  ", "openai")).isFalse();
+        assertThat(repository.hasUsableUserKey("user-42", null)).isFalse();
+
+        verify(credentialClient, never()).getDefaultCredential(any(), any());
+    }
+
+    @Test
     @DisplayName("should return API key when found via credential client")
     void shouldReturnApiKeyWhenFound() {
         when(credentialClient.getPlatformCredentialForIntegration("llm_anthropic"))

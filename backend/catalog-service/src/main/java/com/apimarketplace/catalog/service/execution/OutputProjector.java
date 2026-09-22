@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.List;
 import java.util.Map;
 
@@ -40,6 +41,8 @@ public class OutputProjector {
     private static final String TYPE_OBJECT  = "object";
     private static final String TYPE_ARRAY   = "array";
     private static final String TYPE_FILEREF = "fileRef";
+    /** Marks an outputSchema field whose value comes from a response header, not the body. */
+    private static final String SOURCE_HEADER = "header";
 
     private final ObjectMapper objectMapper;
 
@@ -50,6 +53,106 @@ public class OutputProjector {
      * @param outputSchemaJson JSONB string from {@code api_tools.output_schema} (may be null)
      * @return projected output, or {@code rawResponse} unchanged when no schema is declared
      */
+    /**
+     * Project the response, then add any field the schema sources from a RESPONSE HEADER.
+     *
+     * <p>Some providers return the value a later call needs in a header rather than in the body.
+     * LinkedIn's video upload is the case this exists for: each part is PUT to a signed URL that
+     * answers 201 with an EMPTY body and the part's identifier in {@code ETag}, and
+     * {@code finalizeUpload} will not accept the video without those identifiers. The execution
+     * layer has always captured the headers; they were dropped one layer above, so no endpoint
+     * could ever declare one and the whole upload flow was unreachable.
+     *
+     * <p>A field opts in with {@code "source": "header"} and is looked up by its {@code key},
+     * case-insensitively, because HTTP header names are. Anything without that marker reads from
+     * the body exactly as before, so every existing tool projects unchanged.
+     *
+     * @param responseHeaders response headers, may be null or empty
+     */
+    public Object project(Object rawResponse, String outputSchemaJson,
+                          Map<String, String> responseHeaders) {
+        Object projected = project(rawResponse, outputSchemaJson);
+        List<String> headerKeys = headerSourcedKeys(outputSchemaJson);
+        if (headerKeys.isEmpty()) {
+            return projected;
+        }
+        // A header-sourced field has to land somewhere. The body of such a call is typically
+        // empty, so the projection is an empty Map; starting a fresh one when it is anything
+        // else (null, a list) keeps the declared field reachable instead of silently lost.
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (projected instanceof Map<?, ?> projectedMap) {
+            for (Map.Entry<?, ?> e : projectedMap.entrySet()) {
+                String key = String.valueOf(e.getKey());
+                // A header-sourced field reads from the HEADER and from nowhere else. The body
+                // projection above does not know about the marker, so a body field of the same
+                // name would otherwise survive here and be handed back as if the provider had
+                // sent the header - a wrong value, silently, with no way for a caller to tell.
+                // Dropping it first makes the header the only source, present or absent.
+                if (headerKeys.contains(key)) {
+                    continue;
+                }
+                out.put(key, e.getValue());
+            }
+        } else if (projected != null) {
+            log.debug("OutputProjector: header-sourced fields declared on a non-object projection; "
+                    + "keeping the projection under 'data'");
+            out.put("data", projected);
+        }
+        Map<String, String> lookup = caseInsensitive(responseHeaders);
+        for (String key : headerKeys) {
+            String value = lookup.get(key.toLowerCase(Locale.ROOT));
+            if (value != null) {
+                out.put(key, value);
+            }
+        }
+        return out;
+    }
+
+    /** The keys the schema declares as coming from a header. Root level only. */
+    private List<String> headerSourcedKeys(String outputSchemaJson) {
+        if (outputSchemaJson == null || outputSchemaJson.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode schema = objectMapper.readTree(outputSchemaJson);
+            if (!schema.isArray()) {
+                return List.of();
+            }
+            List<String> keys = new ArrayList<>();
+            for (JsonNode field : schema) {
+                if (SOURCE_HEADER.equalsIgnoreCase(field.path("source").asText(""))) {
+                    String key = field.path("key").asText("");
+                    if (!key.isBlank()) {
+                        keys.add(key);
+                    }
+                }
+            }
+            return keys;
+        } catch (Exception e) {
+            log.warn("OutputProjector: could not read the output schema for header-sourced fields ({})",
+                    e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * HTTP header names are case-insensitive, and providers disagree on the casing they send
+     * ({@code ETag}, {@code etag}). Matching on the exact spelling a seed author happened to type
+     * would make the field resolve for one provider and silently vanish for the next.
+     */
+    private Map<String, String> caseInsensitive(Map<String, String> headers) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (headers == null) {
+            return out;
+        }
+        for (Map.Entry<String, String> e : headers.entrySet()) {
+            if (e.getKey() != null && e.getValue() != null) {
+                out.put(e.getKey().toLowerCase(Locale.ROOT), e.getValue());
+            }
+        }
+        return out;
+    }
+
     public Object project(Object rawResponse, String outputSchemaJson) {
         if (outputSchemaJson == null || outputSchemaJson.isBlank()) {
             return rawResponse; // legacy path - no projection

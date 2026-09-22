@@ -7,7 +7,9 @@ import type { StorageExplorerEntry } from '@/lib/api/storage-api';
 import { getFileUrlById } from '@/lib/api/orchestrator/file.service';
 import { useAuthedObjectUrl } from '@/hooks/useAuthedObjectUrl';
 import { getFileTypeIcon } from '@/lib/files/fileTypes';
-import { detectPreviewKind, resolveMediaMimeType } from '@/lib/files/filePreview';
+import {
+  detectPreviewKind, resolveMediaMimeType, PDF_FIRST_PAGE_FRAGMENT, VIDEO_POSTER_FRAGMENT,
+} from '@/lib/files/filePreview';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { DRAG_GUARD_PROPS } from '@/lib/dnd/dragGuards';
 
@@ -191,8 +193,12 @@ export function FileThumb({ entry }: { entry: FileThumbEntry }) {
   const { url: blobUrl, error } = useAuthedObjectUrl(
     wantBytes ? getFileUrlById(entry.id, { inline: true }) : null,
     // Re-type a generic blob from the filename so a PDF/video stored as octet-stream still
-    // renders its first frame/page instead of a broken tile.
+    // renders its first frame/page instead of a broken tile. A PDF is FRAMED, so its type is
+    // forced rather than hinted: the tile classifies by name, a blob URL inherits this app's
+    // origin, and a row stored as text/html under a `.pdf` name would otherwise run its own
+    // script here. Forced, it renders as a broken PDF instead. See useAuthedObjectUrl.
     resolveMediaMimeType(entry.mimeType, entry.fileName),
+    isPdf ? 'application/pdf' : undefined,
   );
 
   const iconFallback = (
@@ -218,7 +224,7 @@ export function FileThumb({ entry }: { entry: FileThumbEntry }) {
       <div ref={containerRef} className="w-full h-full">
         {inView && blobUrl ? (
           <video
-            src={`${blobUrl}#t=0.1`}
+            src={`${blobUrl}${VIDEO_POSTER_FRAGMENT}`}
             muted
             playsInline
             preload="metadata"
@@ -235,7 +241,7 @@ export function FileThumb({ entry }: { entry: FileThumbEntry }) {
       {inView && blobUrl ? (
         <iframe
           // Toolbar-less first page; pointer-events-none keeps the tile clickable.
-          src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
+          src={`${blobUrl}${PDF_FIRST_PAGE_FRAGMENT}`}
           title={entry.fileName ?? 'PDF'}
           className="w-full h-full pointer-events-none bg-white"
           tabIndex={-1}

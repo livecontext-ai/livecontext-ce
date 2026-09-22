@@ -159,8 +159,15 @@ export function useInspectorNodeMeta(node: Node<BuilderNodeData> | null): Inspec
     const isCoreNode =
       (isCoreGenericNode || isLogicSubcategory) && !isIfElse && !isSwitch && !isUserApproval && !isWhile && !isTransform && !isMerge && !isWait && !isHttpRequest && !isWebhook;
     
-    // Interface node
-    const isInterfaceNode = nodeIdForCore === 'interface' || nodeIdForCore.startsWith('interface-');
+    // Interface node - through the registry, like isMerge/isWait above and for the
+    // same reason. The id-prefix form missed 221 of the 364 interface nodes in
+    // production plans, because `data.id` comes back from a plan as the graph node
+    // id, which is whatever created the canvas node. Every one of those lost the
+    // interface-specific Output column (Output / Preview / Schema) and the Preview
+    // action, and gained the Edit / Run data switcher that interface nodes are
+    // deliberately not given. The registry matches on node type and on the presence
+    // of an interfaceId, neither of which a round-trip changes.
+    const isInterfaceNode = !!node && nodeRegistry.isInterfaceNode(node);
 
     return {
       nodeClass,

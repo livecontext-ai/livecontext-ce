@@ -255,7 +255,7 @@ export default function ModelsPage() {
           rows={[
             ['ALL', 'the wildcard default, used when no more specific scope matches.'],
             ['CHAT', 'chat conversations (CONVERSATION is an alias of this).'],
-            ['WORKFLOW', 'workflow agent-node executions.'],
+            ['WORKFLOW', 'workflow node executions: the agent node, and the classify and guardrail nodes.'],
             ['WEBHOOK', 'webhook-triggered runs.'],
             ['WIDGET', 'embedded widget conversations.'],
             ['SCHEDULE', 'schedule-triggered runs.'],
@@ -265,15 +265,73 @@ export default function ModelsPage() {
         />
         <p>
           Resolution checks the exact surface first, then falls back to the <code>ALL</code> row.
-          Guardrail, Classify, and sub-agent runs never reach this chokepoint, so no scope targets
-          them. At most one link exists per billed pair and scope; the surface picker only offers
+          Guardrail and Classify nodes resolve as <code>WORKFLOW</code>, like the agent node they sit
+          next to. The browser agent, avatar generation and single JSON completions carry no surface
+          at all, and a sub-agent run carries one (<code>SUB_AGENT</code>) that matches none, so in
+          every case only an <code>ALL</code> row reaches them. Disabling a surface-scoped
+          row does not park that surface on the billed model either: it reverts to the{' '}
+          <code>ALL</code> route when one exists. At most one link exists per billed pair and scope; the surface picker only offers
           scopes not already linked for that pair, so you can stack <code>ALL</code> plus any subset of
           specific surfaces, but never the same surface twice. Links can be individually enabled,
           disabled, or deleted.
         </p>
+        <p>
+          The <strong>Models</strong> tab carries a shortcut for the most common link. A model whose
+          provider has a CLI counterpart that actually routes that exact model id (Anthropic to Claude
+          Code, OpenAI to Codex, Google to Gemini CLI, and Mistral to Mistral Vibe, though that last
+          one matches nothing in the standard catalog because the Vibe CLI names its models with
+          local aliases) shows a small route button: one click creates
+          the link to that CLI, on the same model id, scoped <code>ALL</code>. Once a model is routed,
+          the button becomes a badge carrying the execution target&apos;s icon (its name is in the
+          tooltip) and opens a surface picker.
+          Everything it writes is an ordinary link, editable from the Execution Links tab like any
+          other. A model whose CLI counterpart does not route it gets no route button, but it still
+          shows the badge once it is linked from the Execution Links tab, so the Models tab answers
+          &ldquo;is this model routed, and where&rdquo; for every model, not only the CLI-capable ones.
+        </p>
+        <p>
+          The picker mirrors how a route is resolved rather than showing eight independent switches.
+          While <code>All surfaces</code> is on it routes every surface, so the others are listed as
+          covered by it and are not clickable: a surface-scoped row could only send that surface
+          somewhere else, never switch it off. A surface already overridden onto another target is
+          frozen there too, and stays editable from the Execution Links tab. Turning <code>All surfaces</code> off
+          disables that row (it is not deleted, so the badge and this picker stay) and the surfaces
+          become individually routable.
+        </p>
+        <p>
+          <code>All surfaces</code> also covers the callers that carry no surface, and each lands on
+          a model of its own choosing: chat compaction summarises with the platform summariser
+          (unless a conversation or agent overrides it), avatar generation uses the tenant&apos;s
+          default model, and the browser agent uses the pair configured on it. Where the model they land on is the one
+          you routed to a CLI, the CLI cannot serve it: a single JSON completion fails outright,
+          avatar generation quietly switches to the platform utility model (and fails only if that
+          one is routed to a CLI too), and the browser agent keeps the billed model. So the rows to
+          think twice about are the platform summariser model and your tenant default.
+        </p>
+        <p>
+          The button turns amber when that CLI <strong>cannot run</strong> on the bridge host, which
+          means it is absent OR present but logged out. On an already-linked model it stays neutral
+          while nothing reaches that CLI (the model is routed elsewhere, or its routing is switched
+          off), since an unusable CLI cannot break what is not sent to it; on a model with no link
+          yet it is amber precisely because the click would send it there. That is worth heeding
+          before clicking: a
+          linked run falls back to the billed provider only when the bridge transport is entirely
+          unwired, so with the bridge up and the CLI unusable everything routed to it fails until the
+          CLI is fixed or the routing is changed.
+        </p>
+        <p>
+          Installed and logged in is not the only precondition, and it is the only one the badge can
+          see. Each CLI also has its own <strong>access policy</strong> on that CLI&apos;s tab, and it
+          ships as <strong>admin-only</strong>: an admin&apos;s own runs pass, so the person reading
+          this panel is the least likely to notice that every other user&apos;s run of that model is
+          denied with a typed error. On a shared model an <code>ALL</code>-scoped link makes that
+          everyone else&apos;s problem, and the badge stays neutral throughout. The third
+          precondition is the bridge transport being wired at all, and that is the one case that
+          degrades quietly: there the link is dropped and the billed model runs on its own provider.
+        </p>
         <Callout variant="info">
           Execution Links is a cloud-only tab and feature. On a self-hosted install this tab
-          doesn&apos;t appear.
+          doesn&apos;t appear, and neither does the route button on the Models tab.
         </Callout>
 
         <h2>Bridge availability filtering</h2>

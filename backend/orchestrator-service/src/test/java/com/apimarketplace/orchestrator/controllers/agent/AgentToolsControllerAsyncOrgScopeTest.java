@@ -107,4 +107,46 @@ class AgentToolsControllerAsyncOrgScopeTest {
         assertThat(ctx.getValue().credentials())
                 .containsEntry("allowedFileIds", List.of("file-1", "file-2"));
     }
+
+    @Test
+    @DisplayName("a body-supplied orgRole never reaches the context, on BOTH the sync and async entry points")
+    void bodyOrgRoleIsIgnoredOnBothEntryPoints() {
+        // The body was a second channel for the privilege axis. Both entry points here read it,
+        // and both are reachable through the gateway, which strips the caller's own identity
+        // HEADERS but not the body: a user whose gateway resolved no active org could name a
+        // workspace and assert OWNER in it in one request. Every internal caller sends the role
+        // as a header from the same source it filled the body with, so nothing legitimate needs
+        // the body read. orgId is deliberately still accepted from the body and asserted here so
+        // the two are not conflated by a later reader.
+        when(registry.hasTool("workflow")).thenReturn(true);
+        when(registrationService.executeToolAsync(eq("workflow"), any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(ToolExecutionResult.success(Map.of())));
+        when(registrationService.executeTool(eq("workflow"), any(), any()))
+                .thenReturn(ToolExecutionResult.success(Map.of()));
+
+        MockHttpServletRequest httpReq = new MockHttpServletRequest();
+        httpReq.addHeader("X-User-ID", "tenant-1");
+        // deliberately NO X-Organization-Role header: this is the reachable state
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("tool", "workflow");
+        body.put("parameters", Map.of("action", "list"));
+        body.put("orgId", "victim-org");
+        body.put("orgRole", "OWNER");
+
+        controller.executeToolAsync(httpReq, body);
+        ArgumentCaptor<ToolExecutionContext> asyncCtx = ArgumentCaptor.forClass(ToolExecutionContext.class);
+        verify(registrationService).executeToolAsync(eq("workflow"), any(), asyncCtx.capture());
+        assertThat(asyncCtx.getValue().orgRole())
+                .as("execute-async must not take the role from the body")
+                .isNull();
+        assertThat(asyncCtx.getValue().orgId()).isEqualTo("victim-org");
+
+        controller.executeTool(httpReq, body);
+        ArgumentCaptor<ToolExecutionContext> syncCtx = ArgumentCaptor.forClass(ToolExecutionContext.class);
+        verify(registrationService).executeTool(eq("workflow"), any(), syncCtx.capture());
+        assertThat(syncCtx.getValue().orgRole())
+                .as("execute must not take the role from the body either")
+                .isNull();
+    }
 }

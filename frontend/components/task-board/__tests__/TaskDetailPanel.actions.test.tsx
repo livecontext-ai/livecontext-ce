@@ -529,8 +529,13 @@ describe('TaskDetailPanel contextual task actions', () => {
     expect(screen.queryByTestId('task-extras-editor')).toBeNull();
 
     // Expanding "Advanced" reveals estimate / blockers / checklist in the rail.
+    //
+    // AWAITED, because the editor appears as a result of the click rather than with it. Asserted
+    // synchronously this passed on an idle machine and failed in full-suite runs, which reads as
+    // flakiness and is really a missing wait: `getBy` demands the element in the same tick the
+    // click was dispatched in.
     fireEvent.click(screen.getByRole('button', { name: /^Advanced$/i }));
-    expect(scroll).toContainElement(screen.getByTestId('task-extras-editor'));
+    expect(scroll).toContainElement(await screen.findByTestId('task-extras-editor'));
   });
 
   // A task that already carries advanced config (here: an estimate) auto-opens the

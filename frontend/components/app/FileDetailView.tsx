@@ -150,8 +150,12 @@ export function FileDetailView({
   const { url: mediaUrl } = useAuthedObjectUrl(
     entryId && needsMediaUrl ? getFileUrlById(entryId, { inline: true }) : null,
     // Re-type a generic (octet-stream) blob from the filename so a PDF/video whose stored
-    // mime_type is missing renders in the iframe/<video> instead of a broken link.
+    // mime_type is missing renders in the iframe/<video> instead of a broken link. A PDF is
+    // FRAMED, so its type is forced rather than hinted: `.pdf` in the NAME is enough to classify
+    // one here, a blob URL inherits this app's origin, and a file stored as text/html under that
+    // name would otherwise run its own script with the session in reach. See useAuthedObjectUrl.
     resolveMediaMimeType(mimeType, fileName),
+    kind === 'pdf' ? 'application/pdf' : undefined,
   );
 
   const handleDownload = async () => {

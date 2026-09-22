@@ -1,5 +1,6 @@
 package com.apimarketplace.monolith.chat;
 
+import com.apimarketplace.common.credit.ChatCreditRefusal;
 import com.apimarketplace.agent.cloud.RuntimeLlmProviderResolver;
 import com.apimarketplace.agent.factory.LLMProviderFactory;
 import com.apimarketplace.agent.loop.AgentLoopContext;
@@ -78,11 +79,15 @@ public class MonolithChatController {
                 request.getConversationId(), provider, model);
 
         // Source-type-scoped gate (cloud ChatControllerV3 parity): chat draws the
-        // PAYG bucket alone on the FREE plan. No-op in CE unlimited mode.
+        // PAYG bucket alone on the FREE plan, plus the AI allowance when the model is
+        // open to the free tier (V494) - hence the provider/model, resolved just above.
+        // No-op in CE unlimited mode, but the cloud and CE gates must ask the same
+        // question or the two editions refuse different turns for the same request.
         if (!creditClient.checkCredits(userId,
-                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION)) {
+                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION,
+                provider, model)) {
             return ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
-                    .body(Map.of("error", "Insufficient credits"));
+                    .body(Map.of("error", ChatCreditRefusal.MESSAGE));
         }
 
         // Get or create conversation (same as cloud ChatStreamInitializer)

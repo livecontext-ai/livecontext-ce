@@ -438,6 +438,74 @@ class LiteLlmFeedParserTest {
     }
 
     @Test
+    @DisplayName("A rejected id is RECORDED, so native discovery cannot re-admit what the feed refused")
+    void recordsWhatItDeclined() {
+        // Both rejects here are live on OpenAI's own /models listing, which
+        // states neither a mode nor a tool-calling capability. Without the
+        // record, discovery re-emits them as chat rows and the platform
+        // advertises an embedding model and a model it cannot call tools on.
+        String fixture = """
+            {
+              "text-embedding-3-large": {
+                "litellm_provider": "openai", "mode": "embedding",
+                "input_cost_per_token": 1.3e-07, "output_cost_per_token": 0,
+                "supports_function_calling": false
+              },
+              "gpt-5-chat": {
+                "litellm_provider": "openai", "mode": "chat",
+                "input_cost_per_token": 1.25e-06, "output_cost_per_token": 1e-05,
+                "supports_function_calling": false
+              },
+              "gemini-exp-free": {
+                "litellm_provider": "gemini", "mode": "chat",
+                "input_cost_per_token": 0, "output_cost_per_token": 0,
+                "supports_function_calling": true
+              },
+              "gpt-5.4": {
+                "litellm_provider": "openai", "mode": "chat",
+                "input_cost_per_token": 2.5e-06, "output_cost_per_token": 1.5e-05,
+                "supports_function_calling": true
+              }
+            }
+            """;
+
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        // Keyed by OUR provider name and the NATIVE id, which is what a vendor
+        // listing returns. Recording litellm's own provider key ("gemini") or
+        // the namespaced id would match nothing and the filter would be inert
+        // while every test still passed.
+        assertThat(result.declinedIds()).containsExactlyInAnyOrder(
+                NativeModelDiscoveryService.key("openai", "text-embedding-3-large"),
+                NativeModelDiscoveryService.key("openai", "gpt-5-chat"),
+                NativeModelDiscoveryService.key("google", "gemini-exp-free"));
+        // An accepted model is never declined - it is the feed's own catalog.
+        assertThat(result.declinedIds())
+                .doesNotContain(NativeModelDiscoveryService.key("openai", "gpt-5.4"));
+    }
+
+    @Test
+    @DisplayName("A namespaced feed id is recorded under its bare native id, the form a vendor listing returns")
+    void recordsDeclinedIdsWithoutTheProviderNamespace() {
+        String fixture = """
+            {
+              "mistral/mistral-embed": {
+                "litellm_provider": "mistral", "mode": "embedding",
+                "input_cost_per_token": 1e-07, "output_cost_per_token": 0,
+                "supports_function_calling": false
+              }
+            }
+            """;
+
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        assertThat(result.declinedIds()).containsExactly(
+                NativeModelDiscoveryService.key("mistral", "mistral-embed"));
+    }
+
+    @Test
     @DisplayName("Drops ft: fine-tuning pricing templates - they're not callable until a tenant fine-tunes the base")
     void dropsFineTuneTemplates() {
         // LiteLLM publishes ft:-prefixed rows as per-token rate templates for
@@ -578,6 +646,342 @@ class LiteLlmFeedParserTest {
                 .containsExactlyInAnyOrder("claude-opus-4-7", "gpt-4-0613");
         // gpt-4-0613 has a date-like suffix but NO canonical twin in the feed
         // (gpt-4 doesn't appear), so it stays.
+
+        // The hidden twin is recorded. Anthropic's own listing returns dated
+        // ids, so without this every sync with an Anthropic key would have
+        // discovery add claude-opus-4-7-20260416 back as a second row for the
+        // same model - the highest-volume duplicate of the lot, and unlike the
+        // others it would fire on every single run.
+        assertThat(result.declinedIds()).contains(
+                NativeModelDiscoveryService.key("anthropic", "claude-opus-4-7-20260416"));
+        // A dated-only row was KEPT, so it is a catalog row and must not also
+        // be declined - that would hide a model the feed publishes.
+        assertThat(result.declinedIds()).doesNotContain(
+                NativeModelDiscoveryService.key("openai", "gpt-4-0613"));
+    }
+
+    @Test
+    @DisplayName("A version-suffixed twin collapses onto its version-free alias when the feed describes them identically")
+    void collapsesVersionedTwinOntoAlias() {
+        // The live case, taken from the feed on 2026-09-15: DeepSeek publishes
+        // deepseek-flash AND deepseek-v4-flash, with the same price, context,
+        // output cap and capability flags, and updates the weights behind both
+        // in place. So the versioned name says "v4" for weights that are no
+        // longer v4, and the picker shows two rows nobody can tell apart, one
+        // of which lies about what it serves.
+        String fixture = """
+            {
+              "deepseek-flash": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "max_input_tokens": 1000000, "max_output_tokens": 393216,
+                "supports_function_calling": true, "supports_vision": true,
+                "supports_reasoning": true
+              },
+              "deepseek-v4-flash": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "max_input_tokens": 1000000, "max_output_tokens": 393216,
+                "supports_function_calling": true, "supports_vision": true,
+                "supports_reasoning": true
+              }
+            }
+            """;
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        // The ALIAS is the survivor, deliberately: a version-free id cannot go
+        // stale, it only ever claims to be the current flash model.
+        assertThat(result.models()).extracting(m -> m.get("modelId"))
+                .containsExactly("deepseek-flash");
+        // Recorded like any other declined id, so the native discovery pass
+        // cannot offer deepseek-v4-flash straight back on the same sync.
+        assertThat(result.declinedIds()).contains(
+                NativeModelDiscoveryService.key("deepseek", "deepseek-v4-flash"));
+    }
+
+    @Test
+    @DisplayName("A field the ALIAS carries and the versioned twin lacks blocks the collapse")
+    void asymmetricFieldsBlockTheCollapse() {
+        // publishedFieldsEqual walks the UNION of both key sets, and this is the
+        // fixture that proves the union is load-bearing. The direction matters
+        // and it is not symmetric: the comparison is always called as
+        // (twin, alias), so iterating only the FIRST side's keys still catches a
+        // field the twin has and the alias lacks. What it cannot see is the
+        // reverse - a key that exists only on the ALIAS is never looked up, both
+        // rows read as identical, and the twin is silently collapsed away.
+        //
+        // Reachable in production rather than theoretical: normalise() writes
+        // deprecationDate and releaseDate CONDITIONALLY. Here the vendor has
+        // announced an end date for the moving alias while the pinned snapshot
+        // carries none, so the two are genuinely different offers and both must
+        // stand. Delete `keys.addAll(b.keySet())` and this test fails while
+        // every other test in the class still passes.
+        String fixture = """
+            {
+              "vendor-flash": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true,
+                "deprecation_date": "2027-01-01"
+              },
+              "vendor-v4-flash": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true
+              }
+            }
+            """;
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        assertThat(result.models()).extracting(m -> m.get("modelId"))
+                .containsExactlyInAnyOrder("vendor-flash", "vendor-v4-flash");
+        assertThat(result.declinedIds()).doesNotContain(
+                NativeModelDiscoveryService.key("deepseek", "vendor-v4-flash"));
+        // The asymmetry is real, not an artefact of the fixture: exactly one of
+        // the two normalised rows carries the key at all.
+        assertThat(findByModelId(result.models(), "vendor-flash")).containsKey("deprecationDate");
+        assertThat(findByModelId(result.models(), "vendor-v4-flash")).doesNotContainKey("deprecationDate");
+    }
+
+    @Test
+    @DisplayName("A field the versioned twin carries and the alias lacks also blocks the collapse")
+    void asymmetryBlocksTheCollapseInEitherDirection() {
+        // The mirror image of the test above. It is the easier direction, caught
+        // even by a one-sided comparison, and it is here so the pair states the
+        // whole rule rather than the half that happens to be fragile: ANY
+        // difference in the published description keeps both rows.
+        String fixture = """
+            {
+              "vendor-flash": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true
+              },
+              "vendor-v4-flash": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true,
+                "deprecation_date": "2027-01-01"
+              }
+            }
+            """;
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        assertThat(result.models()).extracting(m -> m.get("modelId"))
+                .containsExactlyInAnyOrder("vendor-flash", "vendor-v4-flash");
+    }
+
+    @Test
+    @DisplayName("A version-suffixed row is KEPT when any published field differs from its alias")
+    void keepsVersionedRowWhenTheFeedSaysTheyDiffer() {
+        // The collapse has to be provable from the feed, not inferred from the
+        // name. A vendor can publish a version-free alias next to a genuinely
+        // different versioned model, and here the feed says so: 1M of context
+        // against 128k. Guessing from the name alone would delete a real model
+        // and leave users on a different one under the id they picked.
+        String fixture = """
+            {
+              "vendor-chat": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "max_input_tokens": 1000000,
+                "supports_function_calling": true
+              },
+              "vendor-v3-chat": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "max_input_tokens": 128000,
+                "supports_function_calling": true
+              }
+            }
+            """;
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        assertThat(result.models()).extracting(m -> m.get("modelId"))
+                .containsExactlyInAnyOrder("vendor-chat", "vendor-v3-chat");
+        assertThat(result.declinedIds()).doesNotContain(
+                NativeModelDiscoveryService.key("deepseek", "vendor-v3-chat"));
+    }
+
+    @Test
+    @DisplayName("An id carrying two version tokens tries each one, not only the first")
+    void severalVersionTokensAreEachTried() {
+        // The match loop runs `while (mat.find())` rather than testing one
+        // candidate, and nothing drove it past its first iteration. Here the
+        // FIRST token yields an id the feed does not carry, so a single-shot
+        // implementation would give up and keep a redundant row; only trying
+        // the second token finds the real alias.
+        String fixture = """
+            {
+              "vendor-v4-v2-flash": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true
+              },
+              "vendor-v4-flash": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true
+              }
+            }
+            """;
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        // Removing "-v4" gives "vendor-v2-flash", which is absent; removing
+        // "-v2" gives "vendor-v4-flash", which is present and identical.
+        assertThat(result.models()).extracting(m -> m.get("modelId"))
+                .containsExactly("vendor-v4-flash");
+        assertThat(result.declinedIds()).contains(
+                NativeModelDiscoveryService.key("deepseek", "vendor-v4-v2-flash"));
+    }
+
+    @Test
+    @DisplayName("A version token at the END of an id is never treated as a twin suffix")
+    void trailingVersionTokenIsNotAnAlias() {
+        // deepseek-prover-v2 is a MODEL NAME that happens to end in a version.
+        // Stripping the token there would invent "deepseek-prover", an id the
+        // vendor does not serve, and a match against it would delete a real
+        // model in favour of a different one. The pattern is anchored on a
+        // FOLLOWING hyphen precisely so the end of an id cannot match.
+        String fixture = """
+            {
+              "deepseek-prover": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true
+              },
+              "deepseek-prover-v2": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true
+              }
+            }
+            """;
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        assertThat(result.models()).extracting(m -> m.get("modelId"))
+                .containsExactlyInAnyOrder("deepseek-prover", "deepseek-prover-v2");
+    }
+
+    @Test
+    @DisplayName("One vendor's alias does not hide another vendor's, so a legitimate collapse still happens")
+    void twoVendorsSharingAnAliasIdDoNotMaskEachOther() {
+        // The case that actually pins the (provider, id) map key, which the test
+        // below deliberately does not: two vendors publish the SAME alias id,
+        // and only one of them also ships the versioned twin.
+        //
+        // Keyed by the bare id, the two aliases collide in the index and one
+        // overwrites the other. The twin then looks up its alias, finds the
+        // WRONG vendor's row, and the provider mismatch blocks a collapse that
+        // should have happened - a silent miss rather than a loud failure, so
+        // the only thing that would ever surface it is a test like this one.
+        String fixture = """
+            {
+              "shared-flash": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true
+              },
+              "shared-v4-flash": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true
+              },
+              "moonshot/shared-flash": {
+                "litellm_provider": "moonshot", "mode": "chat",
+                "input_cost_per_token": 9e-07, "output_cost_per_token": 3.6e-06,
+                "supports_function_calling": true
+              }
+            }
+            """;
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        // DeepSeek's twin collapsed; both vendors keep their alias.
+        assertThat(result.models()).extracting(m -> m.get("provider") + ":" + m.get("modelId"))
+                .containsExactlyInAnyOrder("deepseek:shared-flash", "moonshot:shared-flash");
+        assertThat(result.declinedIds()).contains(
+                NativeModelDiscoveryService.key("deepseek", "shared-v4-flash"));
+    }
+
+    @Test
+    @DisplayName("Two vendors shipping twin-shaped ids both survive, whatever their prices")
+    void versionedTwinsAreMatchedPerProvider() {
+        // Honest about its own mechanism, corrected: this passes because the
+        // alias index is keyed (provider, id), so the lookup for one vendor's
+        // twin never returns the other vendor's row. It is NOT the field
+        // comparison doing the work - adding "provider" to the ignored set
+        // changes nothing here, because publishedFieldsEqual is never reached
+        // for this pair (mutation-proven).
+        //
+        // It also does not PIN that key: keying by bare id would still leave
+        // both rows standing here. The case that pins it is
+        // twoVendorsSharingAnAliasIdDoNotMaskEachOther. What this one pins is
+        // the user-visible outcome: one vendor's naming habit cannot delete
+        // another vendor's model.
+        String fixture = """
+            {
+              "shared-flash": {
+                "litellm_provider": "deepseek", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true
+              },
+              "shared-v4-flash": {
+                "litellm_provider": "moonshot", "mode": "chat",
+                "input_cost_per_token": 3e-07, "output_cost_per_token": 1.2e-06,
+                "supports_function_calling": true
+              }
+            }
+            """;
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        assertThat(result.models()).extracting(m -> m.get("modelId"))
+                .containsExactlyInAnyOrder("shared-flash", "shared-v4-flash");
+        assertThat(result.declinedIds()).doesNotContain(
+                NativeModelDiscoveryService.key("moonshot", "shared-v4-flash"));
+    }
+
+    @Test
+    @DisplayName("Two vendors shipping the same dated id are recorded apart, never as one")
+    void datedTwinsAreRecordedPerProvider() {
+        // The declined index is keyed by provider, so a twin hidden for one
+        // vendor must not silence the same id for another. Cheap to get wrong
+        // (a key built from the id alone) and invisible when it is: the other
+        // vendor's model simply never appears.
+        String fixture = """
+            {
+              "model-x-9": {
+                "litellm_provider": "anthropic", "mode": "chat",
+                "input_cost_per_token": 5e-06, "output_cost_per_token": 2.5e-05,
+                "supports_function_calling": true
+              },
+              "model-x-9-20260101": {
+                "litellm_provider": "anthropic", "mode": "chat",
+                "input_cost_per_token": 5e-06, "output_cost_per_token": 2.5e-05,
+                "supports_function_calling": true
+              },
+              "model-x-9-20260101-openai-twin": {
+                "litellm_provider": "openai", "mode": "chat",
+                "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06,
+                "supports_function_calling": true
+              }
+            }
+            """;
+
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        assertThat(result.declinedIds()).containsExactly(
+                NativeModelDiscoveryService.key("anthropic", "model-x-9-20260101"));
+        assertThat(result.declinedIds()).doesNotContain(
+                NativeModelDiscoveryService.key("openai", "model-x-9-20260101"));
     }
 
     @Test

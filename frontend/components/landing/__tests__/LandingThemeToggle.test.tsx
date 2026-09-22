@@ -22,6 +22,38 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+describe('the labels it is handed', () => {
+  // The call site is pinned elsewhere; this is the other half. Without it the component can
+  // accept `toLight`/`toDark` and keep rendering its English defaults, which is what the
+  // bottom bar of /fr did before this prop existed and what no test would have noticed.
+  it('uses them instead of its own English, for both the name and the tooltip', () => {
+    render(
+      <LandingThemeProvider>
+        <LandingThemeToggle toLight="ECLAIRCIR" toDark="ASSOMBRIR" />
+      </LandingThemeProvider>,
+    );
+    // Light is the public default, so the button offers the dark theme.
+    const button = screen.getByRole('button', { name: 'ASSOMBRIR' });
+    expect(button).toHaveAttribute('title', 'ASSOMBRIR');
+    expect(screen.queryByRole('button', { name: /Switch to/ })).toBeNull();
+
+    fireEvent.click(button);
+    const flipped = screen.getByRole('button', { name: 'ECLAIRCIR' });
+    expect(flipped).toHaveAttribute('title', 'ECLAIRCIR');
+  });
+
+  it('still says its English when nobody hands it anything', () => {
+    // /docs, /legal and /marketplace reach it through DEFAULT_SHELL_LABELS, so the defaults
+    // have to stay correct as well as unused-by-the-localised-pages.
+    render(
+      <LandingThemeProvider>
+        <LandingThemeToggle />
+      </LandingThemeProvider>,
+    );
+    expect(screen.getByRole('button', { name: 'Switch to dark theme' })).toBeInTheDocument();
+  });
+});
+
 function renderInProvider() {
   return render(
     <LandingThemeProvider>

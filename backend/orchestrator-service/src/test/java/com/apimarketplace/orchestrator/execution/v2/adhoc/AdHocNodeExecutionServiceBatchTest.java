@@ -724,11 +724,24 @@ class AdHocNodeExecutionServiceBatchTest {
         }
 
         assertThat(results).allMatch(AdHocNodeResult::completed);
-        // Two threads per running entry (the entry's task plus the inner one execute() submits),
-        // and nothing for the six still queued behind them.
+        // Two threads per RUNNING entry (the entry's task plus the inner one execute() submits),
+        // and nothing for the six still queued behind them: 2 x parallelism at rest.
+        //
+        // The bound allows one more per running entry, and that is a property of the MEASUREMENT,
+        // not slack in the contract. `permits.release()` runs in a finally INSIDE the submitted
+        // task, while this wrapper decrements in its own finally, which only runs once that task
+        // has returned. So an entry that has just released its permit is still counted when the
+        // caller thread, now unblocked, submits the next one. Up to `parallelism` entries can sit
+        // in that window at once. Only the outer task can: execute() blocks on future.get(), so
+        // the inner one has already finished and decremented by then.
+        //
+        // 3 x parallelism still fails loudly on the regression this exists to catch. Acquiring the
+        // permit inside the task instead would park all eight entries in pool threads at once, for
+        // a peak near 16, not 6.
+        int parallelism = 2;
         assertThat(peakOutstanding.get())
-                .as("at most 2 x parallelism threads, not one per entry")
-                .isLessThanOrEqualTo(2 * 2);
+                .as("bounded by parallelism, not one thread per entry")
+                .isLessThanOrEqualTo(3 * parallelism);
     }
 
     @Test

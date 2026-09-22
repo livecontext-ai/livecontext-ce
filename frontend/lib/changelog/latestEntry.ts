@@ -60,13 +60,13 @@ export interface ChangelogEntry {
 }
 
 export const LATEST_CHANGELOG_ENTRY: ChangelogEntry | null = {
-  key: '2026-09-agent-memory',
-  publishedAt: '2026-09-07',
+  key: '2026-09-classify-jev-own-key',
+  publishedAt: '2026-09-21',
   media: {
     type: 'image',
-    src: '/changelog/2026-09-agent-memory.png',
-    width: 836,
-    height: 706,
+    src: '/changelog/2026-09-classify-jev-own-key.svg',
+    width: 720,
+    height: 260,
   },
   learnMoreUrl: '/changelog',
 };

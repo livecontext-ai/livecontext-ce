@@ -75,7 +75,7 @@ class InternalChatControllerSyncTest {
             request.setMessage("scheduled prompt body");
             request.setSource("SCHEDULE");
 
-            when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION")).thenReturn(false);
+            when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION", null, null)).thenReturn(false);
 
             ResponseEntity<Map<String, Object>> response = controller.chatSync(request, "user-1", "org-1");
 
@@ -116,7 +116,7 @@ class InternalChatControllerSyncTest {
             request.setProvider("claude-code");
             request.setModel("claude-opus-4-7");
 
-            when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION")).thenReturn(false);
+            when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION", "claude-code", "claude-opus-4-7")).thenReturn(false);
 
             controller.chatSync(request, "user-1", "org-1");
 
@@ -178,7 +178,7 @@ class InternalChatControllerSyncTest {
             request.setMessage("hello");
             request.setSource("WEBHOOK");
 
-            when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION")).thenReturn(true);
+            when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION", null, null)).thenReturn(true);
             when(agentService.executeSync(any(), eq("conv-1")))
                     .thenReturn(Map.of("success", true, "content", "ok", "conversationId", "conv-1"));
 

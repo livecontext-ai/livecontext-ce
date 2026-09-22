@@ -1049,7 +1049,11 @@ class SwitchNodeTest {
                 .addDefault("Default")
                 .templateEngine(mockTemplateEngine)
                 .build();
-            node.setTemplateAdapter(adapterResolvingTo("active"));
+            // No template adapter on purpose. The params panel is built from the value the
+            // MATCHING used, so the adapter - a second resolver that renders an absent
+            // value as an empty string where the evaluator renders it as null - is not
+            // consulted any more. Stubbing it here would now be an unused stub, which is
+            // the cleanest possible proof that the second resolution is gone.
 
             NodeExecutionResult result = node.execute(context);
 
@@ -1060,8 +1064,13 @@ class SwitchNodeTest {
             // column as an unlabelled raw key AND be flagged as a missing parameter.
             assertEquals("active", params.get("switchExpression"),
                 "switchExpression carries the RESOLVED expression, under the plan's name");
-            assertEquals(3, params.get("switchCases"),
-                "switchCases counts every case including the default branch");
+            // One key per case, carrying the value it matches on. A count told the
+            // reader how many cases existed and nothing about which values they were
+            // tested against, which is the only question this panel is opened for.
+            assertEquals("active", params.get("Active"));
+            assertEquals("archived", params.get("Archived"));
+            assertEquals("(default)", params.get("Default"));
+            assertFalse(params.containsKey("switchCases"));
             assertEquals("active", params.get("resolved_value"));
         }
     }

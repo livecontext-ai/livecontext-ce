@@ -66,7 +66,7 @@ class StudioAxisSerializationTest {
                     null, null,
                     null, "content", "Content", null, null,
                     null, null, null, null, null, null,
-                    null, null, false, null, studio);
+                    null, null, false, null, studio, null);
         }
     }
 

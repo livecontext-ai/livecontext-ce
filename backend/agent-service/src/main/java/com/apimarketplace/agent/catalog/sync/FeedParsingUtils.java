@@ -20,22 +20,22 @@ public final class FeedParsingUtils {
 
     private FeedParsingUtils() {}
 
-    // Tier thresholds on USD per 1M output tokens. Match scripts/models/sync_openrouter.py.
-    public static final BigDecimal TIER_TOP_MIN  = new BigDecimal("15.00");
-    public static final BigDecimal TIER_HIGH_MIN = new BigDecimal("5.00");
-    public static final BigDecimal TIER_MID_MIN  = new BigDecimal("1.50");
+    // Tier thresholds on USD per 1M output tokens. ONE rule for the whole platform: the
+    // catalog feeds here, the own-key flat fee in auth-service, the admin badge. Owned by
+    // common-lib's ModelTier; kept as aliases so existing readers see the same names.
+    // Match scripts/models/sync_openrouter.py.
+    public static final BigDecimal TIER_TOP_MIN  = com.apimarketplace.common.credit.ModelTier.TOP_MIN;
+    public static final BigDecimal TIER_HIGH_MIN = com.apimarketplace.common.credit.ModelTier.HIGH_MIN;
+    public static final BigDecimal TIER_MID_MIN  = com.apimarketplace.common.credit.ModelTier.MID_MIN;
 
     /**
      * Classify a model into budget / mid / high / top based on its output
      * price per 1M tokens. Returns {@code "unknown"} when the price is null
-     * (never throw - sync is defensive).
+     * (never throw - sync is defensive). Delegates to the shared
+     * {@link com.apimarketplace.common.credit.ModelTier} so billing and catalog agree.
      */
     public static String classifyTier(BigDecimal outputPricePerMillion) {
-        if (outputPricePerMillion == null) return "unknown";
-        if (outputPricePerMillion.compareTo(TIER_TOP_MIN)  >= 0) return "top";
-        if (outputPricePerMillion.compareTo(TIER_HIGH_MIN) >= 0) return "high";
-        if (outputPricePerMillion.compareTo(TIER_MID_MIN)  >= 0) return "mid";
-        return "budget";
+        return com.apimarketplace.common.credit.ModelTier.classify(outputPricePerMillion).key();
     }
 
     // Suffix date patterns on model_ids. Anthropic / OpenAI / Google

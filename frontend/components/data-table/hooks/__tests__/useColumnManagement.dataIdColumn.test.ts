@@ -7,8 +7,8 @@
  * (`id`, `array_index`, `value`, ...) regardless of whether the matching fixed
  * column was actually built. During nested JSON navigation the columns are
  * derived from the DATA, so a workflow step output holding table rows lost its
- * `id` column outright in the node Logs table (which passes showIdColumn=false),
- * and an array of primitives lost its `value` column - rendering an empty grid.
+ * `id` column outright in any view built on DataTable's `showIdColumn = false`
+ * default, and an array of primitives lost its `value` column - an empty grid.
  *
  * Fix: dedupe against the fixed columns that were really built, so a data column
  * is dropped only when it would duplicate one. The one deliberate exception is
@@ -47,7 +47,7 @@ const setup = (viewConfig: ReturnType<typeof createViewConfig>, workflowContext:
 };
 
 describe('useColumnManagement - data column named like a fixed column', () => {
-  it('keeps the data `id` column in the node Logs table (showIdColumn=false)', () => {
+  it('keeps the data `id` column in a nested view with no identity lane', () => {
     const viewConfig = createViewConfig(WORKFLOW_CONTEXT, false, 'output.rows');
     const { result } = setup(viewConfig, WORKFLOW_CONTEXT, NESTED_DATA_COLUMNS);
 
@@ -123,6 +123,26 @@ describe('useColumnManagement - data column named like a fixed column', () => {
 
     const withoutIndex = setup(viewConfig, null, [col('email')]);
     expect(withoutIndex.result.current.getUniqueColumns().map(c => c.field)).not.toContain('array_index');
+  });
+
+  it('keeps an identity lane when drilling in, even if the items carry no id', () => {
+    // The contract the inspector's showIdColumn override was breaking, stated here
+    // on the shared machinery: with the flag the nested view has an identity lane
+    // whatever the data holds, without it the rows have no identity at all. This
+    // pins the machinery, NOT the inspector's call site - that one is pinned by
+    // NodeResultDataTable.identityLane.test.tsx, which is the test that fails on
+    // the pre-fix component.
+    const nestedItemsWithoutId = [col('name'), col('value')];
+
+    const withLane = createViewConfig(WORKFLOW_CONTEXT, true, 'output.items');
+    const kept = setup(withLane, WORKFLOW_CONTEXT, nestedItemsWithoutId);
+    expect(kept.result.current.getUniqueColumns().map((c) => c.field)).toContain('id');
+    cleanup();
+
+    // Without the lane there is no identity at all - the shape of the defect.
+    const bare = createViewConfig(WORKFLOW_CONTEXT, false, 'output.items');
+    const { result } = setup(bare, WORKFLOW_CONTEXT, nestedItemsWithoutId);
+    expect(result.current.getUniqueColumns().map((c) => c.field)).not.toContain('id');
   });
 
   it('leaves backend-driven root columns untouched', () => {

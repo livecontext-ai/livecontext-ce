@@ -34,13 +34,22 @@ export const NUMBER_PARAMS = ['duration_seconds', 'n', 'seed'] as const;
  * is the whole file handle an upload returns. A path or a URL typed into a text box reaches the
  * backend and is refused there, which is a worse place to learn it.
  */
-export const ASSET_PARAMS = ['input_image', 'input_audio', 'input_video'] as const;
+export const ASSET_PARAMS = [
+  'input_image', 'input_audio', 'input_video',
+  // A model can take SEVERAL images meaning different things in one call: a first frame, a last
+  // frame and references. One slot per kind could only ever carry one of them, so the rest had
+  // nowhere to go and one flat "attach" could not say which one the reader was filling.
+  'first_frame_image', 'last_frame_image', 'reference_image',
+] as const;
 
 /** What the picker offers per slot, so the reader is not shown every file they own. */
 export const ASSET_ACCEPT: Record<string, string> = {
   input_image: 'image/*',
   input_audio: 'audio/*',
   input_video: 'video/*',
+  first_frame_image: 'image/*',
+  last_frame_image: 'image/*',
+  reference_image: 'image/*',
 };
 
 /**
@@ -69,6 +78,22 @@ export interface StudioField {
   role?: string;
   /** For an asset field: how many files this parameter takes. At least 1, capped at MAX_ASSET_SLOTS. */
   slots: number;
+  /**
+   * Other slots this one only works ALONGSIDE, as the model declares them.
+   *
+   * <p>Some providers take a closing frame only together with an opening one and refuse the call
+   * otherwise. The refusal is free, but a surface that offers the slot like any other lets the
+   * reader find out by pressing the button: the pairing has to be visible where the choice is made.
+   */
+  requiresFields: string[];
+  /**
+   * Other slots this one cannot be sent WITH.
+   *
+   * <p>Pinning a frame and lending a reference are, for some providers, two different kinds of
+   * request rather than two options: mixing them can come back as a finished asset that ignored
+   * half the files, which is the most expensive way to be told.
+   */
+  excludesFields: string[];
   /** What the picker accepts for an asset field. */
   accept?: string;
   /**
@@ -119,6 +144,7 @@ function fieldKind(name: string, limit: GenerationLimit | undefined): StudioFiel
 export function buildParamSpec(model: GenerationModel | null | undefined): StudioField[] {
   if (!model) return [];
   const required = new Set(model.required ?? []);
+  const accepted = new Set(model.accepts ?? []);
   const fields = (model.accepts ?? [])
     .filter((name) => name !== 'prompt')
     .map<StudioField>((name) => {
@@ -137,6 +163,10 @@ export function buildParamSpec(model: GenerationModel | null | undefined): Studi
         slots: kind === 'asset'
           ? Math.max(1, Math.min(shape?.maxItems ?? 1, MAX_ASSET_SLOTS))
           : 1,
+        // Narrowed to fields this model actually has: the server already does that, and a rule
+        // naming a slot that is not on screen is a sentence the reader cannot act on.
+        requiresFields: (shape?.requires ?? []).filter((name) => accepted.has(name)),
+        excludesFields: (shape?.excludes ?? []).filter((name) => accepted.has(name)),
         accept: kind === 'asset' ? ASSET_ACCEPT[name] : undefined,
         choices: (limit?.allowed ?? []).map((value) => String(value)),
         optionsMustBeFetched: !!limit?.optionsAvailable,
@@ -158,6 +188,19 @@ export function assetFields(spec: StudioField[]): StudioField[] {
   return spec.filter((field) => field.kind === 'asset');
 }
 
+/**
+ * The slots a field cannot travel with.
+ *
+ * <p>The descriptor states each rule ONCE, on whichever slot its author was writing, and the server
+ * is what reads it from both sides: every model listing publishes the complete `excludes` on both
+ * halves of a pair. This function exists to say so in one place rather than to re-derive it, because
+ * a second implementation of a shared contract is how two surfaces come to disagree about it - and
+ * the one that kept working would have hidden the one that stopped.
+ */
+export function forbiddenWith(spec: StudioField[], name: string): string[] {
+  return spec.find((field) => field.name === name)?.excludesFields ?? [];
+}
+
 /** Total files this model will accept across every slot. Zero means: offer no attachment control. */
 export function totalAssetSlots(spec: StudioField[]): number {
   return assetFields(spec).reduce((sum, field) => sum + field.slots, 0);
@@ -174,14 +217,37 @@ export function missingRequired(
   values: Record<string, unknown>,
   assets: Record<string, (unknown | undefined)[]>,
 ): string[] {
-  return spec
-    .filter((field) => field.required)
-    .filter((field) => {
-      if (field.kind === 'asset') return !assets[field.name]?.[0];
-      const value = values[field.name];
-      return value === undefined || value === null || String(value).trim() === '';
-    })
-    .map((field) => field.name);
+  // A REQUIRED slot is answered by its FIRST picker: the form asks for one file there and
+  // marks that one, and a reader who filled the second while leaving the first blank has left
+  // the field it marked empty. Unchanged, deliberately.
+  const filled = (field: StudioField) => (field.kind === 'asset'
+    ? !!assets[field.name]?.[0]
+    : !(values[field.name] === undefined || values[field.name] === null
+        || String(values[field.name]).trim() === ''));
+
+  // A PARTNER is a different question: not "is the field answered" but "is there a file in
+  // this slot at all", which is what the provider sees. Removing one of several files leaves
+  // a hole rather than shifting the rest down, and the payload is packed with
+  // `filter(Boolean)`, so reading index 0 alone would hold a turn whose request carries two
+  // files from that very slot.
+  const present = (field: StudioField) => (field.kind === 'asset'
+    ? (assets[field.name] ?? []).some(Boolean)
+    : filled(field));
+
+  const missing = spec.filter((field) => field.required && !filled(field)).map((f) => f.name);
+
+  // A slot that only works as a PAIR is missing its other half exactly as a required field is
+  // missing its value: the provider refuses the call either way. The refusal is free and says
+  // what to do, but a composer that lets the turn go anyway spends a round trip to deliver a
+  // sentence it could have shown while the reader was still attaching files.
+  spec.forEach((field) => {
+    if (!present(field)) return;
+    field.requiresFields.forEach((partner) => {
+      const other = spec.find((f) => f.name === partner);
+      if (other && !present(other) && !missing.includes(partner)) missing.push(partner);
+    });
+  });
+  return missing;
 }
 
 /**
@@ -230,16 +296,74 @@ export function buildSubmissionParams(
     params[name] = value;
   }
 
+  Object.assign(params, packAssets(spec, assets));
+
+  return params;
+}
+
+/**
+ * The file slots of a submission, packed and capped exactly as it will send them.
+ *
+ * <p>Split out of {@link buildSubmissionParams} because the price needs the FILES without the
+ * values. The composer prices what is currently in the form, and the values there are raw text:
+ * a half-typed duration is a string the submission shaping drops, and a dropped duration reads as
+ * "nothing typed" to the estimate, which then quotes the model's default size for a call that
+ * cannot run at all. The files have no such state - a handle is a handle - so they are what can be
+ * shared between the two.
+ */
+export function packAssets(
+  spec: StudioField[],
+  assets: Record<string, (AssetHandle | undefined)[]>,
+): Record<string, AssetHandle[]> {
+  const accepted = new Map(spec.map((field) => [field.name, field]));
+  const packed: Record<string, AssetHandle[]> = {};
   for (const [name, list] of Object.entries(assets)) {
     const field = accepted.get(name);
     if (!field || field.kind !== 'asset') continue;
-    // Sent packed and capped: the platform reads a list of handles, a hole in it is not a file, and
-    // more handles than the model takes is a refusal.
+    // Packed and capped: the platform reads a list of handles, a hole in it is not a file, and
+    // more handles than the model takes is a refusal. The cap also keeps the price honest, since
+    // a per-file surcharge counts what is SENT.
     const files = (list ?? []).filter(Boolean).slice(0, field.slots) as AssetHandle[];
-    if (files.length > 0) params[name] = files;
+    if (files.length > 0) packed[name] = files;
   }
+  return packed;
+}
 
-  return params;
+/**
+ * The same packing, for a surface that holds no {@link StudioField} spec.
+ *
+ * <p>The chat's generation dialog draws its fields straight from the model's `inputs` map, so it
+ * has no spec to pack against, and it shaped its files inline at the one place that sends them.
+ * That left the PRICE blind to them: a model that charges per reference image was quoted at the
+ * published rate on a form holding three, and billed the surcharge by the server, which measures
+ * the body it received. The studio composer had exactly this bug, from exactly this cause.
+ *
+ * <p>So the rule is written here instead of twice there: one file for a slot that takes one, the
+ * list for a slot that takes several, capped at what the slot accepts, and nothing at all for a
+ * slot left empty. What the price counts is then, by construction, what the submission sends.
+ *
+ * <p><b>The cap is real, and it was not.</b> This sliced nothing and the comment claimed it did,
+ * relying on the dialog to render only `maxItems` slots. That holds until a model's `maxItems`
+ * shrinks under retained asset state - switch to a model taking two references with three already
+ * attached and the submission sent three, the provider refused the call, and a per-file surcharge
+ * had already counted all three. `packAssets`, the spec-based sibling, has always sliced; the two
+ * now agree.
+ *
+ * @param model  the model being configured, whose `inputs[name].maxItems` decides the shape and cap
+ * @param assets the reader's files per parameter, holes and all
+ */
+export function packAssetsByMaxItems<T>(
+  model: GenerationModel | null | undefined,
+  assets: Record<string, (T | undefined | null)[]>,
+): Record<string, T | T[]> {
+  const packed: Record<string, T | T[]> = {};
+  for (const [name, list] of Object.entries(assets)) {
+    const slots = Math.max(1, model?.inputs?.[name]?.maxItems ?? 1);
+    const supplied = ((list ?? []).filter(Boolean) as T[]).slice(0, slots);
+    if (supplied.length === 0) continue;
+    packed[name] = slots > 1 ? supplied : supplied[0];
+  }
+  return packed;
 }
 
 /**

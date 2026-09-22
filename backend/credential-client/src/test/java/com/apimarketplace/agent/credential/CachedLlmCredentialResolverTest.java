@@ -10,6 +10,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -95,6 +96,65 @@ class CachedLlmCredentialResolverTest {
         assertThat(first).isEmpty();
         assertThat(second).contains("sk-mistral-just-added");
         verify(repository, times(2)).findApiKeyByProviderName((String) null, "mistral");
+    }
+
+    @Test
+    @DisplayName("resolveUserApiKey reads the user's OWN key only and never the user-first chain (which may hold the platform key)")
+    void resolveUserApiKeyIsUserOnly() {
+        when(repository.findUserApiKeyByProviderName("user-A", "openai")).thenReturn(Optional.of("sk-A"));
+
+        assertThat(resolver.resolveUserApiKey("user-A", "openai")).contains("sk-A");
+        assertThat(resolver.resolveUserApiKey("user-A", "openai")).contains("sk-A");   // cached
+
+        verify(repository, times(1)).findUserApiKeyByProviderName("user-A", "openai");
+        verify(repository, never()).findApiKeyByProviderName(any(), any());
+    }
+
+    @Test
+    @DisplayName("resolveUserApiKey does not cache a miss, and answers empty without a lookup for a blank user")
+    void resolveUserApiKeyMissNotCached() {
+        when(repository.findUserApiKeyByProviderName("user-A", "openai"))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of("sk-A-just-saved"));
+
+        assertThat(resolver.resolveUserApiKey("user-A", "openai")).isEmpty();
+        assertThat(resolver.resolveUserApiKey("user-A", "openai")).contains("sk-A-just-saved");
+        assertThat(resolver.resolveUserApiKey(null, "openai")).isEmpty();
+        assertThat(resolver.resolveUserApiKey("  ", "openai")).isEmpty();
+
+        verify(repository, times(2)).findUserApiKeyByProviderName("user-A", "openai");
+    }
+
+    @Test
+    @DisplayName("the user-first slot and the user-only slot are independent: a cached platform key never answers an own-key lookup")
+    void userFirstAndUserOnlySlotsAreIndependent() {
+        when(repository.findApiKeyByProviderName("user-A", "openai")).thenReturn(Optional.of("sk-platform"));
+        when(repository.findUserApiKeyByProviderName("user-A", "openai")).thenReturn(Optional.empty());
+
+        assertThat(resolver.resolveApiKey("user-A", "openai")).contains("sk-platform");   // user-first fell to platform
+        assertThat(resolver.resolveUserApiKey("user-A", "openai")).isEmpty();             // own key: none, not the cached platform key
+    }
+
+    @Test
+    @DisplayName("invalidate(userId, provider) drops ONLY that user's slots (user-first and user-only); other users stay cached")
+    void invalidateOneUserOnly() {
+        when(repository.findApiKeyByProviderName("user-A", "openai")).thenReturn(Optional.of("sk-A"));
+        when(repository.findApiKeyByProviderName("user-B", "openai")).thenReturn(Optional.of("sk-B"));
+        when(repository.findUserApiKeyByProviderName("user-A", "openai")).thenReturn(Optional.of("sk-A"));
+        resolver.resolveApiKey("user-A", "openai");
+        resolver.resolveApiKey("user-B", "openai");
+        resolver.resolveUserApiKey("user-A", "openai");
+
+        resolver.invalidate("user-A", "openai");
+        resolver.resolveApiKey("user-A", "openai");
+        resolver.resolveApiKey("user-B", "openai");
+        resolver.resolveUserApiKey("user-A", "openai");
+
+        verify(repository, times(2)).findApiKeyByProviderName("user-A", "openai");
+        verify(repository, times(2)).findUserApiKeyByProviderName("user-A", "openai");
+        verify(repository, times(1)).findApiKeyByProviderName("user-B", "openai");
+        resolver.invalidate(null, "openai");   // no-op, never throws
+        resolver.invalidate("user-A", null);
     }
 
     @Test
@@ -184,5 +244,54 @@ class CachedLlmCredentialResolverTest {
         assertThat(bAfter).contains("v2");
         verify(repository, times(2)).findApiKeyByProviderName("user-A", "openai");
         verify(repository, times(2)).findApiKeyByProviderName("user-B", "openai");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    @DisplayName("Switching workspace resolves its own key on both credential routes")
+    void switchingWorkspaceDoesNotReusePreviousWorkspaceKey(boolean userOnly) {
+        var client = mock(com.apimarketplace.credential.client.CredentialClient.class);
+        when(client.getDefaultCredential("member", "llm_openai")).thenAnswer(call -> {
+            var dto = new com.apimarketplace.credential.client.dto.CredentialSummaryDto();
+            dto.setCredentialData(java.util.Map.of("api_key", "fake-key-" +
+                    com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationId()));
+            return Optional.of(dto);
+        });
+        var realResolver = new CachedLlmCredentialResolver(new LlmCredentialRepository(client));
+
+        for (String workspace : new String[]{"A", "B", "A"}) {
+            com.apimarketplace.common.web.TenantResolver.runWithOrgScope(workspace, () -> {
+                Optional<String> key = userOnly ? realResolver.resolveUserApiKey("member", "openai")
+                        : realResolver.resolveApiKey("member", "openai");
+                assertThat(key).contains("fake-key-" + workspace);
+            });
+        }
+        verify(client, times(2)).getDefaultCredential("member", "llm_openai");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    @DisplayName("Credential invalidation clears both routes across all workspaces")
+    void invalidationClearsAllWorkspaces(boolean providerWide) {
+        when(repository.findApiKeyByProviderName("member", "openai"))
+                .thenReturn(Optional.of("old-key"), Optional.of("old-key"), Optional.of("new-key"));
+        when(repository.findUserApiKeyByProviderName("member", "openai"))
+                .thenReturn(Optional.of("old-key"), Optional.of("old-key"), Optional.of("new-key"));
+        for (String workspace : new String[]{"A", "B"}) {
+            com.apimarketplace.common.web.TenantResolver.runWithOrgScope(workspace, () -> {
+                resolver.resolveApiKey("member", "openai");
+                resolver.resolveUserApiKey("member", "openai");
+            });
+        }
+
+        if (providerWide) resolver.invalidate("openai");
+        else resolver.invalidate("member", "openai");
+
+        for (String workspace : new String[]{"A", "B"}) {
+            com.apimarketplace.common.web.TenantResolver.runWithOrgScope(workspace, () -> {
+                assertThat(resolver.resolveApiKey("member", "openai")).contains("new-key");
+                assertThat(resolver.resolveUserApiKey("member", "openai")).contains("new-key");
+            });
+        }
     }
 }

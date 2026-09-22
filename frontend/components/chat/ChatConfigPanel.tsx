@@ -62,7 +62,7 @@ const TURN_LIMIT_FIELDS: NumericField[] = [
  *
  * Used from:
  *   - MessageComposer → AttachmentHandler Options tab (conversation scope)
- *   - CreateAgentModal "Advanced mode" block (agent scope)
+ *   - (NOT CreateAgentModal: it renders its own native fields and no longer mounts this)
  *   - AgentChatDefaults, i.e. the Agents page "Settings" tab and Settings > Agents & Chat
  *     (userDefault scope - the per-(user, workspace) defaults. Settings > Overview >
  *     Preferences used to mount this too and now only links to those two surfaces.)
@@ -372,6 +372,41 @@ export function ChatConfigPanel({
             />
           </SettingRow>
 
+          {/* Mailbox - opt-in, and the permissions row appears only once it is on:
+              offering a mode for a capability the chat does not have reads as a
+              setting that does nothing. */}
+          <SettingRow title={t('mailboxLabel')} info={t('mailboxInfo')}>
+            <Switch
+              checked={config.mailbox?.enabled ?? false}
+              onCheckedChange={(checked) =>
+                updateConfig({
+                  mailbox: { ...(config.mailbox ?? {}), enabled: checked },
+                  // Granting it with no mode stated would mean full access, so the safe half
+                  // is chosen for the user and left visible for them to widen. On the way OFF
+                  // the mode is written back to 'read' rather than cleared: buildConversationPatch
+                  // falls back to the CURRENT value for an undefined entry, so "clearing" it
+                  // would leave a stale 'write' that comes back the next time this is switched on.
+                  mailboxAccessMode: checked ? (config.mailboxAccessMode ?? 'read') : 'read',
+                })
+              }
+              aria-label={t('mailboxLabel')}
+            />
+          </SettingRow>
+          {config.mailbox?.enabled && (
+            <SettingRow title={t('mailboxAccessLabel')} info={t('mailboxAccessInfo')}>
+              <Switch
+                // Absent means WRITE on the server, so the display has to say write too: showing
+                // read-only for a stored config with no mode would report a restriction nothing
+                // is enforcing. This panel always writes both keys, but it is not the only writer.
+                checked={(config.mailboxAccessMode ?? 'write') === 'write'}
+                onCheckedChange={(checked) =>
+                  updateConfig({ mailboxAccessMode: checked ? 'write' : 'read' })
+                }
+                aria-label={t('mailboxAccessLabel')}
+              />
+            </SettingRow>
+          )}
+
           {/* Run sensitive actions without asking */}
           <SettingRow title={t('autoAuthorizeLabel')} info={t('autoAuthorizeInfo')}>
             <Switch
@@ -582,6 +617,69 @@ export function ChatConfigPanel({
               <Switch checked={config.generation?.enabled ?? false} presentational />
             </button>
           </div>
+          {/* Mailbox, on the general-chat scopes only, exactly like auto-authorize below.
+              The ACCOUNT default merely seeds a conversation, so without a row here a chat
+              that inherited a mailbox could never be narrowed or revoked from inside it.
+              Hidden on an agent-backed chat: there the agent owns the setting and
+              CreateAgentModal renders it, while this panel's agent read/write path
+              (configFromAgent / buildAgentPatch) carries no mailbox at all, so a row here
+              would read OFF whatever the agent holds and save nothing when clicked. */}
+          {target !== 'agent' && (
+            <>
+              <div>
+                <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                  {t('mailboxLabel')}
+                  <InfoTooltip text={t('mailboxInfo')} />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const enabled = !(config.mailbox?.enabled ?? false);
+                    updateConfig({
+                      mailbox: { ...(config.mailbox ?? {}), enabled },
+                      // Granting with no mode stated means FULL access, so the safe half is
+                      // chosen and left visible to widen. On the way off it is written back
+                      // rather than cleared: buildConversationPatch falls back to the CURRENT
+                      // value for an undefined entry, so a stale 'write' would return.
+                      mailboxAccessMode: enabled ? (config.mailboxAccessMode ?? 'read') : 'read',
+                    });
+                  }}
+                  aria-label={t('mailboxLabel')}
+                  className="flex h-9 w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-3 text-sm text-theme-primary hover:bg-[var(--bg-secondary)] transition-colors"
+                >
+                  <span>{config.mailbox?.enabled ? t('enabled') : t('disabled')}</span>
+                  <Switch checked={config.mailbox?.enabled ?? false} presentational />
+                </button>
+              </div>
+              {config.mailbox?.enabled && (
+                <div>
+                  <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                    {t('mailboxAccessLabel')}
+                    <InfoTooltip text={t('mailboxAccessInfo')} />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => updateConfig({
+                      mailboxAccessMode:
+                        (config.mailboxAccessMode ?? 'write') === 'write' ? 'read' : 'write',
+                    })}
+                    aria-label={t('mailboxAccessLabel')}
+                    className="flex h-9 w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-3 text-sm text-theme-primary hover:bg-[var(--bg-secondary)] transition-colors"
+                  >
+                    <span>
+                      {(config.mailboxAccessMode ?? 'write') === 'write'
+                        ? t('mailboxAccessWrite')
+                        : t('mailboxAccessRead')}
+                    </span>
+                    <Switch
+                      checked={(config.mailboxAccessMode ?? 'write') === 'write'}
+                      presentational
+                    />
+                  </button>
+                </div>
+              )}
+            </>
+          )}
           {/* Auto-authorize sensitive actions - general-chat scopes (conversation + the
               "defaults for next conversation" draft on the home composer). Hidden only for
               agent-backed chats (the gate is exempt there). Mirrors the "ne plus demander"

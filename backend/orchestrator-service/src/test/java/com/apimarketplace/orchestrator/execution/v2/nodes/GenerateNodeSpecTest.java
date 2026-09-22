@@ -53,8 +53,26 @@ class GenerateNodeSpecTest {
 
         Set<String> keys = outputKeys();
         assertEquals(
-            Set.of("file", "model", "kind", "provider", "billed_quantity", "billed_unit", "provider_response"),
+            Set.of("file", "model", "kind", "provider", "billed_quantity", "billed_unit",
+                "billed_credits", "provider_response"),
             keys);
+    }
+
+    @Test
+    @DisplayName("the charge is declared as a number, and says that ABSENT is not a charge of zero")
+    void declaresWhatARunCost() {
+        // An output field the node emits and this spec does not declare is a field the inspector
+        // cannot offer and an agent has no reason to reference. The wording matters as much as the
+        // key: most runs carry no amount (a key the account configured itself pays the provider
+        // directly), and a reader who totals those as zeros is reporting a cost that never existed.
+        OutputFieldDef charge = new GenerateNodeSpec().definition().outputs().stream()
+            .filter(f -> "billed_credits".equals(f.key()))
+            .findFirst()
+            .orElseThrow();
+
+        assertEquals("number", charge.type());
+        assertTrue(charge.description().contains("ABSENT"),
+            () -> "the description must say what an absent amount means: " + charge.description());
     }
 
     @Test
@@ -83,9 +101,9 @@ class GenerateNodeSpecTest {
     }
 
     @Test
-    @DisplayName("V429 `outputs` key-set == GenerateNodeSpec.outputs() key-set (drift guard)")
-    void v424MatchesSpecOutputs() throws IOException {
-        Set<String> docKeys = extractTopLevelJsonKeys(outputsBlockFromMigration());
+    @DisplayName("the DOCUMENTED `outputs` key-set == GenerateNodeSpec.outputs() key-set (drift guard)")
+    void documentedOutputsMatchTheSpec() throws IOException {
+        Set<String> docKeys = documentedOutputKeys();
         Set<String> specKeys = outputKeys();
 
         Set<String> inDocNotSpec = new LinkedHashSet<>(docKeys);
@@ -95,17 +113,17 @@ class GenerateNodeSpecTest {
 
         StringBuilder failures = new StringBuilder();
         if (!inDocNotSpec.isEmpty()) {
-            failures.append("  - V429 documents ").append(inDocNotSpec)
+            failures.append("  - the migrations document ").append(inDocNotSpec)
                     .append(" but the spec does NOT declare them, so nothing persists them: the agent "
                             + "would write templates that resolve to nothing on a COMPLETED run.\n");
         }
         if (!inSpecNotDoc.isEmpty()) {
             failures.append("  - the spec declares ").append(inSpecNotDoc)
-                    .append(" but V429 does NOT document them: the inspector shows them and the agent "
+                    .append(" but no migration documents them: the inspector shows them and the agent "
                             + "never learns they exist.\n");
         }
         if (failures.length() > 0) {
-            fail("V429 <-> GenerateNodeSpec.outputs() drift:\n" + failures);
+            fail("node_type_documentation <-> GenerateNodeSpec.outputs() drift:\n" + failures);
         }
     }
 
@@ -128,6 +146,47 @@ class GenerateNodeSpecTest {
             keys.add(f.key());
         }
         return keys;
+    }
+
+    /**
+     * Every output key the DOCUMENTATION ends up carrying: the ones V429 inserted, plus any a later
+     * migration added with {@code jsonb_set(outputs, '{key}', ...)}.
+     *
+     * <p>Reading V429 alone was right while it was the only migration that touched this row, and
+     * wrong the moment one was added: an applied migration cannot be edited (its checksum is what
+     * Flyway validates), so a new output field is documented by a NEW migration, and a guard that
+     * looks only at the first one reports the field as undocumented when it is documented. The
+     * pattern is matched rather than the file being named, so the next addition needs no edit here.
+     *
+     * <p>It understands ONE shape - {@code jsonb_set(outputs, '{key}', ...)} - and attributes any
+     * migration that mentions both the table and {@code 'generate'}. A future migration that adds a
+     * key by concatenation, or REMOVES one, is invisible to it: the first fails loudly here (the
+     * spec declares a key this cannot find), the second would pass silently. Write additions in the
+     * shape above, or teach this to read the new one.
+     */
+    private static Set<String> documentedOutputKeys() throws IOException {
+        Set<String> keys = new LinkedHashSet<>(extractTopLevelJsonKeys(outputsBlockFromMigration()));
+        Pattern added = Pattern.compile(
+                "jsonb_set\\s*\\(\\s*outputs\\s*,\\s*'\\{([A-Za-z_][A-Za-z0-9_]*)\\}'");
+        for (Path file : migrationFiles()) {
+            String sql = Files.readString(file);
+            if (!sql.contains("node_type_documentation") || !sql.contains("'generate'")) continue;
+            Matcher m = added.matcher(sql);
+            while (m.find()) {
+                keys.add(m.group(1));
+            }
+        }
+        return keys;
+    }
+
+    /** The migration directory, from either working directory the suite can be run in. */
+    private static List<Path> migrationFiles() throws IOException {
+        Path dir = Files.isDirectory(MIGRATION_DIR)
+                ? MIGRATION_DIR
+                : Paths.get("backend", "migration-service", "src", "main", "resources", "db", "migration");
+        try (var paths = Files.list(dir)) {
+            return paths.filter(f -> f.getFileName().toString().endsWith(".sql")).toList();
+        }
     }
 
     /** V429 is an INSERT: `parameters` is the first jsonb literal, `outputs` the second. */

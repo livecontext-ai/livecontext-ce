@@ -160,7 +160,19 @@ public class OAuthUserProcessor {
             extractNameFromDisplayName(user, profile.displayName());
         }
 
-        user.setLastLoginAt(LocalDateTime.now());
+        // Both columns: this IS the authentication instant for a direct social sign-in (no
+        // Keycloak, so there is no auth_time claim to infer it from). Writing only the
+        // last-seen marker would leave last_authenticated_at frozen at whatever V495 seeded
+        // on upgrade day, under a column comment promising it only ever moves forward, and
+        // this is the fourth of the four sign-in sites the project docs lists.
+        LocalDateTime authenticatedAt = LocalDateTime.now();
+        user.setLastLoginAt(authenticatedAt);
+        // Guarded: the column's contract is "moves forward only", and a clock stepping
+        // backwards would write a value every later sign-in has to climb back over.
+        if (user.getLastAuthenticatedAt() == null
+                || authenticatedAt.isAfter(user.getLastAuthenticatedAt())) {
+            user.setLastAuthenticatedAt(authenticatedAt);
+        }
     }
 
     private void extractNameFromDisplayName(User user, String displayName) {

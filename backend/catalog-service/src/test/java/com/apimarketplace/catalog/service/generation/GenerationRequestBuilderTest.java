@@ -814,4 +814,338 @@ class GenerationRequestBuilderTest {
         assertThat(built.params()).containsEntry("seed", 42);
         assertThat(built.quantity().multiply(new BigDecimal("60"))).isEqualByComparingTo("300");
     }
+
+    @Nested
+    @DisplayName("slots that only work as a pair, and the holes an unused slot leaves")
+    class PairsAndHoles {
+
+        private static final GenerationSpec PAIRED = spec("""
+                {
+                  "kind": "video", "assetPath": "url", "modelParam": "model",
+                  "paramMap": {
+                    "prompt": "content[0].text",
+                    "first_frame_image": {
+                      "path": "content[1].image_url.url", "encoding": "data_url", "role": "first_frame",
+                      "itemConstants": { "content[1].type": "image_url", "content[1].role": "first_frame" }
+                    },
+                    "last_frame_image": {
+                      "path": "content[2].image_url.url", "encoding": "data_url", "role": "last_frame",
+                      "requires": ["first_frame_image"],
+                      "itemConstants": { "content[2].type": "image_url", "content[2].role": "last_frame" }
+                    }
+                  },
+                  "constants": { "content[0].type": "text" },
+                  "models": [{
+                    "id": "s-1",
+                    "upstream": "a",
+                    "capabilities": ["prompt", "first_frame_image", "last_frame_image"],
+                    "price": { "unit": "call", "baseCredits": 10 }
+                  }, {
+                    "id": "s-1-no-frames",
+                    "upstream": "b",
+                    "capabilities": ["prompt"],
+                    "price": { "unit": "call", "baseCredits": 10 }
+                  }]
+                }
+                """);
+
+        private static Map<String, Object> file(String name) {
+            Map<String, Object> ref = new LinkedHashMap<>();
+            ref.put("_type", "file");
+            ref.put("path", "tenant-1/uploads/" + name);
+            ref.put("name", name);
+            ref.put("mimeType", "image/png");
+            return ref;
+        }
+
+        @Test
+        @DisplayName("the closing frame alone is refused here, where it is still free")
+        void refusesHalfAPair() {
+            // The provider refuses this call too, but only after it has been
+            // dispatched, and the reader learns it from an invoice.
+            GenerationRequestBuilder.Built built = GenerationRequestBuilder.build(
+                    PAIRED, PAIRED.models().get(0),
+                    Map.of("prompt", "a dolly shot", "last_frame_image", file("close.png")));
+
+            assertThat(built.ok()).isFalse();
+            assertThat(String.join("; ", built.errors()))
+                    .contains("'last_frame_image' only works together with 'first_frame_image'");
+        }
+
+        @Test
+        @DisplayName("both frames together pass, which is the whole point of declaring the pair")
+        void acceptsBothHalves() {
+            GenerationRequestBuilder.Built built = GenerationRequestBuilder.build(
+                    PAIRED, PAIRED.models().get(0),
+                    Map.of("prompt", "a dolly shot",
+                            "first_frame_image", file("open.png"),
+                            "last_frame_image", file("close.png")));
+
+            assertThat(built.errors()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("an EMPTY list is not a file: a slot that takes several and got none leaves the pair undone")
+        void anEmptyListDoesNotSatisfyACompanion() {
+            // Every surface says "no file here" for a multi-file slot with an
+            // empty list, and String.valueOf of one is "[]", which is not blank.
+            GenerationRequestBuilder.Built built = GenerationRequestBuilder.build(
+                    PAIRED, PAIRED.models().get(0),
+                    Map.of("prompt", "a dolly shot",
+                            "first_frame_image", List.of(),
+                            "last_frame_image", file("close.png")));
+
+            assertThat(built.ok()).isFalse();
+            assertThat(String.join("; ", built.errors()))
+                    .contains("only works together with 'first_frame_image'");
+        }
+
+        @Test
+        @DisplayName("a caller's own immutable list is read, never rewritten")
+        void doesNotRewriteACollectionItDoesNotOwn() {
+            // The regression this guards: a slot refused before conversion leaves the caller's
+            // List.of(...) sitting in the request, and pruning it threw UnsupportedOperationException
+            // out of the dispatcher - turning a free, explained refusal into a crash.
+            Map<String, Object> request = new LinkedHashMap<>();
+            List<String> errors = new java.util.ArrayList<>();
+            GenerationRequestBuilder.setByPath(request, "prompt", "a dolly shot", errors);
+            // Immutable, and holding something empty so the prune actually reaches the removal.
+            request.put("images", List.of(Map.of(), Map.of("url", "data:...")));
+
+            GenerationRequestBuilder.pruneEmpty(request);
+
+            assertThat((List<?>) request.get("images")).hasSize(2);
+            assertThat(request).containsKey("prompt");
+        }
+
+        @Test
+        @DisplayName("slots that cannot travel together are refused before anything is reserved")
+        void refusesAForbiddenPair() {
+            GenerationSpec exclusive = spec("""
+                    {
+                      "kind": "video", "assetPath": "url",
+                      "paramMap": {
+                        "prompt": "content[0].text",
+                        "first_frame_image": {
+                          "path": "content[1].image_url.url", "encoding": "data_url",
+                          "role": "first_frame", "excludes": ["input_image"]
+                        },
+                        "input_image": {
+                          "path": "content[3].image_url.url", "encoding": "data_url",
+                          "role": "reference", "maxItems": 4
+                        }
+                      },
+                      "models": [{
+                        "id": "s-2",
+                        "capabilities": ["prompt", "first_frame_image", "input_image"],
+                        "price": {"unit": "call", "baseCredits": 10}
+                      }]
+                    }
+                    """);
+
+            GenerationRequestBuilder.Built built = GenerationRequestBuilder.build(
+                    exclusive, exclusive.models().get(0),
+                    Map.of("prompt", "a market at dawn",
+                            "first_frame_image", file("open.png"),
+                            "input_image", List.of(file("style.png"))));
+
+            assertThat(built.ok()).isFalse();
+            // Named once, not once per direction: the reader has one pair to undo.
+            assertThat(built.errors()).hasSize(1);
+            assertThat(built.errors().get(0))
+                    .contains("'first_frame_image' and 'input_image' cannot be sent in the same call");
+        }
+
+        @Test
+        @DisplayName("the pair is refused when the DECLARING side is the alphabetically later one")
+        void refusesTheSamePairFromTheOtherDirection() {
+            // Only one direction of each pair is reported, chosen by ordering, and the rule is
+            // read from both sides. A one-sided read would pass the test above and let this one
+            // through, which is the same pair reaching the provider because of a letter.
+            GenerationSpec exclusive = spec("""
+                    {
+                      "kind": "video", "assetPath": "url",
+                      "paramMap": {
+                        "prompt": "content[0].text",
+                        "first_frame_image": {
+                          "path": "content[1].image_url.url", "encoding": "data_url",
+                          "role": "first_frame"
+                        },
+                        "input_image": {
+                          "path": "content[3].image_url.url", "encoding": "data_url",
+                          "role": "reference", "maxItems": 4,
+                          "excludes": ["first_frame_image"]
+                        }
+                      },
+                      "models": [{
+                        "id": "s-3",
+                        "capabilities": ["prompt", "first_frame_image", "input_image"],
+                        "price": {"unit": "call", "baseCredits": 10}
+                      }]
+                    }
+                    """);
+
+            GenerationRequestBuilder.Built built = GenerationRequestBuilder.build(
+                    exclusive, exclusive.models().get(0),
+                    Map.of("prompt", "a market at dawn",
+                            "first_frame_image", file("open.png"),
+                            "input_image", List.of(file("style.png"))));
+
+            assertThat(built.errors()).hasSize(1);
+            assertThat(built.errors().get(0)).contains("cannot be sent in the same call");
+        }
+
+        @Test
+        @DisplayName("a pair is not explained to a model that has only one half of it")
+        void doesNotExplainAnExclusionForASlotTheModelLacks() {
+            // Seedance 2.5 is the live case: it takes references and no pinned frame, so
+            // "pick one" would ask the reader to choose between a slot they can use and one
+            // this model does not have. Which side surfaced depended on alphabetical order,
+            // so the guard has to cover the companion, not only the parameter being walked.
+            GenerationSpec exclusive = spec("""
+                    {
+                      "kind": "video", "assetPath": "url",
+                      "paramMap": {
+                        "prompt": "content[0].text",
+                        "first_frame_image": {
+                          "path": "content[1].image_url.url", "encoding": "data_url",
+                          "role": "first_frame", "excludes": ["input_image"]
+                        },
+                        "last_frame_image": {
+                          "path": "content[2].image_url.url", "encoding": "data_url",
+                          "role": "last_frame", "requires": ["first_frame_image"],
+                          "excludes": ["input_image"]
+                        },
+                        "input_image": {
+                          "path": "content[3].image_url.url", "encoding": "data_url",
+                          "role": "reference", "maxItems": 4
+                        }
+                      },
+                      "modelParam": "model",
+                      "models": [{
+                        "id": "s-frames", "upstream": "a",
+                        "capabilities": ["prompt", "first_frame_image", "last_frame_image", "input_image"],
+                        "price": {"unit": "call", "baseCredits": 10}
+                      }, {
+                        "id": "s-refs-only", "upstream": "b",
+                        "capabilities": ["prompt", "input_image"],
+                        "price": {"unit": "call", "baseCredits": 10}
+                      }]
+                    }
+                    """);
+            GenerationSpec.Model refsOnly = exclusive.models().stream()
+                    .filter(m -> m.id().equals("s-refs-only")).findFirst().orElseThrow();
+
+            GenerationRequestBuilder.Built built = GenerationRequestBuilder.build(
+                    exclusive, refsOnly,
+                    Map.of("prompt", "a market at dawn",
+                            "input_image", List.of(file("style.png")),
+                            "last_frame_image", file("close.png")));
+
+            assertThat(built.ok()).isFalse();
+            assertThat(built.errors()).hasSize(1);
+            assertThat(built.errors().get(0)).contains("does not accept 'last_frame_image'");
+        }
+
+        @Test
+        @DisplayName("either half of a forbidden pair is fine on its own, which is the point")
+        void acceptsEitherHalfAlone() {
+            GenerationSpec exclusive = spec("""
+                    {
+                      "kind": "video", "assetPath": "url",
+                      "paramMap": {
+                        "prompt": "content[0].text",
+                        "first_frame_image": {
+                          "path": "content[1].image_url.url", "encoding": "data_url",
+                          "role": "first_frame", "excludes": ["input_image"]
+                        },
+                        "input_image": {
+                          "path": "content[3].image_url.url", "encoding": "data_url",
+                          "role": "reference", "maxItems": 4
+                        }
+                      },
+                      "models": [{
+                        "id": "s-2",
+                        "capabilities": ["prompt", "first_frame_image", "input_image"],
+                        "price": {"unit": "call", "baseCredits": 10}
+                      }]
+                    }
+                    """);
+
+            assertThat(GenerationRequestBuilder.build(exclusive, exclusive.models().get(0),
+                    Map.of("prompt", "a market", "first_frame_image", file("open.png"))).errors())
+                    .isEmpty();
+            assertThat(GenerationRequestBuilder.build(exclusive, exclusive.models().get(0),
+                    Map.of("prompt", "a market", "input_image", List.of(file("style.png")))).errors())
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("a slot this model does not take is reported once, not twice")
+        void doesNotExplainPairingForASlotTheModelLacks() {
+            // The classic xAI video model is the real case: it has no closing frame at all, so
+            // telling its caller how to PAIR one sends them to add a second parameter and be
+            // refused again for the same reason.
+            GenerationSpec.Model noFrames = PAIRED.models().stream()
+                    .filter(m -> m.id().equals("s-1-no-frames")).findFirst().orElseThrow();
+
+            GenerationRequestBuilder.Built built = GenerationRequestBuilder.build(
+                    PAIRED, noFrames, Map.of("prompt", "a dolly shot",
+                            "last_frame_image", file("close.png")));
+
+            assertThat(built.errors()).hasSize(1);
+            assertThat(built.errors().get(0))
+                    .contains("does not accept 'last_frame_image'");
+        }
+
+        @Test
+        @DisplayName("an element nobody filled is dropped, so an unused slot does not send an empty item")
+        void prunesTheHoleAnUnusedSlotLeaves() {
+            // Writing content[2] materialises content[1] as {}, which is right
+            // while one array belongs to one slot and wrong the moment three
+            // slots share it: the provider reads an item with no type and no
+            // value.
+            Map<String, Object> request = new LinkedHashMap<>();
+            List<String> errors = new java.util.ArrayList<>();
+            GenerationRequestBuilder.setByPath(request, "content[0].text", "a dolly shot", errors);
+            GenerationRequestBuilder.setByPath(request, "content[2].image_url.url", "data:...", errors);
+
+            GenerationRequestBuilder.pruneEmpty(request);
+
+            @SuppressWarnings("unchecked")
+            List<Object> content = (List<Object>) request.get("content");
+            assertThat(content).hasSize(2);
+            assertThat(GenerationRequestBuilder.getByPath(request, "content[1].image_url.url"))
+                    .isEqualTo("data:...");
+        }
+
+        @Test
+        @DisplayName("an array left entirely empty is not sent at all, rather than sent empty")
+        void dropsAnArrayThatHeldNothing() {
+            Map<String, Object> request = new LinkedHashMap<>();
+            List<String> errors = new java.util.ArrayList<>();
+            GenerationRequestBuilder.setByPath(request, "prompt", "a dolly shot", errors);
+            // What a multi-file slot that received no file leaves behind.
+            GenerationRequestBuilder.setByPath(request, "reference_images[0].url", null, errors);
+
+            GenerationRequestBuilder.pruneEmpty(request);
+
+            assertThat(request).containsOnlyKeys("prompt");
+        }
+
+        @Test
+        @DisplayName("a value the caller did send survives pruning, however small")
+        void keepsEveryScalar() {
+            Map<String, Object> request = new LinkedHashMap<>();
+            List<String> errors = new java.util.ArrayList<>();
+            GenerationRequestBuilder.setByPath(request, "seed", 0, errors);
+            GenerationRequestBuilder.setByPath(request, "negative_prompt", "", errors);
+            GenerationRequestBuilder.setByPath(request, "flags[0]", false, errors);
+
+            GenerationRequestBuilder.pruneEmpty(request);
+
+            assertThat(request).containsKeys("seed", "negative_prompt", "flags");
+            assertThat((List<?>) request.get("flags")).isEqualTo(List.of(false));
+        }
+    }
 }

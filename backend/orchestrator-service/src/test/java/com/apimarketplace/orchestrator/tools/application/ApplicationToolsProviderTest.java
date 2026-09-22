@@ -84,7 +84,10 @@ class ApplicationToolsProviderTest {
                 .toList();
 
             assertThat(paramNames).containsExactlyInAnyOrder(
-                "action", "workflow_id", "application_id", "query", "category", "title", "description",
+                "action", "workflow_id", "application_id", "query",
+                // Narrows 'my' to the apps built with a given node or integration.
+                "node_types",
+                "category", "title", "description",
                 // A SECOND axis beside category, not a replacement for it: an application keeps its
                 // category and may also sit on the Studio shelf.
                 "studio",

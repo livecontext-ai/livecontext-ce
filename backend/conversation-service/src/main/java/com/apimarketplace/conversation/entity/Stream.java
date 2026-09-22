@@ -23,7 +23,12 @@ public class Stream {
     @Column(name = "conversation_id", length = 36, nullable = false)
     private String conversationId;
     
-    @Column(name = "stream_id", length = 255, nullable = false)
+    // unique = true mirrors the real streams_stream_id_key constraint Flyway created
+    // (V10__create_conversation_schema.sql). It changes no deployed schema: conversation-service
+    // runs ddl-auto: validate and the CE monolith runs none, and Hibernate's validator does not
+    // check unique constraints either way. What it DOES change is the generated TEST schema, so
+    // a duplicate registration is caught by a test instead of only in production.
+    @Column(name = "stream_id", length = 255, nullable = false, unique = true)
     private String streamId;
     
     @Column(name = "user_id", length = 36, nullable = false)

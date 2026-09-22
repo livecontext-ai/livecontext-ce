@@ -24,6 +24,8 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -60,6 +62,14 @@ class ClassifyServiceExecutionLinkTest {
     @Mock
     private ExecutionLinkRouter executionLinkRouter;
 
+    /**
+     * The decision engine, unstubbed on purpose: an execution link only ever moves a run
+     * between chat-shaped targets, so every test here takes the LLM path and
+     * {@code supports(...)} answers false.
+     */
+    @Mock
+    private TypeSafeSystemOneClient typeSafeClient;
+
     private ClassifyService service;
 
     private static final List<ClassifyRequestDto.CategoryDto> CATEGORIES = List.of(
@@ -78,13 +88,13 @@ class ClassifyServiceExecutionLinkTest {
     @BeforeEach
     void setUp() {
         service = new ClassifyService(agentLoopService, guardChainFactory, new ObjectMapper(),
-            bridgeDispatcher, modelCatalogService, executionLinkRouter);
+            bridgeDispatcher, modelCatalogService, executionLinkRouter, typeSafeClient);
         lenient().when(guardChainFactory.forAgent(any(), any(), any(), any())).thenReturn(PreIterationGuard.ALWAYS_PROCEED);
         lenient().when(modelCatalogService.resolveProvider(any(), any())).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(null);
         lenient().when(bridgeDispatcher.shouldDispatch(any())).thenReturn(false);
         lenient().when(agentLoopService.execute(any(), isNull())).thenReturn(loopResult());
-        lenient().when(bridgeDispatcher.execute(any())).thenReturn(loopResult());
+        lenient().when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(loopResult());
     }
 
     @Test
@@ -96,6 +106,63 @@ class ClassifyServiceExecutionLinkTest {
     }
 
     @Test
+    @DisplayName("the key route is pinned once for the execution provider and rides on the loop context")
+    void keyRouteIsPinnedOnTheLoopContext() {
+        KeyRouteResolver keyRouteResolver = org.mockito.Mockito.mock(KeyRouteResolver.class);
+        when(keyRouteResolver.resolve(any(), eq("anthropic"))).thenReturn(com.apimarketplace.agent.domain.KeyRoute.OWN_KEY);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keyRouteResolver", keyRouteResolver);
+
+        var response = service.execute(request());
+
+        ArgumentCaptor<AgentLoopContext> captor = ArgumentCaptor.forClass(AgentLoopContext.class);
+        verify(agentLoopService).execute(captor.capture(), isNull());
+        assertThat(captor.getValue().keyRoute()).isEqualTo(com.apimarketplace.agent.domain.KeyRoute.OWN_KEY);
+        // And the response carries it: the orchestrator bills this node from the response,
+        // and an own-key turn is billed a flat fee, not the token rate.
+        assertThat(response.keyRoute()).isEqualTo("OWN_KEY");
+    }
+
+    @Test
+    @DisplayName("a bridge-linked classification is pinned PLATFORM without consulting the resolver (a bridge holds no API key)")
+    void bridgeLinkPinsPlatform() {
+        KeyRouteResolver keyRouteResolver = org.mockito.Mockito.mock(KeyRouteResolver.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keyRouteResolver", keyRouteResolver);
+        when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(BRIDGE_ROUTE);
+        when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+
+        var response = service.execute(request());
+
+        ArgumentCaptor<AgentLoopContext> captor = ArgumentCaptor.forClass(AgentLoopContext.class);
+        verify(bridgeDispatcher).execute(captor.capture(), eq(true));
+        assertThat(captor.getValue().keyRoute()).isEqualTo(com.apimarketplace.agent.domain.KeyRoute.PLATFORM);
+        verify(keyRouteResolver, never()).resolve(any(), any());
+        assertThat(response.keyRoute()).isEqualTo("PLATFORM");
+    }
+
+    @Test
+    @DisplayName("regression: a bridge run that fails and falls back to the billed pair reports the route of the FALLBACK, not the bridge pin it started with")
+    void fallbackRouteReplacesTheBridgePin() {
+        KeyRouteResolver keyRouteResolver = org.mockito.Mockito.mock(KeyRouteResolver.class);
+        when(keyRouteResolver.resolve(any(), eq("anthropic"))).thenReturn(com.apimarketplace.agent.domain.KeyRoute.OWN_KEY);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "keyRouteResolver", keyRouteResolver);
+        when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(BRIDGE_ROUTE);
+        when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+        when(bridgeDispatcher.execute(any(), eq(true)))
+            .thenReturn(com.apimarketplace.agent.loop.AgentLoopResult.failure("bridge down", 10L, "claude-code"));
+
+        var response = service.execute(request());
+
+        // The bridge attempt was PLATFORM (no key); the billed pair ran on the user's key.
+        // Billing the fallback as PLATFORM would charge the token rate for a turn the
+        // user's provider already billed them for.
+        ArgumentCaptor<AgentLoopContext> captor = ArgumentCaptor.forClass(AgentLoopContext.class);
+        verify(agentLoopService).execute(captor.capture(), isNull());
+        assertThat(captor.getValue().keyRoute()).isEqualTo(com.apimarketplace.agent.domain.KeyRoute.OWN_KEY);
+        assertThat(response.success()).isTrue();
+        assertThat(response.keyRoute()).isEqualTo("OWN_KEY");
+    }
+
+    @Test
     @DisplayName("a link to a CLI bridge sends the classification through the bridge")
     void bridgeLinkRoutesThroughBridge() {
         when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(BRIDGE_ROUTE);
@@ -104,7 +171,7 @@ class ClassifyServiceExecutionLinkTest {
         service.execute(request());
 
         ArgumentCaptor<AgentLoopContext> captor = ArgumentCaptor.forClass(AgentLoopContext.class);
-        verify(bridgeDispatcher).execute(captor.capture());
+        verify(bridgeDispatcher).execute(captor.capture(), eq(true));
         verify(agentLoopService, never()).execute(any(), any());
         assertThat(captor.getValue().provider()).isEqualTo("claude-code");
         assertThat(captor.getValue().model()).isEqualTo("claude-opus-4-8");
@@ -119,7 +186,7 @@ class ClassifyServiceExecutionLinkTest {
         service.execute(request());
 
         ArgumentCaptor<AgentLoopContext> captor = ArgumentCaptor.forClass(AgentLoopContext.class);
-        verify(bridgeDispatcher).execute(captor.capture());
+        verify(bridgeDispatcher).execute(captor.capture(), anyBoolean());
         // Without this the CLI would run a classification with its native file tools
         // and the project cwd, which a plain API call never has.
         assertThat(captor.getValue().credentials())
@@ -188,7 +255,7 @@ class ClassifyServiceExecutionLinkTest {
         service.execute(request());
 
         ArgumentCaptor<AgentLoopContext> captor = ArgumentCaptor.forClass(AgentLoopContext.class);
-        verify(bridgeDispatcher).execute(captor.capture());
+        verify(bridgeDispatcher).execute(captor.capture(), eq(false));
         assertThat(captor.getValue().credentials())
             .containsEntry(ExecutionLinkRouter.RESTRICTED_TOOLSET_KEY, Boolean.TRUE);
     }
@@ -200,7 +267,7 @@ class ClassifyServiceExecutionLinkTest {
         // directly on a CLI provider keeps the identity the bridge reported, which is what
         // it did before links reached this path.
         when(bridgeDispatcher.shouldDispatch("anthropic")).thenReturn(true);
-        when(bridgeDispatcher.execute(any())).thenReturn(loopResultEchoing("claude-code", "claude-opus-4-8-cli"));
+        when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(loopResultEchoing("claude-code", "claude-opus-4-8-cli"));
 
         var result = service.execute(request());
 
@@ -212,7 +279,7 @@ class ClassifyServiceExecutionLinkTest {
     void bridgeDenialPropagates() {
         when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(BRIDGE_ROUTE);
         when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
-        when(bridgeDispatcher.execute(any())).thenThrow(
+        when(bridgeDispatcher.execute(any(), anyBoolean())).thenThrow(
             new com.apimarketplace.agent.bridge.BridgeAccessDeniedException("claude-code", "quota_exceeded", 0));
 
         // Falling back to the billed provider would spend the very key the admin linked
@@ -277,7 +344,7 @@ class ClassifyServiceExecutionLinkTest {
         ExecutionLinkRouter realRouter = new ExecutionLinkRouter(bridgeDispatcher);
         org.springframework.test.util.ReflectionTestUtils.setField(realRouter, "executionLinkService", store);
         service = new ClassifyService(agentLoopService, guardChainFactory, new ObjectMapper(),
-            bridgeDispatcher, modelCatalogService, realRouter);
+            bridgeDispatcher, modelCatalogService, realRouter, typeSafeClient);
     }
 
     private ClassifyRequestDto request() {

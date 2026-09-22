@@ -19,6 +19,7 @@ import CeCloudCreditModal from '@/components/billing/CeCloudCreditModal';
 import ModelNotManagedModal from '@/components/billing/ModelNotManagedModal';
 import AgentErrorModal from '@/components/billing/AgentErrorModal';
 import SuggestedAppsModal from '@/components/billing/SuggestedAppsModal';
+import WelcomeGiftModal from '@/components/billing/WelcomeGiftModal';
 import AccountRestoreModal from '@/components/auth/AccountRestoreModal';
 import ChangelogModal from '@/components/changelog/ChangelogModal';
 import AppViewTracker from '@/components/analytics/AppViewTracker';
@@ -65,6 +66,18 @@ export default function AppLayout({
                         (a running canvas, an SSE stream). Cloud-only, like the
                         rest of the status feature. */}
                     {!IS_CE && <IncidentStrip />}
+                    {/* The two modals onboarding arms, in the order it arms
+                        them: what the new account already has, then what it can
+                        start from. The ORDER on screen is the hand-off's doing,
+                        but the mount order below is not free: the gift is
+                        mounted first, and a child's mount effects run before its
+                        parent's, so the suggestions modal subscribes to the
+                        release event AFTER the gift's own mount effect has run.
+                        The gift therefore never settles inside that effect, only
+                        on a later render pass. Moving either line, or making the
+                        gift decide at mount, drops the release into a window
+                        where nobody is listening. */}
+                    <WelcomeGiftModal />
                     <SuggestedAppsModal />
                     <InsufficientCreditsModal />
                     <InsufficientStorageModal />

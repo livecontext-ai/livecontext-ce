@@ -1,5 +1,12 @@
 package com.apimarketplace.agent.domain;
 
+import com.apimarketplace.common.security.token.EncryptedTokenConverter;
+import com.apimarketplace.common.security.token.HashedTokenEntity;
+import com.apimarketplace.common.security.token.HashedTokenListener;
+import com.apimarketplace.common.security.token.TokenSlot;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import java.util.List;
+
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 
@@ -11,9 +18,10 @@ import java.util.UUID;
  * Stores widget configuration for agents to embed on external websites.
  */
 @Entity
+@EntityListeners(HashedTokenListener.class)
 @Table(name = "agent_widget_configs")
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-public class AgentWidgetConfigEntity {
+public class AgentWidgetConfigEntity implements HashedTokenEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -47,8 +55,18 @@ public class AgentWidgetConfigEntity {
     private Integer autoOpenDelay = 0;
 
     // Security
-    @Column(name = "widget_token", length = 40, unique = true)
+    /**
+     * The embeddable widget token (/w/embed/{token}).
+     * Stored encrypted (ENC:...) through {@link EncryptedTokenConverter}; the entity always holds
+     * the plaintext. Lookups go through {@link #getWidgetTokenHash()}, never through this column.
+     */
+    @Convert(converter = EncryptedTokenConverter.class)
+    @Column(name = "widget_token", unique = true, length = 255)
     private String widgetToken;
+
+    /** HMAC-SHA256 of the plaintext, filled by {@link HashedTokenListener}; the only lookup key. */
+    @Column(name = "widget_token_hash", length = 64)
+    private String widgetTokenHash;
 
     @Column(name = "allowed_origins", columnDefinition = "TEXT")
     private String allowedOrigins;
@@ -203,5 +221,20 @@ public class AgentWidgetConfigEntity {
                 ", primaryColor='" + primaryColor + '\'' +
                 ", isActive=" + isActive +
                 '}';
+    }
+
+    @JsonIgnore
+    public String getWidgetTokenHash() {
+        return widgetTokenHash;
+    }
+
+    public void setWidgetTokenHash(String widgetTokenHash) {
+        this.widgetTokenHash = widgetTokenHash;
+    }
+
+    @Override
+    @JsonIgnore
+    public List<TokenSlot> tokenSlots() {
+        return List.of(new TokenSlot(this::getWidgetToken, this::setWidgetTokenHash));
     }
 }

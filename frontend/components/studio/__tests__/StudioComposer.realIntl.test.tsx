@@ -23,18 +23,23 @@ import enMessages from '@/messages/en.json';
 import frMessages from '@/messages/fr.json';
 
 // A published rate per SECOND: the one shape whose unit has to travel through the unit dictionary.
-vi.mock('@/hooks/useGenerationQuote', () => ({
-  useGenerationQuote: () => ({
+const quoteState = vi.hoisted(() => ({
+  value: {
     quote: {
       hasPricing: true,
       priceUnit: 'second',
       baseCredits: '0',
       unitCredits: '60',
-    },
+    } as Record<string, unknown>,
     quantity: 5,
     // The question has been answered: the composer only states a price once it has.
     settled: true,
-  }),
+    stale: false,
+    multiplier: 1,
+  },
+}));
+vi.mock('@/hooks/useGenerationQuote', () => ({
+  useGenerationQuote: () => quoteState.value,
 }));
 vi.mock('@/hooks/useGenerationOptions', () => ({ useGenerationOptions: () => ({}) }));
 vi.mock('@/components/studio/StudioPayerControl', () => ({
@@ -43,6 +48,7 @@ vi.mock('@/components/studio/StudioPayerControl', () => ({
 
 import { StudioComposer } from '../StudioComposer';
 import type { GenerationModel } from '@/lib/api/orchestrator/generation.service';
+import { STUDIO_MESSAGE_TYPE } from '@/lib/generation/studioMessage';
 
 const MODEL: GenerationModel = {
   model: 'seedance-2',
@@ -62,21 +68,59 @@ const MODEL: GenerationModel = {
   async: true,
 };
 
-function renderIn(locale: 'en' | 'fr') {
+/** The same model, declaring a priced resolution, so the real factor pipeline has work to do. */
+const MODULATED: GenerationModel = {
+  ...MODEL,
+  model: 'seedance-2-tiered',
+  accepts: ['prompt', 'duration_seconds', 'resolution'],
+  required: ['resolution'],
+  limits: { resolution: { type: 'enum', values: ['720p', '1080p'] } },
+  price: {
+    unit: 'second', baseCredits: '0', unitCredits: '60',
+    modifiers: { resolution: { by_value: { '720p': 1, '1080p': 2 } } },
+  },
+} as GenerationModel;
+
+function renderIn(
+  locale: 'en' | 'fr',
+  model: GenerationModel = MODEL,
+  params?: Record<string, unknown>,
+) {
   const messages = (locale === 'fr' ? frMessages : enMessages) as Record<string, unknown>;
   return render(
     <NextIntlClientProvider locale={locale} messages={messages}>
       <StudioComposer
-        models={[MODEL]}
-        selectedModel={MODEL}
+        models={[model]}
+        selectedModel={model}
         onSelectModel={() => {}}
         onSubmit={async () => true}
+        // Parameters are seated through `reuse`, the same door the "Modify" button on a past turn
+        // uses. Setting them any other way would mean reaching into component state, and the point
+        // of this suite is to exercise what a reader's own actions produce.
+        reuse={params ? {
+          type: STUDIO_MESSAGE_TYPE,
+          role: 'request',
+          prompt: 'a lighthouse at dusk',
+          model: model.model,
+          kind: model.kind,
+          params,
+        } : null}
+        onReuseConsumed={() => {}}
       />
     </NextIntlClientProvider>,
   );
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  quoteState.value = {
+    quote: { hasPricing: true, priceUnit: 'second', baseCredits: '0', unitCredits: '60' },
+    quantity: 5,
+    settled: true,
+    stale: false,
+    multiplier: 1,
+  };
+});
 
 describe('StudioComposer - the real dictionaries', () => {
   it('names the price unit in English, through the unit dictionary', () => {
@@ -107,5 +151,54 @@ describe('StudioComposer - the real dictionaries', () => {
 
     expect(screen.getByPlaceholderText(/Seedance 2\.0/)).toBeInTheDocument();
     expect(screen.queryByText(/^studio\./)).toBeNull();
+  });
+});
+
+/**
+ * The factor sentence, end to end through the component.
+ *
+ * <p>The dedicated factor suite mocks `describePriceFactors` to a constant, so it proves the badge
+ * is gated on the server's echo and nothing about the pipeline that produces the words: it would
+ * stay green if the composer passed the wrong model, the wrong parameters, or an empty object into
+ * it. Nothing anywhere exercised source -> reasons -> sentence, which is where the parameter label
+ * and the list join live, and both of those have shipped broken (a key path on screen, and a
+ * Chinese list with no separator).
+ */
+describe('StudioComposer - the factor sentence, unmocked', () => {
+  it('names the CHOICE and its factor, read from the model the composer holds', () => {
+    // The parameters are the composer's own defaults for this model; what matters is that the
+    // sentence comes out of the real table rather than a stub, in the reader's language.
+    quoteState.value = {
+      ...quoteState.value,
+      quote: { ...quoteState.value.quote, priceMultiplier: '2' },
+      multiplier: 2,
+    };
+
+    renderIn('en', MODULATED, { resolution: '1080p' });
+
+    // `price.factor` is "{param} x{factor}" and `price.factors` wraps it: a pipeline that lost the
+    // dictionary would print `params.resolution` or the bare key path here.
+    expect(screen.getByText(/includes/i).textContent).toMatch(/Resolution x2/i);
+  });
+
+  it('says it in FRENCH, which a stubbed sentence could never show', () => {
+    quoteState.value = {
+      ...quoteState.value,
+      quote: { ...quoteState.value.quote, priceMultiplier: '2' },
+      multiplier: 2,
+    };
+
+    renderIn('fr', MODULATED, { resolution: '1080p' });
+
+    const note = screen.getByText(/dont /i);
+    expect(note.textContent).toMatch(/x2/);
+    expect(note.textContent).not.toContain('price.');
+    expect(note.textContent).not.toContain('params.');
+  });
+
+  it('says nothing at all when the server applied no factor', () => {
+    renderIn('en', MODULATED, { resolution: '1080p' });
+
+    expect(screen.queryByText(/includes/i)).toBeNull();
   });
 });

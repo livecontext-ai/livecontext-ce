@@ -53,6 +53,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import com.apimarketplace.orchestrator.services.failure.UserActionableFailure;
 
 /**
  * Service for executing reusable triggers (webhook, manual, chat).
@@ -1299,10 +1300,21 @@ public class ReusableTriggerService {
                         shouldFailTriggerOnNodeFailures(triggerGlobalData));
                 }
             } else {
-                logger.error("[ReusableTrigger] {} trigger execution failed: runId={}, error={}",
-                            triggerType, runId, v2Result.getErrorMessage());
+                // A refused run is not an incident when the customer is the one who can act on
+                // it: out of credits, plan upgrade needed, credential not configured. The run
+                // still fails and still reports the same message; only the level moves, so one
+                // workspace at zero credits with a retrying webhook caller stops filling the
+                // error dashboard with a state that is working as designed.
+                String triggerError = v2Result.getErrorMessage();
+                if (UserActionableFailure.isUserActionable(triggerError)) {
+                    logger.warn("[ReusableTrigger] {} trigger refused: runId={}, reason={}",
+                                triggerType, runId, triggerError);
+                } else {
+                    logger.error("[ReusableTrigger] {} trigger execution failed: runId={}, error={}",
+                                triggerType, runId, triggerError);
+                }
                 return TriggerExecutionResult.failure(runId, triggerId, triggerType,
-                    v2Result.getErrorMessage());
+                    triggerError);
             }
         } catch (Exception e) {
             logger.error("[ReusableTrigger] Error in V2 execution: runId={}, error={}",

@@ -4,6 +4,9 @@
  */
 
 import { apiClient } from './api-client';
+// The LEAF cache module, not `workspaceMembers`: that one fetches through this file, so
+// importing it here would put two hot API modules in a cycle.
+import { invalidateWorkspaceMembers } from '@/lib/api/workspaceMembersCache';
 import { getActiveOrgHeaderForRequest } from '@/lib/stores/current-org-store';
 
 export type OrganizationRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER';
@@ -154,10 +157,14 @@ class OrganizationApiService {
    * Returns the joined Organization.
    */
   async acceptInvitationById(invitationId: string): Promise<Organization> {
-    return await apiClient.post<Organization>(
+    const org = await apiClient.post<Organization>(
       `/organizations/invitations/${invitationId}/accept-by-id`,
       null
     );
+    // Accepting ADDS a member (this user). Inviting does not - the roster only changes when
+    // the invite is accepted, which is why the invite call is deliberately not wired here.
+    invalidateWorkspaceMembers(org?.id);
+    return org;
   }
 
   async declineInvitationById(invitationId: string): Promise<Invitation> {
@@ -172,9 +179,11 @@ class OrganizationApiService {
   }
 
   async acceptInvitation(token: string): Promise<Organization> {
-    return await apiClient.post<Organization>(`/organizations/invitations/accept`, null, {
+    const org = await apiClient.post<Organization>(`/organizations/invitations/accept`, null, {
       params: { token }
     });
+    invalidateWorkspaceMembers(org?.id);
+    return org;
   }
 
   /**
@@ -203,15 +212,22 @@ class OrganizationApiService {
 
   async removeMember(orgId: string, userId: number): Promise<void> {
     await apiClient.delete(`/organizations/${orgId}/members/${userId}`);
+    // The cached roster (names + avatars behind resource attribution and the task assignee
+    // picker) would otherwise keep naming someone this very session just removed, until it
+    // expired on its own.
+    invalidateWorkspaceMembers(orgId);
   }
 
   async changeMemberRole(orgId: string, userId: number, role: string): Promise<OrganizationMember> {
-    return await apiClient.put<OrganizationMember>(`/organizations/${orgId}/members/${userId}/role`, { role });
+    const updated = await apiClient.put<OrganizationMember>(`/organizations/${orgId}/members/${userId}/role`, { role });
+    invalidateWorkspaceMembers(orgId);
+    return updated;
   }
 
   // ── PR-4a - leave organization ─────────────────────────────────
   async leaveOrganization(orgId: string): Promise<void> {
     await apiClient.post(`/organizations/${orgId}/leave`, null);
+    invalidateWorkspaceMembers(orgId);
   }
 
   // ── PR-4c - transfer ownership ─────────────────────────────────

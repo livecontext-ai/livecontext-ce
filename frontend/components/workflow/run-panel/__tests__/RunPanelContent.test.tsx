@@ -58,6 +58,7 @@ vi.mock('@/components/workflow/run-panel/RunSummaryBar', () => ({
       <div data-testid="summary">
         {props.leading}
         <button type="button" data-testid="version" onClick={() => props.onVersionClick?.()}>version</button>
+        {props.trailing}
       </div>
     );
   },
@@ -441,6 +442,14 @@ describe('RunPanelContent - epoch selection', () => {
 });
 
 describe('RunPanelContent - the way back to the workflow canvas', () => {
+  it('opens the logs child from the right side of the run header', () => {
+    const onOpenLogs = vi.fn();
+    render(<RunPanelContent workflowId="wf-1" onOpenLogs={onOpenLogs} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'workflow.logs.openLogs' }));
+    expect(onOpenLogs).toHaveBeenCalledTimes(1);
+  });
+
   it('offers a labelled control in the run header when the host has a canvas tab', () => {
     const onBackToWorkflow = vi.fn();
     render(<RunPanelContent workflowId="wf-1" onBackToWorkflow={onBackToWorkflow} />);

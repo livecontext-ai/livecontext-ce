@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -89,11 +90,18 @@ public class CryptoJwtNode extends BaseNode {
             Map<String, Object> inputData = new LinkedHashMap<>();
             inputData.put("operation", operation);
             if (resolved.algorithm() != null) inputData.put("algorithm", resolved.algorithm());
+            // `encoding` changes how the KEY is read, so it belongs to the operations
+            // that take one. The config constructor defaults it, so reporting it
+            // unconditionally would show `hex` on a generateUuid node that never looks
+            // at it.
+            putEncodingIfKeyed(inputData, operation, resolved);
             if (resolved.value() != null) inputData.put("value", resolved.value());
             if (resolved.token() != null) inputData.put("token", resolved.token());
             if (resolved.payload() != null) inputData.put("payload", resolved.payload());
             // Intentionally omit secret and key for security
-            result.put("resolved_params", inputData);
+            // Through the gate: `token` here is a SIGNED JWT - a bearer credential under the
+            // exact name the masking rule exists for - and `payload` has no size limit.
+            result.put("resolved_params", ReportedParams.forReport(inputData));
 
             logger.info("CryptoJWT completed: nodeId={}, operation={}", nodeId, operation);
             return NodeExecutionResult.success(nodeId, result);
@@ -113,8 +121,11 @@ public class CryptoJwtNode extends BaseNode {
                 if (resolved.value() != null) failInputData.put("value", resolved.value());
                 if (resolved.token() != null) failInputData.put("token", resolved.token());
                 if (resolved.payload() != null) failInputData.put("payload", resolved.payload());
+                // Here above all: a key that is right but read with the wrong encoding
+                // throws, and this is the map the reader gets when it does.
+                putEncodingIfKeyed(failInputData, operation, resolved);
             }
-            failOutput.put("resolved_params", failInputData);
+            failOutput.put("resolved_params", ReportedParams.forReport(failInputData));
             failOutput.put("error", e.getMessage());
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failOutput, 0L);
         }
@@ -422,4 +433,21 @@ public class CryptoJwtNode extends BaseNode {
     }
 
     public static Builder builder() { return new Builder(); }
+
+    /**
+     * Reports `encoding` only for the operations that actually read a key with it.
+     *
+     * The config constructor defaults `encoding` to "hex", so an unconditional report
+     * would show it on a generateUuid or base64Encode node that never looks at it -
+     * the same "you configured something you did not" the params work exists to end.
+     */
+    private static void putEncodingIfKeyed(Map<String, Object> target, String operation,
+                                           Core.CryptoJwtConfig resolved) {
+        if (resolved == null || resolved.encoding() == null || operation == null) return;
+        boolean readsAKey = switch (operation) {
+            case "hmac", "sign", "verify", "encrypt", "decrypt" -> true;
+            default -> false;
+        };
+        if (readsAKey) target.put("encoding", resolved.encoding());
+    }
 }

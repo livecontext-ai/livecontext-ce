@@ -74,6 +74,9 @@ import { EmptyCanvasChat } from './EmptyCanvasChat';
 import { CanvasToolbar } from './CanvasToolbar';
 import { CanvasSettingsPanel } from './CanvasSettingsPanel';
 import { nodeMatchesStep } from '../services/nodeMatcher';
+import { resolveFollowFrame } from '../services/runFollowBounds';
+import { WORKFLOW_FOLLOW_NODES_EVENT, FOLLOW_TRANSITION_MS } from '../services/runFollowEvent';
+
 import { nodeRegistry } from '../registry/nodeRegistry';
 import { NodeIcon, getIconSlug } from './nodes/shared';
 import { findNodeClassById } from '../nodes/nodeClasses';
@@ -580,6 +583,61 @@ export function BuilderCanvas({
     window.addEventListener('workflowToast', handleToast as EventListener);
     return () => window.removeEventListener('workflowToast', handleToast as EventListener);
   }, [showToast]);
+
+  // Camera follow: keep every RUNNING step inside the frame.
+  //
+  // Deliberately NOT `workflowFocusNode` below. That one selects the node, which swaps
+  // the side panel to the inspector and so unmounts the run step list the user is
+  // watching. Fine for a deliberate click on a step row; fatal during a run.
+  //
+  // The event carries resolved NODE IDS and the workflow they belong to. Both matter:
+  // several canvases are mounted at once, so an unscoped event would drag a second
+  // canvas (possibly one being edited) around for someone else's run.
+  //
+  // Several nodes are genuinely running at once whenever a fork or two independent
+  // branches are live, so this frames their BOUNDING BOX instead of electing one.
+  // Electing one makes the viewport jump between branches for the whole fan-out.
+  // `nodes` and `instance` are read through refs so the listener is registered ONCE
+  // instead of on every node identity change, which during a run and during any drag
+  // is several times a second, for every user regardless of the preference.
+  const followNodesRef = React.useRef(nodes);
+  const followInstanceRef = React.useRef(instance);
+  // Synced in an effect, not during render: a render React discards would otherwise
+  // leave these pointing at nodes that were never committed.
+  React.useEffect(() => {
+    followNodesRef.current = nodes;
+    followInstanceRef.current = instance;
+  });
+
+  React.useEffect(() => {
+    const handleFollowNodes = (event: CustomEvent<{ workflowId?: string; nodeIds: string[] }>) => {
+      const inst = followInstanceRef.current;
+      if (!inst) return;
+      // Ignores an event belonging to another canvas, and returns null when nothing
+      // resolves. Kept pure and out of here so both rules are tested.
+      const bounds = resolveFollowFrame(followNodesRef.current, event.detail, workflowId, {
+        pad: FOLLOW_PAD_UNITS,
+        fallbackWidth: FOLLOW_FALLBACK_NODE_WIDTH,
+        fallbackHeight: FOLLOW_FALLBACK_NODE_HEIGHT,
+      });
+      if (!bounds) return;
+
+      try {
+        // fitBounds does the viewport arithmetic itself and clamps to this canvas's
+        // min/max zoom. Measuring the DOM instead would be wrong: several <ReactFlow>
+        // instances can be mounted, so there is no single element to measure. It adds
+        // its own small padding on top of FOLLOW_PAD_UNITS.
+        inst.fitBounds(bounds, { duration: FOLLOW_TRANSITION_MS });
+      } catch {
+        // A camera move must never break the canvas it is decorating.
+      }
+    };
+
+    window.addEventListener(WORKFLOW_FOLLOW_NODES_EVENT, handleFollowNodes as EventListener);
+    return () => {
+      window.removeEventListener(WORKFLOW_FOLLOW_NODES_EVENT, handleFollowNodes as EventListener);
+    };
+  }, [workflowId]);
 
   // Listen for focus-node requests (e.g. from run info panel step clicks)
   React.useEffect(() => {
@@ -1486,6 +1544,13 @@ export function BuilderCanvas({
 }
 
 // CSS styles extracted
+/** Breathing room around the running nodes, in flow units. ReactFlow's fitBounds
+ *  clamps the resulting zoom to this canvas's own minZoom 0.3 / maxZoom 1.5. */
+const FOLLOW_PAD_UNITS = 260;
+/** Used only before ReactFlow has measured a node. */
+const FOLLOW_FALLBACK_NODE_WIDTH = 240;
+const FOLLOW_FALLBACK_NODE_HEIGHT = 80;
+
 const CANVAS_STYLES = `
   .react-flow { height: 100% !important; width: 100% !important; }
   .react-flow__viewport { height: 100% !important; width: 100% !important; transition: none !important; }

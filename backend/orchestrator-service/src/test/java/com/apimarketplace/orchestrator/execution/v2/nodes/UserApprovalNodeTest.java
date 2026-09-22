@@ -83,6 +83,67 @@ class UserApprovalNodeTest {
         }
 
         @Test
+        @DisplayName("records its resolved configuration on the signal, the only carrier a parked node has")
+        @SuppressWarnings("unchecked")
+        void recordsItsReportOnTheSignal() {
+            approvalNode.setSignalService(signalService);
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            approvalNode.execute(context);
+
+            // An approval yields, and a yield persists no step row: what it resolved -
+            // the approver roles, the threshold, the delegation - had nowhere to be reported.
+            // Asserted on the VALUES: `assertNotNull` passes on an empty list, which is the
+            // one answer a reader of this panel cannot use.
+            org.mockito.ArgumentCaptor<Map<String, Object>> recorded =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+            verify(signalService).recordReportedParams(any(), recorded.capture());
+            assertEquals(List.of("manager"), recorded.getValue().get("approverRoles"));
+            assertEquals(1, recorded.getValue().get("requiredApprovals"));
+            assertEquals(86400000L, recorded.getValue().get("timeoutMs"));
+        }
+
+        @Test
+        @DisplayName("records the RESOLVED delegation and the continuation mode: who could answer, and what happened next")
+        @SuppressWarnings("unchecked")
+        void recordsTheResolvedDelegation() {
+            // The two keys the production comment names as the reason this report exists,
+            // and neither was asserted. An approval answered by an unexpected person, or
+            // one that continued in an unexpected way, cannot be explained from the roles
+            // and the threshold alone - and the chatId is TEMPLATE-capable, so the
+            // configured value is not the one that decided.
+            UserApprovalNode node = UserApprovalNode.builder()
+                .nodeId("core:manager_approval")
+                .approverRoles(List.of("manager"))
+                .requiredApprovals(1)
+                .timeoutMs(86400000L)
+                .delegation(new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "{{trigger:hook.output.chat_id}}", null, null,
+                    List.of(), null, null))
+                .continuationMode("per_item")
+                .build();
+            node.setSignalService(signalService);
+            node.setTemplateAdapter(templateAdapter);
+            when(templateAdapter.evaluateTemplate(eq("{{trigger:hook.output.chat_id}}"), any()))
+                .thenReturn("-100987");
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            node.execute(context);
+
+            org.mockito.ArgumentCaptor<Map<String, Object>> recorded =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+            verify(signalService).recordReportedParams(any(), recorded.capture());
+            assertEquals("per_item", recorded.getValue().get("continuationMode"));
+            Map<String, Object> delegation = (Map<String, Object>) recorded.getValue().get("delegation");
+            assertNotNull(delegation, "the delegation decides WHO may approve");
+            assertEquals("telegram", delegation.get("channel"));
+            assertEquals("-100987", delegation.get("chatId"),
+                "the RESOLVED chat id, not the template: the template is not what the message went to");
+        }
+
+        @Test
         @DisplayName("regression: split context persists the current item as the signal's splitItemData (approver sees WHAT they approve)")
         void persistsSplitItemContextAsSignalSplitItemData() {
             approvalNode.setSignalService(signalService);

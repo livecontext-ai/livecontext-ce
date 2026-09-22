@@ -850,7 +850,7 @@ class AgentObservabilityServiceRecordFromChatTest {
             Map<String, Object> rejected = new java.util.HashMap<>();
             rejected.put("success", false);
             rejected.put("error", "402 Insufficient credits");
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenReturn(rejected);
 
             service.recordFromChat(TENANT_ID, "org-test", req);
@@ -863,8 +863,42 @@ class AgentObservabilityServiceRecordFromChatTest {
                 eq("claude-3-sonnet"),
                 eq(1500),
                 eq(600),
-                eq("402 Insufficient credits")
+                eq("402 Insufficient credits"),
+                any(),
+                any()
             );
+        }
+
+        @Test
+        @DisplayName("BILLING: a refused own-key chat turn hands its route to the dead-letter row, so the replay bills the flat fee and not the token rate")
+        void rejectedOwnKeyChatTurnKeepsItsRouteInTheDeadLetter() {
+            ChatAgentObservabilityRequest req = buildFullRequest().withKeyRoute("OWN_KEY");
+            Map<String, Object> rejected = new java.util.HashMap<>();
+            rejected.put("success", false);
+            rejected.put("error", "402 Insufficient credits");
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(),
+                    isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), eq("OWN_KEY")))
+                .thenReturn(rejected);
+
+            service.recordFromChat(TENANT_ID, "org-test", req);
+
+            verify(creditClient).persistRejection(eq(TENANT_ID), eq("CHAT_CONVERSATION"), any(String.class),
+                eq("anthropic"), eq("claude-3-sonnet"), eq(1500), eq(600), eq("402 Insufficient credits"),
+                any(), eq("OWN_KEY"));
+        }
+
+        @Test
+        @DisplayName("BILLING: when the debit call itself fails, the async retry is queued WITH the route (the replay is the last chance to bill it right)")
+        void failedOwnKeyChatDebitRetriesWithItsRoute() {
+            ChatAgentObservabilityRequest req = buildFullRequest().withKeyRoute("OWN_KEY");
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(),
+                    isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), eq("OWN_KEY")))
+                .thenThrow(new RuntimeException("auth-service down"));
+
+            service.recordFromChat(TENANT_ID, "org-test", req);
+
+            verify(creditClient).consumeCreditsAsync(eq(TENANT_ID), eq("CHAT_CONVERSATION"), any(String.class),
+                eq("anthropic"), eq("claude-3-sonnet"), eq(1500), eq(600), eq("OWN_KEY"));
         }
 
         @Test
@@ -874,13 +908,56 @@ class AgentObservabilityServiceRecordFromChatTest {
             Map<String, Object> success = new java.util.HashMap<>();
             success.put("success", true);
             success.put("creditsUsed", 2.0);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenReturn(success);
 
             service.recordFromChat(TENANT_ID, "org-test", req);
 
             verify(creditClient, never()).persistRejection(
-                any(), any(), any(), any(), any(), anyInt(), anyInt(), any());
+                any(), any(), any(), any(), any(), anyInt(), anyInt(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("BILLING: on the tenant's own key the route reaches the debit, the ledger takes a flat fee, and the agent counter keeps metering CONSUMPTION, never the fee")
+        void ownKeyChatCountersMeterConsumptionNotTheFee() {
+            ChatAgentObservabilityRequest req = buildFullRequest().withKeyRoute("OWN_KEY");
+            Map<String, Object> ownKey = new java.util.HashMap<>();
+            ownKey.put("success", true);
+            ownKey.put("creditsUsed", 3.0);
+            ownKey.put("consumptionCredits", 60.0);
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(),
+                    isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), eq("OWN_KEY")))
+                .thenReturn(ownKey);
+
+            service.recordFromChat(TENANT_ID, "org-test", req);
+
+            // The route reached the debit: that is what lets auth-service bill the flat fee.
+            verify(creditClient).consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(),
+                    isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), eq("OWN_KEY"));
+            // ...and the execution row says which route it ran on.
+            verify(executionRepository, atLeastOnce()).save(execCaptor.capture());
+            assertThat(execCaptor.getAllValues().get(0).getKeyRoute()).isEqualTo("OWN_KEY");
+            // A budget or a counter that metered the 3-credit fee would let an own-key agent run
+            // twenty times past the limit set for it: the limit is about consumption.
+            verify(agentRepository).incrementCreditsConsumed(
+                eq(UUID.fromString(AGENT_ID)), eq(java.math.BigDecimal.valueOf(60.0)));
+        }
+
+        @Test
+        @DisplayName("a platform-route debit reports no consumption figure: the debit itself stands in (pre-V506 shape)")
+        void platformChatDebitStandsInForConsumption() {
+            ChatAgentObservabilityRequest req = buildFullRequest();
+            Map<String, Object> platform = new java.util.HashMap<>();
+            platform.put("success", true);
+            platform.put("creditsUsed", 2.5);
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(),
+                    isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
+                .thenReturn(platform);
+
+            service.recordFromChat(TENANT_ID, "org-test", req);
+
+            verify(agentRepository).incrementCreditsConsumed(
+                eq(UUID.fromString(AGENT_ID)), eq(java.math.BigDecimal.valueOf(2.5)));
         }
 
         @Test
@@ -902,7 +979,9 @@ class AgentObservabilityServiceRecordFromChatTest {
                 eq("claude-3-sonnet"),
                 eq(1500),
                 eq(600),
-                eq(new com.apimarketplace.common.credit.LlmCacheTokens(110, 55, 90, 35))
+                isNull(),
+                eq(new com.apimarketplace.common.credit.LlmCacheTokens(110, 55, 90, 35)),
+                any()
             );
         }
 

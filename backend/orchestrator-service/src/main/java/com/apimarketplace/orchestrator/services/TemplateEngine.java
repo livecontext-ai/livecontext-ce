@@ -6,6 +6,7 @@ import com.apimarketplace.orchestrator.services.expression.JsonParseException;
 import com.apimarketplace.orchestrator.services.interfaces.TemplateResolver;
 import com.apimarketplace.orchestrator.services.template.NamespaceResolver;
 import com.apimarketplace.orchestrator.services.template.PathNavigator;
+import com.apimarketplace.orchestrator.services.template.PathProbe;
 import com.apimarketplace.orchestrator.services.template.SpelEvaluator;
 import com.apimarketplace.orchestrator.services.template.SpelProtectedRegions;
 import com.apimarketplace.orchestrator.services.template.VarsSyntaxNormalizer;
@@ -279,8 +280,39 @@ public class TemplateEngine implements TemplateResolver {
         String originalExpression,
         String resolvedExpression,
         boolean result,
-        String errorMessage
-    ) {}
+        String errorMessage,
+        List<UnresolvedReference> unresolvedReferences
+    ) {
+        public ConditionEvaluationResult {
+            unresolvedReferences = unresolvedReferences == null
+                ? List.of()
+                : List.copyOf(unresolvedReferences);
+        }
+
+        /**
+         * Previous arity, kept so every existing caller compiles unchanged. A result
+         * built this way reports no unresolved reference, which is the honest answer
+         * for a caller that never looked.
+         */
+        public ConditionEvaluationResult(String originalExpression, String resolvedExpression,
+                                         boolean result, String errorMessage) {
+            this(originalExpression, resolvedExpression, result, errorMessage, List.of());
+        }
+    }
+
+    /**
+     * A reference inside a condition that points at nothing: a mistyped node label, a
+     * node that did not run, a field its producer does not emit.
+     *
+     * <p>This is the difference between "the value is null" and "there is no value",
+     * which a resolved expression cannot show: both render as {@code null}, so
+     * {@code {{trigger:x.output.task}} == null} is true either way. Without this list a
+     * branch taken on a typo is indistinguishable from a branch taken on real data.
+     *
+     * @param reference the reference as the author wrote it
+     * @param reason one sentence naming what is missing, never the value
+     */
+    public record UnresolvedReference(String reference, String reason) {}
 
     // ========================================
     // Expression Resolution
@@ -701,16 +733,20 @@ public class TemplateEngine implements TemplateResolver {
 
         logger.debug("evaluateConditionWithDetailsWithMap: input={}", condition);
 
+        // Collected BEFORE evaluation so it is reported on the failure path too: a
+        // condition that throws is exactly where "which reference is missing" matters.
+        List<UnresolvedReference> unresolved = collectUnresolvedReferences(condition, context);
+
         try {
             String expression = condition.trim();
 
             // Case 1: Pure expression {{...}}
             if (isPureExpression(expression)) {
                 String innerExpression = expression.substring(2, expression.length() - 2).trim();
-                String resolvedExpr = resolveExpressionToHumanReadableWithMap(innerExpression, context);
+                String resolvedExpr = resolveExpressionToHumanReadableWithMap(innerExpression, context, unresolved);
                 Object result = spelEvaluator.evaluateWithMap(innerExpression, context, pathNavigator);
                 boolean boolResult = spelEvaluator.toBoolean(result);
-                return new ConditionEvaluationResult(condition, resolvedExpr, boolResult, null);
+                return new ConditionEvaluationResult(condition, resolvedExpr, boolResult, null, unresolved);
             }
 
             // Case 2: Mixed expression with {{...}} blocks
@@ -732,7 +768,7 @@ public class TemplateEngine implements TemplateResolver {
                     resolvedContext.put(varName, value);
                     // Don't add # prefix here - evaluateWithMap adds it via transformExpressionForMap
                     spelResult.append(varName);
-                    humanReadable.append(formatValueForDisplay(value));
+                    humanReadable.append(formatBlockForDisplay(value, innerExpression, unresolved));
                 }
 
                 if (lastEnd < expression.length()) {
@@ -743,28 +779,181 @@ public class TemplateEngine implements TemplateResolver {
                 String fullSpelExpression = spelResult.toString();
                 Object result = spelEvaluator.evaluateWithMap(fullSpelExpression, resolvedContext, pathNavigator);
                 boolean boolResult = spelEvaluator.toBoolean(result);
-                return new ConditionEvaluationResult(condition, humanReadable.toString(), boolResult, null);
+                return new ConditionEvaluationResult(condition, humanReadable.toString(), boolResult, null, unresolved);
             }
 
             // Case 3: Raw expression without {{}}
-            String resolvedExpr = resolveExpressionToHumanReadableWithMap(expression, context);
+            String resolvedExpr = resolveExpressionToHumanReadableWithMap(expression, context, unresolved);
             Object result = spelEvaluator.evaluateWithMap(expression, context, pathNavigator);
             boolean boolResult = spelEvaluator.toBoolean(result);
-            return new ConditionEvaluationResult(condition, resolvedExpr, boolResult, null);
+            return new ConditionEvaluationResult(condition, resolvedExpr, boolResult, null, unresolved);
 
         } catch (Exception e) {
             logger.error("evaluateConditionWithDetailsWithMap error: condition={}, error={}", condition, e.getMessage());
-            return new ConditionEvaluationResult(condition, condition, false, e.getMessage());
+            return new ConditionEvaluationResult(condition, condition, false, e.getMessage(), unresolved);
         }
+    }
+
+    /**
+     * Every reference in {@code expression} that points at nothing, in source order and
+     * de-duplicated.
+     *
+     * <p>This is a DIAGNOSTIC: it must never accuse a condition that works. Three filters
+     * earn that, and the first two were learned the hard way, by measuring the first
+     * version of this method against a real engine:
+     *
+     * <ol>
+     *   <li><b>Protected regions are skipped.</b> {@code VARIABLE_IDENTIFIER_PATTERN}
+     *       matches bare words, so {@code {{status}} == 'active'} offers {@code active} as
+     *       an identifier. Without this, the commonest condition shape in the product -
+     *       equality against a string literal - was reported as a missing node on every
+     *       run. {@link SpelEvaluator#transformExpressionForMap} skips the same regions
+     *       for the same reason.</li>
+     *   <li><b>Only NAMESPACED references are considered</b> ({@code trigger:x},
+     *       {@code core:y}, {@code mcp:z}). A bare identifier is genuinely ambiguous here:
+     *       trigger fields are flattened to the top level and step outputs are found by
+     *       scanning every entry, so "no such key" does not mean "no such value". A
+     *       namespaced reference is unambiguous, and it is the shape that actually goes
+     *       wrong - a mistyped node label.</li>
+     *   <li><b>The engine is asked, not modelled.</b> Nothing is reported unless
+     *       {@link SpelEvaluator#resolveVariableForDiagnostics} - the resolution a
+     *       condition really performs - also comes back empty, and unless the parent path
+     *       is not a non-Map value that SpEL would walk itself.</li>
+     * </ol>
+     */
+    private List<UnresolvedReference> collectUnresolvedReferences(String expression, Map<String, Object> context) {
+        if (expression == null || expression.isBlank() || context == null || context.isEmpty()) {
+            return List.of();
+        }
+
+        List<SpelProtectedRegions.Region> protectedRegions = SpelProtectedRegions.find(expression);
+        Map<String, UnresolvedReference> found = new LinkedHashMap<>();
+        Matcher matcher = VARIABLE_IDENTIFIER_PATTERN.matcher(expression);
+
+        while (matcher.find()) {
+            String identifier = matcher.group(1);
+            if (found.containsKey(identifier)) {
+                continue;
+            }
+
+            // Inside a string literal, a selection or a projection: not an outer variable.
+            if (SpelProtectedRegions.isProtected(matcher.start(), protectedRegions)) {
+                continue;
+            }
+            // Only a namespaced node reference can be judged with certainty.
+            if (!identifier.contains(":")) {
+                continue;
+            }
+            // `vars:x` is the workflow-variable alias, NOT a node reference. It only
+            // matches the type:label grammar. SpelEvaluator rewrites it through
+            // VarsSyntaxNormalizer before resolving, and nothing here does, so both the
+            // engine check and the probe below answer "missing" for a variable that
+            // exists and works: a decision on {{vars:threshold}} > 5 resolved to 10 > 5,
+            // matched, and was accused of naming no node.
+            if (identifier.startsWith(VarsSyntaxNormalizer.VARS_NAMESPACE + ":")) {
+                continue;
+            }
+            // A method call on a resolved base: the suffix is not a field.
+            if (isFollowedByOpenParen(expression, matcher.end())) {
+                continue;
+            }
+            // Immediately preceded by '.': part of the chain already matched before it.
+            if (matcher.start() > 0 && expression.charAt(matcher.start() - 1) == '.') {
+                continue;
+            }
+            // The engine resolves it: whatever this diagnostic thinks, it is not missing.
+            if (spelEvaluator.resolveVariableForDiagnostics(identifier, context, pathNavigator) != null) {
+                continue;
+            }
+
+            PathProbe probe = pathNavigator.probeVariablePath(identifier, context);
+            if (!probe.isMissing()) {
+                continue;
+            }
+            // A property or method tail on a non-Map value (a String's length, a List's
+            // size): SpEL walks that itself, so the path is not missing.
+            if (probe.status() == PathProbe.Status.MISSING_SEGMENT
+                    && resolvesToNonMap(probe.resolvedPrefix(), context)) {
+                continue;
+            }
+
+            found.put(identifier, new UnresolvedReference(identifier, probe.describe(identifier)));
+        }
+
+        return List.copyOf(found.values());
+    }
+
+    /** Whether a path resolves to a value SpEL can walk a property or method off. */
+    private boolean resolvesToNonMap(String path, Map<String, Object> context) {
+        if (path == null || path.isBlank()) {
+            return false;
+        }
+        Object value = spelEvaluator.resolveVariableForDiagnostics(path, context, pathNavigator);
+        return value != null && !(value instanceof Map);
+    }
+
+    /**
+     * Every reference in {@code expression} that points at nothing.
+     *
+     * <p>For a caller that resolves an expression to a VALUE rather than to a boolean (a
+     * switch subject) and needs the same "missing versus null" distinction a condition
+     * evaluation reports. Same three filters, so it cannot accuse a healthy expression.
+     */
+    public List<UnresolvedReference> findUnresolvedReferences(String expression, Map<String, Object> context) {
+        return collectUnresolvedReferences(expression, context);
+    }
+
+    /** The identifiers a single expression mentions, for exact matching. */
+    private Set<String> referencesIn(String expression) {
+        Set<String> references = new HashSet<>();
+        Matcher matcher = VARIABLE_IDENTIFIER_PATTERN.matcher(expression);
+        while (matcher.find()) {
+            references.add(matcher.group(1));
+        }
+        return references;
+    }
+
+    /**
+     * How a reference that points at nothing appears inside a resolved condition. It names
+     * the reference: {@code <unresolved: trigger:x.output.task> == null} says in one line
+     * why a branch fired, where {@code null == null} says nothing.
+     */
+    private String unresolvedMarker(String reference) {
+        return "<unresolved: " + reference + ">";
+    }
+
+    /**
+     * Renders one {@code {{...}}} block of a mixed condition. A null that came from a
+     * missing reference is marked; a null that is the real value stays {@code null}.
+     */
+    private String formatBlockForDisplay(Object value, String innerExpression,
+                                         List<UnresolvedReference> unresolved) {
+        if (value == null && !unresolved.isEmpty()) {
+            // Matched on the block's OWN references, not on a substring of its text: a
+            // short reference (core:a.output.id) is a substring of an unrelated one
+            // (core:a.output.order_id) and would mark the wrong block.
+            Set<String> ownReferences = referencesIn(innerExpression);
+            for (UnresolvedReference ref : unresolved) {
+                if (ownReferences.contains(ref.reference())) {
+                    return unresolvedMarker(ref.reference());
+                }
+            }
+        }
+        return formatValueForDisplay(value);
     }
 
     /**
      * Resolve an expression to its human-readable form by substituting variable values.
      * Example: "trigger:test.output.user_id%2==1" with user_id=5 becomes "5%2==1"
      */
-    private String resolveExpressionToHumanReadableWithMap(String expression, Map<String, Object> context) {
+    private String resolveExpressionToHumanReadableWithMap(String expression, Map<String, Object> context,
+                                                           List<UnresolvedReference> unresolved) {
         // Find all variable references and replace with their values
         Matcher matcher = VARIABLE_IDENTIFIER_PATTERN.matcher(expression);
+        Set<String> missing = new HashSet<>();
+        for (UnresolvedReference ref : unresolved) {
+            missing.add(ref.reference());
+        }
         StringBuilder result = new StringBuilder();
         int lastEnd = 0;
 
@@ -778,8 +967,18 @@ public class TemplateEngine implements TemplateResolver {
             Object value = spelEvaluator.evaluateWithMap(varPath, context, pathNavigator);
             if (value != null) {
                 result.append(formatValueForDisplay(value));
+            } else if (missing.contains(varPath)) {
+                // Confirmed missing by collectUnresolvedReferences, which skips string
+                // literals and only judges namespaced references. Echoing the raw path
+                // here (the pre-fix behaviour) reads exactly like a real null, and made a
+                // branch taken on a mistyped node label look like a branch taken on data.
+                result.append(unresolvedMarker(varPath));
             } else {
-                // Keep original if not found
+                // Deliberately the pre-fix behaviour for anything not CONFIRMED missing.
+                // A literal inside quotes lands here (its "value" is null because it is not
+                // a variable at all), and rendering it as null or as a marker corrupts a
+                // condition that is perfectly correct: 'active' == 'active' became
+                // 'active' == '<unresolved: active>'.
                 result.append(varPath);
             }
         }

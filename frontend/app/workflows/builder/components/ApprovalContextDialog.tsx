@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import type { PendingSignal } from '@/lib/websocket/ws-types';
+import { signalContextText as contextText, sortPendingSignals } from '@/lib/workflow/pendingSignals';
 
 type Resolution = 'APPROVED' | 'REJECTED';
 
@@ -35,35 +36,7 @@ interface ApprovalContextDialogProps {
   onOpenChange?: (open: boolean) => void;
 }
 
-function itemIndexOf(s: PendingSignal): number {
-  const n = Number(s.itemId ?? 0);
-  return Number.isFinite(n) ? n : 0;
-}
 
-/** Stable review order: by epoch then by numeric item index (matches the bar/list). */
-function sortSignals(list: PendingSignal[]): PendingSignal[] {
-  return [...list].sort((a, b) => {
-    const ea = a.epoch ?? 0;
-    const eb = b.epoch ?? 0;
-    if (ea !== eb) return ea - eb;
-    return itemIndexOf(a) - itemIndexOf(b);
-  });
-}
-
-/** The text shown for a signal: the configured approvalContext, else the first
- *  non-empty string of its split itemContext, else null. */
-function contextText(s: PendingSignal | undefined): string | null {
-  if (!s) return null;
-  if (s.approvalContext && s.approvalContext.trim() !== '') return s.approvalContext;
-  const ic = s.itemContext;
-  if (ic && typeof ic === 'object' && !Array.isArray(ic)) {
-    const v = Object.values(ic as Record<string, unknown>).find(
-      (x): x is string => typeof x === 'string' && x.trim() !== '',
-    );
-    if (v) return v;
-  }
-  return null;
-}
 
 /**
  * Approval review MODAL (app Dialog style) opened from a truncated preview.
@@ -99,7 +72,7 @@ export function ApprovalContextDialog({
   const [activeId, setActiveId] = React.useState<number | string | undefined>(initialSignalId);
   const [resolving, setResolving] = React.useState<Resolution | null>(null);
 
-  const sorted = React.useMemo(() => sortSignals(signals), [signals]);
+  const sorted = React.useMemo(() => sortPendingSignals(signals), [signals]);
 
   // On open, point at the requested item (or the first). Intentionally NOT keyed
   // on `signals` so a WS tick mid-review does not yank the user off their item.

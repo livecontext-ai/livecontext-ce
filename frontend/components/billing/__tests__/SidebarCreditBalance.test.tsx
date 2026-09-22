@@ -19,10 +19,11 @@
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import messages from '../../../messages/en.json';
 import { computeCreditGauge } from '@/lib/billing/credit-allowance';
+import { resetCreditRingRevealForTests } from '@/lib/billing/credit-ring-reveal';
 
 const mocks = vi.hoisted(() => ({ useCreditWallet: vi.fn(), isCe: { value: false } }));
 vi.mock('@/lib/hooks/useCreditWallet', () => ({ useCreditWallet: mocks.useCreditWallet }));
@@ -83,6 +84,10 @@ const avatar = () => screen.queryByTestId('the-avatar');
 
 beforeEach(() => {
   mocks.isCe.value = false;
+  // The reveal's memory is page-load scoped, and a test file is one "page":
+  // without this reset the second test to render a ring silently gets the
+  // already-played path and asserts nothing about the animation.
+  resetCreditRingRevealForTests();
 });
 
 afterEach(() => {
@@ -195,6 +200,76 @@ describe('SidebarCreditRing - it is a readout, not a control', () => {
     renderRing();
     expect(ring()!.getAttribute('aria-label')).toBe('+40% over your plan');
   });
+
+  it('says "just over" rather than "+0% over your plan"', () => {
+    // 1,001 of a 1,000 grant is genuinely over, but the rounded figure is 0.
+    // Announcing "+0% over" contradicts the gold arc it describes. This edge
+    // used to be covered through the panel's bar, which is gone; the ring's
+    // name is now the only place the sentence renders in the sidebar.
+    givenWallet({ balance: 1_001, allowance: 1_000 });
+    renderRing();
+    expect(ring()!.getAttribute('aria-label')).toBe('Just over your plan');
+  });
+
+  it('spells the surplus figure for the app locale', () => {
+    // A bare ICU {percent} given a number is NOT locale-formatted, so a 3,400%
+    // surplus reached this sentence as "3400" while every other figure on the
+    // screen was grouped. Also covered through the panel's bar before, and this
+    // is where it now lives.
+    givenWallet({ balance: 35_000, allowance: 1_000 });
+    render(
+      <NextIntlClientProvider locale="de" messages={messages as Record<string, unknown>}>
+        <SidebarCreditRing>
+          <img data-testid="the-avatar" src="/a.png" alt="Owner" />
+        </SidebarCreditRing>
+      </NextIntlClientProvider>,
+    );
+    expect(ring()!.getAttribute('aria-label')).toContain('3.400');
+  });
+});
+
+describe('SidebarCreditRing - the reveal plays once per visit', () => {
+  // AppSidebar renders this component from BOTH arms of its collapsed/expanded
+  // ternary, and React reconciles by position, so a sidebar toggle unmounts one
+  // and mounts the other. Before the memory below, that replayed the whole
+  // 1.3-second reveal on every toggle - which nothing caught, because every
+  // test rendered exactly one ring and each looked perfectly correct.
+  const animates = () => ring()!.querySelector('[data-testid="credit-avatar-ring-arc"]')!;
+  const retracted = (el: Element) =>
+    Number(el.getAttribute('stroke-dashoffset')) === Number(el.getAttribute('stroke-dasharray'));
+
+  it('draws itself on the first ring of the visit', () => {
+    givenWallet({ balance: 5_000, allowance: 10_000 });
+    renderRing();
+    expect(retracted(animates())).toBe(true);
+  });
+
+  it('does NOT replay when the sidebar is toggled and the ring remounts', async () => {
+    givenWallet({ balance: 5_000, allowance: 10_000 });
+    const first = renderRing();
+    // Let the first reveal run, exactly as it would before a reader reaches for
+    // the collapse button.
+    await waitFor(() => expect(retracted(animates())).toBe(false));
+    first.unmount();
+
+    renderRing();
+    // Straight to the answer: no retracted frame, so nothing to travel from.
+    expect(retracted(animates())).toBe(false);
+  });
+
+  it('still draws when the wallet was never on screen to reveal', async () => {
+    // The sidebar mounts before the wallet resolves. Spending the reveal on
+    // those frames would mean the reader never sees it: the ring they finally
+    // get would be a ring that had already "played" while it did not exist.
+    givenWallet({ isLoading: true, balance: null });
+    const loading = renderRing();
+    expect(ring()).toBeNull();
+    loading.unmount();
+
+    givenWallet({ balance: 5_000, allowance: 10_000 });
+    renderRing();
+    expect(retracted(animates())).toBe(true);
+  });
 });
 
 describe('SidebarCreditRing - the gold state', () => {
@@ -237,14 +312,23 @@ describe('SidebarCreditMenuSection - the figures, at the top of the user menu', 
     return { onNavigate, onUpgrade };
   }
 
-  it('shows the grant, what is left, and the labelled gauge', () => {
+  it('shows the grant and what is left', () => {
     givenWallet({ balance: 9_779, allowance: 10_000 });
     renderSection();
 
     expect(screen.getByTestId('balance-remaining').textContent).toBe('9,779');
     expect(screen.getByText('10,000 credits')).toBeTruthy();
-    expect(screen.getByTestId('balance-gauge-fill').style.width).toBe('2%');
-    expect(screen.getByTestId('balance-gauge-label').textContent).toBe('2% of your plan used');
+  });
+
+  it('repeats no plan percentage: the wallet card is where that sentence lives', () => {
+    // This section used to carry a bar and "2% of your plan used" under the
+    // figures, three feet from a ring saying the same thing. Pinned as an
+    // absence so re-adding it is a deliberate act rather than a merge.
+    givenWallet({ balance: 9_779, allowance: 10_000 });
+    renderSection();
+
+    expect(screen.queryByTestId('balance-gauge-fill')).toBeNull();
+    expect(section()!.textContent).not.toMatch(/% of your plan/i);
   });
 
   it('carries the Upgrade CTA, since nothing in the top bar does', () => {
@@ -254,14 +338,15 @@ describe('SidebarCreditMenuSection - the figures, at the top of the user menu', 
     expect(onUpgrade).toHaveBeenCalledTimes(1);
   });
 
-  it('sends the reader to the usage page from the gauge itself', () => {
+  it('sends the reader to the usage page from the figures themselves', () => {
     // The menu's own "Credits" row was removed when this arrived, and the
     // panel's separate "View usage" link went with it: the readout is the
     // route now. If it stopped navigating, a cloud account would have no way
-    // to that page from this menu at all.
+    // to that page from this menu at all - and that matters more since the
+    // plan percentage moved onto the page this link leads to.
     givenWallet();
     const { onNavigate } = renderSection();
-    screen.getByTestId('balance-gauge-label').click();
+    screen.getByTestId('balance-remaining-label').click();
     expect(onNavigate).toHaveBeenCalledTimes(1);
   });
 
@@ -287,7 +372,7 @@ describe('SidebarCreditMenuSection - the figures, at the top of the user menu', 
 
     expect(section()).not.toBeNull();
     expect(screen.getByTestId('balance-remaining').textContent).toBe('42,000');
-    expect(screen.queryByTestId('balance-gauge-label')).toBeNull();
+    expect(screen.queryByTestId('balance-total-label')).toBeNull();
   });
 
   it('shows the bucket split when a top-up exists', () => {

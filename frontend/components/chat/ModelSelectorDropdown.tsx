@@ -28,11 +28,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { clampMenuLeft } from '@/lib/utils/menuPlacement';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, RotateCcw } from 'lucide-react';
 import Image from 'next/image';
 import { cn } from '@/lib/utils';
 import { track } from '@/lib/analytics/analytics';
-import { PROVIDER_ICON_MAP } from '@/lib/ai-providers/providerIcons';
+import { PROVIDER_ICON_MAP, getProviderDisplayName } from '@/lib/ai-providers/providerIcons';
 import { SelectedModel, modelMatches, selectedModelFromAIModel, AIModel } from '@/hooks/useModels';
 import { ModelOptionDisplay, ModelInfoPopover } from '@/components/ai/ModelInfo';
 import { useModelCostBasis } from '@/lib/hooks/useModelCostBasis';
@@ -49,6 +49,53 @@ export { PROVIDER_ICON_MAP };
  * {@code iconSlug} is the only header-side overlay.
  */
 type DropdownModel = AIModel & { iconSlug: string };
+
+/** The four price tiers a catalogue model can carry, in the order the footer lists them. */
+export const MODEL_TIER_ORDER = ['top', 'high', 'mid', 'budget'] as const;
+export type ModelTierKey = (typeof MODEL_TIER_ORDER)[number];
+
+/**
+ * Caller-translated labels for the footer filters, so the component stays NextIntl-free
+ * (see the file header). Built by {@code modelFilterLabelsFrom(t)} in the composers.
+ */
+export interface ModelFilterLabels {
+  tier: string;
+  provider: string;
+  allTiers: string;
+  allProviders: string;
+  tiers: Record<ModelTierKey, string>;
+  noMatch: string;
+  clear: string;
+  /** The footer's reset control, which puts every control in it back to its default. */
+  reset: string;
+}
+
+/** Per-viewer convenience: the last tier / provider filter, remembered in this browser only. */
+const FILTERS_STORAGE_KEY = 'lc.composer.modelFilters';
+
+interface StoredFilters { tier?: string; provider?: string }
+
+function readStoredFilters(): StoredFilters {
+  try {
+    const raw = window.localStorage.getItem(FILTERS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as StoredFilters;
+    return {
+      tier: typeof parsed.tier === 'string' ? parsed.tier : '',
+      provider: typeof parsed.provider === 'string' ? parsed.provider : '',
+    };
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredFilters(filters: StoredFilters): void {
+  try {
+    window.localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
+  } catch {
+    // A private window or a browser blocking site data: the filter still works for this menu.
+  }
+}
 
 const MENU_WIDTH = 320;
 
@@ -67,11 +114,16 @@ export function ModelSelectorDropdown({
   noModelsLabel,
   emptyState,
   upgradeRequired = false,
+  blockedForModel,
+  freeTierForModel,
+  prefersFreeTierModels = false,
   upgradeNotice,
+  freeTierBadge,
   reasoningEffort,
   onReasoningEffortChange,
   reasoningEffortLabel,
   effortAutoLabel,
+  filterLabels,
 }: {
   showModelSelector: boolean;
   setShowModelSelector: (v: boolean) => void;
@@ -93,22 +145,95 @@ export function ModelSelectorDropdown({
    *  marks every row. The verdict is the CALLER's to fetch: this component
    *  stays free of both translations and data hooks. */
   upgradeRequired?: boolean;
+  /**
+   * V494 - the same question, asked per model. The Free plan's AI allowance pays
+   * for the models opened to the free tier and for no others, so the account-level
+   * {@code upgradeRequired} would badge rows the account can already run. Also the
+   * caller's to fetch, for the same reason: no data hook lives here. Absent falls
+   * back to {@code upgradeRequired}, which is the pre-V494 behaviour.
+   */
+  blockedForModel?: (model: { freeTierEnabled?: boolean }) => boolean;
+  /**
+   * The mirror of {@code blockedForModel}: is this model free for this reader
+   * right now? Caller-resolved for the same reason, and it must be
+   * {@code useMonthlyCreditsCannotPay.freeTierForModel} - the verdict that also
+   * weighs the allowance BALANCE, and whose doc says what goes wrong otherwise.
+   * Absent = no model is marked, which is what every surface showed before this
+   * existed.
+   */
+  freeTierForModel?: (model: { freeTierEnabled?: boolean }) => boolean;
+  /** V494 - true when free-tier models should be offered first. Caller-resolved. */
+  prefersFreeTierModels?: boolean;
   /** Rendered under the model list, saying why and linking to the plans. A
    *  node rather than an import, for the same reason as {@code emptyState}. */
   upgradeNotice?: React.ReactNode;
+  /**
+   * Rendered next to the model name on the CLOSED composer, when the model in
+   * hand is one the reader's free-tier allowance covers.
+   *
+   * <p>The menu is where a choice is made, but the composer is where a new
+   * account sits before it ever opens one: without this, the only place it could
+   * learn that its current model costs nothing was a menu it had no reason to
+   * open. A node rather than a flag for the same reason as {@code upgradeNotice}
+   * - the words, and the allowance figure they quote, stay with the caller. Shown
+   * only when the SELECTED model is covered, so a caller hands it down
+   * unconditionally.
+   */
+  freeTierBadge?: React.ReactNode;
   /** Per-conversation reasoning-effort override. When `onReasoningEffortChange`
    *  is provided and the selected provider supports effort, an effort control is
-   *  rendered at the top of the open menu. Omitted by the panel chats. */
+   *  rendered in the menu footer, after the filters. Omitted by the panel chats. */
   reasoningEffort?: string;
   onReasoningEffortChange?: (effort: string) => void;
   reasoningEffortLabel?: string;
   effortAutoLabel?: string;
+  /** Tier and provider filters in the menu footer, next to the effort control.
+   *  Every composer passes them (built by {@code modelFilterLabelsFrom(t)});
+   *  omitted = no filters, for a caller that has no translator to offer. */
+  filterLabels?: ModelFilterLabels;
 }) {
   // One answer for the whole menu, handed down to each presentational row: the
   // multiplier and the cost profiles are about the install, not about any one
   // model, so a query behind every option would re-observe the same cached
   // answer once per catalogue entry.
   const { basis: costBasis } = useModelCostBasis();
+
+  // V494: free-tier models lead for an account whose monthly credits are
+  // workflow-scoped. A STABLE partition, so the admin's catalogue order survives
+  // inside each half. Driven by a PROP, not a hook: this component is
+  // translation-free and data-hook-free by design (see the file header), and the
+  // panels render it without a query client.
+  const orderedModels = React.useMemo(() => {
+    if (!prefersFreeTierModels) return availableModels;
+    return [
+      ...availableModels.filter((m) => m.freeTierEnabled === true),
+      ...availableModels.filter((m) => m.freeTierEnabled !== true),
+    ];
+  }, [availableModels, prefersFreeTierModels]);
+
+  // The notice under the list must agree with the rows above it. Left on the
+  // account-level verdict, a Free account holding an allowance read "upgrade to
+  // continue" directly beneath the very model that allowance pays for.
+  // The catalogue row behind the current selection. `selectedModelData` is typed
+  // as a name and an id, so it cannot answer either verdict below even when a
+  // caller happens to pass a fuller object. One scan, two answers.
+  const currentModel = React.useMemo(
+    () => availableModels.find((m) => modelMatches(m, selectedModel)),
+    [availableModels, selectedModel],
+  );
+
+  const selectionBlocked = React.useMemo(() => {
+    if (!blockedForModel) return upgradeRequired;
+    return currentModel ? blockedForModel(currentModel) : upgradeRequired;
+  }, [blockedForModel, currentModel, upgradeRequired]);
+
+  // Whether the CLOSED composer says the current model is free. The verdict is
+  // the caller's, so it weighs the allowance balance as well as the plan, and
+  // cannot claim "free" on the very row `selectionBlocked` locks.
+  const selectionIsFreeTier = React.useMemo(
+    () => (freeTierForModel && currentModel ? freeTierForModel(currentModel) : false),
+    [freeTierForModel, currentModel],
+  );
 
   // Per-instance positioning + outside-click ref (see the file header for why it
   // must NOT be shared across composer copies).
@@ -200,6 +325,76 @@ export function ModelSelectorDropdown({
   const showEffortControl = !!onReasoningEffortChange
     && supportsReasoningEffort({ provider: selectedModel.provider });
 
+  // Footer filters. Remembered per browser: a user who only ever wants budget models
+  // does not re-pick the tier on every message. Never applied to the SELECTED model:
+  // the trigger keeps showing it whatever the list is narrowed to.
+  const [storedFilters] = useState<StoredFilters>(readStoredFilters);
+  const [tierFilter, setTierFilter] = useState<string>(storedFilters.tier ?? '');
+  const [providerFilter, setProviderFilter] = useState<string>(storedFilters.provider ?? '');
+  const showFilters = !!filterLabels && availableModels.length > 0;
+  const tiersPresent = MODEL_TIER_ORDER.filter((tier) => availableModels.some((m) => m.tier === tier));
+  const providersPresent = Array.from(new Set(availableModels.map((m) => m.provider)))
+    .sort((a, b) => getProviderDisplayName(a).localeCompare(getProviderDisplayName(b)));
+  // A select with one real choice is noise (a CE install with a single provider key is
+  // the common shape): it is not offered, and the other filter still is.
+  const showTierFilter = showFilters && tiersPresent.length >= 2;
+  const showProviderFilter = showFilters && providersPresent.length >= 2;
+  // A remembered filter whose value this catalogue does not hold, or whose control is not
+  // offered (a filter nobody can see or clear must not narrow anything: a catalogue with
+  // untiered models and one tiered one would otherwise show one row and no way out), is
+  // DROPPED from the state and from storage, not merely masked: masked, it would come back
+  // on its own the moment the catalogue changed, with nothing the user did to ask for it.
+  // Only judged once the catalogue is loaded, so an empty first render keeps the memory.
+  // Judged only by a menu that OFFERS the filters: a caller without labels never touches
+  // the memory another composer stored.
+  const staleTier = showFilters && tierFilter !== ''
+    && (!showTierFilter || !tiersPresent.includes(tierFilter as ModelTierKey));
+  const staleProvider = showFilters && providerFilter !== ''
+    && (!showProviderFilter || !providersPresent.includes(providerFilter));
+  useEffect(() => {
+    if (!staleTier && !staleProvider) return;
+    const tier = staleTier ? '' : tierFilter;
+    const provider = staleProvider ? '' : providerFilter;
+    setTierFilter(tier);
+    setProviderFilter(provider);
+    writeStoredFilters({ tier, provider });
+  }, [staleTier, staleProvider, tierFilter, providerFilter]);
+  const effectiveTier = staleTier ? '' : tierFilter;
+  const effectiveProvider = staleProvider ? '' : providerFilter;
+  const visibleModels = showFilters
+    ? orderedModels.filter((m) =>
+        (!effectiveTier || m.tier === effectiveTier)
+        && (!effectiveProvider || m.provider === effectiveProvider))
+    : orderedModels;
+  const changeTierFilter = (tier: string) => {
+    setTierFilter(tier);
+    writeStoredFilters({ tier, provider: effectiveProvider });
+  };
+  const changeProviderFilter = (provider: string) => {
+    setProviderFilter(provider);
+    writeStoredFilters({ tier: effectiveTier, provider });
+  };
+  const clearFilters = () => {
+    setTierFilter('');
+    setProviderFilter('');
+    writeStoredFilters({ tier: '', provider: '' });
+  };
+  const showFooter = showTierFilter || showProviderFilter || showEffortControl;
+  // The footer's reset: every control it OFFERS back to its default, and nothing it does
+  // not. Scoped that way because the effort override outlives the menu that set it (it is
+  // per conversation), so a menu showing no effort control must not silently drop one that
+  // a previous model's menu chose; and the filters are per browser, so clearing them from
+  // a menu that does not show them would undo another composer's memory.
+  const filtersActive = (showTierFilter || showProviderFilter) && !!(effectiveTier || effectiveProvider);
+  const effortActive = showEffortControl && !!reasoningEffort;
+  // No labels means no translator, which is the one caller that gets no filters either;
+  // an unlabelled button in a menu of labelled ones is worse than no button.
+  const showReset = !!filterLabels && (filtersActive || effortActive);
+  const resetFooter = () => {
+    if (filtersActive) clearFilters();
+    if (effortActive) onReasoningEffortChange?.('');
+  };
+
   return (
     // The composer's button row hosts this beside the mic and the send button
     // and can be as narrow as a 320px side panel, so the model NAME is the row's
@@ -218,6 +413,14 @@ export function ModelSelectorDropdown({
             || selectedModel.id
             || (availableModels.length === 0 ? noModelsLabel : '')}
         </span>
+        {/* After the name and before the chevron, and OUTSIDE the truncating
+            span: the name is the elastic part of this row (see the wrapper's
+            comment), so a chip inside it would be the first thing an ellipsis
+            ate on a 320px side panel - exactly the width where a new account
+            meets it. `shrink-0` keeps it whole and lets the name give way. */}
+        {selectionIsFreeTier && freeTierBadge && (
+          <span className="shrink-0">{freeTierBadge}</span>
+        )}
         <ChevronDown className={cn(
           "w-3.5 h-3.5 shrink-0 transition-transform duration-200",
           showModelSelector && "rotate-180"
@@ -240,35 +443,32 @@ export function ModelSelectorDropdown({
             ...(menuPos.placement === 'above' ? { bottom: menuPos.bottom } : { top: menuPos.top }),
           }}
         >
-          {showEffortControl && (
-            <div className="flex items-center justify-between gap-2 px-3 py-2 mb-1 border-b border-theme shrink-0" data-model-selector-keep-open>
-              <span className="text-xs text-theme-secondary">{reasoningEffortLabel}</span>
-              <Select
-                value={reasoningEffort || SELECT_EMPTY_VALUE_SENTINEL}
-                onValueChange={(v) => onReasoningEffortChange?.(v === SELECT_EMPTY_VALUE_SENTINEL ? '' : v)}
+          {availableModels.length === 0 && emptyState}
+          {showFilters && visibleModels.length === 0 && (
+            <div
+              className="flex items-center justify-between gap-2 px-3 py-3 text-sm text-theme-secondary"
+              data-testid="model-selector-no-match"
+            >
+              <span role="status" aria-live="polite">{filterLabels?.noMatch}</span>
+              <button
+                type="button"
+                data-model-selector-keep-open
+                onClick={clearFilters}
+                className="shrink-0 rounded-lg px-2 py-1 text-sm text-theme-primary hover:bg-theme-secondary"
               >
-                <SelectTrigger
-                  data-model-selector-keep-open
-                  className="h-7 min-h-0 w-auto gap-1.5 rounded-lg px-2.5 py-1 text-xs"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent data-model-selector-keep-open>
-                  <SelectItem value="" className="text-xs">{effortAutoLabel}</SelectItem>
-                  {REASONING_EFFORT_LEVELS.map((lvl) => (
-                    <SelectItem key={lvl} value={lvl} className="text-xs">{lvl}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                {filterLabels?.clear}
+              </button>
             </div>
           )}
-          {availableModels.length === 0 && emptyState}
           <div className="space-y-0.5 model-selector-scroll pr-1 overflow-y-auto">
-            {availableModels.map((model) => {
+            {visibleModels.map((model) => {
               const isSelected = modelMatches(model, selectedModel);
+              const blocked = blockedForModel ? blockedForModel(model) : upgradeRequired;
+              const free = freeTierForModel ? freeTierForModel(model) : false;
               return (
                 <div
                   key={`${model.provider}:${model.id}`}
+                  data-testid={blocked ? 'model-row-blocked' : undefined}
                   onClick={() => {
                     setSelectedModel(selectedModelFromAIModel(model));
                     setShowModelSelector(false);
@@ -284,23 +484,36 @@ export function ModelSelectorDropdown({
                     isSelected && "bg-gray-100 dark:bg-gray-800"
                   )}
                 >
+                  {/* Greyed with the name when the balance cannot pay, and the
+                      only part of the row that fades: it is decorative, so losing
+                      contrast costs nothing, whereas compositing the whole row
+                      takes the 11px meta line below AA. Still a choice either
+                      way - `blocked` means "cannot pay right now", which a top-up
+                      changes, and disabling the row would also hide the notice
+                      under the list, the one thing here that says what to do. */}
                   <Image
                     src={`/icons/services/${model.iconSlug}.svg`}
                     alt={model.provider}
                     width={18}
                     height={18}
-                    className="w-[18px] h-[18px] flex-shrink-0 mt-0.5"
+                    className={cn("w-[18px] h-[18px] flex-shrink-0 mt-0.5", blocked && "opacity-50")}
                   />
                   <div className="flex-1 min-w-0">
                     <ModelOptionDisplay
                       model={model}
-                      upgradeRequired={upgradeRequired}
+                      upgradeRequired={blocked}
+                      freeTier={free}
                       costBasis={costBasis}
-                      costProfile="agentConversation"
+                      costProfile="chatConversation"
                     />
                   </div>
-                  <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <ModelInfoPopover model={model} costBasis={costBasis} costProfile="agentConversation" />
+                  {/* Revealed on hover for a pointer, always present on a coarse
+                      pointer (no hover to reveal it with), and revealed when the
+                      button inside it takes focus, so a keyboard does not tab into
+                      something invisible. This card is the only place a reader who
+                      cannot hover gets the full sentence behind the "Free" chip. */}
+                  <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100 transition-opacity">
+                    <ModelInfoPopover model={model} freeTier={free} costBasis={costBasis} costProfile="chatConversation" />
                   </div>
                 </div>
               );
@@ -309,11 +522,120 @@ export function ModelSelectorDropdown({
           {/* Under the list, never in a row: a row is an option, and this menu
               keeps itself open for anything clicked inside it, so a dialog
               opened from a row would sit underneath the menu it came from. */}
-          {upgradeRequired && upgradeNotice && (
+          {selectionBlocked && upgradeNotice && (
             /* Gated on the VERDICT, not on the node: the node is always handed
                down and returns null on its own, so keying the wrapper off it
                left an empty bordered strip at the foot of every menu. */
             <div className="shrink-0 border-t border-theme px-3 py-2">{upgradeNotice}</div>
+          )}
+          {/* Footer: what narrows the list (tier, provider) and what shapes the next
+              answer (reasoning effort), in one strip under the list rather than a
+              header above it, so the rows start at the top of the menu. */}
+          {showFooter && (
+            <div
+              data-testid="model-selector-footer"
+              data-model-selector-keep-open
+              className="shrink-0 mt-1 flex flex-wrap items-center justify-between gap-x-1.5 gap-y-1 border-t border-theme px-2 pt-2 pb-0.5"
+            >
+              {/* TWO groups, not five loose controls, and that is the whole layout rule:
+                  what NARROWS the list travels together, and what shapes the next ANSWER
+                  is the other thing in the row. A flat wrap broke them apart at whatever
+                  width ran out, so a narrow menu could put the effort control at the end
+                  of the filters and one filter alone underneath, which reads as two
+                  unrelated rows. As groups, either everything fits on one line or the
+                  effort control takes a line of its own.
+                  Both groups are `shrink-0` so the OUTER flex wraps them instead of
+                  squeezing them (a shrinkable group wraps INSIDE itself first, which is
+                  the behaviour being fixed), and `max-w-full` is what still lets the
+                  filters group wrap internally when it alone is wider than the menu. */}
+              <div
+                data-model-selector-keep-open
+                className="flex max-w-full shrink-0 flex-wrap items-center gap-1.5"
+              >
+              {showTierFilter && filterLabels && (
+                  <Select value={effectiveTier || SELECT_EMPTY_VALUE_SENTINEL} onValueChange={(v) => changeTierFilter(v === SELECT_EMPTY_VALUE_SENTINEL ? '' : v)}>
+                    <SelectTrigger
+                      data-model-selector-keep-open
+                      aria-label={filterLabels.tier}
+                      title={filterLabels.tier}
+                      className="h-7 min-h-0 w-auto gap-1.5 rounded-lg px-2.5 py-1 text-xs"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent data-model-selector-keep-open>
+                      <SelectItem value="" className="text-xs">{filterLabels.allTiers}</SelectItem>
+                      {tiersPresent.map((tier) => (
+                        <SelectItem key={tier} value={tier} className="text-xs">{filterLabels.tiers[tier]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+              )}
+              {showProviderFilter && filterLabels && (
+                  <Select value={effectiveProvider || SELECT_EMPTY_VALUE_SENTINEL} onValueChange={(v) => changeProviderFilter(v === SELECT_EMPTY_VALUE_SENTINEL ? '' : v)}>
+                    <SelectTrigger
+                      data-model-selector-keep-open
+                      aria-label={filterLabels.provider}
+                      title={filterLabels.provider}
+                      className="h-7 min-h-0 w-auto gap-1.5 rounded-lg px-2.5 py-1 text-xs"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent data-model-selector-keep-open>
+                      <SelectItem value="" className="text-xs">{filterLabels.allProviders}</SelectItem>
+                      {providersPresent.map((provider) => (
+                        <SelectItem key={provider} value={provider} className="text-xs">{getProviderDisplayName(provider)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+              )}
+              {showReset && filterLabels && (
+                <button
+                  type="button"
+                  data-model-selector-keep-open
+                  data-testid="model-selector-reset"
+                  onClick={resetFooter}
+                  aria-label={filterLabels.reset}
+                  title={filterLabels.reset}
+                  // The hover is an ARBITRARY-VALUE background on purpose. Tailwind v4 emits
+                  // no rule for a `hover:` variant of a class hand-written in @layer
+                  // components, so `hover:text-theme-primary` (and `hover:bg-theme-secondary`,
+                  // which the model rows and the clear-filters button in this same file still
+                  // use) compile to nothing and give no feedback at all. Those two are a
+                  // pre-existing instance of the same defect, left alone here only because
+                  // reviving them changes how the rows look; `hover:bg-[var(--bg-secondary)]`
+                  // is the spelling that actually works and the one to copy.
+                  className="inline-flex h-7 min-h-0 shrink-0 items-center gap-1 rounded-lg border border-theme px-2.5 py-1 text-xs text-theme-secondary transition-colors hover:bg-[var(--bg-secondary)]"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  {filterLabels.reset}
+                </button>
+              )}
+              </div>
+              {showEffortControl && (
+                <div data-model-selector-keep-open className="flex max-w-full shrink-0 items-center">
+                  <Select
+                    value={reasoningEffort || SELECT_EMPTY_VALUE_SENTINEL}
+                    onValueChange={(v) => onReasoningEffortChange?.(v === SELECT_EMPTY_VALUE_SENTINEL ? '' : v)}
+                  >
+                    <SelectTrigger
+                      data-model-selector-keep-open
+                      aria-label={reasoningEffortLabel}
+                      title={reasoningEffortLabel}
+                      className="h-7 min-h-0 w-auto gap-1.5 rounded-lg px-2.5 py-1 text-xs"
+                    >
+                      <span className="text-theme-secondary">{reasoningEffortLabel}</span>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent data-model-selector-keep-open>
+                      <SelectItem value="" className="text-xs">{effortAutoLabel}</SelectItem>
+                      {REASONING_EFFORT_LEVELS.map((lvl) => (
+                        <SelectItem key={lvl} value={lvl} className="text-xs">{lvl}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
           )}
         </div>,
         document.body,

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { CHAT_EXCHANGE_CREDITS, PRICING_BASIS_MODEL } from '@/lib/billing/pricing-constants';
 import fs from 'node:fs';
 import path from 'node:path';
 import en from '@/messages/en.json';
@@ -87,7 +88,11 @@ describe('every plan explains what its credits buy', () => {
     // Free credits run workflows only; chat and agents need a paid plan. Handing
     // free the paid sentence would promise conversations it does not buy.
     const [, tooltip] = creditsLine('free').split('||');
-    expect(tooltip).toBe('planCards.features.creditsFreeTooltip');
+    // Its own message, and fed the same credit facts as the paid one: it now
+    // prices the unit free credits actually buy (a workflow step), so it needs
+    // the figures too.
+    expect(tooltip).toBe(DEPS.tCards('features.creditsFreeTooltip', DEPS.creditFacts));
+    expect(tooltip).not.toBe(DEPS.tPricing('compare.dimensions.creditsTooltip', DEPS.creditFacts));
   });
 
   it('still shows the figure itself, which the tooltip is only an aside to', () => {
@@ -101,12 +106,28 @@ describe('every plan explains what its credits buy', () => {
       tPricing: real('pricing'),
     }).split('||');
     expect(tooltip).not.toMatch(/\{[a-zA-Z]+\}/);
-    // The three per-conversation prices, which is what makes the sentence true
-    // on every card. It used to divide the ENTRY PACK instead, and that arithmetic
-    // is false of Enterprise (no pack, no slider) and drifts on the paid cards the
-    // moment the slider moves off 5,000.
-    for (const price of ['80', '300', '3']) {
-      expect(tooltip, `the ${price}-credit figure is missing`).toContain(price);
+    // The per-exchange price, which is what makes the sentence true on every card. It
+    // used to divide the ENTRY PACK instead, and that arithmetic is false of Enterprise
+    // (no pack, no slider) and drifts on the paid cards the moment the slider moves off
+    // 5,000. It then quoted three units at once, which was true but unreadable on a card
+    // a visitor is scanning; the breakdown lives in the FAQ answer now.
+    // Derived from the constants rather than restated: these figures are re-priced
+    // whenever the LLM billing multiplier moves, and a test that hardcodes them fails
+    // for the wrong reason (a deliberate re-price) while still passing if the tooltip
+    // silently stopped interpolating the real ones.
+    expect(
+      tooltip,
+      `the ${CHAT_EXCHANGE_CREDITS}-credit figure for a short exchange is missing`,
+    ).toContain(CHAT_EXCHANGE_CREDITS.toString());
+    expect(tooltip, 'the tooltip no longer says what it was priced on')
+      .toContain(PRICING_BASIS_MODEL);
+    // A single figure can be a substring of unrelated copy - "6" is in almost any pricing
+    // sentence - so the raw message is checked for the placeholder that produces it. The
+    // pair is what makes this a real assertion: one proves the value was interpolated, the
+    // other that the message still asks for it.
+    const raw = (en as any).pricing?.compare?.dimensions?.creditsTooltip ?? '';
+    for (const placeholder of ['{exchangeCredits}', '{basisModel}']) {
+      expect(raw, `the credits tooltip no longer interpolates ${placeholder}`).toContain(placeholder);
     }
   });
 
@@ -122,18 +143,65 @@ describe('every plan explains what its credits buy', () => {
     expect(tooltip).not.toContain('5,000');
   });
 
-  it('qualifies the agent figure the way pricing-constants requires', () => {
-    // CREDIT_EXAMPLES' docblock is binding on any copy quoting that number: it
-    // is the median of a CONVERSATION of a measured shape, not the price of a
-    // finished workflow, so the shape and "a longer build costs more" travel
-    // with it. The FAQ answer does this; the tooltip quoted the figure bare.
-    const [, tooltip] = creditsLine('pro', {
-      ...DEPS,
-      tCards: real('pricing.planCards'),
-      tPricing: real('pricing'),
-    }).split('||');
-    expect(tooltip).toContain('45 tool calls');
-    expect(tooltip.toLowerCase()).toContain('longer build costs more');
+  it.each(Object.keys(PLAN_FEATURE_KEYS))(
+    '%s passes every tooltip the facts its message asks for',
+    (planId) => {
+      // The incident this closes, and it has happened here before: a message
+      // gains a placeholder and its CALLER is not updated. next-intl then
+      // throws FORMATTING_ERROR and renders the key path itself on the card, in
+      // all six locales, while an echoing translator in a test sees nothing
+      // wrong. `real` leaves an unsupplied placeholder literal, which is the
+      // same tell, and it is checked on EVERY line of EVERY plan rather than on
+      // the one that regressed last time.
+      //
+      // Both allowance branches: the Free card renders a different line when the
+      // live allowance has not arrived yet, and it carries the same tooltip.
+      for (const aiCredits of [undefined, '1,000']) {
+        const lines = planFeatureLabels(planId, {
+          ...DEPS,
+          aiCredits,
+          tCards: real('pricing.planCards'),
+          tPricing: real('pricing'),
+        });
+        for (const line of lines) {
+          const [label, tooltip] = line.split('||');
+          expect(label, `${planId} label: ${label}`).not.toMatch(/\{[a-zA-Z]+\}/);
+          if (tooltip !== undefined) {
+            expect(tooltip, `${planId} tooltip: ${tooltip}`).not.toMatch(/\{[a-zA-Z]+\}/);
+          }
+        }
+      }
+    },
+  );
+
+  it('qualifies the agent figure wherever it is quoted, the way pricing-constants requires', () => {
+    // CREDIT_EXAMPLES' docblock is binding on any copy quoting that number: it is the
+    // median of a CONVERSATION of a measured shape, not the price of a finished
+    // workflow, so the shape and "a longer build costs more" travel with it.
+    //
+    // Swept over every message rather than asserted on the one that happened to quote it.
+    // The tooltip used to, and no longer does: an assertion naming a single message goes
+    // green the moment the figure MOVES to another one, which is the only way this rule
+    // can be broken without someone reading it.
+    const quoting: string[] = [];
+    const walk = (node: unknown, trail: string) => {
+      if (typeof node === 'string') {
+        if (node.includes('{agentCredits}')) quoting.push(trail);
+      } else if (node && typeof node === 'object') {
+        for (const [key, value] of Object.entries(node)) walk(value, trail ? `${trail}.${key}` : key);
+      }
+    };
+    walk((en as any).pricing ?? {}, '');
+    expect(quoting.length, 'nothing quotes the agent figure any more, so this guards nothing')
+      .toBeGreaterThan(0);
+
+    for (const path of quoting) {
+      const message = String(path.split('.').reduce<any>((n, p) => n?.[p], (en as any).pricing));
+      expect(message, `${path} quotes the agent figure without its measured shape`)
+        .toContain('45 tool calls');
+      expect(message.toLowerCase(), `${path} quotes the agent figure as a finished build`)
+        .toContain('longer build costs');
+    }
   });
 });
 
@@ -272,4 +340,42 @@ describe('one mapping, not one per surface', () => {
   // Only rendering the component can know what it passes, so that guarantee
   // lives in PlanComparisonDialog.tooltips.test.tsx, which opens every tooltip
   // in all six locales and fails on next-intl's own FORMATTING_ERROR.
+});
+
+describe("the Free plan's AI allowance line (V494)", () => {
+  const withAllowance = (aiCredits?: string) => planFeatureLabels('free', { ...DEPS, aiCredits });
+
+  it('quotes the configured figure', () => {
+    expect(withAllowance('250').some((l) => l.includes('features.aiCreditsFree') && l.includes('250')))
+      .toBe(true);
+  });
+
+  it('DROPS the line when the plan grants none, instead of advertising zero', () => {
+    // Setting included_ai_credits to 0 is how an admin closes the free tier. Rendering
+    // "0 AI credits per month" would keep it on the card as a feature that gives
+    // nothing, which is worse than saying nothing at all.
+    const lines = withAllowance('0');
+
+    expect(lines.some((l) => l.includes('aiCreditsFree'))).toBe(false);
+    // ...and only that line: the rest of the Free card is untouched.
+    expect(lines.some((l) => l.includes('features.creditsFree'))).toBe(true);
+  });
+
+  it('drops it for a formatted zero in any locale shape', () => {
+    // The value arrives already locale-formatted, so the check must not depend on
+    // which separator a locale would have used.
+    expect(withAllowance('0,0').some((l) => l.includes('aiCreditsFree'))).toBe(false);
+  });
+
+  it('keeps a figure-free wording while the request is in flight', () => {
+    // Undefined is "not answered yet", which is not "none": the line must stay, or a
+    // card would gain and lose a bullet as the page settles.
+    const lines = withAllowance(undefined);
+
+    expect(lines.some((l) => l.includes('features.aiCreditsFreeUnknown'))).toBe(true);
+  });
+
+  it('keeps any non-zero figure, including one with a grouping separator', () => {
+    expect(withAllowance('1,000').some((l) => l.includes('features.aiCreditsFree'))).toBe(true);
+  });
 });

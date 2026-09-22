@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { AlertCircle, FolderOpen, Loader2, RotateCcw } from 'lucide-react';
+import { AlertCircle, Coins, FolderOpen, Loader2, Pencil } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -9,6 +9,7 @@ import { FileDetailView } from '@/components/app/FileDetailView';
 import { FormatGlyph, ProviderIcon } from '@/lib/generation/formats';
 import { paramLabel, readableRefusal, type LabelTranslator } from '@/lib/generation/labels';
 import type { StudioRequestEnvelope, StudioResultEnvelope } from '@/lib/generation/studioMessage';
+import { describeBilledFactors, describeCharge, formatCredits } from '@/lib/generation/price';
 
 /**
  * One studio turn on screen: what was asked for, and what came back.
@@ -54,6 +55,10 @@ export function StudioTurnCard({
 }: StudioTurnCardProps) {
   const t = useTranslations('studio');
   const tGeneration = useTranslations('generation');
+  // The price is worded once, by the cards that show a past generation, and read here rather than
+  // said again: two namespaces for one sentence is how the thread and the history two rows apart
+  // end up quoting the same charge differently.
+  const tHistory = useTranslations('generationHistory');
   // The same dictionary, narrowed for the label helpers that need `has` to guard a key the API
   // catalogue can ship without this build knowing the word for it.
   const tLabels = tGeneration as unknown as LabelTranslator;
@@ -137,7 +142,11 @@ export function StudioTurnCard({
 
         {result?.success && (
           fileId ? (
-            <div className="h-[46vh] overflow-hidden rounded-xl">
+            // `studio-asset-frame` is inert on the application's own look and draws a hairline on
+            // the studio one, where the ground is a wall rather than paper: without it a
+            // white-background generation has no edge against a light wall, and a dark one none
+            // against the darkroom. See the block in globals.css.
+            <div className="studio-asset-frame h-[46vh] overflow-hidden rounded-xl">
               <FileDetailView
                 entryId={fileId}
                 s3Key={file?.path ? String(file.path) : undefined}
@@ -170,11 +179,64 @@ export function StudioTurnCard({
               })}
             </span>
           )}
+          {/* The third number in the charge, when there was one.
+
+              The size above says what was produced and the amount below says what it cost; between
+              them sits the only thing that makes the two agree, and it is the one the composer
+              already showed as an estimate before the turn ran. Leaving it off the finished card
+              made the surface state a factor while a price was being decided and forget it once the
+              price was real - the moment it is no longer an estimate but a charge.
+
+              The factor and its reasons come from the RESPONSE, not from a local recalculation:
+              this card outlives the model list it was generated from, and a model whose modifiers
+              were edited since would have the card re-explain a past charge with today's rules. */}
+          {result?.billedMultiplier != null && (() => {
+            // Worded by the SAME expression the composer's estimate uses, so the two halves of one
+            // screen do not speak two vocabularies: the server writes its reasons as raw contract
+            // names in English (`resolution x2`), and printing them verbatim put that beside an
+            // estimate reading "includes Resolution x2", translated and list-joined per locale.
+            const reason = describeBilledFactors(result.billedMultiplierReasons, tGeneration);
+            return (
+              <span className="text-xs text-theme-muted" title={reason || undefined}>
+                {tGeneration('price.multiplierBadge', {
+                  factor: formatCredits(result.billedMultiplier),
+                })}
+                {/* READ OUT, not just hovered. `title` on a role-less span is not an accessible
+                    name and does not exist on touch at all - which is exactly the argument written
+                    out in StudioComposer, and this card shipped the thing that comment forbids.
+                    It is the worse place for it: the composer explains an estimate, this explains
+                    a charge that already happened. */}
+                {reason && <span className="sr-only">{` ${reason}`}</span>}
+              </span>
+            );
+          })()}
+          {/* What it cost, in the same words and the same unit as the history cards on the screen
+              below - a turn that states the size it was billed on and not the amount leaves the
+              reader to look the price up somewhere else for the generation they just ran. Absent
+              when the platform charged nothing, never drawn as a zero. */}
+          {result?.billedCredits != null && result.billedCredits > 0 && (
+            <span
+              className="inline-flex items-center gap-1 text-xs text-theme-secondary"
+              title={tHistory('costTitle')}
+            >
+              <Coins className="h-3 w-3 flex-shrink-0" />
+              {/* Through the SAME expression the history cards use, so the thread and the grid
+                  under it cannot state one charge in two units. Written out here once, this card
+                  quoted credits on a self-hosted install whose every other spend surface, the
+                  history card directly below included, quotes dollars. */}
+              {describeCharge(result.billedCredits, tHistory)}
+            </span>
+          )}
           <div className="flex-1" />
           {onReuse && (
             <Button variant="ghost" size="sm" onClick={() => onReuse(request)}>
-              <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-              {t('turn.reuse')}
+              {/* The same verb and the same pencil as every past-generation card, because it is the
+                  same action and it is wired to the same handler: load this recipe back into the
+                  composer so something can be changed before it runs. On an empty studio the two
+                  controls sit ten pixels apart, and a circular arrow beside "Reuse" promised a
+                  repeat - the wrong action, and the expensive one to be wrong about. */}
+              <Pencil className="mr-1.5 h-3.5 w-3.5" />
+              {t('turn.modify')}
             </Button>
           )}
           {fileId && onOpenInFiles && (

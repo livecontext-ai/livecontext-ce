@@ -45,6 +45,14 @@ public class SkillFolderModule implements ToolModule {
     public Optional<ToolExecutionResult> execute(String action, Map<String, Object> parameters,
                                                   String tenantId, ToolExecutionContext context) {
         if (!canHandle(action)) return Optional.empty();
+
+        // Skills have NO grant axis, so the access mode is the ONLY gate on this family:
+        // an ungated write action here is unreachable by any configuration. READ actions
+        // (list_folders) pass through checkWriteAccess untouched.
+        var accessDenied = com.apimarketplace.agent.config.ToolAccessControl.checkWriteAccess(
+                context != null ? context.credentials() : null, "skill", action);
+        if (accessDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
+
         return Optional.of(switch (action) {
             case "create_folder" -> executeCreateFolder(parameters, tenantId, context);
             case "list_folders" -> executeListFolders(tenantId);

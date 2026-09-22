@@ -14,17 +14,18 @@ const providerSrc = readFileSync(path.resolve(__dirname, '../LandingThemeProvide
 const landingPageSrc = readFileSync(
   path.resolve(__dirname, '../../../app/[locale]/page.tsx'),
   'utf8',
-);
+) + readFileSync(path.resolve(__dirname, '../landingStyles.ts'), 'utf8');
 const globalsCssSrc = readFileSync(
   path.resolve(__dirname, '../../../app/globals.css'),
   'utf8',
 );
-// The landing's brand logos left the page with the trust strip, then with the
-// integrations section that replaced it; both are gone and the catalogue is a page of
-// its own, so the contract is asserted where the markup lives: IntegrationLogo, which
-// renders every logo on /integrations and is shown inside the landing chrome there.
-const integrationLogoSrc = readFileSync(
-  path.resolve(__dirname, '../../integrations/IntegrationLogo.tsx'),
+// The contract is asserted where the markup lives, which is BrandMark: it is the single
+// <img> behind every brand mark on the public site, both the landing's integrations strip
+// and its "what you can build" cards, and the /integrations directory through
+// IntegrationLogo, which only binds a catalogue record onto it. Reading IntegrationLogo
+// alone would pass while the mark itself lost logo-mono.
+const brandMarkSrc = readFileSync(
+  path.resolve(__dirname, '../../integrations/BrandMark.tsx'),
   'utf8',
 );
 
@@ -62,17 +63,28 @@ describe('public-site self-contained theme contract', () => {
     // Safe fallback (no provider) is light too.
     expect(providerSrc).toMatch(/theme: 'light'/);
     // Both landing surfaces restore the stored choice.
-    expect(landingPageSrc).toMatch(/<LandingThemeProvider className="min-h-screen" respectStored>/);
+    // Attribute-by-attribute rather than one literal tag: the element also carries the page
+    // language now, and a contract about the DEFAULT THEME should not break because an
+    // unrelated attribute was added beside it.
+    const provider = landingPageSrc.match(/<LandingThemeProvider[^>]*>/)?.[0] ?? '';
+    expect(provider).toContain('className="min-h-screen"');
+    expect(provider).toContain('respectStored');
+    expect(provider).not.toContain('defaultTheme');
     expect(shellSrc).toMatch(/themeRespectStored = true/);
   });
 
   it('renders the language select AND the public theme toggle in the FOOTER bottom bar', () => {
     // The footer bottom bar carries both controls right after the copyright line.
     expect(shellSrc).toMatch(
-      /All rights reserved\.<\/p>\s*<div[^>]*>\s*<LandingLanguageSelect \/>\s*<LandingThemeToggle \/>/,
+      // Both controls now take their copy as props, so match the tag rather than a bare
+      // self-close: what this pins is that the two sit together in the bottom bar, right
+      // after the copyright line, not how they are configured.
+      /\{labels\.rights\}<\/p>\s*<div[^>]*>\s*<LandingLanguageSelect [^/]*\/>\s*<LandingThemeToggle [^/]*\/>/,
     );
     // Header right-cluster must not carry the language control.
-    expect(shellSrc).not.toMatch(/<LandingLanguageSelect \/>\s*<SignInButton variant="link"/);
+    // Matched on the tag, not on a bare self-close: both controls take props now, so the old
+    // `<LandingLanguageSelect />` spelling occurs nowhere and this guard could no longer fail.
+    expect(shellSrc).not.toMatch(/<LandingLanguageSelect[^>]*\/>\s*<SignInButton variant="link"/);
   });
 
   it('wraps both landing surfaces in LandingThemeProvider (no forced `dark` class on a wrapper)', () => {
@@ -97,10 +109,10 @@ describe('public-site self-contained theme contract', () => {
     // Mono brand logos. `monoDarkInvertClass` is the body-`dark:` utility and must appear
     // in NEITHER: on the public site the theme lives on `.landing-root`, so a body-scoped
     // utility silently never fires.
-    for (const src of [landingPageSrc, integrationLogoSrc]) {
+    for (const src of [landingPageSrc, brandMarkSrc]) {
       expect(src).not.toMatch(/monoDarkInvertClass/);
     }
-    expect(integrationLogoSrc).toMatch(/logo-mono/);
+    expect(brandMarkSrc).toMatch(/logo-mono/);
   });
 });
 

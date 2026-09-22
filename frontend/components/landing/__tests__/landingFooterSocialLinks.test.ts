@@ -15,6 +15,10 @@ describe('public landing footer social links', () => {
     'https://www.instagram.com/livecontext.ai/',
     'https://github.com/livecontext-ai',
     'https://www.tiktok.com/@livecontextai',
+    // The channel the product films are published to. It was missing for months
+    // while the publisher was posting to it daily, so the one place on the site
+    // that lists where LiveContext speaks did not list where it films.
+    'https://www.youtube.com/@livecontext-ai',
     'https://discord.gg/5gTuUwhkJ',
   ];
 

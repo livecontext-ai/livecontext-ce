@@ -249,6 +249,17 @@ public class CatalogToolsGateway implements ToolsGateway {
                 payload.put("inlineBinaries", Boolean.TRUE);
             }
 
+            // How long this call may spend waiting out a provider's rate-limit refusal, in
+            // seconds, decided by the node. Absent = the platform's own budget applies, which is
+            // what every caller without retry logic of its own wants. 0 = the node paces itself,
+            // so the platform must not add requests underneath it.
+            if (billingIdentifiers != null) {
+                Object retryBudget = billingIdentifiers.get("__providerRetryMaxWaitSec__");
+                if (retryBudget instanceof Number n) {
+                    payload.put("providerRetryMaxWaitSeconds", n.intValue());
+                }
+            }
+
             org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
             headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
             if (tenantId != null && !tenantId.isBlank()) {
@@ -351,7 +362,14 @@ public class CatalogToolsGateway implements ToolsGateway {
             String body = e.getResponseBodyAsString();
             boolean isPlanRefusal = body != null && body.contains("PLAN_UPGRADE_REQUIRED");
             String message = isPlanRefusal ? extractJsonMessage(body, e.getMessage()) : e.getMessage();
-            logger.error("Catalog returned 403 for tool {}: {}", toolId, message);
+            if (isPlanRefusal) {
+                // Already identified as the customer's plan two lines up, and logged at INFO by
+                // catalog-service itself: re-logging it here at ERROR promoted a refusal into an
+                // incident.
+                logger.warn("Catalog refused tool {} on the account's plan: {}", toolId, message);
+            } else {
+                logger.error("Catalog returned 403 for tool {}: {}", toolId, message);
+            }
             return new ExecutionResult(false, Map.of(),
                     List.of(Map.of(
                         "type", isPlanRefusal ? "plan_upgrade_required" : "execution_error",
@@ -371,14 +389,30 @@ public class CatalogToolsGateway implements ToolsGateway {
             // re-enter its sibling.
             boolean isCredentialRefusal = body != null && body.contains("CREDENTIAL_SELECTION_UNRESOLVED");
             String message = isCredentialRefusal ? credentialSelectionMessage(body) : e.getMessage();
-            logger.error("Catalog returned 422 for tool {}: {}", toolId, message);
+            if (isCredentialRefusal) {
+                // The caller has to pick a credential: their action, not ours.
+                logger.warn("Catalog refused tool {} pending a credential choice: {}", toolId, message);
+            } else {
+                logger.error("Catalog returned 422 for tool {}: {}", toolId, message);
+            }
             return new ExecutionResult(false, Map.of(),
                     List.of(Map.of(
                         "type", isCredentialRefusal ? "credential_selection_error" : "execution_error",
                         "message", message)),
                     List.of());
         } catch (Exception e) {
-            logger.error("Error executing tool {} via catalog service: {}", tool.toolId(), e.getMessage(), e);
+            // A 402 INSUFFICIENT_CREDITS from the catalogue has no catch of its own, so it lands
+            // here and used to be logged at ERROR *with a stack trace* - the credit class, in its
+            // loudest possible shape, in the service this rule is about. Only the LEVEL changes:
+            // the ExecutionResult below is returned unchanged, so the step still reads the same.
+            // Spring has no PaymentRequired subclass, hence the status check.
+            boolean outOfCredits = e instanceof org.springframework.web.client.HttpClientErrorException http
+                    && http.getStatusCode().value() == 402;
+            if (outOfCredits) {
+                logger.warn("Catalog refused tool {} for lack of credits: {}", tool.toolId(), e.getMessage());
+            } else {
+                logger.error("Error executing tool {} via catalog service: {}", tool.toolId(), e.getMessage(), e);
+            }
             return new ExecutionResult(
                     false,
                     Map.of(),

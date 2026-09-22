@@ -46,6 +46,16 @@ class InterfaceCrudModuleTest {
         return new ToolExecutionContext(TENANT, Map.of(), variables, Set.of(), null, null, null, null);
     }
 
+    /**
+     * Context shaped like EVERY relay that serves this tool: the allow-list arrives on the
+     * CREDENTIALS channel, and `variables` is empty. The CE relay builds exactly this shape
+     * (it passes Map.of() for variables), which is why an allow-list read from `variables`
+     * was unenforceable there.
+     */
+    private ToolExecutionContext ctxWithCredentials(Map<String, Object> credentials) {
+        return new ToolExecutionContext(TENANT, credentials, Map.of(), Set.of(), null, null, null, null);
+    }
+
     private ToolExecutionContext ctxWithOrg(String orgId, String orgRole) {
         return new ToolExecutionContext(TENANT, Map.of(), Map.of(), Set.of(), null, null, orgId, orgRole);
     }
@@ -574,9 +584,9 @@ class InterfaceCrudModuleTest {
             UUID allowedId = UUID.randomUUID();
             UUID blockedId = UUID.randomUUID();
 
-            Map<String, Object> variables = new HashMap<>();
-            variables.put("allowedInterfaceIds", List.of(allowedId.toString()));
-            ToolExecutionContext restrictedCtx = ctxWithVariables(variables);
+            Map<String, Object> credentials = new HashMap<>();
+            credentials.put("allowedInterfaceIds", List.of(allowedId.toString()));
+            ToolExecutionContext restrictedCtx = ctxWithCredentials(credentials);
 
             Map<String, Object> params = Map.of("interface_id", blockedId.toString());
             Optional<ToolExecutionResult> res = module.execute("get", params, TENANT, restrictedCtx);
@@ -592,14 +602,78 @@ class InterfaceCrudModuleTest {
             InterfaceEntity entity = fakeEntity(id, "Allowed UI");
             when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(entity));
 
-            Map<String, Object> variables = new HashMap<>();
-            variables.put("allowedInterfaceIds", List.of(id.toString()));
-            ToolExecutionContext restrictedCtx = ctxWithVariables(variables);
+            Map<String, Object> credentials = new HashMap<>();
+            credentials.put("allowedInterfaceIds", List.of(id.toString()));
+            ToolExecutionContext restrictedCtx = ctxWithCredentials(credentials);
 
             Map<String, Object> params = Map.of("interface_id", id.toString());
             Optional<ToolExecutionResult> res = module.execute("get", params, TENANT, restrictedCtx);
             assertThat(res).isPresent();
             assertThat(res.get().success()).isTrue();
+        }
+
+        @Test
+        @DisplayName("an allow-list passed ONLY in variables no longer scopes anything: the module must read credentials")
+        void shouldIgnoreTheLegacyVariablesChannel() {
+            // Regression for the CE scope hole. The module used to resolve its allow-list from
+            // context.variables(). The relay that serves this tool in the monolith builds the
+            // context with an EMPTY variables map while carrying allowedInterfaceIds in
+            // credentials, so the scope silently evaporated there: a custom-scoped agent reached
+            // every interface in the workspace with an HTTP 200 and no log line.
+            //
+            // This test states the channel contract from the other side: variables is NOT a
+            // source of truth. It pins the direction of the fix so nobody restores the old read.
+            UUID blockedId = UUID.randomUUID();
+            InterfaceEntity entity = fakeEntity(blockedId, "Someone else's UI");
+            when(interfaceService.getInterface(blockedId, TENANT, null)).thenReturn(Optional.of(entity));
+
+            Map<String, Object> variables = new HashMap<>();
+            variables.put("allowedInterfaceIds", List.of(UUID.randomUUID().toString()));
+
+            Map<String, Object> params = Map.of("interface_id", blockedId.toString());
+            Optional<ToolExecutionResult> res =
+                    module.execute("get", params, TENANT, ctxWithVariables(variables));
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success())
+                    .as("variables must not be consulted; only credentials scope this tool")
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("the CE relay shape (allow-list in credentials, variables empty) denies a foreign interface")
+        void shouldEnforceScopeOnTheCeRelayShape() {
+            // Fails on the pre-fix code: with variables empty the allow-list was invisible and
+            // this read returned the entity instead of PERMISSION_DENIED.
+            UUID allowedId = UUID.randomUUID();
+            UUID foreignId = UUID.randomUUID();
+
+            Map<String, Object> credentials = new HashMap<>();
+            credentials.put("allowedInterfaceIds", List.of(allowedId.toString()));
+
+            Map<String, Object> params = Map.of("interface_id", foreignId.toString());
+            Optional<ToolExecutionResult> res =
+                    module.execute("get", params, TENANT, ctxWithCredentials(credentials));
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isFalse();
+            assertThat(res.get().error()).contains("not in your approved interface list");
+            verify(interfaceService, never()).getInterface(eq(foreignId), any(), any());
+        }
+
+        @Test
+        @DisplayName("an empty allow-list ([] = explicit no access) denies every interface")
+        void shouldDenyOnExplicitEmptyAllowList() {
+            Map<String, Object> credentials = new HashMap<>();
+            credentials.put("allowedInterfaceIds", List.of());
+
+            Map<String, Object> params = Map.of("interface_id", UUID.randomUUID().toString());
+            Optional<ToolExecutionResult> res =
+                    module.execute("get", params, TENANT, ctxWithCredentials(credentials));
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isFalse();
+            assertThat(res.get().error()).contains("not in your approved interface list");
         }
     }
 
@@ -748,10 +822,10 @@ class InterfaceCrudModuleTest {
             when(interfaceService.listInterfaces(eq(TENANT), isNull(), isNull(), isNull()))
                 .thenReturn(List.of(fakeEntity(allowedId, "Allowed"), fakeEntity(blockedId, "Blocked")));
 
-            Map<String, Object> variables = new HashMap<>();
-            variables.put("allowedInterfaceIds", List.of(allowedId.toString()));
+            Map<String, Object> credentials = new HashMap<>();
+            credentials.put("allowedInterfaceIds", List.of(allowedId.toString()));
 
-            Optional<ToolExecutionResult> res = module.execute("list", Map.of(), TENANT, ctxWithVariables(variables));
+            Optional<ToolExecutionResult> res = module.execute("list", Map.of(), TENANT, ctxWithCredentials(credentials));
             assertThat(res).isPresent();
 
             Map<String, Object> data = (Map<String, Object>) res.get().data();
@@ -994,14 +1068,14 @@ class InterfaceCrudModuleTest {
         @DisplayName("Should enforce allowedInterfaceIds restriction on update")
         void shouldEnforceAllowedIdsOnUpdate() {
             UUID blockedId = UUID.randomUUID();
-            Map<String, Object> variables = new HashMap<>();
-            variables.put("allowedInterfaceIds", List.of(UUID.randomUUID().toString()));
+            Map<String, Object> credentials = new HashMap<>();
+            credentials.put("allowedInterfaceIds", List.of(UUID.randomUUID().toString()));
 
             Map<String, Object> params = new HashMap<>();
             params.put("interface_id", blockedId.toString());
             params.put("name", "Hacked");
 
-            Optional<ToolExecutionResult> res = module.execute("update", params, TENANT, ctxWithVariables(variables));
+            Optional<ToolExecutionResult> res = module.execute("update", params, TENANT, ctxWithCredentials(credentials));
             assertThat(res).isPresent();
             assertThat(res.get().success()).isFalse();
             assertThat(res.get().error()).contains("not in your approved interface list");
@@ -1569,11 +1643,11 @@ class InterfaceCrudModuleTest {
         @DisplayName("Should enforce allowedInterfaceIds restriction on patch")
         void shouldEnforceAllowedIds() {
             UUID blockedId = UUID.randomUUID();
-            Map<String, Object> variables = new HashMap<>();
-            variables.put("allowedInterfaceIds", List.of(UUID.randomUUID().toString()));
+            Map<String, Object> credentials = new HashMap<>();
+            credentials.put("allowedInterfaceIds", List.of(UUID.randomUUID().toString()));
 
             Optional<ToolExecutionResult> res = module.execute(
-                "patch", patchParams(blockedId, "html", oneEdit("a", "b")), TENANT, ctxWithVariables(variables));
+                "patch", patchParams(blockedId, "html", oneEdit("a", "b")), TENANT, ctxWithCredentials(credentials));
 
             assertThat(res).isPresent();
             assertThat(res.get().success()).isFalse();
@@ -1767,11 +1841,11 @@ class InterfaceCrudModuleTest {
         @DisplayName("Should enforce allowedInterfaceIds restriction on delete")
         void shouldEnforceAllowedIdsOnDelete() {
             UUID blockedId = UUID.randomUUID();
-            Map<String, Object> variables = new HashMap<>();
-            variables.put("allowedInterfaceIds", List.of(UUID.randomUUID().toString()));
+            Map<String, Object> credentials = new HashMap<>();
+            credentials.put("allowedInterfaceIds", List.of(UUID.randomUUID().toString()));
 
             Map<String, Object> params = Map.of("interface_id", blockedId.toString());
-            Optional<ToolExecutionResult> res = module.execute("delete", params, TENANT, ctxWithVariables(variables));
+            Optional<ToolExecutionResult> res = module.execute("delete", params, TENANT, ctxWithCredentials(credentials));
             assertThat(res).isPresent();
             assertThat(res.get().success()).isFalse();
             assertThat(res.get().error()).contains("not in your approved interface list");

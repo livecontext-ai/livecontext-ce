@@ -468,7 +468,7 @@ public record ApiConfigurationRequest(
         java.util.List<String> requiredScopes,
 
         // V428: the generation descriptor, when this endpoint produces an asset
-        // (image, video, audio, voice, music). Optional and null for the 600+
+        // (image, video, audio, voice, music). Optional and null for the 1000+
         // ordinary endpoints. Persisted on api_tools.generation_spec by
         // ApiSubmissionOrchestrator, which is what makes the endpoint visible to
         // the generation surface and, through ApiToolEntity.isGeneration(), what
@@ -568,14 +568,30 @@ public record ApiConfigurationRequest(
     /**
      * Header configuration
      */
+    /**
+     * A request header a tool declares.
+     *
+     * <p>{@code description} and {@code isHidden} are APPENDED components: {@code ToolParameterService}
+     * persists both (into {@code api_tool_parameters.description} / {@code is_hidden}), and an
+     * auto-supplied header must be hidden and described, or an agent sees a required parameter with an
+     * empty label and no way to know the platform already fills it. The 6-argument constructor is kept
+     * so existing callers and JSON payloads that predate the two fields still build.
+     */
     public record HeaderDto(
         String name,
         String value,
         Boolean required,
         String defaultValue,
         List<String> allowedValues,
-        JsonNode extras
-    ) {}
+        JsonNode extras,
+        String description,
+        Boolean isHidden
+    ) {
+        public HeaderDto(String name, String value, Boolean required, String defaultValue,
+                         List<String> allowedValues, JsonNode extras) {
+            this(name, value, required, defaultValue, allowedValues, extras, null, null);
+        }
+    }
 
     /**
      * Path parameter configuration

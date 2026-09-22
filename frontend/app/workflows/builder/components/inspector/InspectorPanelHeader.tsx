@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import clsx from 'clsx';
-import { X, GripVertical, Minimize2, Maximize2, Maximize, Copy, Trash2, Eye, Play, RotateCcw, Minus, MoreVertical, Flag, Table } from 'lucide-react';
+import { X, GripVertical, Minimize2, Maximize2, Maximize, Copy, Trash2, Eye, Play, RotateCcw, Minus, MoreVertical, Flag, Table, FileText } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import type { Node } from 'reactflow';
 import { Button } from '@/components/ui/button';
@@ -12,7 +12,7 @@ import type { BuilderNodeData } from '../../types';
 import type { DataSource } from '../../hooks/useDataSourceData';
 import { getIconSlug, NodeIcon } from '../nodes/shared';
 import { matchNodeClass } from '../../nodes/nodeClasses';
-import { ViewModeTabs, ViewMode } from './ViewModeTabs';
+import { ViewModeTabs } from './ViewModeTabs';
 import { AvatarDisplay } from '@/components/agents/AvatarPicker';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -64,6 +64,13 @@ export interface InspectorPanelHeaderProps {
   isRunMode: boolean;
   isFullscreen: boolean;
   isAdvanced: boolean;
+  /**
+   * True when the CONTENT renders the tabbed layout, which carries its own
+   * view-mode switcher. The header then omits its copy: with both, the reader saw
+   * Edit / Run data / Logs twice, and the header pair cost a whole row of a panel
+   * that was already too narrow for three columns.
+   */
+  isTabbedLayout?: boolean;
 
   // Node type flags
   isTriggerNode: boolean;
@@ -78,10 +85,6 @@ export interface InspectorPanelHeaderProps {
   triggerNavigationLevel: string;
   selectedDataSourceId: number | null;
   dataSources: DataSource[];
-
-  // View mode
-  viewMode: ViewMode;
-  onViewModeChange: (mode: ViewMode) => void;
 
   // Centralized execution data toggle
   showExecutionData: boolean;
@@ -102,6 +105,7 @@ export interface InspectorPanelHeaderProps {
   onDragHandleMouseDown?: (e: React.MouseEvent) => void;
   onMinimize?: () => void;
   onReportNode?: () => void;
+  onOpenLogs?: () => void;
 }
 
 /**
@@ -122,6 +126,7 @@ export function InspectorPanelHeader({
   isRunMode,
   isFullscreen,
   isAdvanced,
+  isTabbedLayout = false,
   isTriggerNode,
   isInterfaceNode,
   shouldForceSmallMode,
@@ -130,8 +135,6 @@ export function InspectorPanelHeader({
   triggerNavigationLevel,
   selectedDataSourceId,
   dataSources,
-  viewMode,
-  onViewModeChange,
   showExecutionData,
   onShowExecutionDataChange,
   canShowExecutionDataToggle,
@@ -146,6 +149,7 @@ export function InspectorPanelHeader({
   onDragHandleMouseDown,
   onMinimize,
   onReportNode,
+  onOpenLogs,
 }: InspectorPanelHeaderProps) {
   const t = useTranslations('workflowBuilder.inspector');
   // `workflowId` names the start event: the right side panel mounts its own
@@ -162,6 +166,14 @@ export function InspectorPanelHeader({
   // (wide) or inside the overflow menu (narrow). Conditions mirror the former
   // floating InspectorActionButtons column exactly.
   const secondaryActions: SecondaryAction[] = [];
+  if (isRunMode && onOpenLogs) {
+    secondaryActions.push({
+      key: 'logs',
+      icon: <FileText className="h-4 w-4" />,
+      label: t('viewLogs'),
+      onClick: onOpenLogs,
+    });
+  }
   if (onDeleteNode && !isRunMode) {
     secondaryActions.push({
       key: 'delete',
@@ -268,6 +280,20 @@ export function InspectorPanelHeader({
   // Is title read-only
   const isTitleReadOnly = isTriggerNode && nodeKind === 'entry' && (triggerNavigationLevel === 'datasources' || triggerNavigationLevel === 'tables');
 
+  // Whether the Edit / Run data switcher has anything to offer.
+  //
+  // `canShowExecutionDataToggle` is part of it: without a Run data segment the
+  // control is a single always-pressed button whose click sets what is already
+  // set, which is chrome pretending to be a choice.
+  //
+  // NOT gated on the panel being wide, which is the bug this replaced. The gate
+  // that pins a node compact is about PICKERS (see shouldForceCompactPanel), and
+  // a compact panel has the same run to explain as a wide one; coupling the two
+  // meant a pinned node showed its configuration form with no way back to its run
+  // data, so a reader looking for a resolved value found the expression that
+  // produced it and concluded the value was missing.
+  const showViewSwitcher = isRunMode && !isInterfaceNode && !isTabbedLayout && canShowExecutionDataToggle;
+
   // Handle step-by-step start in edit mode
   const handleStartStepByStep = React.useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -279,10 +305,10 @@ export function InspectorPanelHeader({
   }, [isTriggerNode, hasGlobalValidationErrors, node.id, workflowId]);
 
   return (
-    <div className={clsx(
-      "flex gap-3 px-5 pt-5 pb-3 relative group/header flex-shrink-0",
-      viewMode === 'result' ? "items-start" : "items-center"
-    )}>
+    // Two siblings, not a wrapper: the panel is already a flex column, so the
+    // compact panel's switcher row can simply be the next row in it.
+    <>
+    <div className="flex items-center gap-3 px-5 pt-5 pb-3 relative group/header flex-shrink-0">
       {/* Drag handle - desktop only, and not while fullscreen (nothing to move) */}
       {!isFullscreen && onDragHandleMouseDown && (
         <div
@@ -346,12 +372,17 @@ export function InspectorPanelHeader({
         )}
       </div>
 
-      {/* ViewModeTabs - show in run mode, desktop only (mobile renders its own in InspectorMobileContent) */}
-      {isRunMode && (isAdvanced || isFullscreen) && !isInterfaceNode && (
+      {/* ViewModeTabs - inline on a WIDE panel only, where there is room beside the
+          node's name. On a compact panel it moves to its own row below (see the end
+          of this component): inline at 300px it left the title six pixels and the
+          node's name is what tells the reader which node they are looking at.
+
+          Not rendered at all when the CONTENT already shows its own switcher
+          (InspectorMobileContent renders one for the tabbed layout, which a narrow
+          panel uses even on a wide window). */}
+      {showViewSwitcher && isWidePanel && (
         <div className="hidden lg:block flex-shrink-0">
           <ViewModeTabs
-            viewMode={viewMode}
-            onViewModeChange={onViewModeChange}
             variant="header"
             showExecutionData={showExecutionData}
             onShowExecutionDataChange={onShowExecutionDataChange}
@@ -503,6 +534,20 @@ export function InspectorPanelHeader({
         )}
       </div>
     </div>
+    {/* Compact panel: the switcher gets its own full-width row, with labels, rather
+        than squeezing the node's name out of the header. Costs one row of height,
+        which a compact panel has and horizontal space it does not. */}
+    {showViewSwitcher && !isWidePanel && (
+      <div className="hidden lg:flex px-5 pb-3 flex-shrink-0" data-testid="inspector-view-switcher-row">
+        <ViewModeTabs
+          variant="basic"
+          showExecutionData={showExecutionData}
+          onShowExecutionDataChange={onShowExecutionDataChange}
+          canShowExecutionDataToggle={canShowExecutionDataToggle}
+        />
+      </div>
+    )}
+    </>
   );
 }
 

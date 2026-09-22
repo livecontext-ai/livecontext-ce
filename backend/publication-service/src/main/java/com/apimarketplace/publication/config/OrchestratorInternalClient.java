@@ -13,6 +13,7 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * HTTP client for calling orchestrator-service internal APIs.
@@ -755,7 +756,21 @@ public class OrchestratorInternalClient {
         if (workflowIds == null || workflowIds.isEmpty()) {
             return Set.of();
         }
-        String ids = workflowIds.stream().map(UUID::toString).reduce((a, b) -> a + "," + b).orElse("");
+        // Drop nulls before mapping. A Set may legitimately carry one (HashSet accepts it,
+        // and workflow_id is a nullable column), and UUID::toString on it throws an NPE
+        // from OUTSIDE the try below, so the caller's scheduled job aborts instead of
+        // degrading through the fail-safe return. This is the FIRST of two gates, not the only
+        // one: PublicationCleanupService also filters at its own source, because even a null
+        // that got past here would then hit its orphan test - existingIds.contains(id) on the
+        // immutable Set.of() this method returns on its three EMPTY branches, which throws on a
+        // null. (The fail-safe branch below returns the caller's own set, which tolerates one.)
+        String ids = workflowIds.stream()
+                .filter(Objects::nonNull)
+                .map(UUID::toString)
+                .collect(Collectors.joining(","));
+        if (ids.isEmpty()) {
+            return Set.of();
+        }
         String url = baseUrl + "/api/internal/publication-support/workflows/exists?ids=" + ids;
         HttpEntity<Void> entity = new HttpEntity<>(buildHeaders(null));
         try {

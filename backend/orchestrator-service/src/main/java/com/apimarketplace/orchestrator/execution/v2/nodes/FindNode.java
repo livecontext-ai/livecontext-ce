@@ -5,6 +5,8 @@ import com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataK
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter;
 import com.apimarketplace.orchestrator.services.TemplateEngine;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
+import com.apimarketplace.orchestrator.services.template.ResolvedValuePreview;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,6 +15,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.apimarketplace.orchestrator.services.failure.UserActionableFailure;
 
 /**
  * Find node - Queries a data table and returns matching rows as an items[] array.
@@ -101,25 +104,79 @@ public class FindNode extends BaseNode {
         }
 
         List<Object> items;
-        Map<String, Object> resolvedInputData = null;
+        // Seeded with the node's OWN configuration, so it survives every path. It used
+        // to start null and stay null on the list-fallback strategy, which reported an
+        // empty map - and `listExpression` / `maxItems` were never reported at all,
+        // even though they are what a find returning nothing is diagnosed from.
+        //
+        // `list` is the expression as the author wrote it. It used to be
+        // resolveTemplateString(listExpression, context): a SECOND resolution of the
+        // expression this node also evaluates for real, through the resolver that coerces
+        // every value to a String - so a list of rows was reported as "[{id=1}, {id=2}]"
+        // while the node's own items[] held the typed array, and a reference pointing at
+        // nothing was reported as an empty string where the evaluation reads null. That
+        // is the same defect AggregateNode removed from its own field reporting. What the
+        // expression evaluated to is reported under `listResolved` instead, taken from the
+        // evaluation that actually produced the items.
+        Map<String, Object> resolvedInputData = new java.util.LinkedHashMap<>();
+        boolean hasListExpression = listExpression != null && !listExpression.isBlank();
+        if (hasListExpression) {
+            // Seeded here for ORDER only - both values are written again below, after the
+            // CRUD echo, which overwrites this key. A LinkedHashMap keeps a re-put key in
+            // its original slot, so "Items" and "Items (resolved)" stay adjacent whichever
+            // strategy ran, and if the map ever overflows the report budget they are the
+            // pair that survives together. (Order is NOT what the panel renders: the row is
+            // persisted to a jsonb column, which does not preserve key order. It decides
+            // which entries survive truncation, and nothing else.)
+            resolvedInputData.put("list", listExpression);
+            resolvedInputData.put("listResolved", null);
+        }
+        if (maxItems > 0) {
+            resolvedInputData.put("maxItems", maxItems);
+        }
 
         // Strategy 1: Execute CRUD read via ToolsGateway
+        ListFallback fallback = ListFallback.notEvaluated();
         if (toolsGateway != null && stepConfig.dataSourceId() != null) {
-            resolvedInputData = prepareCrudInput(context);
+            // Bounded and masked on the way into the report, not into the query: a
+            // similarity search carries a whole query vector, an IN-list carries whatever
+            // the author matched on, and when template resolution fails this map falls back
+            // to the ENTIRE trigger payload. All of it was copied onto the step row as-is.
+            resolvedInputData.putAll(ReportedParams.forReport(prepareCrudInput(context)));
             items = executeCrudRead(context, startTime);
             if (items == null) {
                 logger.warn("[FindNode] CRUD read failed, trying list fallback: nodeId={}", nodeId);
-                items = evaluateListFallback(context);
-            } else if (items.isEmpty() && listExpression != null && !listExpression.isBlank()) {
+                fallback = evaluateListFallback(context);
+                items = fallback.items();
+            } else if (items.isEmpty() && hasListExpression) {
                 logger.info("[FindNode] CRUD returned 0 rows, trying list fallback: nodeId={}", nodeId);
-                List<Object> fallbackItems = evaluateListFallback(context);
+                fallback = evaluateListFallback(context);
+                List<Object> fallbackItems = fallback.items();
                 if (fallbackItems != null && !fallbackItems.isEmpty()) {
                     items = fallbackItems;
                 }
             }
         } else {
             // Strategy 2: Fallback - evaluate list expression
-            items = evaluateListFallback(context);
+            fallback = evaluateListFallback(context);
+            items = fallback.items();
+        }
+
+        // Fills the slots reserved above, LAST, because `prepareCrudInput` above echoes
+        // the step's whole `params` map into this one - and `list` LIVES in `params`
+        // (ExecutionNodeFactory reads listExpression from params.list). So the CRUD
+        // strategy overwrote the expression with a template-resolved copy of itself: the
+        // panel showed the resolved rows under `list` beside "(not evaluated)" under
+        // `listResolved`, two contradictory statements about one setting, and put the
+        // whole resolved collection back onto the persisted row. Re-putting here is what
+        // makes "`list` is the expression" true on the path that actually ships.
+        //
+        // A find whose table returned rows never looks at `list`, and reporting a value
+        // for it would credit the rows to an expression that had no part in producing
+        // them; the sentinel says which of the two strategies the reader is looking at.
+        if (hasListExpression) {
+            resolvedInputData.put("list", listExpression);
+            resolvedInputData.put("listResolved", fallback.description());
         }
 
         if (items == null) {
@@ -157,7 +214,13 @@ public class FindNode extends BaseNode {
         output.put("has_more", totalBeforeLimit > maxItems);
 
         if (resolvedInputData != null) {
-            output.put("resolved_params", resolvedInputData);
+            // Through the gate HERE, after the CRUD echo and after `list`/`listResolved` are
+            // re-put over it: gating earlier would be undone by those re-puts, which is the
+            // ordering ConvertToFileNode had to fix for the same reason. Without it a find
+            // row had no map budget at all - `list` is an author expression with no length
+            // limit, and this row is written per item - while its twin SplitParamsReport
+            // documents that exact reason for gating the same key.
+            output.put("resolved_params", ReportedParams.forReport(resolvedInputData));
         }
 
         output.put("item_index", context.itemIndex());
@@ -228,8 +291,13 @@ public class FindNode extends BaseNode {
                 toolsGateway.executeTool(toolRef, inputData, tenantId, billingIdentifiers);
 
             if (!result.isSuccess()) {
-                logger.error("[FindNode] CRUD read failed: nodeId={}, error={}",
-                    nodeId, result.getErrorMessage());
+                if (UserActionableFailure.isUserActionable(result.getErrorMessage())) {
+                    logger.warn("[FindNode] CRUD read refused: nodeId={}, reason={}",
+                        nodeId, result.getErrorMessage());
+                } else {
+                    logger.error("[FindNode] CRUD read failed: nodeId={}, error={}",
+                        nodeId, result.getErrorMessage());
+                }
                 return null;
             }
 
@@ -289,24 +357,62 @@ public class FindNode extends BaseNode {
         return rawInput;
     }
 
-    private List<Object> evaluateListFallback(ExecutionContext context) {
+    private ListFallback evaluateListFallback(ExecutionContext context) {
         if (listExpression == null || listExpression.isBlank()) {
-            return List.of();
+            return ListFallback.noExpression();
         }
         try {
             if (templateAdapter != null) {
                 Object result = templateAdapter.evaluateTemplate(listExpression, context);
-                return convertToList(result);
+                return ListFallback.evaluated(convertToList(result), result);
             }
             if (templateEngine != null) {
                 V2TemplateAdapter adapter = new V2TemplateAdapter(templateEngine);
                 Object result = adapter.evaluateTemplate(listExpression, context);
-                return convertToList(result);
+                return ListFallback.evaluated(convertToList(result), result);
             }
-            return null;
+            return ListFallback.failed("no template engine is wired");
         } catch (Exception e) {
             logger.error("[FindNode] List fallback evaluation failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
-            return null;
+            return ListFallback.failed(e.getMessage());
+        }
+    }
+
+    /**
+     * The outcome of the list-expression strategy, carried so the parameters panel can say
+     * which of the two strategies produced the rows.
+     *
+     * <p>{@code items == null} is the failure signal the caller already read before this
+     * record existed; what it adds is {@link #describe()}, one bounded line naming what the
+     * expression resolved to - from THIS evaluation, never from a second pass.
+     *
+     * @param items       the items, null when the expression could not be evaluated
+     * @param description how the outcome reads in the parameters panel, null when there is
+     *                    no expression to describe
+     */
+    private record ListFallback(List<Object> items, String description) {
+
+        /**
+         * The table served the rows; the expression was never looked at. Carries no items
+         * on purpose - this value is only ever the seed for the description, and the rows
+         * on that path come from the CRUD read.
+         */
+        static ListFallback notEvaluated() {
+            return new ListFallback(null, "(not evaluated: the table returned rows)");
+        }
+
+        /** No expression is configured: an empty result, and nothing to describe. */
+        static ListFallback noExpression() {
+            return new ListFallback(List.of(), null);
+        }
+
+        static ListFallback evaluated(List<Object> items, Object rawValue) {
+            return new ListFallback(items, ResolvedValuePreview.describe(rawValue));
+        }
+
+        static ListFallback failed(String reason) {
+            // Shortened: a SpEL or JDBC message is not short, and this lands on the step row.
+            return new ListFallback(null, "(evaluation failed: " + ResolvedValuePreview.shorten(reason) + ")");
         }
     }
 

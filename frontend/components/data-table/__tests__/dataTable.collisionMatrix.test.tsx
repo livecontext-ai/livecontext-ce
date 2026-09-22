@@ -162,13 +162,13 @@ const MODES: Mode[] = [
     fromRow: [],
   },
   {
-    name: 'workflow nested (node Logs)',
+    name: 'workflow nested, no identity lane',
     workflowContext: WORKFLOW_CONTEXT, showIdColumn: false, jsonPath: 'payload.items', isSnapshot: false,
     hidden: [],
     fromRow: [],
   },
   {
-    name: 'workflowModal',
+    name: 'workflow nested with identity lane (node Logs, run-result Logs)',
     workflowContext: WORKFLOW_CONTEXT, showIdColumn: true, jsonPath: 'payload.items', isSnapshot: false,
     hidden: [],
     fromRow: [],

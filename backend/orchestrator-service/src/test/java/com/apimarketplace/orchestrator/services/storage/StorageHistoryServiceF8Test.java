@@ -66,7 +66,7 @@ class StorageHistoryServiceF8Test {
     @Test
     @DisplayName("F8: snapshotAllTenants logs ERROR with exception class when a per-tenant snapshot fails")
     void f8LogsErrorWithExceptionClassOnTenantFailure() {
-        when(historyRepository.findDistinctTenantIds()).thenReturn(List.of("tenant-A", "tenant-B"));
+        when(breakdownRepository.findDistinctTenantIds()).thenReturn(List.of("tenant-A", "tenant-B"));
         when(breakdownRepository.findByTenantId("tenant-A")).thenReturn(Collections.emptyList());
         when(breakdownRepository.findByTenantId("tenant-B"))
                 .thenThrow(new DataAccessResourceFailureException("PG conn lost"));
@@ -88,7 +88,7 @@ class StorageHistoryServiceF8Test {
     @Test
     @DisplayName("F8: tenant-A still snapshotted even when tenant-B fails - per-tenant isolation contract preserved")
     void f8PerTenantIsolationContractPreserved() {
-        when(historyRepository.findDistinctTenantIds()).thenReturn(List.of("tenant-A", "tenant-B"));
+        when(breakdownRepository.findDistinctTenantIds()).thenReturn(List.of("tenant-A", "tenant-B"));
         when(breakdownRepository.findByTenantId("tenant-A")).thenReturn(Collections.emptyList());
         when(breakdownRepository.findByTenantId("tenant-B"))
                 .thenThrow(new RuntimeException("boom"));

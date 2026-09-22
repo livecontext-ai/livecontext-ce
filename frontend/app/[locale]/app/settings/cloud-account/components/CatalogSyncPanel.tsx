@@ -32,11 +32,24 @@ import {
  *
  * Flow:
  *  1. Admin clicks "Refresh from providers" → dry-run → modal shows diff +
- *     flagged rows + any guard failures.
- *  2. Admin reviews; optionally ticks "Override price-sanity" if a flagged
- *     price change is legitimate; clicks Apply.
+ *     held-back rows + any guard failures.
+ *  2. Admin reviews; optionally ticks the override to push the held-back rows
+ *     through as well; clicks Apply.
  *  3. Apply calls the apply endpoint (with overrideGuards when checked). On
  *     success, the parent panel refreshes the bundles list.
+ *
+ * A held-back row does NOT block Apply, and its override checkbox is therefore
+ * driven by `flagged.length`, not by a guard failure. `count-floor` is the
+ * opposite case and keeps its own checkbox: it DOES block, it is read out of
+ * `guardFailures`, and without a control the dialog is a dead end. The backend stopped
+ * emitting a price-sanity GuardFailure when it stopped cancelling the whole
+ * refresh over one moved price: it now withholds that row and applies the rest,
+ * so `guardFailures` means "nothing was applied" and reading price-sanity out
+ * of it would leave this panel hiding the checkbox for a condition that no
+ * longer exists, with no way left to accept a held-back price. It would NOT
+ * disable Apply: the flag is never set, so the old disable term is inert, which
+ * is also why the panel test records that it would have passed against the
+ * pre-change component.
  */
 export function CatalogSyncPanel({ onAfterApply }: { onAfterApply?: () => void }) {
   const t = useTranslations("aiProviders.catalogSync");
@@ -47,13 +60,30 @@ export function CatalogSyncPanel({ onAfterApply }: { onAfterApply?: () => void }
   const [plan, setPlan] = useState<CatalogSyncResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [overridePriceSanity, setOverridePriceSanity] = useState(false);
+  const [overrideCountFloor, setOverrideCountFloor] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const stats = plan?.plan.stats;
+  const flagged = plan?.plan.flagged ?? [];
+  const guardFailures = plan?.plan.guardFailures ?? [];
+  // Rows the refresh will withhold unless the operator opts them in.
+  const hasHeldBackRows = flagged.length > 0;
+  // count-floor is the one guard that still blocks the whole apply, and
+  // until now the dialog offered no way past it: the operator got a 412
+  // banner and no control. That is reachable by design, not only by
+  // accident - adding a variant suffix to the parser's drop list shrinks
+  // the feed on purpose, and a deliberate shrink looks exactly like the
+  // partial response this guard exists to reject. Measured on the live
+  // feed, dropping ":batch" takes OpenRouter from 356 accepted rows to
+  // 280 against a floor of 284, so the very first apply trips it.
+  const hasCountFloorFailure = guardFailures.some((g) => g.guard === "count-floor");
 
   const handleDryRun = async () => {
     setLoading(true);
     setError(null);
     setSuccessMsg(null);
     setOverridePriceSanity(false);
+    setOverrideCountFloor(false);
     try {
       const result = await modelConfigService.catalogSyncDryRun();
       setPlan(result);
@@ -69,16 +99,37 @@ export function CatalogSyncPanel({ onAfterApply }: { onAfterApply?: () => void }
     setApplying(true);
     setError(null);
     try {
-      const overrides = overridePriceSanity ? ["price-sanity"] : [];
+      // Gated on the control being VISIBLE, not just ticked. A tick can
+      // outlive the checkbox that set it: an apply that fails inside the
+      // merge answers 200 with applied:false and an EMPTY guardFailures, so
+      // the count-floor box unmounts while its state stays true, and every
+      // later Apply would keep sending an override nobody can see. The rule
+      // is that the dialog never sends what it is not currently showing.
+      const sendPriceSanity = overridePriceSanity && hasHeldBackRows;
+      const sendCountFloor = overrideCountFloor && hasCountFloorFailure;
+      const overrides = [
+        ...(sendPriceSanity ? ["price-sanity"] : []),
+        ...(sendCountFloor ? ["count-floor"] : []),
+      ];
       const result = await modelConfigService.catalogSyncApply(overrides);
       setPlan(result);
       if (result.applied) {
+        // Rows are only withheld when the operator did NOT opt them in; with
+        // the override ticked the same list went through, so reporting it as
+        // held back would describe the opposite of what just happened.
+        const heldBack = sendPriceSanity ? 0 : (result.plan.flagged?.length ?? 0);
+        const summary = t("applied", {
+          inserted: result.inserted,
+          updated: result.updatedCount,
+          deprecated: result.deprecated,
+        });
+        // Said here because the dialog closes on success: without this line the
+        // review queue exists only inside a modal the operator has just
+        // dismissed, and nothing anywhere would say the refresh was partial.
         setSuccessMsg(
-          t("applied", {
-            inserted: result.inserted,
-            updated: result.updatedCount,
-            deprecated: result.deprecated,
-          })
+          heldBack > 0
+            ? `${summary} ${t("appliedHeldBack", { count: heldBack })}`
+            : summary
         );
         setOpen(false);
         onAfterApply?.();
@@ -92,16 +143,13 @@ export function CatalogSyncPanel({ onAfterApply }: { onAfterApply?: () => void }
     }
   };
 
-  const stats = plan?.plan.stats;
-  const flagged = plan?.plan.flagged ?? [];
-  const guardFailures = plan?.plan.guardFailures ?? [];
-  const hasPriceSanityFailure = guardFailures.some((g) => g.guard === "price-sanity");
   // Sorted so the panel does not reshuffle between two runs that found the
   // same providers in a different map order.
   const discoveredEntries = Object.entries(plan?.plan.discovery?.discoveredByProvider ?? {}).sort(
     ([a], [b]) => a.localeCompare(b),
   );
   const discoverySkipped = plan?.plan.discovery?.skippedProviders ?? [];
+  const discoveryNotAsked = plan?.plan.discovery?.notAskedProviders ?? [];
 
   return (
     <>
@@ -216,6 +264,12 @@ export function CatalogSyncPanel({ onAfterApply }: { onAfterApply?: () => void }
                 </p>
               )}
 
+              {discoveryNotAsked.length > 0 && (
+                <p className="text-xs text-theme-secondary">
+                  {t("discoveryNotAsked", { providers: discoveryNotAsked.join(", ") })}
+                </p>
+              )}
+
               {/* Guard failures */}
               {guardFailures.length > 0 && (
                 <div className="rounded-lg bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 p-3">
@@ -245,6 +299,29 @@ export function CatalogSyncPanel({ onAfterApply }: { onAfterApply?: () => void }
                     <AlertTriangle className="w-3.5 h-3.5" />
                     {t("flaggedRows", { count: flagged.length })}
                   </div>
+                  {/*
+                    Shown only while it is TRUE. The sentence promises that the
+                    refresh is landing without these rows and that every other
+                    row still lands. Three states falsify it, and all three are
+                    reachable from this open dialog:
+                      - the box below is ticked, so the rows are no longer left out;
+                      - a blocking guard fired, so count-floor answers 412 and
+                        writes nothing;
+                      - the apply itself failed inside the merge, which answers
+                        200 with an EMPTY guardFailures, so the two conditions
+                        above both pass while nothing landed at all. `error` is
+                        nulled when an apply starts, so a non-null one inside an
+                        open dialog means exactly "this apply failed", and its
+                        red banner sits in the card BEHIND the overlay where the
+                        operator cannot see it.
+                    A stale explanation sitting directly above the control that
+                    invalidated it is worse than no explanation.
+                  */}
+                  {!overridePriceSanity && guardFailures.length === 0 && !error && (
+                    <p className="px-3 py-2 text-xs text-theme-secondary border-b border-theme">
+                      {t("flaggedRowsHint")}
+                    </p>
+                  )}
                   <table className="w-full text-sm">
                     <thead className="text-xs uppercase text-theme-secondary">
                       <tr>
@@ -266,16 +343,38 @@ export function CatalogSyncPanel({ onAfterApply }: { onAfterApply?: () => void }
                 </div>
               )}
 
+              {/*
+                Not suppressed by a guard failure any more. A truncated feed can
+                fire count-floor while every surviving row is unchanged, and the
+                dialog then showed a checkbox above an Apply that can never
+                enable, with no line saying why. "Nothing to apply" is exactly
+                what the operator needs there.
+              */}
               {plan.plan.added.length === 0 &&
-                plan.plan.updated.length === 0 &&
-                guardFailures.length === 0 && (
+                plan.plan.updated.length === 0 && (
                   <div className="rounded-lg border border-dashed border-theme p-6 text-center text-sm text-theme-secondary flex items-center justify-center gap-2">
                     <Info className="w-4 h-4" />
                     {t("noChanges")}
                   </div>
                 )}
 
-              {hasPriceSanityFailure && (
+              {hasCountFloorFailure && (
+                <label className="flex items-start gap-2 p-3 rounded-lg border border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-900/10 cursor-pointer">
+                  <Checkbox
+                    checked={overrideCountFloor}
+                    onCheckedChange={(v) => setOverrideCountFloor(v === true)}
+                    className="mt-0.5"
+                  />
+                  <span className="text-sm text-theme-primary">
+                    <span className="font-medium">{t("overrideCountFloor")}</span>
+                    <span className="block text-xs text-theme-secondary mt-0.5">
+                      {t("overrideCountFloorHint")}
+                    </span>
+                  </span>
+                </label>
+              )}
+
+              {hasHeldBackRows && (
                 <label className="flex items-start gap-2 p-3 rounded-lg border border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-900/10 cursor-pointer">
                   <Checkbox
                     checked={overridePriceSanity}
@@ -293,6 +392,17 @@ export function CatalogSyncPanel({ onAfterApply }: { onAfterApply?: () => void }
             </div>
           )}
 
+          {/*
+            Repeated inside the dialog on purpose. The same message renders in
+            the card behind the overlay, where a failed apply leaves the
+            operator looking at an unchanged dialog and no explanation.
+          */}
+          {error && (
+            <p className="text-sm text-red-600 dark:text-red-400" role="alert">
+              {error}
+            </p>
+          )}
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)} disabled={applying}>
               {t("cancel")}
@@ -302,8 +412,7 @@ export function CatalogSyncPanel({ onAfterApply }: { onAfterApply?: () => void }
               disabled={
                 applying ||
                 (plan?.plan.added.length === 0 &&
-                  plan?.plan.updated.length === 0) ||
-                (hasPriceSanityFailure && !overridePriceSanity)
+                  plan?.plan.updated.length === 0)
               }
             >
               {applying ? (

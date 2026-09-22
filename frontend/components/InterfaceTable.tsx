@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Search, Monitor, Plus, Trash2, Copy, Globe, Clock, ArrowUpDown, Eye } from 'lucide-react';
 import { PublicationStatusIcon } from '@/components/publications/PublicationStatusIcon';
+import { ResourceInfoPopover } from '@/components/resource-info/ResourceInfoPopover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { favoritesFirst, type ListSortKey, type VisibilityFilter } from '@/lib/utils/listSort';
 import { useResourceFavorites } from '@/hooks/useResourceFavorites';
@@ -38,6 +39,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PaginationBar } from '@/components/ui/PaginationBar';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import PublishResourceModal from '@/components/marketplace/PublishResourceModal';
+import { useResourceRowsDeleted } from '@/lib/resources/resourceDeleted';
 
 /**
  * How many folder-preview pages one level of the list will render at most. A face draws
@@ -281,6 +283,17 @@ function InterfaceCard({ intf, isSelected, isShared, isPendingReview, isRejected
             rejectionReason={rejectionReason}
             showPrivate={showPrivate}
           />
+          {/* On the name row rather than a row of its own: this card is a picture over a
+              name, and a dedicated meta row would add height to every tile in a masonry
+              grid to hold a single button. */}
+          <ResourceInfoPopover
+            resourceName={intf.name}
+            ownerId={intf.tenantId}
+            createdAt={intf.createdAt}
+            updatedAt={intf.updatedAt}
+            className="shrink-0"
+            data-testid={`interface-info-${intf.id}`}
+          />
         </div>
         {intf.description && (
           <p className="text-xs text-theme-muted truncate cursor-help" title={intf.description}>{intf.description}</p>
@@ -439,6 +452,11 @@ export function InterfaceTable({ className = '', interfaceTypeFilter }: Interfac
 
   // The hook reloads through this ref, so it can be created before the fetch it triggers.
   reloadRef.current = fetchInterfaces;
+
+  // An interface deleted anywhere else (its side-panel tab, the edit modal, a chat card)
+  // drops out of this list at once, then the page is refetched so the total and the
+  // page fill come from the server rather than from what was on screen.
+  useResourceRowsDeleted('interface', interfaces, setInterfaces, fetchInterfaces);
 
   // Initial load + reload on page / size / search / type / sort / visibility / workspace switch. The
   // fetch callback already closes over those inputs, so keying on its identity fires exactly one page

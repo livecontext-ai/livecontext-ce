@@ -41,6 +41,18 @@ gateway:
       - /api/internal/
       - /api/agent-tools
 
+# The product-film library behind the public /videos pages.
+#
+# BLANK by default, and that is the correct value everywhere except the LiveContext
+# cloud: an unset id means the public endpoint serves an empty library instead of
+# guessing at a table. Setting it opts ONE data source, owned by ONE tenant, into
+# being readable anonymously - see PublicVideoService for why that is the whole
+# security argument.
+public:
+  video-library:
+    datasource-id: ${PUBLIC_VIDEO_LIBRARY_DATASOURCE_ID:}
+    tenant-id: ${PUBLIC_VIDEO_LIBRARY_TENANT_ID:}
+
 # Credential encryption (same keys as orchestrator for decryption compatibility)
 credential:
   encryption:

@@ -164,6 +164,84 @@ class SubscriptionServiceTest {
                 .thenReturn(stripeSub);
     }
 
+    /**
+     * The branch that resolves the billing customer from the Stripe customer id rather than from
+     * a decoded userId, which is the only way into the create-or-repoint path.
+     */
+    private void givenUpsertResolvedByStripeCustomer(String customerId) throws StripeException {
+        setupStripeRetrieve(createStripeSubscription("sub_x", customerId, false, 1));
+        lenient().when(stripe.customers()).thenReturn(stripeCustomerServiceMock);
+        Customer stripeCustomer = mock(Customer.class);
+        lenient().when(stripeCustomer.getMetadata()).thenReturn(java.util.Map.of("userId", "7"));
+        lenient().when(stripeCustomerServiceMock.retrieve(customerId)).thenReturn(stripeCustomer);
+
+        User owner = new User();
+        owner.setId(7L);
+        lenient().when(userRepository.findById(7L)).thenReturn(Optional.of(owner));
+
+        Plan plan = new Plan();
+        plan.setId(1L);
+        plan.setCode("STARTER");
+        lenient().when(planRepository.findById(1L)).thenReturn(Optional.of(plan));
+        lenient().when(priceRepository.findByProviderPriceId(anyString())).thenReturn(Optional.empty());
+        lenient().when(subscriptionRepository.findByProviderSubscriptionId(anyString()))
+                .thenReturn(Optional.empty());
+        lenient().when(subscriptionRepository.save(any(com.apimarketplace.auth.domain.Subscription.class)))
+                .thenAnswer(inv -> {
+                    com.apimarketplace.auth.domain.Subscription s = inv.getArgument(0);
+                    s.setId(900L);
+                    return s;
+                });
+        lenient().when(billingEventRepository.save(any(BillingEvent.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    @Test
+    @DisplayName("a Stripe customer with no local row creates one through findOrCreate, never through save(new)")
+    void resolvesAnUnknownStripeCustomerWithoutRacingOnUserId() throws Exception {
+        givenUpsertResolvedByStripeCustomer("cus_UNKNOWN");
+        when(billingCustomerRepository.findByProviderCustomerId("cus_UNKNOWN")).thenReturn(Optional.empty());
+        User owner = new User();
+        owner.setId(7L);
+        BillingCustomer fresh = new BillingCustomer(owner, "stripe");
+        fresh.setId(55L);
+        when(billingCustomerRepository.findOrCreate(7L, "stripe")).thenReturn(fresh);
+        when(billingCustomerRepository.save(any(BillingCustomer.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        subscriptionService.onSubscriptionUpsert("evt_repoint_1", "sub_x", "active", 1L,
+                "price_x", LocalDateTime.now().minusDays(1), LocalDateTime.now().plusDays(29), null, null);
+
+        // The old spelling was new BillingCustomer(...) + save, a check-then-act on
+        // billing_customer.user_id. Two deliveries of the same Stripe retry both reached it, and
+        // the loser did not lose a row, it lost this whole webhook transaction.
+        verify(billingCustomerRepository).findOrCreate(7L, "stripe");
+        assertThat(fresh.getProviderCustomerId()).isEqualTo("cus_UNKNOWN");
+    }
+
+    @Test
+    @DisplayName("a user who already has a row under another Stripe id has it REPOINTED, and said so")
+    void repointsAnExistingBillingCustomerOntoTheNewStripeId() throws Exception {
+        givenUpsertResolvedByStripeCustomer("cus_NEW");
+        when(billingCustomerRepository.findByProviderCustomerId("cus_NEW")).thenReturn(Optional.empty());
+        User owner = new User();
+        owner.setId(7L);
+        BillingCustomer existing = new BillingCustomer(owner, "stripe");
+        existing.setId(55L);
+        existing.setProviderCustomerId("cus_OLD");
+        when(billingCustomerRepository.findOrCreate(7L, "stripe")).thenReturn(existing);
+        ArgumentCaptor<BillingCustomer> saved = ArgumentCaptor.forClass(BillingCustomer.class);
+        when(billingCustomerRepository.save(saved.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        subscriptionService.onSubscriptionUpsert("evt_repoint_2", "sub_x", "active", 1L,
+                "price_x", LocalDateTime.now().minusDays(1), LocalDateTime.now().plusDays(29), null, null);
+
+        // There is one billing_customer per user, so this is the only resolution the constraint
+        // leaves: the row moves to the new Stripe id and every subscription hanging off it moves
+        // with it. Durable, and therefore something the WARN beside it must announce.
+        assertThat(saved.getValue().getId()).isEqualTo(55L);
+        assertThat(saved.getValue().getProviderCustomerId()).isEqualTo("cus_NEW");
+    }
+
     // ===== onSubscriptionUpsert =====
 
     @Nested
@@ -418,8 +496,8 @@ class SubscriptionServiceTest {
         }
 
         @Test
-        @DisplayName("should handle race condition via DataIntegrityViolationException fallback")
-        void shouldHandleRaceConditionWithFallback() throws Exception {
+        @DisplayName("a unique-constraint rejection of the insert propagates (the transaction is aborted, no in-place fallback) and attributes no credits")
+        void uniqueConstraintRejectionPropagatesWithoutCredits() throws Exception {
             User user = createTestUser(1L);
             BillingCustomer bc = createBillingCustomer(1L, user);
             Plan plan = createPlan(1L, "STARTER");
@@ -429,27 +507,22 @@ class SubscriptionServiceTest {
 
             when(billingCustomerRepository.findByUserId(1L)).thenReturn(Optional.of(bc));
             when(planRepository.findById(1L)).thenReturn(Optional.of(plan));
-
-            com.apimarketplace.auth.domain.Subscription raceWinner = createExistingSubscription(50L, bc, plan, "active");
-            raceWinner.setProviderSubscriptionId("sub_race_1");
-
-            when(subscriptionRepository.findByProviderSubscriptionId("sub_race_1"))
-                    .thenReturn(Optional.empty())
-                    .thenReturn(Optional.of(raceWinner));
-
-            // First save throws DataIntegrityViolationException, second succeeds
+            when(subscriptionRepository.findByProviderSubscriptionId("sub_race_1")).thenReturn(Optional.empty());
+            // A concurrent delivery won the insert (provider_subscription_id) or a second active
+            // row raced past the sibling retirement (V423 index): Postgres has aborted the tx.
             when(subscriptionRepository.save(any(com.apimarketplace.auth.domain.Subscription.class)))
-                    .thenThrow(new DataIntegrityViolationException("Duplicate key"))
-                    .thenAnswer(inv -> inv.getArgument(0));
-            when(billingEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+                    .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint"));
 
-            subscriptionService.onSubscriptionUpsert("evt_race", "sub_race_1", "active",
-                    1L, null, LocalDateTime.now(), LocalDateTime.now().plusDays(30), 1L, null);
+            assertThatThrownBy(() -> subscriptionService.onSubscriptionUpsert("evt_race", "sub_race_1", "active",
+                    1L, null, LocalDateTime.now(), LocalDateTime.now().plusDays(30), 1L, null))
+                    .isInstanceOf(DataIntegrityViolationException.class);
 
-            // Should have called findByProviderSubscriptionId twice (once normally, once in fallback)
-            verify(subscriptionRepository, times(2)).findByProviderSubscriptionId("sub_race_1");
-            // Two save calls: first fails, second succeeds
-            verify(subscriptionRepository, times(2)).save(any(com.apimarketplace.auth.domain.Subscription.class));
+            // The former fallback re-read and re-saved inside the aborted session (always an
+            // AssertionFailure on a real database). Nothing may be re-read, re-saved or granted.
+            verify(subscriptionRepository, times(1)).findByProviderSubscriptionId("sub_race_1");
+            verify(subscriptionRepository, times(1)).save(any(com.apimarketplace.auth.domain.Subscription.class));
+            verify(creditAttributionService, never()).attributeOnSubscription(anyLong(), any(), anyInt());
+            verify(billingEventRepository, never()).save(any());
         }
 
         @Test
@@ -595,6 +668,107 @@ class SubscriptionServiceTest {
             verify(subscriptionRepository).save(captor.capture());
             assertThat(captor.getValue().getPrice()).isEqualTo(price);
             assertThat(captor.getValue().getCadence()).isEqualTo("yearly");
+        }
+
+        @Test
+        @DisplayName("V498: an unknown providerPriceId takes the cadence from the Stripe item's interval, so a yearly row is not mislabelled monthly")
+        void unknownPriceTakesTheCadenceFromTheStripeInterval() throws Exception {
+            User user = createTestUser(1L);
+            BillingCustomer bc = createBillingCustomer(1L, user);
+            Plan plan = createPlan(1L, "TEAM");
+
+            com.stripe.model.Subscription stripeSub = createStripeSubscription("sub_noprice_year", "cus_test_1", false, 1);
+            com.stripe.model.Price stripePrice = mock(com.stripe.model.Price.class);
+            com.stripe.model.Price.Recurring recurring = mock(com.stripe.model.Price.Recurring.class);
+            lenient().when(recurring.getInterval()).thenReturn("year");
+            lenient().when(stripePrice.getRecurring()).thenReturn(recurring);
+            lenient().when(stripeSub.getItems().getData().get(0).getPrice()).thenReturn(stripePrice);
+            setupStripeRetrieve(stripeSub);
+
+            when(billingCustomerRepository.findByUserId(1L)).thenReturn(Optional.of(bc));
+            when(planRepository.findById(1L)).thenReturn(Optional.of(plan));
+            when(priceRepository.findByProviderPriceId("price_unknown")).thenReturn(Optional.empty());
+            when(subscriptionRepository.findByProviderSubscriptionId("sub_noprice_year")).thenReturn(Optional.empty());
+            when(subscriptionRepository.save(any())).thenAnswer(inv -> {
+                com.apimarketplace.auth.domain.Subscription s = inv.getArgument(0);
+                s.setId(104L);
+                return s;
+            });
+            when(billingEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            subscriptionService.onSubscriptionUpsert("evt_noprice_year", "sub_noprice_year", "active",
+                    1L, "price_unknown", LocalDateTime.now(), LocalDateTime.now().plusMonths(12), 1L, null);
+
+            ArgumentCaptor<com.apimarketplace.auth.domain.Subscription> captor =
+                    ArgumentCaptor.forClass(com.apimarketplace.auth.domain.Subscription.class);
+            verify(subscriptionRepository).save(captor.capture());
+            // "monthly" here would exclude the row from YearlyCreditCycleScheduler: one pack a
+            // year for twelve months of payment, the exact defect V498 closes.
+            assertThat(captor.getValue().getCadence()).isEqualTo("yearly");
+        }
+
+        @Test
+        @DisplayName("V498: re-sending the SAME period on a yearly row keeps its credit cycle index (Stripe re-sends it on every update)")
+        void sameStripePeriodKeepsTheCreditCycleIndex() throws Exception {
+            User user = createTestUser(1L);
+            BillingCustomer bc = createBillingCustomer(1L, user);
+            Plan plan = createPlan(1L, "TEAM");
+            com.apimarketplace.auth.domain.Subscription existing = createExistingSubscription(10L, bc, plan, "active");
+            existing.setProviderSubscriptionId("sub_yearly_same");
+            existing.setCadence("yearly");
+            LocalDateTime anchor = LocalDateTime.of(2026, 9, 14, 23, 53, 9);
+            existing.setCurrentPeriodStart(anchor);
+            existing.setCurrentPeriodEnd(anchor.plusMonths(12));
+            existing.setCreditCycleIndex(4);
+
+            com.stripe.model.Subscription stripeSub = createStripeSubscription("sub_yearly_same", "cus_test_1", false, 1);
+            setupStripeRetrieve(stripeSub);
+            when(billingCustomerRepository.findByUserId(1L)).thenReturn(Optional.of(bc));
+            when(planRepository.findById(1L)).thenReturn(Optional.of(plan));
+            when(subscriptionRepository.findByProviderSubscriptionId("sub_yearly_same")).thenReturn(Optional.of(existing));
+            when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            when(billingEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            subscriptionService.onSubscriptionUpsert("evt_same", "sub_yearly_same", "active",
+                    1L, null, anchor, anchor.plusMonths(12), 1L, null);
+
+            // A reset here would re-grant cycles 1..4 on the next hourly pass: four packs twice.
+            assertThat(existing.getCreditCycleIndex()).isEqualTo(4);
+            // No price id on this event and a mocked item with no expanded price: nothing knows
+            // the cadence, so the row must KEEP yearly. The old literal "monthly" default would
+            // drop it from the monthly credit cycle with nothing in the log.
+            assertThat(existing.getCadence()).isEqualTo("yearly");
+        }
+
+        @Test
+        @DisplayName("V498: a MOVED period (the yearly renewal) restarts the credit cycle index through the Stripe sync")
+        void movedStripePeriodRestartsTheCreditCycleIndex() throws Exception {
+            User user = createTestUser(1L);
+            BillingCustomer bc = createBillingCustomer(1L, user);
+            Plan plan = createPlan(1L, "TEAM");
+            com.apimarketplace.auth.domain.Subscription existing = createExistingSubscription(10L, bc, plan, "active");
+            existing.setProviderSubscriptionId("sub_yearly_moved");
+            existing.setCadence("yearly");
+            LocalDateTime anchor = LocalDateTime.of(2026, 9, 14, 23, 53, 9);
+            existing.setCurrentPeriodStart(anchor);
+            existing.setCurrentPeriodEnd(anchor.plusMonths(12));
+            existing.setCreditCycleIndex(11);
+
+            com.stripe.model.Subscription stripeSub = createStripeSubscription("sub_yearly_moved", "cus_test_1", false, 1);
+            setupStripeRetrieve(stripeSub);
+            when(billingCustomerRepository.findByUserId(1L)).thenReturn(Optional.of(bc));
+            when(planRepository.findById(1L)).thenReturn(Optional.of(plan));
+            when(subscriptionRepository.findByProviderSubscriptionId("sub_yearly_moved")).thenReturn(Optional.of(existing));
+            when(subscriptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            when(billingEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            subscriptionService.onSubscriptionUpsert("evt_moved", "sub_yearly_moved", "active",
+                    1L, null, anchor.plusMonths(12), anchor.plusMonths(24), 1L, null);
+
+            // A stale 11 would make every month of year two "already granted".
+            assertThat(existing.getCurrentPeriodStart()).isEqualTo(anchor.plusMonths(12));
+            assertThat(existing.getCreditCycleIndex()).isZero();
+            assertThat(existing.getCadence()).isEqualTo("yearly");
         }
 
         @Test

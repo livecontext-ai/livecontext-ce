@@ -30,8 +30,9 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * Aggregates the home-page "Triggers" tab strip across workflows, applications,
- * and agents - one DTO per (resource, trigger-kind).
+ * Aggregates production triggers across workflows, applications and agents. The
+ * notification bell receives one compact DTO per resource and trigger kind. The
+ * agenda receives one DTO per exact trigger from the immutable production plan.
  *
  * <p><b>Emission rules</b>:
  * <ul>
@@ -184,6 +185,22 @@ public class ActiveAutomationsService {
      */
     public List<ActiveAutomationDto> getActiveAutomations(String tenantId, String orgId, String orgRole,
                                                           boolean includeDisabledSchedules) {
+        return getActiveAutomations(tenantId, orgId, orgRole, includeDisabledSchedules, false);
+    }
+
+    /**
+     * The agenda's trigger catalogue. Unlike the bell's compact per-kind rows, this emits
+     * one row per trigger from the immutable production plan, including its normalized key
+     * and authored label. That identity is what lets search distinguish two manual triggers
+     * on the same workflow and attribute historical fires to the right one.
+     */
+    public List<ActiveAutomationDto> getAgendaAutomations(String tenantId, String orgId, String orgRole) {
+        return getActiveAutomations(tenantId, orgId, orgRole, true, true);
+    }
+
+    private List<ActiveAutomationDto> getActiveAutomations(String tenantId, String orgId, String orgRole,
+                                                           boolean includeDisabledSchedules,
+                                                           boolean exactProductionTriggers) {
         // Post-V261 (2026-05-19): the gateway always injects X-Organization-ID
         // (personal workspaces resolve to the user's default personal org), so
         // orgId is never null/blank for normal traffic. The legacy personal-
@@ -250,9 +267,15 @@ public class ActiveAutomationsService {
 
         // 3. Resolve which pinned workflows have at least one webhook token (workflow-side).
         List<UUID> pinnedIds = pinned.stream().map(WorkflowEntity::getId).toList();
-        Set<UUID> workflowIdsWithWebhooks = pinnedIds.isEmpty()
+        Set<UUID> workflowIdsWithWebhooks = pinnedIds.isEmpty() || exactProductionTriggers
                 ? Collections.emptySet()
                 : triggerClient.findWorkflowIdsWithTokens(pinnedIds);
+        Map<UUID, Set<String>> activeWebhookTriggerIdsByWorkflow = pinnedIds.isEmpty() || !exactProductionTriggers
+                ? Collections.emptyMap()
+                : triggerClient.findActiveTriggerIdsByWorkflow(pinnedIds);
+        if (activeWebhookTriggerIdsByWorkflow == null) {
+            activeWebhookTriggerIdsByWorkflow = Collections.emptyMap();
+        }
 
         // 3b. Batch-resolve the production run for each pinned workflow so the
         //     bell can route the user straight to /run/{prodRun} (matching the
@@ -276,7 +299,8 @@ public class ActiveAutomationsService {
         //     than adopting production), so a builder session out-sorts the real production run.
         //     Reading its epochs would badge a schedule row with the time and verdict of a Play
         //     click. The routing target above deliberately keeps the older scan behaviour.
-        Map<UUID, WorkflowRunEntity> epochRunByWorkflow = epochRunsByWorkflow(pinned, productionRunByWorkflow);
+        Map<UUID, WorkflowRunEntity> epochRunByWorkflow = epochRunsByWorkflow(
+                pinned, productionRunByWorkflow, exactProductionTriggers);
 
         // 3d. Batch-resolve how each of those runs' LAST fire ended, so a row can badge its
         //     last-run time with the same COMPLETED/FAILED icon the run panel draws on that
@@ -304,9 +328,12 @@ public class ActiveAutomationsService {
                     ? ResourceType.APPLICATION
                     : ResourceType.WORKFLOW;
 
-            WorkflowRunEntity productionRun = productionRunByWorkflow.get(w.getId());
-            String productionRunIdPublic = productionRun != null ? productionRun.getRunIdPublic() : null;
             WorkflowRunEntity epochRun = epochRunByWorkflow.get(w.getId());
+            WorkflowRunEntity productionRun = exactProductionTriggers
+                    ? epochRun
+                    : (epochRun != null ? epochRun : productionRunByWorkflow.get(w.getId()));
+            String productionRunIdPublic = productionRun != null ? productionRun.getRunIdPublic() : null;
+            boolean resourcePaused = productionRun != null && productionRun.getStatus() == RunStatus.CANCELLED;
             LatestEpochOutcome lastEpoch = epochRun != null
                     ? lastEpochByRun.get(epochRun.getRunIdPublic())
                     : null;
@@ -317,8 +344,11 @@ public class ActiveAutomationsService {
             // the same run, so a row must not claim a fire of another kind (see firedKind).
             // Parsed once and handed to both readers below: this runs per pinned workflow on an
             // endpoint the frontend polls, and WorkflowPlan.fromMap is not free.
-            WorkflowPlan plan = parsePlan(w.getPlan());
-            TriggerType firedKind = firedTriggerKind(plan, lastEpoch);
+            WorkflowPlan draftPlan = parsePlan(w.getPlan());
+            WorkflowPlan productionPlan = parsePlan(productionRun != null ? productionRun.getPlan() : null);
+            WorkflowPlan plan = exactProductionTriggers ? productionPlan : draftPlan;
+            TriggerType firedKind = firedTriggerKind(
+                    productionPlan != null ? productionPlan : draftPlan, lastEpoch);
             // v5 F4-PUB-HIJACK observability: APPLICATION rows must route to
             // /app/applications/{publicationId} not /app/applications/{workflowId}.
             // The frontend route param is keyed by publication id.
@@ -328,9 +358,12 @@ public class ActiveAutomationsService {
             List<ScheduledExecutionDto> schedules = schedulesByWorkflow.getOrDefault(w.getId(), List.of());
             Set<UUID> emittedScheduleIds = new HashSet<>();
             for (ScheduledExecutionDto s : schedules) {
+                if (exactProductionTriggers
+                        && !hasTrigger(plan, s.getTriggerId(), TriggerType.SCHEDULE)) continue;
                 emittedScheduleIds.add(s.getId());
-                items.add(toScheduleAutomation(type, w.getId(), w.getName(), null, s, true,
-                        scheduleLastRun(workflowLastRun, s, w), productionRunIdPublic, publicationId, w));
+                items.add(toScheduleAutomation(type, w.getId(), w.getName(), null, s, true, resourcePaused,
+                        scheduleLastRun(workflowLastRun, s, w), productionRunIdPublic, publicationId, w,
+                        triggerLabel(plan, s.getTriggerId())));
             }
             // Standalone schedules: workflow_id NULL by design, so absent from
             // schedulesByWorkflow. Resolve them from THIS workflow's plan via the
@@ -346,14 +379,26 @@ public class ActiveAutomationsService {
                 if (!emittedScheduleIds.add(scheduleId)) continue;   // de-dup vs attached
                 ScheduledExecutionDto s = visibleScheduleById.get(scheduleId);
                 if (s == null) continue;   // disabled / max-reached / other org / not found
-                items.add(toScheduleAutomation(type, w.getId(), w.getName(), null, s, true,
-                        scheduleLastRun(workflowLastRun, s, w), productionRunIdPublic, publicationId, w));
+                items.add(toScheduleAutomation(type, w.getId(), w.getName(), null, s, true, resourcePaused,
+                        scheduleLastRun(workflowLastRun, s, w), productionRunIdPublic, publicationId, w,
+                        triggerLabel(plan, s.getTriggerId())));
             }
-            if (workflowIdsWithWebhooks.contains(w.getId())) {
-                items.add(toWebhookAutomation(type, w.getId(), w.getName(), null, true,
+            if (exactProductionTriggers) {
+                Set<String> activeWebhookTriggerIds = activeWebhookTriggerIdsByWorkflow
+                        .getOrDefault(w.getId(), Collections.emptySet());
+                for (Trigger trigger : triggersOfKind(plan, TriggerType.WEBHOOK)) {
+                    if (activeWebhookTriggerIds.contains(trigger.getNormalizedKey())) {
+                        items.add(toWebhookAutomation(type, w.getId(), w.getName(), null, true, resourcePaused,
+                                workflowLastRun.forTrigger(trigger.getNormalizedKey()), null,
+                                productionRunIdPublic, publicationId,
+                                trigger.getNormalizedKey(), trigger.label()));
+                    }
+                }
+            } else if (workflowIdsWithWebhooks.contains(w.getId())) {
+                items.add(toWebhookAutomation(type, w.getId(), w.getName(), null, true, resourcePaused,
                         workflowLastRun.forKind(firedKind, TriggerType.WEBHOOK)
                                 .orElseAt(w.getLastExecutedAt()), null,
-                        productionRunIdPublic, publicationId));
+                        productionRunIdPublic, publicationId, null, null));
             }
 
             // Declared-kind rows for the 6 non-armed kinds (manual, chat, form,
@@ -361,24 +406,36 @@ public class ActiveAutomationsService {
             // (already populated on workflow save by WorkflowIconExtractor).
             // For legacy rows where node_icons is null, fall back to an inline
             // extraction from the plan - compute-only, no write-on-read.
-            List<Map<String, Object>> icons = w.getNodeIcons();
-            if (icons == null) {
-                icons = WorkflowIconExtractor.extractNodeIcons(w.getPlan());
-            }
-            // De-dup: a workflow can declare the same trigger kind on multiple
-            // nodes (rare, but legal). One DTO per kind is the desired UX.
-            EnumSet<TriggerType> declaredKinds = EnumSet.noneOf(TriggerType.class);
-            for (Map<String, Object> icon : icons) {
-                Object nodeKind = icon.get("nodeKind");
-                if (!"entry".equals(nodeKind)) continue;
-                Object nodeId = icon.get("nodeId");
-                if (!(nodeId instanceof String idStr)) continue;
-                TriggerType kind = KIND_BY_NODE_ID.get(idStr);
-                if (kind == null) continue;            // schedule/webhook excluded by design
-                if (!declaredKinds.add(kind)) continue; // de-dup
-                items.add(toDeclaredKindAutomation(type, w.getId(), w.getName(), kind, true,
-                        workflowLastRun.forKind(firedKind, kind).orElseAt(w.getLastExecutedAt()),
-                        productionRunIdPublic, publicationId));
+            if (exactProductionTriggers) {
+                if (plan != null) {
+                    for (Trigger trigger : plan.getTriggers()) {
+                        TriggerType kind = triggerType(trigger);
+                        if (kind == null || kind == TriggerType.SCHEDULE || kind == TriggerType.WEBHOOK) continue;
+                        items.add(toDeclaredKindAutomation(type, w.getId(), w.getName(), kind, true,
+                                resourcePaused, workflowLastRun.forTrigger(trigger.getNormalizedKey()),
+                                productionRunIdPublic, publicationId,
+                                trigger.getNormalizedKey(), trigger.label()));
+                    }
+                }
+            } else {
+                List<Map<String, Object>> icons = w.getNodeIcons();
+                if (icons == null) {
+                    icons = WorkflowIconExtractor.extractNodeIcons(w.getPlan());
+                }
+                // De-dup: the notification bell stays compact, with one row per kind.
+                EnumSet<TriggerType> declaredKinds = EnumSet.noneOf(TriggerType.class);
+                for (Map<String, Object> icon : icons) {
+                    Object nodeKind = icon.get("nodeKind");
+                    if (!"entry".equals(nodeKind)) continue;
+                    Object nodeId = icon.get("nodeId");
+                    if (!(nodeId instanceof String idStr)) continue;
+                    TriggerType kind = KIND_BY_NODE_ID.get(idStr);
+                    if (kind == null || !declaredKinds.add(kind)) continue;
+                    items.add(toDeclaredKindAutomation(type, w.getId(), w.getName(), kind, true,
+                            resourcePaused,
+                            workflowLastRun.forKind(firedKind, kind).orElseAt(w.getLastExecutedAt()),
+                            productionRunIdPublic, publicationId, null, null));
+                }
             }
         }
 
@@ -392,20 +449,29 @@ public class ActiveAutomationsService {
         for (UUID agentId : agentIdsWithTriggers) {
             AgentDto agent = agentById.get(agentId);
             if (agent == null) continue; // Stale schedule for a deleted agent - skip silently.
+            boolean resourcePaused = Boolean.FALSE.equals(agent.getIsActive());
 
             // Agents have no pinning concept => no production run to route to.
+            //
+            // An agent schedule has no WORKFLOW cap, which is what budgetOwner describes, so
+            // that argument stays null. It does have the agent's OWN cap, and the schedule
+            // executor now refuses a fire against it - so the calendar has to draw those
+            // fires as not-going-to-happen, or it promises runs the gate is going to refuse.
+            // The verdict is resolved by agent-service and read here; re-deriving it from
+            // creditBudget and creditsConsumed would miss the reservation and the pending
+            // lazy reset, and grey out a month of fires that will actually run.
+            BudgetBlock agentBudget = agentBudgetBlock(agent);
             for (ScheduledExecutionDto s : schedulesByAgent.getOrDefault(agentId, List.of())) {
-                // An agent schedule has no workflow spending cap and no production run to read,
-                // so it carries the schedule's own fire time and no verdict.
-                items.add(toScheduleAutomation(ResourceType.AGENT, agent.getId(), agent.getName(),
-                        agent.getAvatarUrl(), s, null, LastRun.NONE.orElseAt(s.getLastExecutionAt()),
-                        null, null));
+                items.add(toScheduleAutomationWithBudget(ResourceType.AGENT, agent.getId(), agent.getName(),
+                        agent.getAvatarUrl(), s, null, resourcePaused, LastRun.NONE.orElseAt(s.getLastExecutionAt()),
+                        null, null, null, agentBudget));
             }
             List<ActiveAgentWebhookTokenDto> webhooks = webhooksByAgent.getOrDefault(agentId, List.of());
             if (!webhooks.isEmpty()) {
                 String httpMethod = webhooks.get(0).getHttpMethod();
                 items.add(toWebhookAutomation(ResourceType.AGENT, agent.getId(), agent.getName(),
-                        agent.getAvatarUrl(), null, LastRun.NONE, httpMethod, null, null));
+                        agent.getAvatarUrl(), null, resourcePaused, LastRun.NONE, httpMethod, null, null,
+                        null, null));
             }
         }
 
@@ -439,10 +505,10 @@ public class ActiveAutomationsService {
     }
 
     private ActiveAutomationDto toScheduleAutomation(ResourceType type, UUID resourceId, String name, String avatarUrl,
-                                                     ScheduledExecutionDto s, Boolean isPinned, LastRun lastRun,
+                                                     ScheduledExecutionDto s, Boolean isPinned, boolean resourcePaused, LastRun lastRun,
                                                      String productionRunIdPublic, String publicationId) {
-        return toScheduleAutomation(type, resourceId, name, avatarUrl, s, isPinned, lastRun,
-                productionRunIdPublic, publicationId, null);
+        return toScheduleAutomation(type, resourceId, name, avatarUrl, s, isPinned, resourcePaused, lastRun,
+                productionRunIdPublic, publicationId, null, null);
     }
 
     /**
@@ -451,10 +517,27 @@ public class ActiveAutomationsService {
      *        is a different subsystem, with its own counter and its own reset).
      */
     private ActiveAutomationDto toScheduleAutomation(ResourceType type, UUID resourceId, String name, String avatarUrl,
-                                                     ScheduledExecutionDto s, Boolean isPinned, LastRun lastRun,
+                                                     ScheduledExecutionDto s, Boolean isPinned, boolean resourcePaused, LastRun lastRun,
                                                      String productionRunIdPublic, String publicationId,
-                                                     WorkflowEntity budgetOwner) {
-        BudgetBlock block = budgetBlock(budgetOwner, Instant.now());
+                                                     WorkflowEntity budgetOwner, String triggerLabel) {
+        return toScheduleAutomationWithBudget(type, resourceId, name, avatarUrl, s, isPinned, resourcePaused, lastRun,
+                productionRunIdPublic, publicationId, triggerLabel,
+                budgetBlock(budgetOwner, Instant.now()));
+    }
+
+    /**
+     * The variant that takes the verdict instead of the workflow that owns it.
+     *
+     * <p>Exists because the two resource kinds capped in this product keep their cap in
+     * different places: a workflow's is columns on the row this service already holds, an
+     * agent's is resolved by agent-service and arrives on its DTO. Both end up in the same
+     * {@link BudgetBlock}, so everything downstream of here, the agenda included, stays
+     * blind to which kind it is looking at.
+     */
+    private ActiveAutomationDto toScheduleAutomationWithBudget(ResourceType type, UUID resourceId, String name, String avatarUrl,
+                                                     ScheduledExecutionDto s, Boolean isPinned, boolean resourcePaused, LastRun lastRun,
+                                                     String productionRunIdPublic, String publicationId,
+                                                     String triggerLabel, BudgetBlock block) {
         boolean budgetBlocked = block.blocked();
         Instant budgetBlockedUntil = block.until();
         ScheduleInfo schedule = new ScheduleInfo(
@@ -470,8 +553,8 @@ public class ActiveAutomationsService {
                 budgetBlocked,
                 budgetBlockedUntil);
         return new ActiveAutomationDto(type, resourceId, name, avatarUrl, TriggerType.SCHEDULE,
-                schedule, null, lastRun.at(), isPinned, productionRunIdPublic, publicationId,
-                lastRun.status());
+                schedule, null, lastRun.at(), isPinned, resourcePaused, productionRunIdPublic, publicationId,
+                lastRun.status(), s.getTriggerId(), triggerLabel);
     }
 
     /**
@@ -490,7 +573,8 @@ public class ActiveAutomationsService {
      * epoch this badge is describing, and describing it is the whole job.
      */
     private Map<UUID, WorkflowRunEntity> epochRunsByWorkflow(List<WorkflowEntity> pinned,
-                                                             Map<UUID, WorkflowRunEntity> scanned) {
+                                                             Map<UUID, WorkflowRunEntity> scanned,
+                                                             boolean exactProductionTriggers) {
         // The scan usually already holds the FK row - these are full entities, JSONB columns
         // included, so re-selecting them would be the most expensive query on the endpoint.
         Map<UUID, WorkflowRunEntity> knownById = scanned.values().stream()
@@ -512,7 +596,9 @@ public class ActiveAutomationsService {
             WorkflowRunEntity fkRun = w.getProductionRunId() != null
                     ? fkRunsById.get(w.getProductionRunId())
                     : null;
-            WorkflowRunEntity run = usableAsProductionRun(fkRun, w) ? fkRun : scanned.get(w.getId());
+            WorkflowRunEntity run = usableAsProductionRun(fkRun, w)
+                    ? fkRun
+                    : (exactProductionTriggers ? null : scanned.get(w.getId()));
             if (run != null && run.getRunIdPublic() != null) {
                 resolved.put(w.getId(), run);
             }
@@ -524,13 +610,13 @@ public class ActiveAutomationsService {
      * Whether a workflow's {@code production_run_id} still points at something this badge may
      * read, or the scan should answer instead.
      *
-     * <p>Two rejections, both of them states {@code ProductionRunResolver} also refuses (it
-     * heals them; this read-only path just declines them). A SHOWCASE run is a published
-     * snapshot's replay - the pinned-version scan excludes those explicitly, so adopting one
-     * here would make this path LESS filtered than the one it supersedes. A run belonging to
-     * another workflow means the FK is stale or wrong, and the id is otherwise the only thing
-     * scoping the by-id read above. {@code getWorkflow().getId()} is safe on the LAZY proxy:
-     * reading the identifier does not initialize it.
+     * <p>The checks mirror the immutable production identity used by the trigger lane. The run
+     * must belong to this workflow, match the currently pinned version, carry a production-safe
+     * lifecycle status, and not be a showcase replay. CANCELLED is retained because it is the
+     * explicit resource-paused state exposed by Agenda.
+     * A SHOWCASE run is a published snapshot's replay and is never production identity.
+     * {@code getWorkflow().getId()} is safe on the LAZY proxy because reading the identifier
+     * does not initialize it.
      */
     private static boolean usableAsProductionRun(WorkflowRunEntity fkRun, WorkflowEntity w) {
         if (fkRun == null) {
@@ -539,13 +625,24 @@ public class ActiveAutomationsService {
         if (fkRun.getWorkflow() == null || !w.getId().equals(fkRun.getWorkflow().getId())) {
             return false;
         }
+        if (!Objects.equals(fkRun.getPlanVersion(), w.getPinnedVersion())) {
+            return false;
+        }
+        RunStatus status = fkRun.getStatus();
+        if (status != RunStatus.COMPLETED
+                && status != RunStatus.WAITING_TRIGGER
+                && status != RunStatus.RUNNING
+                && status != RunStatus.PAUSED
+                && status != RunStatus.CANCELLED) {
+            return false;
+        }
         String runIdPublic = fkRun.getRunIdPublic();
         return !"showcase".equalsIgnoreCase(fkRun.getSource())
                 && (runIdPublic == null || !runIdPublic.startsWith("showcase_"));
     }
 
     /**
-     * The workflow's draft plan, parsed, or null when it is absent or unreadable.
+     * A supplied workflow plan map, parsed, or null when it is absent or unreadable.
      *
      * <p>One parse per workflow, shared by every reader below - an unparseable plan costs those
      * readers their answer, never the row.
@@ -580,13 +677,40 @@ public class ActiveAutomationsService {
             if (!lastEpoch.triggerId().equals(trigger.getNormalizedKey())) {
                 continue;
             }
-            String nodeId = trigger.type() == null
-                    ? null
-                    : WorkflowIconExtractor.TRIGGER_TYPE_TO_NODE_ID.get(
-                            trigger.type().toLowerCase(java.util.Locale.ROOT));
-            return nodeId == null ? null : KIND_BY_NODE_ID_ALL.get(nodeId);
+            return triggerType(trigger);
         }
         return null;
+    }
+
+    private static TriggerType triggerType(Trigger trigger) {
+        if (trigger == null || trigger.type() == null) return null;
+        String nodeId = WorkflowIconExtractor.TRIGGER_TYPE_TO_NODE_ID.get(
+                trigger.type().toLowerCase(java.util.Locale.ROOT));
+        return nodeId == null ? null : KIND_BY_NODE_ID_ALL.get(nodeId);
+    }
+
+    private static List<Trigger> triggersOfKind(WorkflowPlan plan, TriggerType kind) {
+        if (plan == null) return List.of();
+        return plan.getTriggers().stream()
+                .filter(trigger -> triggerType(trigger) == kind)
+                .toList();
+    }
+
+    private static boolean hasTrigger(WorkflowPlan plan, String triggerId, TriggerType kind) {
+        if (plan == null || triggerId == null) return false;
+        return plan.getTriggers().stream()
+                .anyMatch(trigger -> triggerId.equals(trigger.getNormalizedKey())
+                        && triggerType(trigger) == kind);
+    }
+
+    private static String triggerLabel(WorkflowPlan plan, String triggerId) {
+        if (plan == null || triggerId == null) return null;
+        return plan.getTriggers().stream()
+                .filter(trigger -> triggerId.equals(trigger.getNormalizedKey()))
+                .map(Trigger::label)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
     }
 
     /**
@@ -731,14 +855,36 @@ public class ActiveAutomationsService {
     record BudgetBlock(boolean blocked, Instant until) {}
 
     /**
-     * Package-private and static so it can be tested the way
-     * {@link #pausedReason} is: this decides whether the agenda greys a
-     * schedule's future, and the mapper that consumes it is private, so keeping
-     * the decision inline would put it out of reach of any unit test.
+     * The same verdict for an AGENT, read rather than computed.
      *
-     * @param owner the workflow whose cap governs these fires, or {@code null}
-     *              when nothing caps them (an agent's schedule: its budget is a
-     *              different subsystem, with its own counter and its own reset)
+     * <p>Unlike the workflow one, this does not re-derive anything: agent-service resolved it
+     * on the DTO, because two of the inputs never leave that service (the reservation held by
+     * an in-flight sub-agent, and the lazy reset that has not been written yet). Deriving it
+     * here from {@code creditBudget} and {@code creditsConsumed} alone is the tempting version
+     * and it is wrong in a way nobody would notice for a month: a monthly agent that hit its
+     * cap in September reads {@code consumed >= budget} all through October, so the calendar
+     * would grey out a month of fires that will actually run.
+     *
+     * <p>Fails OPEN: a missing verdict means "not blocked", never "blocked".
+     */
+    static BudgetBlock agentBudgetBlock(AgentDto agent) {
+        if (agent == null || !agent.budgetBlockedOrFalse()) {
+            return new BudgetBlock(false, null);
+        }
+        return new BudgetBlock(true, agent.getBudgetBlockedUntil());
+    }
+
+    /**
+     * Whether a WORKFLOW spending cap is refusing the fires it governs, and when that lifts.
+     *
+     * <p>Package-private and static so it can be tested the way {@code pausedReason} is:
+     * this decides whether the agenda greys a schedule future, and the mapper that consumes
+     * it is private, so keeping the decision inline would put it out of reach of any test.
+     *
+     * @param owner the workflow whose cap governs these fires, or {@code null} when none
+     *              does, which includes every agent schedule (an agent cap is a different
+     *              subsystem, with its own counter and its own reset - see
+     *              {@link #agentBudgetBlock})
      */
     static BudgetBlock budgetBlock(WorkflowEntity owner, Instant now) {
         if (owner == null) {
@@ -802,19 +948,10 @@ public class ActiveAutomationsService {
      * {@code schedulesByWorkflow} map and would stay invisible in the bell's
      * Triggers tab despite firing.
      *
-     * <p><b>Draft-plan read (deliberate).</b> Reads the live
-     * {@code WorkflowEntity.getPlan()} (draft) column - NOT the pinned version's
-     * plan that {@code ScheduleSyncService} arms schedules from. This is the SAME
-     * draft-plan view the sibling declared-kind extraction already uses
-     * ({@code nodeIcons}, recomputed from the draft on every save), so the bell's
-     * schedule and declared-kind rows stay on one consistent source and the read
-     * costs no extra query. Accepted limitation, shared with the declared-kind
-     * rows: if the draft diverges from the pinned version (a schedule trigger
-     * added to / removed from the draft but not yet re-pinned) the bell can
-     * momentarily over- or under-list a schedule relative to what actually fires.
-     * The enabled+org filter applied to the resolved row at the call site still
-     * gates what surfaces, so a divergent draft can never surface a disabled or
-     * cross-org schedule.
+     * <p>The caller chooses the source deliberately. The compact notification view passes
+     * the editable workflow plan to preserve its existing behaviour. The agenda passes the
+     * immutable production-run plan, so its searchable catalogue cannot advertise a draft
+     * trigger that is not active in production.
      *
      * <p>Returns an empty set when the plan is null/unparseable or declares no
      * standalone schedule; a malformed {@code scheduleId} value is skipped
@@ -843,12 +980,13 @@ public class ActiveAutomationsService {
     }
 
     private ActiveAutomationDto toWebhookAutomation(ResourceType type, UUID resourceId, String name, String avatarUrl,
-                                                    Boolean isPinned, LastRun lastRun, String httpMethod,
-                                                    String productionRunIdPublic, String publicationId) {
+                                                    Boolean isPinned, boolean resourcePaused, LastRun lastRun, String httpMethod,
+                                                    String productionRunIdPublic, String publicationId,
+                                                    String triggerId, String triggerLabel) {
         WebhookInfo webhook = new WebhookInfo(httpMethod);
         return new ActiveAutomationDto(type, resourceId, name, avatarUrl, TriggerType.WEBHOOK,
-                null, webhook, lastRun.at(), isPinned, productionRunIdPublic, publicationId,
-                lastRun.status());
+                null, webhook, lastRun.at(), isPinned, resourcePaused, productionRunIdPublic, publicationId,
+                lastRun.status(), triggerId, triggerLabel);
     }
 
     /**
@@ -860,10 +998,11 @@ public class ActiveAutomationsService {
      * now read from the run rather than from a column any draft execution also stamps.
      */
     private ActiveAutomationDto toDeclaredKindAutomation(ResourceType type, UUID resourceId, String name,
-                                                        TriggerType kind, Boolean isPinned, LastRun lastRun,
-                                                        String productionRunIdPublic, String publicationId) {
+                                                        TriggerType kind, Boolean isPinned, boolean resourcePaused, LastRun lastRun,
+                                                        String productionRunIdPublic, String publicationId,
+                                                        String triggerId, String triggerLabel) {
         return new ActiveAutomationDto(type, resourceId, name, null, kind,
-                null, null, lastRun.at(), isPinned, productionRunIdPublic, publicationId,
-                lastRun.status());
+                null, null, lastRun.at(), isPinned, resourcePaused, productionRunIdPublic, publicationId,
+                lastRun.status(), triggerId, triggerLabel);
     }
 }

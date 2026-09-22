@@ -333,15 +333,45 @@ class ApiCatalogBundleSyncSchedulerTest {
     }
 
     @Test
-    @DisplayName("@Scheduled cron sits on tick() with the 15-minute default")
+    @DisplayName("@Scheduled cron sits on tick(), overridable by property and defaulting to a per-process slot")
     void scheduledOnTick() throws NoSuchMethodException {
         java.lang.reflect.Method tick =
                 ApiCatalogBundleSyncScheduler.class.getDeclaredMethod("tick");
         org.springframework.scheduling.annotation.Scheduled scheduled =
                 tick.getAnnotation(org.springframework.scheduling.annotation.Scheduled.class);
         assertThat(scheduled).as("@Scheduled must be on tick()").isNotNull();
-        assertThat(scheduled.cron()).contains("api-catalog.bundle.sync.cron")
-                .contains("0 */15 * * * *");
+        assertThat(scheduled.cron())
+                .as("the documented property must stay the override")
+                .contains("api-catalog.bundle.sync.cron")
+                .as("a fixed wall-clock default puts the whole CE fleet on the same second")
+                .contains("PollSpread");
+    }
+
+    @Test
+    @DisplayName("the default resolves to a real cron - a typo in the expression would stop this poller at boot")
+    void theDefaultResolvesToARealCron() throws NoSuchMethodException {
+        // The default is SpEL inside a property placeholder, naming a class by
+        // its full name. A typo there is not a compile error: it surfaces as a
+        // bean-creation failure at startup, and a CE install would then never
+        // sync again. Evaluating the annotation's own string is what catches it.
+        String expression = ApiCatalogBundleSyncScheduler.class.getDeclaredMethod("tick")
+                .getAnnotation(org.springframework.scheduling.annotation.Scheduled.class)
+                .cron();
+        String spel = expression.substring(expression.indexOf(":") + 1, expression.length() - 1);
+        // Without this the test passes on the pre-change code too: a literal cron
+        // comes back unchanged from the template parser and parses fine, so the
+        // assertion below would certify a default that spreads nothing.
+        assertThat(spel)
+                .as("the default must be computed, not a fixed wall-clock expression")
+                .startsWith("#{");
+
+        String resolved = new org.springframework.expression.spel.standard.SpelExpressionParser()
+                .parseExpression(spel, new org.springframework.expression.common.TemplateParserContext())
+                .getValue(String.class);
+
+        assertThat(org.springframework.scheduling.support.CronExpression.isValidExpression(resolved))
+                .as(resolved)
+                .isTrue();
     }
 
     @Test

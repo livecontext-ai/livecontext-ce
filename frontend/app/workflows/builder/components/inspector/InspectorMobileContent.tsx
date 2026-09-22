@@ -9,8 +9,7 @@ import { InputColumn } from './InputColumn';
 import { OutputColumn } from './OutputColumn';
 import { PreviewColumn } from './PreviewColumn';
 import { InterfaceMappingsColumn } from './InterfaceMappingsColumn';
-import { NodeResultDataTable } from './NodeResultDataTable';
-import { ViewModeTabs, ViewMode } from './ViewModeTabs';
+import { ViewModeTabs } from './ViewModeTabs';
 import { ParameterColumn } from './ParameterColumn';
 import type { ConnectionPropsBundle } from './types/connectionProps';
 
@@ -33,10 +32,6 @@ export interface InspectorMobileContentProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
 
-  // View mode
-  viewMode: ViewMode;
-  onViewModeChange: (mode: ViewMode) => void;
-
   // Run context
   runId?: string;
   workflowId?: string;
@@ -50,9 +45,6 @@ export interface InspectorMobileContentProps {
 
   // Update handler
   onUpdate: (data: BuilderNodeData) => void;
-
-  // Breadcrumb handler for result mode
-  onBreadcrumbChange: (items: any[]) => void;
 
   // Connection props bundle
   connectionProps: ConnectionPropsBundle;
@@ -99,15 +91,12 @@ export function InspectorMobileContent({
   isAiAgent,
   activeTab,
   setActiveTab,
-  viewMode,
-  onViewModeChange,
   runId,
   workflowId,
   onSelectNode,
   selectedLoopChild,
   toolDetails,
   onUpdate,
-  onBreadcrumbChange,
   connectionProps,
   getEditorExpression,
   handleEditorExpressionChange,
@@ -121,13 +110,11 @@ export function InspectorMobileContent({
 
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
-      {/* Mode Configuration/Result selector - show in run mode on mobile/tablet
+      {/* Configuration/run-data selector - show in run mode on mobile/tablet
           (header's ViewModeTabs is hidden below lg: breakpoint) */}
       {isRunMode && !isInterfaceNode && (
         <div className="mb-4 flex justify-center">
           <ViewModeTabs
-            viewMode={viewMode}
-            onViewModeChange={onViewModeChange}
             variant="compact"
             showExecutionData={showExecutionData}
             onShowExecutionDataChange={onShowExecutionDataChange}
@@ -136,8 +123,7 @@ export function InspectorMobileContent({
         </div>
       )}
 
-      {(!runId || viewMode === 'configuration' || isInterfaceNode) ? (
-        <>
+      <>
           {/* Tab list - 3 tabs in advanced mode, 1 tab otherwise. Same segmented
               control as the header's view switcher: one visual language for
               "pick a view", instead of the default shadcn pill. */}
@@ -257,16 +243,7 @@ export function InspectorMobileContent({
               )}
             </TabsContent>
           )}
-        </>
-      ) : (
-        // Result mode - show merged DataTable directly for the node's step
-        <NodeResultDataTable
-          node={node}
-          runId={runId}
-          workflowId={workflowId}
-          onBreadcrumbChange={onBreadcrumbChange}
-        />
-      )}
+      </>
     </Tabs>
   );
 }

@@ -24,6 +24,7 @@ export const PROVIDER_ICON_MAP: Record<string, string> = {
   qwen: 'qwen',
   moonshot: 'moonshot',
   minimax: 'minimax',
+  typesafe: 'typesafe',
   'claude-code': 'claude-code',
   codex: 'codex',
   'gemini-cli': 'gemini-cli',
@@ -71,6 +72,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   qwen: 'Qwen',
   moonshot: 'Moonshot',
   minimax: 'MiniMax',
+  typesafe: 'TypeSafe',
   'claude-code': 'Claude Code',
   codex: 'Codex',
   'gemini-cli': 'Gemini CLI',
@@ -80,10 +82,18 @@ export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
 /**
  * Resolve a provider key to its human label, falling back to the raw key when
  * unknown (so new providers coming from the live catalog still render readably).
+ *
+ * <p>The LOOKUP is case-insensitive, like {@link getProviderIconSlug}'s: the
+ * catalogue promises no casing and the credit ledger stores whatever the calling
+ * service sent, so an exact-key match gave a row stored as `Anthropic` the right
+ * LOGO (that resolver already lower-cases) and the raw key as its name. The
+ * FALLBACK is the provider exactly as given, never lower-cased: an unknown key
+ * may already be a name (a catalogue tool call stores the API's own title), and
+ * there is nothing here that can improve on it.
  */
 export function getProviderDisplayName(provider: string | null | undefined): string {
   if (!provider) return '';
-  return PROVIDER_DISPLAY_NAMES[provider] ?? provider;
+  return PROVIDER_DISPLAY_NAMES[provider.toLowerCase()] ?? provider;
 }
 
 /**

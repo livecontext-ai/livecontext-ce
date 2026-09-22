@@ -7,6 +7,7 @@ import { formatRelativeDate } from '@/lib/utils/dateFormatters';
 import { getDataSourceColumns, getDataSourceColumnHeaders } from '@/components/DataSourceColumnIcons';
 import { PublicationStatusIcon } from '@/components/publications/PublicationStatusIcon';
 import { FavoriteStarButton } from '@/components/ui/FavoriteStarButton';
+import { ResourceInfoPopover } from '@/components/resource-info/ResourceInfoPopover';
 
 /** Rows shown in a card's mini-table preview (the chat table-visualize card style). */
 const PREVIEW_ROWS = 3;
@@ -211,10 +212,21 @@ export function DataSourceCard({ ds, rowCount, sampleRows, onClick, selected, on
             <p className="text-xs text-theme-muted truncate mt-0.5">{ds.description}</p>
           )}
           <div className="flex items-center gap-1 mt-1 text-xs text-theme-muted">
-            <Clock className="h-3 w-3" />
-            <span>{modifiedAt ? formatRelativeDate(modifiedAt) : '-'}</span>
-            <span className="text-slate-300 dark:text-slate-600">·</span>
-            <span>{t('data.rowCount', { count: rowCount })}</span>
+            <Clock className="h-3 w-3 shrink-0" />
+            <span className="truncate">{modifiedAt ? formatRelativeDate(modifiedAt) : '-'}</span>
+            <span className="shrink-0 text-slate-300 dark:text-slate-600">·</span>
+            <span className="shrink-0 whitespace-nowrap">{t('data.rowCount', { count: rowCount })}</span>
+            {/* The row's only control, at the right edge. The date is the one segment that
+                gives width (`truncate`), so this button keeps its square on a narrow card. */}
+            <ResourceInfoPopover
+              // Both spellings, like the dates just above: the API serializes snake_case.
+              resourceName={ds.name}
+              ownerId={ds.tenantId ?? ds.tenant_id}
+              createdAt={ds.createdAt ?? ds.created_at}
+              updatedAt={ds.updatedAt ?? ds.updated_at}
+              className="ml-auto shrink-0"
+              data-testid={`table-info-${ds.id}`}
+            />
           </div>
         </div>
       </div>

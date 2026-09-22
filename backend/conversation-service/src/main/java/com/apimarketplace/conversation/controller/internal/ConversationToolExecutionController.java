@@ -114,6 +114,19 @@ public class ConversationToolExecutionController {
             Map.entry("streamId", "__streamId__")
         );
 
+        // Per-resource access modes travel PLAIN, the way every other relay forwards them
+        // (checkWriteAccess reads the plain key first, then the __namespaced__ one). They were
+        // missing entirely while every allowed*Ids list was forwarded, so this boundary carried
+        // the allow-lists but not the read/write axis: any tool routed through here that does
+        // gate on a mode would have run as write. Today only ungated conversation-local tools
+        // reach it, so this closes the gap before a caller widens it rather than after.
+        for (String accessModeKey : com.apimarketplace.agent.config.ToolAccessControl.ACCESS_MODE_KEYS) {
+            Object modeValue = request.get(accessModeKey);
+            if (modeValue != null) {
+                credentials.put(accessModeKey, modeValue);
+            }
+        }
+
         for (Map.Entry<String, String> entry : reverseMapping.entrySet()) {
             Object value = request.get(entry.getKey());
             if (value != null) {

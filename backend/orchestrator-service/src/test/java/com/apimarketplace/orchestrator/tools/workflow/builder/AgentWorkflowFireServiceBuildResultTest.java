@@ -903,6 +903,46 @@ class AgentWorkflowFireServiceBuildResultTest {
         }
 
         @Test
+        @DisplayName("a node that lost some of its split items is counted, not reported as failed: 0")
+        void macro_countsPartialFailures() throws Exception {
+            // The 2026-09-22 shape: a classify node lost 3 of its 8 items to a provider
+            // outage and stayed COMPLETED (by design - see computeEpochStatus), its whole
+            // downstream chain was skipped, and the epoch reported failed: 0. The verdict
+            // stays binary; what was missing is any count that makes the loss visible.
+            WorkflowRunEntity run = runWith(RunStatus.WAITING_TRIGGER);
+
+            String epochStateJson = mapper.writeValueAsString(Map.of(
+                    "completedNodeIds", List.of("core:inbox", "agent:classify"),
+                    "failedNodeIds", List.of(),
+                    "partialFailedNodeIds", List.of("agent:classify"),
+                    "skippedNodeIds", List.of("core:merge", "core:board"),
+                    "runningNodeIds", List.of(),
+                    "readyNodeIds", List.of(),
+                    "awaitingSignalNodeIds", List.of()
+            ));
+            var header0 = new EpochHeaderWithEpochRow(
+                    0, epochStateJson, false,
+                    java.time.Instant.parse("2026-03-20T10:00:00Z"),
+                    java.time.Instant.parse("2026-03-20T10:00:05Z"),
+                    "trigger:start", 5000L);
+            when(epochService.listEpochHeaders(RUN_ID)).thenReturn(List.of(header0));
+            when(epochService.getEpochWorkDurations(RUN_ID)).thenReturn(Map.of(0, 3_000L));
+
+            Map<String, Object> result = service.buildRunMacroReport(run, emptyPlan(), TENANT_ID);
+
+            @SuppressWarnings("unchecked")
+            var epochs = (List<Map<String, Object>>) result.get("epochs");
+            @SuppressWarnings("unchecked")
+            var counts = (Map<String, Object>) epochs.get(0).get("node_counts");
+
+            assertThat(counts.get("partial_failed"))
+                    .as("the lost items must be countable, or failed: 0 reads as nothing went wrong")
+                    .isEqualTo(1);
+            assertThat(counts.get("failed")).isEqualTo(0);
+            assertThat(counts.get("skipped")).isEqualTo(2);
+        }
+
+        @Test
         @DisplayName("macro omits duration_ms for an epoch that executed no node")
         void macro_omitsDurationWhenEpochHasNoStepRows() {
             // The header exists but nothing ran under it, and it claims 32h42m of

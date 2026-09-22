@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.apimarketplace.agent.registry.ToolSchemaGenerator.arrayParam;
 import static com.apimarketplace.agent.registry.ToolSchemaGenerator.generateInputSchema;
 import static com.apimarketplace.agent.registry.ToolSchemaGenerator.intParam;
 import static com.apimarketplace.agent.registry.ToolSchemaGenerator.objectParam;
@@ -146,6 +147,23 @@ public class GenerationToolsProvider implements ToolsProvider {
                         + "(create). Same shape as input_image: the whole file object.", false),
                 objectParam("input_video", "A file to continue or restyle (create). Same shape as "
                         + "input_image: the whole file object.", false),
+                // THE SLOTS A MODEL TAKES AT THE SAME TIME. One image field could
+                // only ever carry one image, so a model that pins both ends of a
+                // clip and takes references besides was reachable only in part,
+                // whatever it accepted: the second file had nowhere to go. Which
+                // of these a model takes is in 'inputs' from action='models',
+                // beside how many files each one holds.
+                objectParam("first_frame_image", "The still the clip OPENS on (create). Same shape "
+                        + "as input_image: the whole file object. Only models listing "
+                        + "first_frame_image in 'accepts' take it.", false),
+                objectParam("last_frame_image", "The still the clip LANDS on (create). Same shape "
+                        + "as input_image. Which slots it must travel with, and which it cannot "
+                        + "travel with, are the 'requires' and 'excludes' of its row in 'inputs' "
+                        + "from action='models'; breaking either is refused at no cost.", false),
+                arrayParam("reference_image", "Files that guide the result without appearing in it "
+                        + "- a face, a product, a style (create). A LIST of whole file objects, even "
+                        + "when you have one. How many this model takes is in 'inputs' from "
+                        + "action='models'.", false, "object"),
                 intParam("duration_seconds", "Length in seconds for video, music and sound "
                         + "(create). Models priced per second bill on this value. Omit it and the "
                         + "model's own default_duration_seconds from action='models' is used and "
@@ -282,9 +300,19 @@ public class GenerationToolsProvider implements ToolsProvider {
                         "input_image", "a file to start from, when the model lists input_image in "
                                 + "'accepts'. Pass the WHOLE file object another tool returned, "
                                 + "exactly as it came. Same for input_audio and input_video.",
+                        "input_files", "a model that takes SEVERAL files names one slot per meaning: "
+                                + "first_frame_image, last_frame_image, reference_image. Read "
+                                + "'inputs' in action='models' for the ones this model has, how "
+                                + "many files each holds, and its 'requires' / 'excludes' - the "
+                                + "slots it must be sent with and the ones it may never be sent "
+                                + "with. Fill the one you mean: they are not interchangeable, and "
+                                + "no slot is guessed for you.",
                         "others", "only the parameters listed in that model's 'accepts'. Anything else "
                                 + "is refused with the accepted list, at no cost."),
-                "returns", "{ model, kind, provider, file, billed_quantity, billed_unit, provider_response }"));
+                "returns", "{ model, kind, provider, file, billed_quantity, billed_unit, "
+                        + "billed_credits, provider_response }. billed_credits is what the platform "
+                        + "charged, present only when the platform's key answered: ABSENT MEANS NOT "
+                        + "CHARGED BY THE PLATFORM, never zero."));
         actions.put("help", Map.of("summary", "This payload. No params."));
         out.put("actions", actions);
 
@@ -292,7 +320,19 @@ public class GenerationToolsProvider implements ToolsProvider {
                 "input_assets", "Some models start from a file rather than from nothing: a video that "
                         + "continues from an image, an image edited instead of invented, a voice "
                         + "cloned from a sample. Those models list input_image, input_audio or "
-                        + "input_video in their 'accepts'. Pass the WHOLE file object another tool "
+                        + "input_video in their 'accepts'. A model that takes more than one file "
+                        + "names each slot by what the file IS to it instead: first_frame_image is "
+                        + "the still the clip opens on, last_frame_image the one it lands on, and "
+                        + "reference_image a list of files it borrows a face, a product or a style "
+                        + "from without showing them. 'inputs' in action='models' names the slots "
+                        + "this model has, what each one means, how many files it holds, and two "
+                        + "rules: 'requires' lists slots it must be sent WITH (a provider that pins "
+                        + "both ends of a clip refuses one frame on its own) and 'excludes' lists "
+                        + "slots it may never be sent with (pinning a frame and lending a reference "
+                        + "are, for some providers, two different kinds of request, and mixing them "
+                        + "can come back as an asset that used half the files). Both are refused "
+                        + "before anything is charged; sending "
+                        + "the right file to the wrong slot is a different video, paid for. Pass the WHOLE file object another tool "
                         + "returned, exactly as it came: not its path, not a URL, not a name. Where "
                         + "to get one: the 'file' this tool returns from an earlier create, the 'ref' "
                         + "of files(action='get') for something already in the workspace, or the "
@@ -361,7 +401,19 @@ public class GenerationToolsProvider implements ToolsProvider {
                         "duration_seconds", 5, "resolution", "1280:720",
                         "input_image", Map.of("_type", "file",
                                 "path", "<as returned by the tool that produced it>",
-                                "name", "boat.png", "mimeType", "image/png"))));
+                                "name", "boat.png", "mimeType", "image/png")),
+                // Both ends of the clip pinned: the model generates the movement
+                // between two stills you already have. Each file goes in the slot
+                // that names what it is; there is no order to rely on.
+                Map.of("action", "create", "model", "grok-imagine-video-1.5",
+                        "prompt", "the camera dollies from the doorway to the window",
+                        "duration_seconds", 8,
+                        "first_frame_image", Map.of("_type", "file",
+                                "path", "<as returned by the tool that produced it>",
+                                "name", "open.png", "mimeType", "image/png"),
+                        "last_frame_image", Map.of("_type", "file",
+                                "path", "<as returned by the tool that produced it>",
+                                "name", "close.png", "mimeType", "image/png"))));
 
         return out;
     }

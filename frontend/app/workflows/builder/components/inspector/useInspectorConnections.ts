@@ -29,6 +29,20 @@ interface UseInspectorConnectionsProps {
   panelRef: React.RefObject<HTMLDivElement>;
 }
 
+/**
+ * Same handles at the same places? Sub-pixel drift is not a move: rounding to whole
+ * pixels keeps a scrollbar's fractional jitter from counting as one.
+ */
+function samePositions(a: Map<string, HandlePosition>, b: Map<string, HandlePosition>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [id, next] of b) {
+    const prev = a.get(id);
+    if (!prev) return false;
+    if (Math.round(prev.x) !== Math.round(next.x) || Math.round(prev.y) !== Math.round(next.y)) return false;
+  }
+  return true;
+}
+
 export function useInspectorConnections({
   node,
   connectionType,
@@ -241,9 +255,17 @@ export function useInspectorConnections({
     
     const updatePositions = () => {
       if (!panelRef.current) return;
+      // Nothing to measure: the panel renders no connection handles at all in run
+      // mode. Reading the panel's rect anyway would force a layout ten times a
+      // second for an empty result.
+      if (handleRefs.current.size === 0) {
+        setHandlePositions((prev) => (prev.size === 0 ? prev : new Map()));
+        return;
+      }
+
       const panelRect = panelRef.current.getBoundingClientRect();
       const newPositions = new Map<string, HandlePosition>();
-      
+
       handleRefs.current.forEach((element, id) => {
         const rect = element.getBoundingClientRect();
         newPositions.set(id, {
@@ -252,8 +274,11 @@ export function useInspectorConnections({
           y: rect.top + rect.height / 2 - panelRect.top,
         });
       });
-      
-      setHandlePositions(newPositions);
+
+      // Publish only a REAL move. This runs on a 100 ms interval, and handles sit
+      // still almost all of the time, so a fresh Map every tick re-rendered the whole
+      // panel - the step Logs grid included - ten times a second for nothing.
+      setHandlePositions((prev) => (samePositions(prev, newPositions) ? prev : newPositions));
     };
     
     updatePositions();

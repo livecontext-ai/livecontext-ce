@@ -939,6 +939,12 @@ public class InternalPublicationController {
         if (pub.getNodeIcons() != null && !pub.getNodeIcons().isEmpty()) {
             map.put("nodeIcons", pub.getNodeIcons());
         }
+        // Always present, even when empty: the node-type filter on the
+        // applications list reads it, and an ABSENT key is indistinguishable
+        // from "this app uses no nodes" - the filter would answer 200 with an
+        // empty page instead of failing, which is the hardest kind of bug to
+        // notice. An empty list at least says the row was considered.
+        map.put("nodeTypes", pub.getNodeTypes());
         if (pub.getInterfaceCount() != null && pub.getInterfaceCount() > 0) {
             map.put("interfaceCount", pub.getInterfaceCount());
         }

@@ -4,6 +4,7 @@ import com.apimarketplace.orchestrator.domain.workflow.Core.HttpAuthConfig;
 import com.apimarketplace.orchestrator.domain.workflow.Core.HttpParam;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -135,16 +136,31 @@ public class HttpRequestNode extends BaseNode {
         // Build minimal resolved_params early so it is available in all failure paths
         Map<String, Object> inputData = new LinkedHashMap<>();
         inputData.put("method", method);
-        inputData.put("url", urlExpression);
+        // Masked here, not only after the enrichment below: every failure BEFORE that point
+        // (an SSRF rejection, a header or body that throws, a missing url) reports this map,
+        // and the CONFIGURED url can be a signed link the author pasted whole - which is
+        // exactly the case DownloadFileNode masks on its own configured url.
+        inputData.put("url", ReportedParams.maskUrlSecrets(urlExpression));
         if (bodyType != null) inputData.put("bodyType", bodyType);
         if (authType != null && !"none".equals(authType)) inputData.put("authType", authType);
+        // The NON-SECRET half of the auth configuration. A 401 is most often the wrong
+        // account, the wrong header name or the wrong location, and none of that was
+        // visible. The values that authenticate - password, bearerToken, apiKeyValue,
+        // headerValue - are deliberately absent: this map is persisted and displayed.
+        if (contentType != null && !contentType.isBlank()) inputData.put("contentType", contentType);
+        if (authConfig != null) {
+            putIfPresent(inputData, "username", authConfig.username());
+            putIfPresent(inputData, "apiKeyName", authConfig.apiKeyName());
+            putIfPresent(inputData, "apiKeyLocation", authConfig.apiKeyLocation());
+            putIfPresent(inputData, "headerName", authConfig.headerName());
+        }
         if (timeout != null && timeout > 0) inputData.put("timeout", timeout);
 
         try {
             // Validate RestTemplate
             if (restTemplate == null) {
                 Map<String, Object> failOutput = new HashMap<>();
-                failOutput.put("resolved_params", inputData);
+                failOutput.put("resolved_params", ReportedParams.forReport(inputData));
                 return NodeExecutionResult.failureWithOutput(nodeId, "RestTemplate not configured", failOutput, 0);
             }
 
@@ -152,7 +168,7 @@ public class HttpRequestNode extends BaseNode {
             String url = resolveExpression(urlExpression, context);
             if (url == null || url.isBlank()) {
                 Map<String, Object> failOutput = new HashMap<>();
-                failOutput.put("resolved_params", inputData);
+                failOutput.put("resolved_params", ReportedParams.forReport(inputData));
                 return NodeExecutionResult.failureWithOutput(nodeId, "URL is required", failOutput, 0);
             }
 
@@ -165,7 +181,11 @@ public class HttpRequestNode extends BaseNode {
             // SSRF protection: validate URL before making any request
             UrlSafetyValidator.validateUrl(url);
 
-            logger.info("HTTP Request: {} {}", method, url);
+            // Masked BEFORE the log, not only before the row: this line prints the
+            // post-enrichment url, which is the one carrying the key appendApiKeyQueryParam
+            // just appended. Computed once and reused for the row and the cancel log below.
+            String reportableUrl = ReportedParams.maskUrlSecrets(redactApiKeyFromUrl(url, context));
+            logger.info("HTTP Request: {} {}", method, reportableUrl);
 
             // Prepare headers
             HttpHeaders httpHeaders = prepareHeaders(context);
@@ -173,11 +193,41 @@ public class HttpRequestNode extends BaseNode {
             // Prepare body
             Object body = prepareBody(context);
 
-            // Enrich inputData with fully resolved values
-            inputData.put("url", url);
-            if (body != null) inputData.put("body", body);
-            if (!headers.isEmpty()) inputData.put("headers", headers.size() + " header(s)");
-            if (!queryParams.isEmpty()) inputData.put("queryParams", queryParams.size() + " param(s)");
+            // Enrich inputData with fully resolved values. The url is the one masked above:
+            // `redactApiKeyFromUrl` masks the parameter the AUTH CONFIG names, which is the
+            // key this node appends itself, and `maskUrlSecrets` masks any other
+            // credential-named parameter in the query string, including the ones the author
+            // typed into the url by hand. This map is persisted to workflow_step_data and
+            // rendered in the Params column, so the raw url here published the credential to
+            // anyone who can read the run.
+            inputData.put("url", reportableUrl);
+            // The body is the request's own payload: an OAuth token exchange posts
+            // `client_secret` in it, a login posts `password`, and it has no size ceiling.
+            // Credential-named fields are masked, the rest is reported, and a body too
+            // large for a step row is described instead of copied.
+            if (body != null) inputData.put("body", reportableBody(body));
+            // The NAMES, not a count. A reader opening this panel is diagnosing a 401 or a
+            // 404, and "3 header(s)" answers neither question; the values are the half that
+            // authenticates, so they stay out.
+            if (!headers.isEmpty()) {
+                inputData.put("headers", headers.stream()
+                    .map(HttpParam::key).filter(Objects::nonNull).toList());
+            }
+            if (!queryParams.isEmpty()) {
+                Map<String, Object> reportedQuery = new LinkedHashMap<>();
+                for (HttpParam param : queryParams) {
+                    if (param.key() == null) continue;
+                    // The URL predicate, the same one `maskUrlSecrets` applies to the url two
+                    // lines above. With the narrower map predicate these two disagreed on one
+                    // row: `?key=` was masked inside the url and printed in clear here, for
+                    // every Google API, and the value is the author's literal - the commonest
+                    // way a key reaches this node.
+                    reportedQuery.put(param.key(), ReportedParams.isCredentialQueryParam(param.key())
+                        ? ReportedParams.WITHHELD_CREDENTIAL
+                        : ReportedParams.value(param.value()));
+                }
+                inputData.put("queryParams", reportedQuery);
+            }
 
             // Create request
             HttpEntity<Object> request = new HttpEntity<>(body, httpHeaders);
@@ -215,20 +265,20 @@ public class HttpRequestNode extends BaseNode {
             try {
                 response = waitWithCancelPolling(future, context);
             } catch (CancellationException ce) {
-                logger.info("⏹️ [CANCEL] HTTP request cancelled by user: nodeId={} url={}", nodeId, url);
+                logger.info("⏹️ [CANCEL] HTTP request cancelled by user: nodeId={} url={}", nodeId, reportableUrl);
                 Map<String, Object> failOutput = new HashMap<>();
-                failOutput.put("resolved_params", inputData);
+                failOutput.put("resolved_params", ReportedParams.forReport(inputData));
                 return NodeExecutionResult.failureWithOutput(nodeId,
                     "HTTP Request cancelled (run cancel signal)", failOutput, 0);
             } catch (HttpStatusCodeException e) {
                 NodeExecutionResult errorResult = buildErrorResult(e, context);
-                if (errorResult.output() != null) errorResult.output().put("resolved_params", inputData);
+                if (errorResult.output() != null) errorResult.output().put("resolved_params", ReportedParams.forReport(inputData));
                 return errorResult;
             } catch (ExecutionException ee) {
                 Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
                 if (cause instanceof HttpStatusCodeException hse) {
                     NodeExecutionResult errorResult = buildErrorResult(hse, context);
-                    if (errorResult.output() != null) errorResult.output().put("resolved_params", inputData);
+                    if (errorResult.output() != null) errorResult.output().put("resolved_params", ReportedParams.forReport(inputData));
                     return errorResult;
                 }
                 throw cause instanceof Exception ex ? ex : new RuntimeException(cause);
@@ -236,13 +286,13 @@ public class HttpRequestNode extends BaseNode {
 
             // Build success result
             NodeExecutionResult successResult = buildSuccessResult(response, context);
-            if (successResult.output() != null) successResult.output().put("resolved_params", inputData);
+            if (successResult.output() != null) successResult.output().put("resolved_params", ReportedParams.forReport(inputData));
             return successResult;
 
         } catch (Exception e) {
             logger.error("HTTP Request failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
             Map<String, Object> failOutput = new HashMap<>();
-            failOutput.put("resolved_params", inputData);
+            failOutput.put("resolved_params", ReportedParams.forReport(inputData));
             return NodeExecutionResult.failureWithOutput(nodeId, "HTTP Request failed: " + e.getMessage(), failOutput, 0);
         }
     }
@@ -327,6 +377,78 @@ public class HttpRequestNode extends BaseNode {
         }
 
         return url;
+    }
+
+    /**
+     * The request body as it may be REPORTED: credential-named fields masked, oversized
+     * payloads described instead of copied.
+     *
+     * <p>A body is the one parameter of this node with no ceiling and no schema: an OAuth
+     * token exchange posts {@code client_secret} in it, a sign-in posts {@code password},
+     * and a bulk POST posts megabytes. It was reported whole, onto the step row of every
+     * item, on every run.
+     *
+     * <p>A String body is masked structurally when it parses as JSON, and otherwise only
+     * bounded: rewriting arbitrary text by pattern would corrupt the one value a reader
+     * compares against what they sent.
+     */
+    @SuppressWarnings("unchecked")
+    private Object reportableBody(Object body) {
+        if (body instanceof Map<?, ?> map) {
+            return ReportedParams.forReport((Map<String, Object>) map);
+        }
+        if (body instanceof String text) {
+            String trimmed = text.trim();
+            if (trimmed.startsWith("{")) {
+                try {
+                    Map<String, Object> parsed = objectMapper.readValue(trimmed, Map.class);
+                    return ReportedParams.forReport(parsed);
+                } catch (Exception notJson) {
+                    // Not an object after all: fall through to the plain bound below.
+                }
+            }
+            if (trimmed.startsWith("[")) {
+                try {
+                    // Same treatment as the object above: a bulk POST body is a list of
+                    // records, and a record carries whatever the author put in it. Without
+                    // this the array shape was reported as plain text, unmasked.
+                    return ReportedParams.reportValue(objectMapper.readValue(trimmed, List.class));
+                } catch (Exception notJson) {
+                    // Not an array after all: fall through to the plain bound below.
+                }
+            }
+        }
+        // reportValue, not value: a bulk POST arrives as a top-level JSON ARRAY, which is
+        // neither of the two shapes above, and a list of records carries whatever its rows
+        // carry - a `password` column among them. Bounding alone published it.
+        return ReportedParams.reportValue(body);
+    }
+
+    /**
+     * The url with the api-key query parameter's VALUE masked.
+     *
+     * <p>Only that one parameter is touched: the rest of the query string is ordinary
+     * configuration a reader needs, and blanking the whole url would hide the very
+     * thing a failed request is diagnosed from. Matched by NAME rather than by
+     * value, so it holds even when the key resolves to something that also appears
+     * legitimately elsewhere in the url.
+     */
+    private String redactApiKeyFromUrl(String url, ExecutionContext context) {
+        if (url == null || authConfig == null || !"api-key".equals(authType)) {
+            return url;
+        }
+        if (!"query".equalsIgnoreCase(authConfig.apiKeyLocation())) {
+            return url;
+        }
+        String apiKeyName = resolveExpression(authConfig.apiKeyName(), context);
+        if (apiKeyName == null || apiKeyName.isBlank()) {
+            return url;
+        }
+        String encodedName = URLEncoder.encode(apiKeyName, StandardCharsets.UTF_8);
+        return url.replaceAll(
+            "([?&])(" + java.util.regex.Pattern.quote(apiKeyName)
+                + "|" + java.util.regex.Pattern.quote(encodedName) + ")=[^&]*",
+            "$1$2=***");
     }
 
     /**
@@ -733,5 +855,12 @@ public class HttpRequestNode extends BaseNode {
 
     public static Builder builder() {
         return new Builder();
+    }
+
+    /** Adds a value only when it carries something, so a blank never reads as a setting. */
+    private static void putIfPresent(Map<String, Object> target, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            target.put(key, value);
+        }
     }
 }

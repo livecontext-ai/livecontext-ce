@@ -759,6 +759,87 @@ public class AgentEntity implements OrgScopedEntity {
         return creditBudget.subtract(consumed).subtract(reserved).max(BigDecimal.ZERO);
     }
 
+    /**
+     * Whether this agent's own cap refuses its next run, including a scheduled one.
+     *
+     * <p>Not the same question as {@code creditsFree == 0}, and the difference is a whole
+     * period long. {@code creditsFree} is arithmetic on the STORED counter, while that
+     * counter is only zeroed when the agent next EXECUTES ({@code BudgetResolver}): a
+     * monthly agent that reached its cap in September reads zero free all through October
+     * and will run fine. This getter applies the pending reset before answering, through the
+     * same rule the enforcement path uses, so a reader can act on it.
+     *
+     * <p>{@code @Transient} for the reason {@link #getCreditsFree()} documents: JPA must not
+     * persist it, and Jackson serializes it anyway on every endpoint that returns this
+     * entity directly, which is how the agents list and the agent page receive it.
+     */
+    @Transient
+    public boolean isBudgetBlocked() {
+        return isBudgetBlockedAt(java.time.Instant.now());
+    }
+
+    /**
+     * Same verdict, at a caller-supplied instant.
+     *
+     * <p>Exists because the three derived getters here are a SET: a caller that reads them
+     * one after another reads three different clocks, and a monthly cap rolling over
+     * between two of them yields {@code blocked=true} beside {@code blockedUntil=null},
+     * which every consumer reads as "never lifts". One instant per answer removes that.
+     * The no-argument getters remain for Jackson, which calls each one separately and
+     * cannot be handed a clock; the window there is a millisecond at a period boundary.
+     */
+    @Transient
+    public boolean isBudgetBlockedAt(java.time.Instant now) {
+        return com.apimarketplace.common.credit.AgentBudgetRule.blocked(
+                creditBudget, creditsConsumed, creditsReserved,
+                budgetResetMode, budgetLastReset, now);
+    }
+
+    /**
+     * What this agent has COMMITTED against its cap: the post-reset accumulator plus the
+     * credits an in-flight sub-agent is holding.
+     *
+     * <p>The figure every refusal has to print, and the reason it is exposed at all.
+     * {@code creditsReserved} deliberately never leaves this service, so a caller that
+     * printed {@code creditsConsumed} alone produced "6 of 10 credits" beside a refusal,
+     * which reads as a bug to the person who set the cap: what stopped the run is the 4
+     * committed elsewhere. One number, resolved where the inputs are.
+     *
+     * <p>Null when the agent has no cap: there is nothing to be committed against.
+     */
+    @Transient
+    public BigDecimal getBudgetCommitted() {
+        return getBudgetCommittedAt(java.time.Instant.now());
+    }
+
+    /** Same figure, at a caller-supplied instant. See {@link #isBudgetBlockedAt}. */
+    @Transient
+    public BigDecimal getBudgetCommittedAt(java.time.Instant now) {
+        if (creditBudget == null || creditBudget.signum() <= 0) {
+            return null;
+        }
+        BigDecimal reserved = creditsReserved != null ? creditsReserved : BigDecimal.ZERO;
+        return com.apimarketplace.common.credit.AgentBudgetRule.effectiveConsumed(
+                creditsConsumed, reserved, budgetResetMode, budgetLastReset, now).add(reserved);
+    }
+
+    /**
+     * When {@link #isBudgetBlocked()} stops being true on its own, or null when it never
+     * does (a cumulative cap, or an agent that is not blocked at all).
+     */
+    @Transient
+    public Instant getBudgetBlockedUntil() {
+        return getBudgetBlockedUntilAt(java.time.Instant.now());
+    }
+
+    /** Same instant, at a caller-supplied clock. See {@link #isBudgetBlockedAt}. */
+    @Transient
+    public Instant getBudgetBlockedUntilAt(java.time.Instant now) {
+        return com.apimarketplace.common.credit.AgentBudgetRule.blockedUntil(
+                creditBudget, creditsConsumed, creditsReserved,
+                budgetResetMode, budgetLastReset, now);
+    }
+
     public String getBudgetResetMode() {
         return budgetResetMode;
     }

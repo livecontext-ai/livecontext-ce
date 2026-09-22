@@ -16,6 +16,10 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import org.mockito.ArgumentCaptor;
+
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -50,14 +54,182 @@ class ModelCatalogServiceProviderFilterTest {
     @Mock private CachedModelRateLimitProvider cachedRateLimitProvider;
     @Mock private AuthPricingSyncClient authPricingSyncClient;
     @Mock private CloudLlmRuntimeAccess cloudLlmRuntimeAccess;
+    @Mock private com.apimarketplace.agent.repository.ModelProviderSettingsRepository providerSettings;
 
     private ModelCatalogService service;
+    /** The production wiring, which is the only one that can see a provider switch. */
+    private ModelCatalogService switchAware;
 
     @BeforeEach
     void setUp() {
         service = new ModelCatalogService(
                 repository, categoryRepository, llmProviderFactory, credentialRepository,
                 cachedRateLimitProvider, "", authPricingSyncClient);
+        switchAware = new ModelCatalogService(
+                repository, categoryRepository, llmProviderFactory, credentialRepository,
+                cachedRateLimitProvider, "", authPricingSyncClient, false, providerSettings);
+    }
+
+    private static com.apimarketplace.agent.domain.ModelProviderSettingsEntity off(String provider) {
+        return new com.apimarketplace.agent.domain.ModelProviderSettingsEntity(provider, false);
+    }
+
+    @Test
+    @DisplayName("a provider switched off disappears from the picker with every model it serves")
+    void aDisabledProviderTakesItsModelsWithIt() {
+        // The move the panel had no way to make: OpenRouter carries 438 rows, so removing it
+        // one model at a time was not a real option.
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("providers", new ArrayList<>(List.of(
+                provider("anthropic", true), provider("openrouter", true))));
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(catalog);
+        when(credentialRepository.hasDbKey(anyString())).thenReturn(true);
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
+        when(providerSettings.findAll()).thenReturn(List.of(off("openrouter")));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> providers = (List<Map<String, Object>>)
+                switchAware.getModelsForCategory(null, "tenant-1").get("providers");
+
+        assertThat(providers).extracting(p -> p.get("name")).containsExactly("anthropic");
+    }
+
+    @Test
+    @DisplayName("REGRESSION: a disabled provider does not come back through the custom-model door")
+    void aDisabledProviderCannotReturnViaACustomModel() {
+        // The switch filtered the YAML/base list, and a provider whose rows are custom is not
+        // in that list: it is INJECTED afterwards. So the feature's one promise was silently
+        // partial for any disabled provider carrying a custom row, and a plain no-op for a
+        // provider made only of them.
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("providers", new ArrayList<>(List.of(provider("anthropic", true))));
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(catalog);
+        when(credentialRepository.hasDbKey(anyString())).thenReturn(true);
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of(customRow("openrouter", "my-local-thing")));
+        when(providerSettings.findAll()).thenReturn(List.of(off("openrouter")));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> providers = (List<Map<String, Object>>)
+                switchAware.getModelsForCategory(null, "tenant-1").get("providers");
+
+        assertThat(providers).extracting(p -> p.get("name")).containsExactly("anthropic");
+    }
+
+    @Test
+    @DisplayName("a custom model of an ENABLED provider is still injected: the filter is the switch, not the door")
+    void aCustomModelOfAnEnabledProviderIsStillInjected() {
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("providers", new ArrayList<>(List.of(provider("anthropic", true))));
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(catalog);
+        when(credentialRepository.hasDbKey(anyString())).thenReturn(true);
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of(customRow("my-lab", "my-local-thing")));
+        when(providerSettings.findAll()).thenReturn(List.of(off("openrouter")));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> providers = (List<Map<String, Object>>)
+                switchAware.getModelsForCategory(null, "tenant-1").get("providers");
+
+        assertThat(providers).extracting(p -> p.get("name")).contains("my-lab");
+    }
+
+    /** An admin-added local model: its provider exists only because this row does. */
+    private static com.apimarketplace.agent.domain.ModelConfigOverrideEntity customRow(
+            String provider, String modelId) {
+        com.apimarketplace.agent.domain.ModelConfigOverrideEntity e =
+                new com.apimarketplace.agent.domain.ModelConfigOverrideEntity();
+        e.setProvider(provider);
+        e.setModelId(modelId);
+        e.setDisplayName(modelId);
+        e.setCustom(true);
+        e.setEnabled(true);
+        return e;
+    }
+
+    @Test
+    @DisplayName("the switch is read case-blind, so a row saved as OpenRouter still silences the provider")
+    void theSwitchIsCaseBlind() {
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("providers", new ArrayList<>(List.of(provider("openrouter", true))));
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(catalog);
+        when(credentialRepository.hasDbKey(anyString())).thenReturn(true);
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
+        when(providerSettings.findAll()).thenReturn(List.of(off("OpenRouter")));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> providers = (List<Map<String, Object>>)
+                switchAware.getModelsForCategory(null, "tenant-1").get("providers");
+
+        assertThat(providers).isEmpty();
+    }
+
+    @Test
+    @DisplayName("switching off the provider that held the default leaves the picker a default it can use")
+    void disablingTheDefaultProviderRecomputesTheDefault() {
+        // A picker whose default names a provider that is no longer in the list has no valid
+        // selection at all, which is why the bridge filter recomputes too. Asserted here
+        // because both other switch tests check membership only.
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("providers", new ArrayList<>(List.of(
+                provider("openrouter", true), provider("anthropic", true))));
+        catalog.put("defaultProvider", "openrouter");
+        catalog.put("defaultModel", "openrouter-model");
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(catalog);
+        when(credentialRepository.hasDbKey(anyString())).thenReturn(true);
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
+        when(providerSettings.findAll()).thenReturn(List.of(off("openrouter")));
+
+        Map<String, Object> result = switchAware.getModelsForCategory(null, "tenant-1");
+
+        assertThat(result.get("defaultProvider")).isEqualTo("anthropic");
+        assertThat(result.get("defaultModel")).isEqualTo("anthropic-model");
+    }
+
+    @Test
+    @DisplayName("an unreadable switch table leaves every provider ON rather than emptying the picker")
+    void anUnreadableSwitchTableFailsOpen() {
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("providers", new ArrayList<>(List.of(provider("anthropic", true))));
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(catalog);
+        when(credentialRepository.hasDbKey(anyString())).thenReturn(true);
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
+        when(providerSettings.findAll()).thenThrow(new IllegalStateException("table gone"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> providers = (List<Map<String, Object>>)
+                switchAware.getModelsForCategory(null, "tenant-1").get("providers");
+
+        assertThat(providers).extracting(p -> p.get("name")).containsExactly("anthropic");
+    }
+
+    @Test
+    @DisplayName("switching a provider back ON deletes its row: the table stays a list of exceptions")
+    void enablingDeletesTheRow() {
+        switchAware.setProviderEnabled("OpenRouter", true);
+
+        verify(providerSettings).deleteById("openrouter");
+        verify(providerSettings, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("switching a provider OFF stores one row, lower-cased")
+    void disablingStoresOneRow() {
+        switchAware.setProviderEnabled("OpenRouter", false);
+
+        ArgumentCaptor<com.apimarketplace.agent.domain.ModelProviderSettingsEntity> saved =
+                ArgumentCaptor.forClass(com.apimarketplace.agent.domain.ModelProviderSettingsEntity.class);
+        verify(providerSettings).save(saved.capture());
+        assertThat(saved.getValue().getProvider()).isEqualTo("openrouter");
+        assertThat(saved.getValue().getEnabled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("a malformed provider name is refused before anything is written")
+    void aMalformedNameIsRefused() {
+        assertThatThrownBy(() -> switchAware.setProviderEnabled("Open Router!", false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid provider");
+        verify(providerSettings, never()).save(any());
+        verify(providerSettings, never()).deleteById(any());
     }
 
     private Map<String, Object> provider(String name, boolean configured) {
@@ -172,7 +344,7 @@ class ModelCatalogServiceProviderFilterTest {
         // the API provider (anthropic) stays. This is the bug the strict default fixes.
         ModelCatalogService strict = new ModelCatalogService(
                 repository, categoryRepository, llmProviderFactory, credentialRepository,
-                cachedRateLimitProvider, "", authPricingSyncClient, true);
+                cachedRateLimitProvider, "", authPricingSyncClient, true, null);
         ReflectionTestUtils.setField(strict, "cloudLlmRuntimeAccess", cloudLlmRuntimeAccess);
         when(cloudLlmRuntimeAccess.isCloudSelected("tenant-byok")).thenReturn(false);
         when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(

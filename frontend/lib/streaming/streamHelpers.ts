@@ -3,7 +3,7 @@
  * Single source of truth for stream-related operations
  */
 
-import type { ToolActivity, ToolDiffData, GitStatusData } from '@/contexts/StreamingContext';
+import type { ToolActivity, ToolDiffData, GitStatusData, ToolAuthorizationSubject } from '@/contexts/StreamingContext';
 
 // ============== TOOL ACTIVITY HELPERS ==============
 
@@ -104,6 +104,8 @@ export interface StreamEventData {
     gateKey?: string;
     /** Publication id - only for application:acquire, used to open the install modal. */
     applicationId?: string;
+    /** What the card is about (which workflow/version, which cron). See ToolAuthorizationSubject. */
+    subject?: ToolAuthorizationSubject;
   };
   /**
    * A question the agent put to the user (ask_user tool). Channel-agnostic payload: the

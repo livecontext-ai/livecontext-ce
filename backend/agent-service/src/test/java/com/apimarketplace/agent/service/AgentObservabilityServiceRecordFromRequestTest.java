@@ -308,7 +308,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             verify(creditClient).consumeCredits(
                     anyString(), eq("AGENT_EXECUTION"),
                     anyString(), anyString(), anyString(),
-                    anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+                    anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -327,7 +327,48 @@ class AgentObservabilityServiceRecordFromRequestTest {
             verify(creditClient).consumeCredits(
                     anyString(), anyString(), anyString(), anyString(), anyString(),
                     anyInt(), anyInt(),
-                    eq(new com.apimarketplace.common.credit.LlmCacheTokens(100, 50, 80, 30)));
+                    isNull(), eq(new com.apimarketplace.common.credit.LlmCacheTokens(100, 50, 80, 30)), any());
+        }
+
+        @Test
+        @DisplayName("a fully-cached turn is NOT split 50/50: the cache counters prove the breakdown is present, not missing")
+        void cachedTurnIsNotSplitFiftyFifty() {
+            // The 50/50 safety net exists for a caller that reported a total and no
+            // breakdown. A turn served entirely from cache legitimately has 0 plain input,
+            // and 0 completion if it produced nothing - the browser-agent path can now
+            // report exactly that. Splitting it would invent plain input AND bill half of
+            // it at the OUTPUT rate, on top of the cache lines that are already there.
+            AgentObservabilityRequest req = buildBaseRequest();
+            req.setPromptTokens(0);
+            req.setCompletionTokens(0);
+            req.setTotalTokens(5000);
+            req.setCacheReadTokens(5000);
+            req.setCacheCreationTokens(0);
+            req.setCachedTokens(0);
+
+            service.recordFromRequest(req);
+
+            verify(creditClient).consumeCredits(
+                    anyString(), anyString(), anyString(), anyString(), anyString(),
+                    eq(0), eq(0), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
+        }
+
+        @Test
+        @DisplayName("a turn with no breakdown AND no cache still falls back to the 50/50 split, so the net is intact")
+        void breakdownlessTurnStillSplits() {
+            AgentObservabilityRequest req = buildBaseRequest();
+            req.setPromptTokens(0);
+            req.setCompletionTokens(0);
+            req.setTotalTokens(5000);
+            req.setCacheReadTokens(0);
+            req.setCacheCreationTokens(0);
+            req.setCachedTokens(0);
+
+            service.recordFromRequest(req);
+
+            verify(creditClient).consumeCredits(
+                    anyString(), anyString(), anyString(), anyString(), anyString(),
+                    eq(2500), eq(2500), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -339,7 +380,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             verify(creditClient).consumeCredits(
                     anyString(), eq("CLASSIFY_EXECUTION"),
                     anyString(), anyString(), anyString(),
-                    anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+                    anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -351,7 +392,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             verify(creditClient).consumeCredits(
                     anyString(), eq("GUARDRAIL_EXECUTION"),
                     anyString(), anyString(), anyString(),
-                    anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+                    anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -363,7 +404,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             verify(creditClient).consumeCredits(
                     anyString(), eq("CLI_SESSION"),
                     anyString(), anyString(), anyString(),
-                    anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+                    anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -382,7 +423,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             verify(creditClient).consumeCredits(
                     anyString(), eq("BROWSER_AGENT_EXECUTION"),
                     anyString(), anyString(), anyString(),
-                    anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+                    anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -396,7 +437,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             verify(creditClient).consumeCredits(
                     anyString(), eq("COMPACTION_SUMMARY"),
                     anyString(), anyString(), anyString(),
-                    anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+                    anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -411,7 +452,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             verify(creditClient).consumeCredits(
                     anyString(), eq("COMPACTION_SUMMARY"),
                     anyString(), anyString(), anyString(),
-                    anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+                    anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -423,7 +464,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             verify(creditClient).consumeCredits(
                     anyString(), eq("AGENT_EXECUTION"),
                     anyString(), anyString(), anyString(),
-                    anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+                    anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
 
         @Test
@@ -438,7 +479,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             verify(creditClient).consumeCredits(
                     anyString(), eq("CLASSIFY_EXECUTION"),
                     anyString(), anyString(), anyString(),
-                    anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+                    anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
     }
 
@@ -877,7 +918,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
                 eq("anthropic"),
                 eq("claude-3-sonnet"),
                 eq(1000),
-                eq(500), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                eq(500), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
 
@@ -890,7 +931,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             service.recordFromRequest(req);
 
             verify(creditClient).consumeCredits(
-                any(), eq("CLASSIFY_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                any(), eq("CLASSIFY_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
         }
 
@@ -903,8 +944,53 @@ class AgentObservabilityServiceRecordFromRequestTest {
             service.recordFromRequest(req);
 
             verify(creditClient).consumeCredits(
-                any(), eq("GUARDRAIL_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)
+                any(), eq("GUARDRAIL_EXECUTION"), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()
             );
+        }
+
+        @Test
+        @DisplayName("own key: the counters and the settle meter CONSUMPTION (consumptionCredits), not the flat fee the ledger took")
+        void ownKeyCountersMeterConsumptionNotTheFee() {
+            AgentObservabilityRequest req = buildBaseRequest();
+            req.setKeyRoute("OWN_KEY");
+            Map<String, Object> creditResult = new java.util.HashMap<>();
+            creditResult.put("creditsUsed", 8);            // the flat fee the ledger debited
+            creditResult.put("consumptionCredits", 60.0);  // what the turn consumed at the platform rate
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(),
+                    any(com.apimarketplace.common.credit.LlmCacheTokens.class), eq("OWN_KEY")))
+                .thenReturn(creditResult);
+
+            service.recordFromRequest(req);
+
+            // The route reached the debit (so auth-service could bill the fee)...
+            verify(creditClient).consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(),
+                    any(com.apimarketplace.common.credit.LlmCacheTokens.class), eq("OWN_KEY"));
+            // ...the execution row says which route it ran on (the fleet view splits on it)...
+            verify(executionRepository, atLeastOnce()).save(execCaptor.capture());
+            assertThat(execCaptor.getAllValues().get(0).getKeyRoute()).isEqualTo("OWN_KEY");
+            // ...and the agent's "credits used" grew by the consumption, so a 500-credit
+            // budget behaves the same whether the key is the user's or the platform's.
+            verify(agentRepository).incrementCreditsConsumed(
+                eq(UUID.fromString("00000000-0000-0000-0000-000000000001")),
+                eq(java.math.BigDecimal.valueOf(60.0)));
+            verify(agentRepository, never()).incrementCreditsConsumed(any(), eq(java.math.BigDecimal.valueOf(8.0)));
+        }
+
+        @Test
+        @DisplayName("platform route: without consumptionCredits the debit stands in (older auth-service, pre-V506 shape)")
+        void withoutConsumptionTheDebitStandsIn() {
+            AgentObservabilityRequest req = buildBaseRequest();
+            Map<String, Object> creditResult = new java.util.HashMap<>();
+            creditResult.put("creditsUsed", 2.5);
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(),
+                    any(com.apimarketplace.common.credit.LlmCacheTokens.class), isNull()))
+                .thenReturn(creditResult);
+
+            service.recordFromRequest(req);
+
+            verify(agentRepository).incrementCreditsConsumed(
+                eq(UUID.fromString("00000000-0000-0000-0000-000000000001")),
+                eq(java.math.BigDecimal.valueOf(2.5)));
         }
 
         @Test
@@ -913,7 +999,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             AgentObservabilityRequest req = buildBaseRequest();
             Map<String, Object> creditResult = new java.util.HashMap<>();
             creditResult.put("creditsUsed", 2.5);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenReturn(creditResult);
 
             service.recordFromRequest(req);
@@ -930,7 +1016,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             AgentObservabilityRequest req = buildBaseRequest();
             Map<String, Object> creditResult = new java.util.HashMap<>();
             creditResult.put("creditsUsed", 0);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenReturn(creditResult);
 
             service.recordFromRequest(req);
@@ -942,7 +1028,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
         @DisplayName("should NOT increment when creditResult is null")
         void doesNotIncrementWhenCreditResultNull() {
             AgentObservabilityRequest req = buildBaseRequest();
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenReturn(null);
 
             service.recordFromRequest(req);
@@ -957,7 +1043,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             req.setAgentEntityId(null);
             Map<String, Object> creditResult = new java.util.HashMap<>();
             creditResult.put("creditsUsed", 5.0);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenReturn(creditResult);
 
             service.recordFromRequest(req);
@@ -971,7 +1057,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             AgentObservabilityRequest req = buildBaseRequest();
             Map<String, Object> creditResult = new java.util.HashMap<>();
             creditResult.put("creditsUsed", 3.0);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenReturn(creditResult);
             org.mockito.Mockito.doThrow(new RuntimeException("DB down"))
                 .when(agentRepository).incrementCreditsConsumed(any(), any());
@@ -990,14 +1076,16 @@ class AgentObservabilityServiceRecordFromRequestTest {
             // without throwing → the existing catch(Exception) branch never fired → no ledger
             // row, no dead-letter row. This test pins the new rejection-path persistence.
             AgentObservabilityRequest req = buildBaseRequest();
+            req.setKeyRoute("OWN_KEY");
             Map<String, Object> rejected = new java.util.HashMap<>();
             rejected.put("success", false);
             rejected.put("error", "402 Insufficient credits");
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), eq("OWN_KEY")))
                 .thenReturn(rejected);
 
             service.recordFromRequest(req);
 
+            // The route rides on the rejection, so the replay bills the turn the way it was meant to.
             verify(creditClient).persistRejection(
                 eq("tenant-1"),
                 eq("AGENT_EXECUTION"),
@@ -1006,8 +1094,24 @@ class AgentObservabilityServiceRecordFromRequestTest {
                 eq("claude-3-sonnet"),
                 eq(1000),
                 eq(500),
-                eq("402 Insufficient credits")
+                eq("402 Insufficient credits"),
+                any(),
+                eq("OWN_KEY")
             );
+        }
+
+        @Test
+        @DisplayName("BILLING: when the debit call itself fails, the async retry is queued WITH the route (the replay is the last chance to bill it right)")
+        void failedOwnKeyDebitRetriesWithItsRoute() {
+            AgentObservabilityRequest req = buildBaseRequest();
+            req.setKeyRoute("OWN_KEY");
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), eq("OWN_KEY")))
+                .thenThrow(new RuntimeException("auth-service down"));
+
+            service.recordFromRequest(req);
+
+            verify(creditClient).consumeCreditsAsync(eq("tenant-1"), eq("AGENT_EXECUTION"), any(String.class),
+                eq("anthropic"), eq("claude-3-sonnet"), eq(1000), eq(500), eq("OWN_KEY"));
         }
 
         @Test
@@ -1017,13 +1121,13 @@ class AgentObservabilityServiceRecordFromRequestTest {
             Map<String, Object> success = new java.util.HashMap<>();
             success.put("success", true);
             success.put("creditsUsed", 1.0);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenReturn(success);
 
             service.recordFromRequest(req);
 
             verify(creditClient, never()).persistRejection(
-                any(), any(), any(), any(), any(), anyInt(), anyInt(), any());
+                any(), any(), any(), any(), any(), anyInt(), anyInt(), any(), any(), any());
         }
     }
 
@@ -1055,7 +1159,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
 
             Map<String, Object> creditResult = new java.util.HashMap<>();
             creditResult.put("creditsUsed", 2.5);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenReturn(creditResult);
 
             service.recordFromRequest(req);
@@ -1075,7 +1179,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
 
             Map<String, Object> creditResult = new java.util.HashMap<>();
             creditResult.put("creditsUsed", 0);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenReturn(creditResult);
 
             service.recordFromRequest(req);
@@ -1095,7 +1199,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
 
             // Credit client blows up - persistToDeadLetter handles the cost side, but the
             // cascade reservation still MUST be settled or the ancestor chain leaks.
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenThrow(new RuntimeException("billing pipeline down"));
 
             service.recordFromRequest(req);
@@ -1151,7 +1255,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
 
             Map<String, Object> creditResult = new java.util.HashMap<>();
             creditResult.put("creditsUsed", 1.0);
-            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
+            when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any()))
                 .thenReturn(creditResult);
             org.mockito.Mockito.doThrow(new RuntimeException("settle failed"))
                 .when(budgetReservationService).settleReservationChain(any(), any(), any());
@@ -1238,7 +1342,7 @@ class AgentObservabilityServiceRecordFromRequestTest {
             // usage is never lost to the residual race (the "not worse" guarantee).
             verify(creditClient).consumeCredits(
                 anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
+                anyInt(), anyInt(), isNull(), any(com.apimarketplace.common.credit.LlmCacheTokens.class), any());
         }
     }
 }

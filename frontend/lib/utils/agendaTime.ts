@@ -283,6 +283,23 @@ export function formatMonthTitle(instant: Date, timeZone: string, locale?: strin
   }).format(instant);
 }
 
+/** `7 - 13 Sep 2026` - a compact, locale-aware period title without repeated weekdays. */
+export function formatCompactDateRange(
+  from: Date,
+  to: Date,
+  timeZone: string,
+  locale?: string,
+): string {
+  const range = displayFormatter(locale, timeZone, {
+    day: 'numeric', month: 'short', year: 'numeric',
+  }).formatRange(from, to);
+
+  // Intl uses typographic dash characters for ranges. Product copy uses the ordinary
+  // hyphen consistently, and normalising the surrounding spacing keeps every locale
+  // compact without joining the two dates together.
+  return range.replace(/\s*[\u2013\u2014]\s*/gu, ' - ');
+}
+
 /** `Thursday 3 September 2026` - the day view's title. */
 export function formatFullDate(instant: Date, timeZone: string, locale?: string): string {
   return displayFormatter(locale, timeZone, {

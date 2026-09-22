@@ -590,6 +590,7 @@ class ToolResponseControllerIntegrationTest {
             String requestBody = "{\"toolId\": null, \"content\": \"test\"}";
 
             mockMvc.perform(post("/api/tool-responses/mapping/resolve")
+                            .header("X-User-ID", "58")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(requestBody))
                     .andExpect(status().isBadRequest());
@@ -606,9 +607,27 @@ class ToolResponseControllerIntegrationTest {
             String requestBody = String.format("{\"toolId\": \"%s\", \"content\": \"test data\"}", TOOL_ID);
 
             mockMvc.perform(post("/api/tool-responses/mapping/resolve")
+                            .header("X-User-ID", "58")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(requestBody))
                     .andExpect(status().isOk());
+        }
+
+        @Test
+        @DisplayName("an unauthenticated caller is refused before any mapping work")
+        void shouldRefuseAnonymousCaller() throws Exception {
+            // These tests used to call with no identity at all and expect 200/400, which is what
+            // pinned the endpoint as anonymous. It resolves a GLOBAL mapping row whose sibling
+            // write is admin-token gated, and in CE (where the monolith does not decide
+            // authentication at the filter) "no identity" meant reachable by anyone on the network.
+            String requestBody = String.format("{\"toolId\": \"%s\", \"content\": \"test\"}", TOOL_ID);
+
+            mockMvc.perform(post("/api/tool-responses/mapping/resolve")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(requestBody))
+                    .andExpect(status().isUnauthorized());
+
+            verify(mappingResolverService, never()).resolve(any(), any(byte[].class));
         }
     }
 

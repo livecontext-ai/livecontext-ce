@@ -19,6 +19,8 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -81,7 +83,7 @@ class BudgetGuardParityTest {
 
         // Mock the credit client to return the fixture balance.
         CreditConsumptionClient creditClient = mock(CreditConsumptionClient.class);
-        when(creditClient.fetchBalance("tenant-1")).thenReturn(fc.balance);
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any())).thenReturn(fc.balance);
 
         TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, calc, fc.requireCtxWindow);
 

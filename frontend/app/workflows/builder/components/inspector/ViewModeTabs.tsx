@@ -2,13 +2,10 @@
 
 import * as React from 'react';
 import clsx from 'clsx';
-import { Settings, FileText, Play } from 'lucide-react';
-
-export type ViewMode = 'configuration' | 'result';
+import { Settings, Play } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 
 interface ViewModeTabsProps {
-  viewMode: ViewMode;
-  onViewModeChange: (mode: ViewMode) => void;
   /** 'compact' = icon-only (narrow panels / mobile); anything else = icon + label. */
   variant?: 'header' | 'mobile' | 'basic' | 'compact';
   /** Whether the node has run data to show ("Run data" vs the config form). */
@@ -18,50 +15,38 @@ interface ViewModeTabsProps {
   canShowExecutionDataToggle?: boolean;
 }
 
-type SegmentId = 'edit' | 'data' | 'logs';
+type SegmentId = 'edit' | 'data';
 
 /**
  * The inspector view switcher: one clean, labeled segmented control that makes
- * the three node views explicit instead of a 2-tab pill plus a cryptic icon.
+ * the configuration and run-data views explicit.
  *
- *  - Edit     -> the node's configuration form (viewMode=configuration, data off)
- *  - Run data -> the node's execution output (viewMode=configuration, data on) -
+ *  - Edit     -> the node's configuration form
+ *  - Run data -> the node's execution output
  *                only shown when the node actually produced run data
- *  - Logs     -> the run/result view (viewMode=result)
- *
  * Square-rounded, theme-tokened, and responsive: `compact` renders icon-only for
  * narrow panels, otherwise each segment shows its icon and label.
  */
 export function ViewModeTabs({
-  viewMode,
-  onViewModeChange,
   variant = 'mobile',
   showExecutionData,
   onShowExecutionDataChange,
   canShowExecutionDataToggle = false,
 }: ViewModeTabsProps) {
+  const t = useTranslations('workflowBuilder.inspector');
   const iconOnly = variant === 'compact';
 
-  const active: SegmentId =
-    viewMode === 'result' ? 'logs' : showExecutionData ? 'data' : 'edit';
+  const active: SegmentId = showExecutionData ? 'data' : 'edit';
 
   const select = (id: SegmentId) => {
-    if (id === 'logs') {
-      onViewModeChange('result');
-      return;
-    }
-    // Edit / Run data both live in the configuration view; the execution-data
-    // toggle picks which one is shown.
-    onViewModeChange('configuration');
     onShowExecutionDataChange?.(id === 'data');
   };
 
   const segments: Array<{ id: SegmentId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-    { id: 'edit', label: 'Edit', icon: Settings },
+    { id: 'edit', label: t('editMode'), icon: Settings },
     ...(canShowExecutionDataToggle
-      ? [{ id: 'data' as const, label: 'Run data', icon: Play }]
+      ? [{ id: 'data' as const, label: t('runDataMode'), icon: Play }]
       : []),
-    { id: 'logs', label: 'Logs', icon: FileText },
   ];
 
   return (

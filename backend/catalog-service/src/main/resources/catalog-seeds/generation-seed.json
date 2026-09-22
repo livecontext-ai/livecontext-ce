@@ -1,5 +1,5 @@
 {
-  "version": 2033,
+  "version": 2041,
   "generatedFrom": "scripts/api-migrations/*.json",
   "generator": "scripts/api-migrations/generate_generation_seed.py",
   "endpointCount": 41,
@@ -668,7 +668,8 @@
             "price": {
               "unit": "character",
               "unitCredits": 2
-            }
+            },
+            "priceBasis": "Priced per CHARACTER of the script, which is what the avatar speaks and therefore what the render length follows. `style` is not priced: HeyGen charges the same for every style, the parameter carries no `allowed` list so there is nothing exhaustive to price against, and the descriptor parser requires one before a value can be given a factor."
           }
         ]
       }
@@ -1286,7 +1287,7 @@
               "unit": "call",
               "baseCredits": 4800
             },
-            "priceBasis": "FLOOR, not a verified Higgsfield rate. Veo 3.1 with audio lists at $0.40 per second; the pinned 6s take is $2.40, doubled to 4800 credits. Higgsfield publishes no rate card of its own and resells at its own margin, so treat this as a FLOOR rather than a verified cost: confirm the real figure with the account-specific estimate endpoint Higgsfield documents at docs.higgsfield.ai/docs/concepts/billing-and-retention (it answers {credits, usd}; its route is not derivable from the generation route, which is why it is not shipped here) and raise the price in Settings > Platform Keys before selling this model on a platform key."
+            "priceBasis": "FLOOR, not a verified Higgsfield rate. Veo 3.1 with audio lists at $0.40 per second; the pinned 6s take is $2.40, doubled to 4800 credits. Higgsfield publishes no rate card of its own and resells at its own margin, so treat this as a FLOOR rather than a verified cost: confirm the real figure with the account-specific estimate endpoint Higgsfield documents at docs.higgsfield.ai/docs/concepts/billing-and-retention (it answers {credits, usd}; its route is not derivable from the generation route, which is why it is not shipped here) and raise the price in Settings > Platform Keys before selling this model on a platform key. A resolution modifier (1080 at twice 720) was written here and REMOVED before shipping: Google prices Veo 3.1 per second of output and the SAME per-second figure covers both resolutions, so the surcharge had no provider cost behind it at all. It would have been a price rise wearing the clothes of a cost, on the one model here whose underlying rate is public. Note that 'resolution' stays in this model's required list, where it already was: that is a provider contract, not a pricing one, and removing it with the modifier was a mistake. Price the tiers if Higgsfield ever publishes a per-resolution figure of its own."
           }
         ]
       }
@@ -1338,7 +1339,7 @@
               "unit": "call",
               "baseCredits": 1800
             },
-            "priceBasis": "FLOOR, not a verified Higgsfield rate. Veo 3.1 Fast with audio lists at $0.15 per second; the pinned 6s take is $0.90, doubled to 1800 credits. Higgsfield publishes no rate card of its own and resells at its own margin, so treat this as a FLOOR rather than a verified cost: confirm the real figure with the account-specific estimate endpoint Higgsfield documents at docs.higgsfield.ai/docs/concepts/billing-and-retention (it answers {credits, usd}; its route is not derivable from the generation route, which is why it is not shipped here) and raise the price in Settings > Platform Keys before selling this model on a platform key."
+            "priceBasis": "FLOOR, not a verified Higgsfield rate. Veo 3.1 Fast with audio lists at $0.15 per second; the pinned 6s take is $0.90, doubled to 1800 credits. Higgsfield publishes no rate card of its own and resells at its own margin, so treat this as a FLOOR rather than a verified cost: confirm the real figure with the account-specific estimate endpoint Higgsfield documents at docs.higgsfield.ai/docs/concepts/billing-and-retention (it answers {credits, usd}; its route is not derivable from the generation route, which is why it is not shipped here) and raise the price in Settings > Platform Keys before selling this model on a platform key. A resolution modifier (1080 at twice 720) was written here and REMOVED before shipping: Google prices Veo 3.1 per second of output and the SAME per-second figure covers both resolutions, so the surcharge had no provider cost behind it at all. It would have been a price rise wearing the clothes of a cost, on the one model here whose underlying rate is public. Note that 'resolution' stays in this model's required list, where it already was: that is a provider contract, not a pricing one, and removing it with the modifier was a mistake. Price the tiers if Higgsfield ever publishes a per-resolution figure of its own."
           }
         ]
       }
@@ -2724,7 +2725,8 @@
             "price": {
               "unit": "second",
               "unitCredits": 240
-            }
+            },
+            "priceBasis": "Resolution is NOT priced on this model, and that is a decision rather than an omission: every value its `allowed` list offers is the same pixel budget in a different shape (1280:720, 720:1280, 1104:832, 832:1104, 960:960, 1584:672 are all about 0.92 MP), so Runway's per-second rate covers all of them and a factor would be a price rise with no cost behind it. It is a framing choice wearing the name 'resolution'. Price it only if Runway ever publishes a per-size figure."
           },
           {
             "id": "runway-veo3.1",
@@ -2759,7 +2761,8 @@
             "price": {
               "unit": "second",
               "unitCredits": 800
-            }
+            },
+            "priceBasis": "Resolution is NOT priced on this model, and that is a decision rather than an omission: every value its `allowed` list offers is the same pixel budget in a different shape (1280:720, 720:1280, 1104:832, 832:1104, 960:960, 1584:672 are all about 0.92 MP), so Runway's per-second rate covers all of them and a factor would be a price rise with no cost behind it. It is a framing choice wearing the name 'resolution'. Price it only if Runway ever publishes a per-size figure."
           },
           {
             "id": "runway-veo3.1-fast",
@@ -2794,7 +2797,8 @@
             "price": {
               "unit": "second",
               "unitCredits": 300
-            }
+            },
+            "priceBasis": "Resolution is NOT priced on this model, and that is a decision rather than an omission: every value its `allowed` list offers is the same pixel budget in a different shape (1280:720, 720:1280, 1104:832, 832:1104, 960:960, 1584:672 are all about 0.92 MP), so Runway's per-second rate covers all of them and a factor would be a price rise with no cost behind it. It is a framing choice wearing the name 'resolution'. Price it only if Runway ever publishes a per-size figure."
           },
           {
             "id": "runway-seedance2",
@@ -2828,7 +2832,8 @@
             "price": {
               "unit": "second",
               "unitCredits": 720
-            }
+            },
+            "priceBasis": "Resolution is NOT priced on this model, and that is a decision rather than an omission: every value its `allowed` list offers is the same pixel budget in a different shape (1280:720, 720:1280, 1104:832, 832:1104, 960:960, 1584:672 are all about 0.92 MP), so Runway's per-second rate covers all of them and a factor would be a price rise with no cost behind it. It is a framing choice wearing the name 'resolution'. Price it only if Runway ever publishes a per-size figure."
           },
           {
             "id": "runway-seedance2-fast",
@@ -2862,7 +2867,8 @@
             "price": {
               "unit": "second",
               "unitCredits": 580
-            }
+            },
+            "priceBasis": "Resolution is NOT priced on this model, and that is a decision rather than an omission: every value its `allowed` list offers is the same pixel budget in a different shape (1280:720, 720:1280, 1104:832, 832:1104, 960:960, 1584:672 are all about 0.92 MP), so Runway's per-second rate covers all of them and a factor would be a price rise with no cost behind it. It is a framing choice wearing the name 'resolution'. Price it only if Runway ever publishes a per-size figure."
           },
           {
             "id": "runway-seedance2-mini",
@@ -2897,7 +2903,8 @@
               "unit": "second",
               "unitCredits": 320,
               "minCredits": 1280
-            }
+            },
+            "priceBasis": "Resolution is NOT priced on this model, and that is a decision rather than an omission: every value its `allowed` list offers is the same pixel budget in a different shape (1280:720, 720:1280, 1104:832, 832:1104, 960:960, 1584:672 are all about 0.92 MP), so Runway's per-second rate covers all of them and a factor would be a price rise with no cost behind it. It is a framing choice wearing the name 'resolution'. Price it only if Runway ever publishes a per-size figure."
           }
         ]
       }
@@ -2958,7 +2965,8 @@
             "price": {
               "unit": "second",
               "unitCredits": 100
-            }
+            },
+            "priceBasis": "Resolution is NOT priced on this model, and that is a decision rather than an omission: every value its `allowed` list offers is the same pixel budget in a different shape (1280:720, 720:1280, 1104:832, 832:1104, 960:960, 1584:672 are all about 0.92 MP), so Runway's per-second rate covers all of them and a factor would be a price rise with no cost behind it. It is a framing choice wearing the name 'resolution'. Price it only if Runway ever publishes a per-size figure. The source image carries no per-file surcharge either: it is in this model's `required` list, so the published rate is already quoted for a call that has one, and the descriptor parser refuses `perAsset` on a required file for exactly that reason."
           },
           {
             "id": "runway-i2v-gen4.5",
@@ -2997,7 +3005,8 @@
             "price": {
               "unit": "second",
               "unitCredits": 240
-            }
+            },
+            "priceBasis": "Resolution is NOT priced on this model, and that is a decision rather than an omission: every value its `allowed` list offers is the same pixel budget in a different shape (1280:720, 720:1280, 1104:832, 832:1104, 960:960, 1584:672 are all about 0.92 MP), so Runway's per-second rate covers all of them and a factor would be a price rise with no cost behind it. It is a framing choice wearing the name 'resolution'. Price it only if Runway ever publishes a per-size figure. The source image carries no per-file surcharge either: it is in this model's `required` list, so the published rate is already quoted for a call that has one, and the descriptor parser refuses `perAsset` on a required file for exactly that reason."
           }
         ]
       }
@@ -3015,14 +3024,41 @@
           "aspect_ratio": "ratio",
           "duration_seconds": "duration",
           "seed": "seed",
-          "input_image": {
+          "first_frame_image": {
             "path": "content[1].image_url.url",
+            "encoding": "data_url",
+            "role": "first_frame",
+            "excludes": [
+              "input_image"
+            ],
+            "itemConstants": {
+              "content[1].type": "image_url",
+              "content[1].role": "first_frame"
+            }
+          },
+          "last_frame_image": {
+            "path": "content[2].image_url.url",
+            "encoding": "data_url",
+            "role": "last_frame",
+            "requires": [
+              "first_frame_image"
+            ],
+            "excludes": [
+              "input_image"
+            ],
+            "itemConstants": {
+              "content[2].type": "image_url",
+              "content[2].role": "last_frame"
+            }
+          },
+          "input_image": {
+            "path": "content[3].image_url.url",
             "encoding": "data_url",
             "role": "reference",
             "maxItems": 4,
             "itemConstants": {
-              "content[1].type": "image_url",
-              "content[1].role": "reference_image"
+              "content[3].type": "image_url",
+              "content[3].role": "reference_image"
             }
           }
         },
@@ -3085,8 +3121,15 @@
             },
             "price": {
               "unit": "second",
-              "unitCredits": 231.2
-            }
+              "unitCredits": 231.2,
+              "modifiers": [
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
+            },
+            "priceBasis": "The per-second rate above predates this note and carries no recorded basis; what follows explains the MODIFIERS only. Per-file modifiers are a PLATFORM surcharge and not a ByteDance rate: ModelArk bills Seedance per token, an image handed to it as an opening frame, a closing frame or a reference conditions every step of the generation, and the platform additionally reads the file out of storage and inlines it into the request as a data URL, which the per-second rate above was not computed for. 0.05 per file is a FLOOR chosen because ByteDance publishes no per-image figure. The most a call on this model can reach is 1.2x, from its four reference images; this model has no frame slots. It can only over-charge against a rate nobody has published. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so changing it is an edit here plus a re-import. Lower it that way once the token cost of an input image is known."
           },
           {
             "id": "seedance-2.5-480p",
@@ -3143,8 +3186,15 @@
             },
             "price": {
               "unit": "second",
-              "unitCredits": 102.8
-            }
+              "unitCredits": 102.8,
+              "modifiers": [
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
+            },
+            "priceBasis": "The per-second rate above predates this note and carries no recorded basis; what follows explains the MODIFIERS only. Per-file modifiers are a PLATFORM surcharge and not a ByteDance rate: ModelArk bills Seedance per token, an image handed to it as an opening frame, a closing frame or a reference conditions every step of the generation, and the platform additionally reads the file out of storage and inlines it into the request as a data URL, which the per-second rate above was not computed for. 0.05 per file is a FLOOR chosen because ByteDance publishes no per-image figure. The most a call on this model can reach is 1.2x, from its four reference images; this model has no frame slots. It can only over-charge against a rate nobody has published. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so changing it is an edit here plus a re-import. Lower it that way once the token cost of an input image is known."
           },
           {
             "id": "seedance-2.5-1080p",
@@ -3201,8 +3251,15 @@
             },
             "price": {
               "unit": "second",
-              "unitCredits": 568.6
-            }
+              "unitCredits": 568.6,
+              "modifiers": [
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
+            },
+            "priceBasis": "The per-second rate above predates this note and carries no recorded basis; what follows explains the MODIFIERS only. Per-file modifiers are a PLATFORM surcharge and not a ByteDance rate: ModelArk bills Seedance per token, an image handed to it as an opening frame, a closing frame or a reference conditions every step of the generation, and the platform additionally reads the file out of storage and inlines it into the request as a data URL, which the per-second rate above was not computed for. 0.05 per file is a FLOOR chosen because ByteDance publishes no per-image figure. The most a call on this model can reach is 1.2x, from its four reference images; this model has no frame slots. It can only over-charge against a rate nobody has published. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so changing it is an edit here plus a re-import. Lower it that way once the token cost of an input image is known."
           },
           {
             "id": "seedance-2.0",
@@ -3213,7 +3270,9 @@
               "aspect_ratio",
               "duration_seconds",
               "seed",
-              "input_image"
+              "input_image",
+              "first_frame_image",
+              "last_frame_image"
             ],
             "constraints": {
               "duration_seconds": {
@@ -3244,8 +3303,23 @@
             },
             "price": {
               "unit": "second",
-              "unitCredits": 152
-            }
+              "unitCredits": 152,
+              "modifiers": [
+                {
+                  "param": "first_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "last_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
+            },
+            "priceBasis": "The per-second rate above predates this note and carries no recorded basis; what follows explains the MODIFIERS only. Per-file modifiers are a PLATFORM surcharge and not a ByteDance rate: ModelArk bills Seedance per token, an image handed to it as an opening frame, a closing frame or a reference conditions every step of the generation, and the platform additionally reads the file out of storage and inlines it into the request as a data URL, which the per-second rate above was not computed for. 0.05 per file is a FLOOR chosen because ByteDance publishes no per-image figure. The most a call on this model can reach is 1.2x: its frame slots and its reference slot are mutually exclusive, so a call carries either two pinned frames (1.1025x) or up to four references (1.20x), never both. It can only over-charge against a rate nobody has published. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so changing it is an edit here plus a re-import. Lower it that way once the token cost of an input image is known."
           },
           {
             "id": "seedance-2.0-480p",
@@ -3256,7 +3330,9 @@
               "aspect_ratio",
               "duration_seconds",
               "seed",
-              "input_image"
+              "input_image",
+              "first_frame_image",
+              "last_frame_image"
             ],
             "constraints": {
               "duration_seconds": {
@@ -3287,8 +3363,23 @@
             },
             "price": {
               "unit": "second",
-              "unitCredits": 70
-            }
+              "unitCredits": 70,
+              "modifiers": [
+                {
+                  "param": "first_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "last_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
+            },
+            "priceBasis": "The per-second rate above predates this note and carries no recorded basis; what follows explains the MODIFIERS only. Per-file modifiers are a PLATFORM surcharge and not a ByteDance rate: ModelArk bills Seedance per token, an image handed to it as an opening frame, a closing frame or a reference conditions every step of the generation, and the platform additionally reads the file out of storage and inlines it into the request as a data URL, which the per-second rate above was not computed for. 0.05 per file is a FLOOR chosen because ByteDance publishes no per-image figure. The most a call on this model can reach is 1.2x: its frame slots and its reference slot are mutually exclusive, so a call carries either two pinned frames (1.1025x) or up to four references (1.20x), never both. It can only over-charge against a rate nobody has published. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so changing it is an edit here plus a re-import. Lower it that way once the token cost of an input image is known."
           },
           {
             "id": "seedance-2.0-1080p",
@@ -3299,7 +3390,9 @@
               "aspect_ratio",
               "duration_seconds",
               "seed",
-              "input_image"
+              "input_image",
+              "first_frame_image",
+              "last_frame_image"
             ],
             "constraints": {
               "duration_seconds": {
@@ -3330,8 +3423,23 @@
             },
             "price": {
               "unit": "second",
-              "unitCredits": 374
-            }
+              "unitCredits": 374,
+              "modifiers": [
+                {
+                  "param": "first_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "last_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
+            },
+            "priceBasis": "The per-second rate above predates this note and carries no recorded basis; what follows explains the MODIFIERS only. Per-file modifiers are a PLATFORM surcharge and not a ByteDance rate: ModelArk bills Seedance per token, an image handed to it as an opening frame, a closing frame or a reference conditions every step of the generation, and the platform additionally reads the file out of storage and inlines it into the request as a data URL, which the per-second rate above was not computed for. 0.05 per file is a FLOOR chosen because ByteDance publishes no per-image figure. The most a call on this model can reach is 1.2x: its frame slots and its reference slot are mutually exclusive, so a call carries either two pinned frames (1.1025x) or up to four references (1.20x), never both. It can only over-charge against a rate nobody has published. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so changing it is an edit here plus a re-import. Lower it that way once the token cost of an input image is known."
           },
           {
             "id": "seedance-2.0-4k",
@@ -3342,7 +3450,9 @@
               "aspect_ratio",
               "duration_seconds",
               "seed",
-              "input_image"
+              "input_image",
+              "first_frame_image",
+              "last_frame_image"
             ],
             "constraints": {
               "duration_seconds": {
@@ -3373,8 +3483,23 @@
             },
             "price": {
               "unit": "second",
-              "unitCredits": 778
-            }
+              "unitCredits": 778,
+              "modifiers": [
+                {
+                  "param": "first_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "last_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
+            },
+            "priceBasis": "The per-second rate above predates this note and carries no recorded basis; what follows explains the MODIFIERS only. Per-file modifiers are a PLATFORM surcharge and not a ByteDance rate: ModelArk bills Seedance per token, an image handed to it as an opening frame, a closing frame or a reference conditions every step of the generation, and the platform additionally reads the file out of storage and inlines it into the request as a data URL, which the per-second rate above was not computed for. 0.05 per file is a FLOOR chosen because ByteDance publishes no per-image figure. The most a call on this model can reach is 1.2x: its frame slots and its reference slot are mutually exclusive, so a call carries either two pinned frames (1.1025x) or up to four references (1.20x), never both. It can only over-charge against a rate nobody has published. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so changing it is an edit here plus a re-import. Lower it that way once the token cost of an input image is known."
           },
           {
             "id": "seedance-2.0-fast",
@@ -3385,7 +3510,9 @@
               "aspect_ratio",
               "duration_seconds",
               "seed",
-              "input_image"
+              "input_image",
+              "first_frame_image",
+              "last_frame_image"
             ],
             "constraints": {
               "duration_seconds": {
@@ -3416,8 +3543,23 @@
             },
             "price": {
               "unit": "second",
-              "unitCredits": 120
-            }
+              "unitCredits": 120,
+              "modifiers": [
+                {
+                  "param": "first_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "last_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
+            },
+            "priceBasis": "The per-second rate above predates this note and carries no recorded basis; what follows explains the MODIFIERS only. Per-file modifiers are a PLATFORM surcharge and not a ByteDance rate: ModelArk bills Seedance per token, an image handed to it as an opening frame, a closing frame or a reference conditions every step of the generation, and the platform additionally reads the file out of storage and inlines it into the request as a data URL, which the per-second rate above was not computed for. 0.05 per file is a FLOOR chosen because ByteDance publishes no per-image figure. The most a call on this model can reach is 1.2x: its frame slots and its reference slot are mutually exclusive, so a call carries either two pinned frames (1.1025x) or up to four references (1.20x), never both. It can only over-charge against a rate nobody has published. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so changing it is an edit here plus a re-import. Lower it that way once the token cost of an input image is known."
           },
           {
             "id": "seedance-2.0-fast-480p",
@@ -3428,7 +3570,9 @@
               "aspect_ratio",
               "duration_seconds",
               "seed",
-              "input_image"
+              "input_image",
+              "first_frame_image",
+              "last_frame_image"
             ],
             "constraints": {
               "duration_seconds": {
@@ -3459,8 +3603,23 @@
             },
             "price": {
               "unit": "second",
-              "unitCredits": 56
-            }
+              "unitCredits": 56,
+              "modifiers": [
+                {
+                  "param": "first_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "last_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
+            },
+            "priceBasis": "The per-second rate above predates this note and carries no recorded basis; what follows explains the MODIFIERS only. Per-file modifiers are a PLATFORM surcharge and not a ByteDance rate: ModelArk bills Seedance per token, an image handed to it as an opening frame, a closing frame or a reference conditions every step of the generation, and the platform additionally reads the file out of storage and inlines it into the request as a data URL, which the per-second rate above was not computed for. 0.05 per file is a FLOOR chosen because ByteDance publishes no per-image figure. The most a call on this model can reach is 1.2x: its frame slots and its reference slot are mutually exclusive, so a call carries either two pinned frames (1.1025x) or up to four references (1.20x), never both. It can only over-charge against a rate nobody has published. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so changing it is an edit here plus a re-import. Lower it that way once the token cost of an input image is known."
           },
           {
             "id": "seedance-2.0-mini",
@@ -3471,7 +3630,9 @@
               "aspect_ratio",
               "duration_seconds",
               "seed",
-              "input_image"
+              "input_image",
+              "first_frame_image",
+              "last_frame_image"
             ],
             "constraints": {
               "duration_seconds": {
@@ -3502,8 +3663,23 @@
             },
             "price": {
               "unit": "second",
-              "unitCredits": 76
-            }
+              "unitCredits": 76,
+              "modifiers": [
+                {
+                  "param": "first_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "last_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
+            },
+            "priceBasis": "The per-second rate above predates this note and carries no recorded basis; what follows explains the MODIFIERS only. Per-file modifiers are a PLATFORM surcharge and not a ByteDance rate: ModelArk bills Seedance per token, an image handed to it as an opening frame, a closing frame or a reference conditions every step of the generation, and the platform additionally reads the file out of storage and inlines it into the request as a data URL, which the per-second rate above was not computed for. 0.05 per file is a FLOOR chosen because ByteDance publishes no per-image figure. The most a call on this model can reach is 1.2x: its frame slots and its reference slot are mutually exclusive, so a call carries either two pinned frames (1.1025x) or up to four references (1.20x), never both. It can only over-charge against a rate nobody has published. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so changing it is an edit here plus a re-import. Lower it that way once the token cost of an input image is known."
           },
           {
             "id": "seedance-2.0-mini-480p",
@@ -3514,7 +3690,9 @@
               "aspect_ratio",
               "duration_seconds",
               "seed",
-              "input_image"
+              "input_image",
+              "first_frame_image",
+              "last_frame_image"
             ],
             "constraints": {
               "duration_seconds": {
@@ -3545,8 +3723,23 @@
             },
             "price": {
               "unit": "second",
-              "unitCredits": 36
-            }
+              "unitCredits": 36,
+              "modifiers": [
+                {
+                  "param": "first_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "last_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
+            },
+            "priceBasis": "The per-second rate above predates this note and carries no recorded basis; what follows explains the MODIFIERS only. Per-file modifiers are a PLATFORM surcharge and not a ByteDance rate: ModelArk bills Seedance per token, an image handed to it as an opening frame, a closing frame or a reference conditions every step of the generation, and the platform additionally reads the file out of storage and inlines it into the request as a data URL, which the per-second rate above was not computed for. 0.05 per file is a FLOOR chosen because ByteDance publishes no per-image figure. The most a call on this model can reach is 1.2x: its frame slots and its reference slot are mutually exclusive, so a call carries either two pinned frames (1.1025x) or up to four references (1.20x), never both. It can only over-charge against a rate nobody has published. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so changing it is an edit here plus a re-import. Lower it that way once the token cost of an input image is known."
           }
         ]
       }
@@ -4101,6 +4294,17 @@
             "path": "image.url",
             "encoding": "data_url",
             "role": "first_frame"
+          },
+          "last_frame_image": {
+            "path": "last_frame.url",
+            "encoding": "data_url",
+            "role": "last_frame"
+          },
+          "reference_image": {
+            "path": "reference_images[0].url",
+            "encoding": "data_url",
+            "role": "reference",
+            "maxItems": 3
           }
         },
         "models": [
@@ -4138,10 +4342,16 @@
                 ]
               }
             },
-            "priceBasis": "xAI's published price for this model is $0.05 per second of output, doubled to 100 credits per second. The per-second figures are the ones this endpoint's own 'model' parameter documents, so the number is re-derivable without leaving the file. Resolution is offered rather than pinned because xAI publishes one rate per model per second and none per resolution; if that ever stops being true, 480p and 720p become separate models the way the image tiers are.",
+            "priceBasis": "xAI's published price for this model is $0.05 per second of output, doubled to 100 credits per second. The per-second figures are the ones this endpoint's own 'model' parameter documents, so the number is re-derivable without leaving the file. Resolution is offered rather than pinned because xAI publishes one rate per model per second and none per resolution; if that ever stops being true, 480p and 720p become separate models the way the image tiers are. A resolution modifier was written here and REMOVED before shipping: xAI publishes a single per-second figure for this model, so a 2x surcharge on 720p had no provider cost behind it and would have been a price rise wearing the clothes of a cost. It also forced resolution into 'required', which refuses calls that run today. Price the tiers when xAI publishes them. The input files carry a platform surcharge of 0.05 each. It is a PLATFORM cost, not an xAI rate: every file slot on this endpoint is bound with encoding 'data_url', so the platform reads the file out of storage and inlines it into the request body as a base64 data URL, and the per-second rate above was computed for a text-only request that does none of that. An inlined image also conditions the generation itself, which xAI bills for and publishes no figure for, so 0.05 per file is a FLOOR chosen in the absence of a vendor number and not a measured cost. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so lowering it once xAI publishes a per-image figure is an edit here plus a re-import.",
             "price": {
               "unit": "second",
-              "unitCredits": 100
+              "unitCredits": 100,
+              "modifiers": [
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                }
+              ]
             }
           },
           {
@@ -4153,7 +4363,9 @@
               "duration_seconds",
               "aspect_ratio",
               "resolution",
-              "input_image"
+              "input_image",
+              "last_frame_image",
+              "reference_image"
             ],
             "required": [
               "prompt",
@@ -4178,10 +4390,24 @@
                 ]
               }
             },
-            "priceBasis": "xAI's published price for this model is $0.08 per second of output, doubled to 160 credits per second. The per-second figures are the ones this endpoint's own 'model' parameter documents, so the number is re-derivable without leaving the file. Resolution is offered rather than pinned because xAI publishes one rate per model per second and none per resolution; if that ever stops being true, 480p and 720p become separate models the way the image tiers are.",
+            "priceBasis": "xAI's published price for this model is $0.08 per second of output, doubled to 160 credits per second. The per-second figures are the ones this endpoint's own 'model' parameter documents, so the number is re-derivable without leaving the file. Resolution is offered rather than pinned because xAI publishes one rate per model per second and none per resolution; if that ever stops being true, 480p and 720p become separate models the way the image tiers are. A resolution modifier was written here and REMOVED before shipping: xAI publishes a single per-second figure for this model, so a 2x surcharge on 720p had no provider cost behind it and would have been a price rise wearing the clothes of a cost. It also forced resolution into 'required', which refuses calls that run today. Price the tiers when xAI publishes them. The input files carry a platform surcharge of 0.05 each. It is a PLATFORM cost, not an xAI rate: every file slot on this endpoint is bound with encoding 'data_url', so the platform reads the file out of storage and inlines it into the request body as a base64 data URL, and the per-second rate above was computed for a text-only request that does none of that. An inlined image also conditions the generation itself, which xAI bills for and publishes no figure for, so 0.05 per file is a FLOOR chosen in the absence of a vendor number and not a measured cost. A MODIFIER is not editable in Settings > Platform Keys, which publishes the rate and the clamps: it lives in this descriptor, so lowering it once xAI publishes a per-image figure is an edit here plus a re-import.",
             "price": {
               "unit": "second",
-              "unitCredits": 160
+              "unitCredits": 160,
+              "modifiers": [
+                {
+                  "param": "last_frame_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "input_image",
+                  "perAsset": 0.05
+                },
+                {
+                  "param": "reference_image",
+                  "perAsset": 0.05
+                }
+              ]
             }
           }
         ]

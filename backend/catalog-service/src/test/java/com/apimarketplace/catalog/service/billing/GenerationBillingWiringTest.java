@@ -4,6 +4,7 @@ import com.apimarketplace.catalog.domain.ApiEntity;
 import com.apimarketplace.catalog.domain.ApiToolEntity;
 import com.apimarketplace.catalog.domain.dto.CeCatalogRelayRequest;
 import com.apimarketplace.catalog.domain.dto.ToolExecutionRequest;
+import com.apimarketplace.catalog.domain.dto.ToolExecutionResponse;
 import com.apimarketplace.catalog.repository.ApiRepository;
 import com.apimarketplace.catalog.repository.ApiToolRepository;
 import com.apimarketplace.catalog.repository.ToolNextHintRepository;
@@ -30,6 +31,7 @@ import com.apimarketplace.credential.client.CredentialClient;
 import com.apimarketplace.credential.client.dto.FrozenMarkupDto;
 import com.apimarketplace.credential.client.dto.PlatformCredentialLookupDto;
 import com.apimarketplace.credential.client.dto.PricingVersionDto;
+import com.apimarketplace.credential.client.dto.ResolvedScopeMarkupDto;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -217,7 +219,7 @@ class GenerationBillingWiringTest {
                         org.mockito.ArgumentMatchers.eq(PRICING_VERSION_ID),
                         org.mockito.ArgumentMatchers.eq(TOOL_ID),
                         org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.any()))
+                        org.mockito.ArgumentMatchers.any(), any()))
                 .thenReturn(Optional.of(frozen));
     }
 
@@ -289,7 +291,115 @@ class GenerationBillingWiringTest {
             // NEVER two parties: the execution layer inside did not price or
             // reserve the same call a second time.
             verify(credentialClient, never()).resolveScopeMarkupRate(any(), any(), any(), any(),
-                    any(UUID.class), any(), any());
+                    any(UUID.class), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("names the MODEL on the ledger when the relayed call names one, so a linked "
+                + "install's spend reads like the cloud's own on the same usage page")
+        void theRelayedLedgerNamesTheModel() {
+            // Same rule as the direct path, on the other half of the same feature. The relay
+            // measures the model out of the body it is about to execute (never declared by the
+            // install), prices with it, and then has to LABEL with it: an endpoint that backs two
+            // models at two rates writes the same two words over both otherwise.
+            stubGenerationEndpointWithModels();
+            stubPlatformCredentialAndPricing();
+            stubSuccessfulReserve();
+            stubUpstreamSuccess();
+            when(creditClient.scopeCommit(anyString(), any(), anyString(), anyString()))
+                    .thenReturn("COMMITTED");
+
+            relayService.execute(CLOUD_USER_ID, INSTALL_ID, API_SLUG, TOOL_SLUG,
+                    CeCatalogRelayRequest.builder()
+                            .parameters(Map.of("model", "seedance-1-pro-upstream", "prompt", "a cat"))
+                            .build());
+
+            ArgumentCaptor<String> reservedKey = ArgumentCaptor.forClass(String.class);
+            verify(creditClient).scopeReserve(eq(CLOUD_USER_ID), reservedKey.capture(),
+                    eq("Seedance"), eq("seedance-1-pro"), any(), isNull(), anyInt(),
+                    eq("CE_RELAY"), eq(INSTALL_ID), eq(false));
+            verify(creditClient).scopeCommit(
+                    eq(reservedKey.getValue()), any(), eq("Seedance"), eq("seedance-1-pro"));
+        }
+
+        /**
+         * The same endpoint, declaring the two models it backs.
+         *
+         * <p>The body carries the UPSTREAM name, which is what an install actually sends; the
+         * ledger has to end up with the PUBLIC id, because that is what the usage page filters on
+         * and what a price is published against.
+         */
+        private void stubGenerationEndpointWithModels() {
+            ApiToolEntity tool = new ApiToolEntity();
+            tool.setId(TOOL_ID);
+            tool.setApiId(API_ID);
+            tool.setToolSlug(TOOL_SLUG);
+            tool.setIsActive(true);
+            // A descriptor the parser actually accepts: `assetPath` is required, and with a
+            // `modelParam` each model must carry its upstream name. A spec that fails to parse
+            // reads as "not a generation" and would make this test pass for the wrong reason.
+            tool.setGenerationSpec("{\"kind\":\"video\",\"assetPath\":\"data.video_url\","
+                    + "\"modelParam\":\"model\","
+                    + "\"paramMap\":{\"prompt\":\"prompt\"},"
+                    + "\"models\":["
+                    + "{\"id\":\"seedance-1-pro\",\"upstream\":\"seedance-1-pro-upstream\","
+                    + "\"capabilities\":[\"prompt\"]},"
+                    + "{\"id\":\"seedance-1-lite\",\"upstream\":\"seedance-1-lite-upstream\","
+                    + "\"capabilities\":[\"prompt\"]}]}");
+            lenient().when(apiToolRepository.findByApiIdAndToolSlug(API_ID, TOOL_SLUG))
+                    .thenReturn(Optional.of(tool));
+            lenient().when(apiToolRepository.findById(TOOL_ID)).thenReturn(Optional.of(tool));
+        }
+
+        @Test
+        @DisplayName("says on the answer what the linked account was charged, so a self-hosted "
+                + "install can show the price of an asset it did not pay for locally")
+        void reportsWhatTheLinkedAccountWasCharged() {
+            stubPlatformCredentialAndPricing();
+            stubSuccessfulReserve();
+            stubUpstreamSuccess();
+            when(creditClient.scopeCommit(anyString(), any(), anyString(), anyString()))
+                    .thenReturn("COMMITTED");
+
+            RelayResult result = relayService.execute(
+                    CLOUD_USER_ID, INSTALL_ID, API_SLUG, TOOL_SLUG, relayRequest());
+
+            // The relay bills BEFORE handing the call to the ordinary path, which then reserves
+            // nothing: without this the one edition whose spend is least visible would be the only
+            // one whose assets could not say what they cost.
+            assertThat(result.response().getMetadata()).containsEntry("billedCredits", RELAY_MARKUP);
+        }
+
+        @Test
+        @DisplayName("says nothing about a charge that could not be taken whole")
+        void reportsNothingWhenTheChargeWasNotTakenWhole() {
+            stubPlatformCredentialAndPricing();
+            stubSuccessfulReserve();
+            stubUpstreamSuccess();
+            when(creditClient.scopeCommit(anyString(), any(), anyString(), anyString()))
+                    .thenReturn("COMMITTED_PARTIAL");
+
+            RelayResult result = relayService.execute(
+                    CLOUD_USER_ID, INSTALL_ID, API_SLUG, TOOL_SLUG, relayRequest());
+
+            assertThat(result.response().getMetadata()).doesNotContainKey("billedCredits");
+        }
+
+        @Test
+        @DisplayName("says nothing about a charge on an install that does not meter at all")
+        void reportsNothingWhenTheInstallDoesNotMeter() {
+            // The credit client answers BILLING_DISABLED rather than a success word when metering
+            // is off, which is what keeps a price off an asset that reached no ledger.
+            stubPlatformCredentialAndPricing();
+            stubSuccessfulReserve();
+            stubUpstreamSuccess();
+            when(creditClient.scopeCommit(anyString(), any(), anyString(), anyString()))
+                    .thenReturn(com.apimarketplace.common.credit.CreditConsumptionClient.BILLING_DISABLED);
+
+            RelayResult result = relayService.execute(
+                    CLOUD_USER_ID, INSTALL_ID, API_SLUG, TOOL_SLUG, relayRequest());
+
+            assertThat(result.response().getMetadata()).doesNotContainKey("billedCredits");
         }
 
         @Test
@@ -389,4 +499,176 @@ class GenerationBillingWiringTest {
             assertThat(posted.getBillingOwnedByCaller()).isNull();
         }
     }
+
+    // ── the direct (non-relayed) generation on the platform key ─────────────
+
+    /**
+     * The two things a reader learns about a generation AFTER it has run: what was bought, and
+     * what it cost. Both are decided here, in the execution path, and neither can be recovered
+     * later - a rate can be republished, and an endpoint name cannot be turned back into a model.
+     */
+    @Nested
+    @DisplayName("a generation billed on the platform key")
+    class DirectPlatformGeneration {
+
+        /** The model the caller asked for. Its endpoint serves several, at several prices. */
+        private static final String MODEL_ID = "seedance-1-pro";
+
+        @Test
+        @DisplayName("names the MODEL on the ledger, not the endpoint that served it, so two models "
+                + "sold through one endpoint can be told apart in usage")
+        void theLedgerNamesTheModel() {
+            stubPlatformCredentialAndPricing();
+            stubResolvedScopeRate();
+            stubSuccessfulReserve();
+            stubUpstreamSuccess();
+
+            catalogV1Service.executeTool(COMPOSITE_SLUG, generationRequest(),
+                    String.valueOf(CLOUD_USER_ID), null, "req-1");
+
+            // Pre-fix both of these carried "create_video_task", the ENDPOINT: every model sold
+            // through it wrote the same two words, so the usage page could show the amounts and
+            // never say which model produced them.
+            ArgumentCaptor<String> reservedKey = ArgumentCaptor.forClass(String.class);
+            verify(creditClient).scopeReserve(eq(CLOUD_USER_ID), reservedKey.capture(),
+                    eq("Seedance"), eq(MODEL_ID), eq(RELAY_MARKUP), isNull(), anyInt(),
+                    eq("RUN"), eq("run-1"), anyBoolean());
+            verify(creditClient).scopeCommit(
+                    eq(reservedKey.getValue()), eq(RELAY_MARKUP), eq("Seedance"), eq(MODEL_ID));
+        }
+
+        @Test
+        @DisplayName("an ORDINARY call still names the endpoint, so the 600+ tools that name no "
+                + "model keep a legible ledger row")
+        void anOrdinaryCallNamesTheEndpoint() {
+            // The other half of the same line, and the half a mutation walks straight through:
+            // reduced to `billingModel = generationModelId`, every non-generation platform-key call
+            // writes model = NULL on its ledger row - the "null/null" the label was introduced to
+            // end - while every generation test in this file stays green.
+            stubPlatformCredentialAndPricing();
+            stubResolvedScopeRate();
+            stubSuccessfulReserve();
+            stubUpstreamSuccess();
+            stubOrdinaryEndpoint();
+
+            catalogV1Service.executeTool(COMPOSITE_SLUG, ordinaryRequest(),
+                    String.valueOf(CLOUD_USER_ID), null, "req-1");
+
+            verify(creditClient).scopeReserve(eq(CLOUD_USER_ID), anyString(),
+                    eq("Seedance"), eq("create_video_task"), any(), isNull(), anyInt(),
+                    eq("RUN"), eq("run-1"), anyBoolean());
+        }
+
+        /** The same endpoint with no generation descriptor: an ordinary catalog tool. */
+        private void stubOrdinaryEndpoint() {
+            ApiToolEntity tool = new ApiToolEntity();
+            tool.setId(TOOL_ID);
+            tool.setApiId(API_ID);
+            tool.setToolSlug(TOOL_SLUG);
+            tool.setIsActive(true);
+            lenient().when(apiToolRepository.findByApiIdAndToolSlug(API_ID, TOOL_SLUG))
+                    .thenReturn(Optional.of(tool));
+            lenient().when(apiToolRepository.findById(TOOL_ID)).thenReturn(Optional.of(tool));
+        }
+
+        /** What an ordinary tool call posts: a run to charge against, and no model. */
+        private ToolExecutionRequest ordinaryRequest() {
+            return ToolExecutionRequest.builder()
+                    .parameters(Map.of("prompt", "a cat"))
+                    .credentialSource("platform")
+                    .billingScopeKind("RUN")
+                    .billingScopeId("run-1")
+                    .build();
+        }
+
+        @Test
+        @DisplayName("reports what it charged, so the asset can carry its own price")
+        void reportsWhatItCharged() {
+            stubPlatformCredentialAndPricing();
+            stubResolvedScopeRate();
+            stubSuccessfulReserve();
+            stubUpstreamSuccess();
+            stubCommitOutcome("COMMITTED");
+
+            ToolExecutionResponse response = catalogV1Service.executeTool(
+                    COMPOSITE_SLUG, generationRequest(), String.valueOf(CLOUD_USER_ID), null, "req-1");
+
+            assertThat(response.getMetadata()).containsEntry("billedCredits", RELAY_MARKUP);
+        }
+
+        @Test
+        @DisplayName("reports NOTHING when the commit could not take the whole amount: the reserved "
+                + "figure is not what was charged, and a wrong price is worse than none")
+        void reportsNothingOnAPartialCommit() {
+            stubPlatformCredentialAndPricing();
+            stubResolvedScopeRate();
+            stubSuccessfulReserve();
+            stubUpstreamSuccess();
+            // The balance ran out between the reserve and the commit: auth charges what is left,
+            // which is less than RELAY_MARKUP, and does not tell this layer how much.
+            stubCommitOutcome("COMMITTED_PARTIAL");
+
+            ToolExecutionResponse response = catalogV1Service.executeTool(
+                    COMPOSITE_SLUG, generationRequest(), String.valueOf(CLOUD_USER_ID), null, "req-1");
+
+            assertThat(response.getMetadata()).doesNotContainKey("billedCredits");
+        }
+
+        @Test
+        @DisplayName("reports NOTHING when the reader's own key answered: the platform charged them "
+                + "nothing, and absent must not be readable as free")
+        void reportsNothingOnTheReadersOwnKey() {
+            stubPlatformCredentialAndPricing();
+            stubResolvedScopeRate();
+            stubSuccessfulReserve();
+            stubUpstreamAnsweredByTheReadersKey();
+
+            ToolExecutionResponse response = catalogV1Service.executeTool(
+                    COMPOSITE_SLUG, generationRequest(), String.valueOf(CLOUD_USER_ID), null, "req-1");
+
+            assertThat(response.getMetadata()).doesNotContainKey("billedCredits");
+            // Not merely unreported: not charged either.
+            verify(creditClient).scopeRelease(anyString(), anyString());
+            verify(creditClient, never()).scopeCommit(anyString(), any(), anyString(), anyString());
+        }
+
+        /** A published, endpoint-specific, flat price - what a resold generation requires. */
+        private void stubResolvedScopeRate() {
+            ResolvedScopeMarkupDto resolved = new ResolvedScopeMarkupDto();
+            resolved.setFound(true);
+            resolved.setEffectiveMarkup(RELAY_MARKUP);
+            resolved.setPriceUnit("call");
+            // Published for THIS endpoint. A credential-wide default is refused for a generation.
+            resolved.setPricedByPublishedRow(true);
+            lenient().when(credentialClient.resolveScopeMarkupRate(any(), any(), any(), any(),
+                    any(UUID.class), any(), any(), any())).thenReturn(Optional.of(resolved));
+        }
+
+        private void stubCommitOutcome(String outcome) {
+            when(creditClient.scopeCommit(anyString(), any(), anyString(), anyString()))
+                    .thenReturn(outcome);
+        }
+
+        /** The agentic fallback that actually happened: the caller's own key answered. */
+        private void stubUpstreamAnsweredByTheReadersKey() {
+            Map<String, Object> upstream = new LinkedHashMap<>();
+            upstream.put("success", true);
+            upstream.put("data", Map.of("task_id", "task-1"));
+            upstream.put("credentialSource", "user");
+            when(apiService.executeApiTool(eq(API_ID.toString()), eq("create_video_task"),
+                    any(JsonNode.class), any(), anyString())).thenReturn(upstream);
+        }
+
+        /** What the generation surface posts: a run to charge against, and the model it bought. */
+        private ToolExecutionRequest generationRequest() {
+            return ToolExecutionRequest.builder()
+                    .parameters(Map.of("prompt", "a cat", "duration", 10))
+                    .credentialSource("platform")
+                    .billingScopeKind("RUN")
+                    .billingScopeId("run-1")
+                    .generationModelId(MODEL_ID)
+                    .build();
+        }
+    }
+
 }

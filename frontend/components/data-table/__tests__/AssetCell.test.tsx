@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next-intl', () => ({
@@ -41,12 +41,37 @@ vi.mock('@/app/workflows/builder/components/inspector/StorageExplorerTab', () =>
 }));
 
 
-// Authenticated image previews fetch bytes; hand back a stable object URL instead.
+// Authenticated previews fetch bytes; hand back a stable object URL instead.
 vi.mock('@/hooks/useAuthedObjectUrl', () => ({
   // A distinct blob per source, as the real hook produces - so a test cannot pass by accident
-  // just because two different files happened to share one preview URL.
-  useAuthedObjectUrl: (url: string | null) => ({ url: url ? `blob:${url}` : null, error: false }),
+  // just because two different files happened to share one preview URL. An external source is
+  // returned verbatim because that is what the real hook does with one (it fetches only
+  // same-origin `/api/` URLs); the stand-in has to match, or the external-image test below would
+  // assert a `blob:` prefix this app never produces. What the real hook sends, and to whom, is
+  // covered where it can actually be observed: hooks/__tests__/useAuthedObjectUrl.
+  useAuthedObjectUrl: (url: string | null) => ({
+    url: url ? (url.startsWith('/api/') ? `blob:${url}` : url) : null,
+    error: false,
+  }),
 }));
+
+/**
+ * jsdom ships no IntersectionObserver, and the visibility latch then fails OPEN - so a test that
+ * installs nothing renders the lazy kinds with the gate switched off, which is not the browser.
+ * Install one and drive it, so a clip has to travel the real path: observed, scrolled to, loaded.
+ */
+let observerCallbacks: ((entries: { isIntersecting: boolean }[]) => void)[] = [];
+function withObserver() {
+  class FakeObserver {
+    constructor(cb: (entries: { isIntersecting: boolean }[]) => void) { observerCallbacks.push(cb); }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal('IntersectionObserver', FakeObserver);
+}
+const scrollIntoView = () =>
+  act(() => observerCallbacks.forEach((cb) => cb([{ isIntersecting: true }])));
 
 const uploadGeneric = vi.fn();
 vi.mock('@/lib/api/orchestrator/file.service', async (importOriginal) => ({
@@ -94,6 +119,8 @@ function renderCellFor(value: unknown) {
 afterEach(() => {
   cleanup();
   uploadGeneric.mockReset();
+  observerCallbacks = [];
+  vi.unstubAllGlobals();
 });
 
 describe('AssetCell', () => {
@@ -368,6 +395,140 @@ describe('AssetCell', () => {
 
     expect(container.querySelector('.rounded-xl')).not.toBeNull();
     expect(container.querySelector('.rounded-full')).toBeNull();
+  });
+
+  it('plays a clip, a sound and a page in the row once it is scrolled to, not just a picture', () => {
+    // The complaint this answers: an attachment column showed a name and a grey icon, which is
+    // the one thing the row already told you. Every kind Files previews, the cell previews.
+    //
+    // Driven through a real observer on purpose. These three kinds are lazy, and a browser only
+    // reports a target that HAS a box: a version of this cell that hid the observed element
+    // while it was empty rendered nothing here, at any scroll position, and a test that relied
+    // on jsdom's missing observer called it green.
+    const cases = [
+      { name: 'clip.mp4', mimeType: 'video/mp4', tag: 'video' },
+      { name: 'voice.mp3', mimeType: 'audio/mpeg', tag: 'audio' },
+      { name: 'invoice.pdf', mimeType: 'application/pdf', tag: 'iframe' },
+    ];
+    for (const media of cases) {
+      withObserver();
+      const { container } = render(
+        <AssetCell
+          value={{ _type: 'file', id: UUID, name: media.name, mimeType: media.mimeType }}
+          rowKey="r1" field="attachment" isEditing={false}
+          onSaveAndExit={vi.fn()} onStartEditing={() => {}} onExitEditing={() => {}}
+          displayConfig={{ render: 'card' }}
+        />,
+      );
+
+      expect(container.querySelector(media.tag), media.name + ' before scroll').toBeNull();
+      scrollIntoView();
+
+      expect(container.querySelector(media.tag), media.name).toBeInTheDocument();
+      cleanup();
+      observerCallbacks = [];
+    }
+  });
+
+  it('reads the kind off the file name when the mime type is the generic one', () => {
+    // What our own raw serve answers for a row with no stored mime, which is most of what a
+    // workflow writes into a table.
+    withObserver();
+    const { container } = render(
+      <AssetCell
+        value={{ _type: 'file', id: UUID, name: 'render.mp4', mimeType: 'application/octet-stream' }}
+        rowKey="r1" field="attachment" isEditing={false}
+        onSaveAndExit={vi.fn()} onStartEditing={() => {}} onExitEditing={() => {}}
+        displayConfig={{ render: 'card' }}
+      />,
+    );
+    scrollIntoView();
+
+    expect(container.querySelector('video')).toBeInTheDocument();
+    // The badge beside it has to agree, shape AND colour: it used to read the mime type alone,
+    // so a clip stored as application/octet-stream played as a video under a generic grey file
+    // icon. Both halves are asserted because they are two separate functions.
+    expect(container.querySelector('.bg-red-500 svg')).toHaveClass('lucide-video');
+  });
+
+  it('shows a clip as a still frame on a thumbnail column, and a sound as its icon', () => {
+    // A 56px box has no room for a control bar, and a sound has no frame to put in it.
+    const { container: withVideo } = render(
+      <AssetCell
+        value={{ _type: 'file', id: UUID, name: 'clip.mp4', mimeType: 'video/mp4' }}
+        rowKey="r1" field="photo" isEditing={false}
+        onSaveAndExit={vi.fn()} onStartEditing={() => {}} onExitEditing={() => {}}
+        displayConfig={{ render: 'thumbnail' }}
+      />,
+    );
+    expect(withVideo.querySelector('video')).toBeInTheDocument();
+    expect(withVideo.querySelector('video')).not.toHaveAttribute('controls');
+    cleanup();
+
+    const { container: withAudio } = render(
+      <AssetCell
+        value={{ _type: 'file', id: UUID, name: 'voice.mp3', mimeType: 'audio/mpeg' }}
+        rowKey="r1" field="photo" isEditing={false}
+        onSaveAndExit={vi.fn()} onStartEditing={() => {}} onExitEditing={() => {}}
+        displayConfig={{ render: 'thumbnail' }}
+      />,
+    );
+    expect(withAudio.querySelector('audio')).toBeNull();
+    // Scoped to the 56px box: the row also carries the Eye/Download/Delete icons, so a bare
+    // "there is an svg somewhere" would pass with no type icon at all.
+    expect(withAudio.querySelector('.rounded-xl svg')).toBeInTheDocument();
+  });
+
+  it('leaves a file it cannot show as a name and its icon, with no media in the row', () => {
+    const { container } = render(
+      <AssetCell
+        value={{ _type: 'file', id: UUID, name: 'archive.zip', mimeType: 'application/zip', size: 12 }}
+        rowKey="r1" field="attachment" isEditing={false}
+        onSaveAndExit={vi.fn()} onStartEditing={() => {}} onExitEditing={() => {}}
+        displayConfig={{ render: 'card' }}
+      />,
+    );
+
+    expect(screen.getByText('archive.zip')).toBeInTheDocument();
+    expect(container.querySelector('video')).toBeNull();
+    expect(container.querySelector('audio')).toBeNull();
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(container.querySelector('img')).toBeNull();
+    // A kind with no preview keeps the plain slate badge, and no preview wrapper is rendered
+    // at all - not even an empty one waiting for bytes that are never coming.
+    expect(container.querySelector('.bg-slate-500')).toBeInTheDocument();
+    expect(container.querySelector('.bg-slate-100')).toBeNull();
+  });
+
+  it('offers the View action for a clip whose stored type says nothing, and never for an archive', () => {
+    // The case that was missing before: the gate read the mime type alone, so a clip our own raw
+    // serve types as a binary stream had no View button, for the same reason it had no preview.
+    // Reading the name is what fixes both.
+    renderCell({
+      value: { _type: 'file', id: UUID, name: 'render.mp4', mimeType: 'application/octet-stream' },
+    });
+    expect(screen.getByTitle('view')).toBeInTheDocument();
+    cleanup();
+
+    // Plain text keeps the arm it always had: not a kind a row previews, but it opens fine.
+    renderCell({ value: { _type: 'file', id: UUID, name: 'notes.txt', mimeType: 'text/plain' } });
+    expect(screen.getByTitle('view')).toBeInTheDocument();
+    cleanup();
+
+    // An archive opens as nothing at all, so the button stays off.
+    renderCell({ value: { _type: 'file', id: UUID, name: 'archive.zip', mimeType: 'application/zip' } });
+    expect(screen.queryByTitle('view')).not.toBeInTheDocument();
+  });
+
+  it('leaves what is SAFE to open to the layer that holds the bytes', () => {
+    // Deliberately no deny-list here. What executes is the type the SERVER sends, and a cell can
+    // hold a file with no stored type at all - most of what a workflow writes - so a guard on the
+    // cell's copy would pass exactly the case that matters and read as if it had closed it. The
+    // View button says "worth opening"; openAuthedFileInNewTab says "safe to open", on the served
+    // type (see lib/utils/__tests__/url-auth.test.ts).
+    renderCell({ value: { _type: 'file', id: UUID, name: 'page.html', mimeType: 'text/html' } });
+
+    expect(screen.getByTitle('view')).toBeInTheDocument();
   });
 
   it('never stores a folder as if it were a file', () => {

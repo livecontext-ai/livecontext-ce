@@ -1,10 +1,25 @@
 package com.apimarketplace.agent.repository;
 
+import com.apimarketplace.agent.config.AgentDefaultsConfig;
+import com.apimarketplace.agent.domain.AgentMemoryEntity;
+import com.apimarketplace.agent.memory.MemoryLimitsConfig;
+import com.apimarketplace.agent.memory.MemoryPromptSection;
+import com.apimarketplace.agent.memory.MemoryService;
+import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
+import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
+import com.apimarketplace.agent.tools.memory.MemoryCrudModule;
+import com.apimarketplace.agent.tools.memory.MemoryHelpModule;
+import com.apimarketplace.agent.tools.memory.MemoryToolsProvider;
+import org.hibernate.SessionFactory;
+import org.hibernate.cfg.Configuration;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
+import org.springframework.data.jpa.repository.support.JpaRepositoryFactory;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -21,16 +36,18 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The memory queries and the V479 migration, against a real Postgres.
+ * The memory queries, tool lifecycle and V479 migration against real Postgres.
  *
- * <p>Everything else about memory is covered with mocks, which is the right tool
- * for the branching in the service and exactly the wrong one here: a mocked
+ * <p>The unit suites cover branching with mocks. This class also exercises the
+ * real tool, service, JPA repository and renderer across committed calls: a mocked
  * repository returns whatever the test says, so it cannot tell whether the SQL
  * runs at all. Four things in this feature live only in the database and would
  * ship broken with a fully green mock suite: the generated {@code tsvector}
@@ -233,6 +250,144 @@ class AgentMemoryQueriesPostgresTest {
     }
 
     // -------------------------------------------------------------------- tests
+
+    @Nested
+    @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+    @DisplayName("memory tool lifecycle with real persistence and prompt rendering")
+    class ToolLifecycle {
+        private SessionFactory sessions;
+
+        @BeforeAll
+        void openPersistence() {
+            // Use the shipped migration above, never Hibernate-created tables.
+            sessions = new Configuration()
+                .addAnnotatedClass(AgentMemoryEntity.class)
+                .setProperty("hibernate.connection.url", jdbcUrl)
+                .setProperty("hibernate.connection.username", jdbcUser)
+                .setProperty("hibernate.connection.password", jdbcPassword)
+                .setProperty("hibernate.hbm2ddl.auto", "none")
+                .buildSessionFactory();
+        }
+
+        @AfterAll
+        void closePersistence() {
+            if (sessions != null) sessions.close();
+        }
+
+        private <T> T inSession(Function<MemoryService, T> operation) {
+            try (var session = sessions.openSession()) {
+                var tx = session.beginTransaction();
+                try {
+                    var repository = new JpaRepositoryFactory(session).getRepository(AgentMemoryRepository.class);
+                    T result = operation.apply(new MemoryService(repository, new MemoryLimitsConfig()));
+                    tx.commit();
+                    return result;
+                } catch (RuntimeException | Error failure) {
+                    tx.rollback();
+                    throw failure;
+                }
+            }
+        }
+
+        private ToolExecutionResult call(String org, UUID caller, String access, Map<String, Object> parameters) {
+            // Each call gets a new persistence context: later reads cannot pass by
+            // observing the same Java entity that save just changed.
+            return inSession(service -> {
+                var limits = new MemoryLimitsConfig();
+                var renderer = new MemoryPromptSection(service, limits);
+                var provider = new MemoryToolsProvider(
+                    new MemoryCrudModule(service, renderer, null, new AgentDefaultsConfig()),
+                    new MemoryHelpModule(limits), limits);
+                Map<String, Object> credentials = new HashMap<>();
+                if (caller != null) credentials.put("__agentId__", caller.toString());
+                credentials.put("__memoryAccessMode__", access);
+                return provider.execute("memory", parameters,
+                    new ToolExecutionContext("user-1", credentials, Map.of(), Set.of(), null, null, org, "MEMBER"));
+            });
+        }
+
+        private Map<?, ?> ok(ToolExecutionResult result) {
+            assertThat(result.success()).as("tool result: %s", result.error()).isTrue();
+            return (Map<?, ?>) result.data();
+        }
+
+        private String prompt(String org, UUID caller) {
+            return inSession(service -> new MemoryPromptSection(service, new MemoryLimitsConfig())
+                .appendTo("Base instructions", org, caller));
+        }
+
+        @Test
+        @DisplayName("a saved preference is recalled and corrected in later runs without retaining obsolete details")
+        void savesRecallsAndCorrectsAcrossRuns() {
+            String frozenPrompt = prompt(ORG, agentId);
+            Map<?, ?> saved = ok(call(ORG, agentId, "write", Map.of(
+                "action", "save", "slug", "sam-answer-length", "title", "Sam answer length", "type", "user",
+                "summary", "Sam prefers short answers.", "content", "Sam prefers a maximum of five lines.")));
+
+            assertThat(saved.get("status")).isEqualTo("CREATED");
+            assertThat(frozenPrompt).doesNotContain("Sam prefers");
+            assertThat(prompt(ORG, agentId)).contains("Sam prefers short answers.").doesNotContain("five lines");
+            assertThat(ok(call(ORG, agentId, "read", Map.of("action", "list", "as_index", true))).get("index"))
+                .isEqualTo(prompt(ORG, agentId).substring("Base instructions\n\n".length()));
+            assertThat(ok(call(ORG, agentId, "read", Map.of("action", "search", "query", "five"))).get("count"))
+                .isEqualTo(1);
+            Map<?, ?> recalled = ok(call(ORG, agentId, "read", Map.of("action", "get", "slug", "sam-answer-length")));
+            assertThat(recalled.get("content")).isEqualTo("Sam prefers a maximum of five lines.");
+
+            Map<?, ?> corrected = ok(call(ORG, agentId, "write", Map.of(
+                "action", "save", "slug", "sam-answer-length", "scope", recalled.get("scope"),
+                "title", "Sam answer length", "summary", "Sam prefers detailed explanations.", "content", "")));
+            assertThat(corrected.get("status")).isEqualTo("REPLACED");
+            assertThat(corrected.get("id")).isEqualTo(saved.get("id"));
+            assertThat(prompt(ORG, agentId)).contains("Sam prefers detailed explanations.").doesNotContain("short answers");
+            assertThat(ok(call(ORG, agentId, "read", Map.of("action", "search", "query", "five"))).get("count"))
+                .isEqualTo(0);
+        }
+
+        @Test
+        @DisplayName("agent memory survives corrections without becoming shared or crossing a workspace")
+        void agentScopeRemainsIsolatedAcrossRuns() {
+            ok(call(ORG, agentId, "write", Map.of("action", "save", "scope", "agent", "slug", "atlas-context",
+                "title", "Atlas context", "summary", "Atlas uses sentence case.", "pinned", true,
+                "content", "Atlas labels have no terminal punctuation.")));
+
+            assertThat(prompt(ORG, agentId)).contains("Atlas labels have no terminal punctuation.");
+            assertThat(prompt(ORG, siblingAgentId)).doesNotContain("Atlas");
+            assertThat(prompt(OTHER_ORG, agentId)).doesNotContain("Atlas");
+            assertThat(call(ORG, siblingAgentId, "read", Map.of("action", "get", "slug", "atlas-context")).success()).isFalse();
+            Map<?, ?> recalled = ok(call(ORG, agentId, "read", Map.of("action", "get", "slug", "atlas-context")));
+            ok(call(ORG, agentId, "write", Map.of("action", "save", "scope", recalled.get("scope"),
+                "slug", "atlas-context", "title", "Atlas context", "summary", "Atlas uses title case.",
+                "content", "Atlas labels use title case.")));
+
+            assertThat(prompt(ORG, agentId)).contains("Atlas labels use title case.").doesNotContain("sentence case");
+            assertThat(prompt(ORG, null)).doesNotContain("Atlas");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM agent.agent_memories", Integer.class)).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("read-only writes are refused and disabled or deleted facts disappear from later prompts")
+        void respectsAccessDeactivationAndDeletion() {
+            Map<?, ?> saved = ok(call(ORG, agentId, "write", Map.of("action", "save", "slug", "atlas-team",
+                "title", "Atlas team", "summary", "Atlas is a distributed team.")));
+            UUID id = UUID.fromString(saved.get("id").toString());
+            assertThat(call(ORG, agentId, "read", Map.of("action", "save", "slug", "atlas-team",
+                "title", "Atlas team", "summary", "Atlas is an office team.")).success()).isFalse();
+            assertThat(prompt(ORG, agentId)).contains("distributed team");
+
+            jdbc.update("UPDATE agent.agent_memories SET is_active = false WHERE id = ?", id);
+            assertThat(prompt(ORG, agentId)).doesNotContain("Atlas");
+            assertThat(call(ORG, agentId, "read", Map.of("action", "get", "slug", "atlas-team")).success()).isFalse();
+            assertThat(ok(call(ORG, agentId, "write", Map.of("action", "save", "slug", "atlas-team",
+                "title", "Atlas team", "summary", "Atlas is an office team."))).get("is_active")).isEqualTo(false);
+            assertThat(prompt(ORG, agentId)).doesNotContain("Atlas");
+
+            jdbc.update("UPDATE agent.agent_memories SET is_active = true WHERE id = ?", id);
+            ok(call(ORG, agentId, "write", Map.of("action", "delete", "slug", "atlas-team")));
+            assertThat(prompt(ORG, agentId)).doesNotContain("Atlas");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM agent.agent_memories", Integer.class)).isZero();
+        }
+    }
 
     @Nested
     @DisplayName("full-text search")

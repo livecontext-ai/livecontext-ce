@@ -49,6 +49,11 @@ public class UpdateRowNodeSpec implements NodeSpec {
                     .key("updated_at")
                     .type("datetime")
                     .description("ISO timestamp when the update was performed")
+                    .build(),
+                OutputFieldDef.builder()
+                    .key("warnings")
+                    .type("array")
+                    .description("What the column types reported about the values written. Present only when there is something to say. A step can succeed and still have emptied a cell it could not parse, or stored one nothing can use - read these before treating the write as clean.")
                     .build()
             ))
             .keywords(List.of("update", "modify", "edit", "row", "table"))

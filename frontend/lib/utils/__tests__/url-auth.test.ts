@@ -31,6 +31,79 @@ function mockFetchOk() {
   return fetchMock;
 }
 
+/** Capture the blob the object URL is minted from, which is the only place the type is visible. */
+function captureBlobOfType(type: string): () => Blob | null {
+  const blob = new Blob(['<script>parent.postMessage(document.cookie)</script>'], { type });
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(blob) }));
+  let captured: Blob | null = null;
+  URL.createObjectURL = vi.fn((b: Blob) => { captured = b; return 'blob:mock-object-url'; });
+  return () => captured;
+}
+
+/**
+ * A blob URL inherits this app's origin, so a file the browser EXECUTES becomes same-origin code
+ * the moment it is opened in a tab - a stronger position than any preview iframe, and reachable
+ * from a single click on a row. The bytes are not the problem, the type is: re-stamped as plain
+ * text, the tab shows the page's source instead of running it, which is what a forge does with a
+ * raw file. Downloading is untouched, and so is every type that merely renders.
+ */
+describe('openAuthedFileInNewTab - what a tab is allowed to execute', () => {
+  const EXECUTABLE = ['text/html', 'application/xhtml+xml', 'image/svg+xml', 'application/xml', 'text/xml'];
+
+  it.each(EXECUTABLE)('serves %s as its own source instead of running it', async (type) => {
+    const captured = captureBlobOfType(type);
+    vi.stubGlobal('open', vi.fn());
+
+    await openAuthedFileInNewTab('/api/proxy/files/by-id/abc/raw');
+
+    expect(captured()!.type).toBe('text/plain');
+    expect(captured()!.size).toBeGreaterThan(0); // same bytes, only the type changed
+  });
+
+  it('neutralizes a type that arrives with its parameters, which is how a server sends it', async () => {
+    // The spelling a real server uses. It executes exactly like a bare `text/html`, so a guard
+    // that compares the raw string answers "not executable" for the commonest form of the thing
+    // it exists to stop. Latent today only because this browser strips the parameter off
+    // Blob.type before the guard sees it, which is not a guarantee.
+    const captured = captureBlobOfType('text/html;charset=utf-8');
+    vi.stubGlobal('open', vi.fn());
+
+    await openAuthedFileInNewTab('/api/proxy/files/by-id/abc/raw');
+
+    expect(captured()!.type).toBe('text/plain');
+  });
+
+  it('leaves a type that merely renders alone, so a PDF still opens as a PDF', async () => {
+    const captured = captureBlobOfType('application/pdf');
+    vi.stubGlobal('open', vi.fn());
+
+    await openAuthedFileInNewTab('/api/proxy/files/by-id/abc/raw');
+
+    expect(captured()!.type).toBe('application/pdf');
+  });
+
+  it('leaves a file with no served type alone, rather than guessing at it', async () => {
+    // The generic type our raw serve falls back to. It executes nothing on its own, and
+    // re-stamping it would break the browser's own handling of a file we know nothing about.
+    const captured = captureBlobOfType('application/octet-stream');
+    vi.stubGlobal('open', vi.fn());
+
+    await openAuthedFileInNewTab('/api/proxy/files/by-id/abc/raw');
+
+    expect(captured()!.type).toBe('application/octet-stream');
+  });
+
+  it('does not touch a download: the saved file keeps the type it was stored with', async () => {
+    // Nothing executes on the way to disk, and re-typing here would hand the user a file whose
+    // type argues with its own name.
+    const captured = captureBlobOfType('text/html');
+
+    await downloadAuthedFile('/api/proxy/files/by-id/abc/raw', 'page.html');
+
+    expect(captured()!.type).toBe('text/html');
+  });
+});
+
 describe('isInternalUrl', () => {
   it('returns true for /api/ prefixed URLs', () => {
     expect(isInternalUrl('/api/proxy/files/abc')).toBe(true);

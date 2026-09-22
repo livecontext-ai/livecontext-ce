@@ -161,9 +161,10 @@ class AdminPlanServiceTest {
         when(planRepository.findByCode("STARTER")).thenReturn(Optional.of(plan("STARTER")));
         when(userRepository.findById(TARGET_ID)).thenReturn(Optional.of(user));
         when(subscriptionRepository.findActiveByUserIdForUpdate(TARGET_ID)).thenReturn(Optional.empty());
-        when(billingCustomerRepository.findByUserId(TARGET_ID)).thenReturn(Optional.empty());
-        when(billingCustomerRepository.save(any(BillingCustomer.class)))
-                .thenAnswer(inv -> inv.getArgument(0));
+        // No findByUserId stub: findOrCreate does that read itself, which is the point of it
+        // existing. A stub here would be dead code that strict stubs rightly rejects.
+        when(billingCustomerRepository.findOrCreate(TARGET_ID, "internal"))
+                .thenReturn(new BillingCustomer(user, "internal"));
         stubSaveReturnsArg();
 
         AssignPlanResult result = service.assignPlan(TARGET_ID, "STARTER", ADMIN_ID);
@@ -172,7 +173,11 @@ class AdminPlanServiceTest {
         assertThat(result.previousPlanCode()).isNull(); // brand-new sub has no prior plan
         assertThat(result.newPlanCode()).isEqualTo("STARTER");
 
-        verify(billingCustomerRepository).save(any(BillingCustomer.class));
+        // findOrCreate, never save: the find-then-save this replaced was a check-then-act on
+        // billing_customer.user_id, so an admin assigning a plan while the user was signing in
+        // for the first time lost this transaction rather than a row.
+        verify(billingCustomerRepository).findOrCreate(TARGET_ID, "internal");
+        verify(billingCustomerRepository, never()).save(any(BillingCustomer.class));
         ArgumentCaptor<Subscription> captor = ArgumentCaptor.forClass(Subscription.class);
         verify(subscriptionRepository).save(captor.capture());
         Subscription saved = captor.getValue();

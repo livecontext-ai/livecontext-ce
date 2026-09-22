@@ -11,6 +11,7 @@ import com.apimarketplace.storage.service.file.DownloadStream;
 import com.apimarketplace.storage.service.file.FileStorageService;
 import com.apimarketplace.storage.service.file.StorageStreamingMetrics;
 import com.apimarketplace.common.storage.signing.ShowcaseUrlSigner;
+import com.apimarketplace.common.storage.signing.SignedResponseCacheControl;
 import com.apimarketplace.storage.util.FileConstants;
 import com.apimarketplace.storage.util.FileNameExtractor;
 import com.apimarketplace.storage.util.MimeTypeRegistry;
@@ -410,9 +411,11 @@ public class FileController {
      *
      * <p><strong>Validation order matters</strong>: signature first (refuses to
      * disclose whether the key exists for an unsigned/forged request), then
-     * expiry, then existence. {@code Cache-Control: private, max-age=900}
-     * mirrors the 15-min URL TTL - public CDN caching would survive past the
-     * expiry and defeat the gate.
+     * expiry, then existence.
+     *
+     * <p><strong>Cache-Control</strong> comes from {@link SignedResponseCacheControl#forExpiry}:
+     * {@code private, max-age=min(900, exp - now)}, so a cache entry can never outlive the link
+     * that earned it. That helper carries the reasoning, and the CE mount shares it.
      */
     @GetMapping("/proxy-signed")
     public ResponseEntity<StreamingResponseBody> proxySignedDownload(
@@ -455,10 +458,7 @@ public class FileController {
                 ResponseEntity.BodyBuilder builder = ResponseEntity.ok()
                         .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
                         .header(HttpHeaders.CONTENT_TYPE, mimeType)
-                        // PRIVATE: don't let CDN caches (Cloudflare, Caddy) hold
-                        // bytes past the URL's expiry - a cached entry would
-                        // bypass our signature/expiry gate.
-                        .header(HttpHeaders.CACHE_CONTROL, "private, max-age=900");
+                        .header(HttpHeaders.CACHE_CONTROL, SignedResponseCacheControl.forExpiry(exp, now));
                 if (advertisedLength >= 0) {
                     builder.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(advertisedLength));
                 }
@@ -476,6 +476,15 @@ public class FileController {
             HttpServletRequest request) {
 
         String tenantId = tenantResolver.resolve(request);
+
+        // Org VIEWERs are read-only platform-wide. This endpoint had only the key-prefix
+        // check below, so a VIEWER could delete any file they had uploaded themselves,
+        // which is exactly what the central gate exists to prevent. The bulk-delete
+        // sibling in StorageExplorerController has carried this check all along.
+        if (OrgAccessGuard.isRoleWriteBlocked(
+                tenantResolver.resolveOrgId(request), tenantResolver.resolveOrgRole(request))) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
 
         if (!key.startsWith(tenantId + "/")) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();

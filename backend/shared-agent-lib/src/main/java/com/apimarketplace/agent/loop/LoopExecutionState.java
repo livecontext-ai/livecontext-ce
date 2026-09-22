@@ -186,6 +186,34 @@ public class LoopExecutionState {
         return last.promptTokens() != null ? last.promptTokens() : 0L;
     }
 
+    /**
+     * How many tokens the last request actually OCCUPIED in the model's context window,
+     * as reported by the provider. Returns 0 when no iteration has completed yet.
+     *
+     * <p>This is deliberately not {@link #getLastIterationPromptTokens()}. Anthropic's
+     * {@code input_tokens} counts only the tokens it had to read fresh: everything served from
+     * the prompt cache is reported separately as {@code cache_read_input_tokens} /
+     * {@code cache_creation_input_tokens}. Since {@code ClaudeProvider} caches the system blocks
+     * and the last history message, a nearly-full Claude conversation on a cache hit reports a
+     * few hundred prompt tokens while occupying most of the window. Summing the three is the
+     * real occupancy.
+     *
+     * <p>OpenAI is unaffected by the sum: its {@code prompt_tokens} already includes cached
+     * tokens, and the subset it reports separately ({@code cachedTokens}) is deliberately NOT
+     * added here, which would double-count it.
+     */
+    public long getLastIterationContextTokens() {
+        if (usagePerIteration.isEmpty()) return 0L;
+        UsageInfo last = usagePerIteration.get(usagePerIteration.size() - 1);
+        return orZero(last.promptTokens())
+            + orZero(last.cacheReadInputTokens())
+            + orZero(last.cacheCreationInputTokens());
+    }
+
+    private static long orZero(Integer value) {
+        return value != null ? value : 0L;
+    }
+
     /** Completion tokens of the most recent completed iteration alone (V162). */
     public long getLastIterationCompletionTokens() {
         if (usagePerIteration.isEmpty()) return 0L;

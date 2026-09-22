@@ -1,5 +1,7 @@
 package com.apimarketplace.agent.webhook;
 
+import com.apimarketplace.common.security.token.TokenAtRest;
+
 import com.apimarketplace.agent.domain.AgentWebhookTokenEntity;
 import com.apimarketplace.agent.repository.AgentWebhookTokenRepository;
 import com.apimarketplace.common.security.CredentialEncryptionService;
@@ -27,6 +29,12 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("AgentWebhookTokenService Tests")
 class AgentWebhookTokenServiceTest {
+
+    /** Token columns are hashed through TokenAtRest; a unit test must install the material itself. */
+    @org.junit.jupiter.api.BeforeAll
+    static void installTokenAtRest() {
+        TokenAtRest.install(new CredentialEncryptionService("test-password-123", "0123456789abcdef"));
+    }
 
     @Mock
     private AgentWebhookTokenRepository repository;
@@ -423,24 +431,24 @@ class AgentWebhookTokenServiceTest {
         }
 
         @Test
-        @DisplayName("should delegate to repository.findByToken for a non-blank token")
+        @DisplayName("should look the hash of a non-blank token up in repository.findByTokenHash")
         void shouldDelegateToRepository() {
             String token = service.generateToken();
             AgentWebhookTokenEntity entity = new AgentWebhookTokenEntity(AGENT_ID, token);
 
-            when(repository.findByToken(token)).thenReturn(Optional.of(entity));
+            when(repository.findByTokenHash(TokenAtRest.hash(token))).thenReturn(Optional.of(entity));
 
             Optional<AgentWebhookTokenEntity> result = service.findByToken(token);
 
             assertThat(result).isPresent().contains(entity);
-            verify(repository).findByToken(token);
+            verify(repository).findByTokenHash(TokenAtRest.hash(token));
         }
 
         @Test
         @DisplayName("should return empty when repository finds nothing")
         void shouldReturnEmptyWhenRepoReturnsEmpty() {
             String token = service.generateToken();
-            when(repository.findByToken(token)).thenReturn(Optional.empty());
+            when(repository.findByTokenHash(TokenAtRest.hash(token))).thenReturn(Optional.empty());
 
             assertThat(service.findByToken(token)).isEmpty();
         }
@@ -465,25 +473,25 @@ class AgentWebhookTokenServiceTest {
         }
 
         @Test
-        @DisplayName("should delegate to repository.findActiveByToken for a non-blank token")
+        @DisplayName("should look the hash of a non-blank token up in repository.findActiveByTokenHash")
         void shouldDelegateToRepository() {
             String token = service.generateToken();
             AgentWebhookTokenEntity entity = new AgentWebhookTokenEntity(AGENT_ID, token);
             entity.setIsActive(true);
 
-            when(repository.findActiveByToken(token)).thenReturn(Optional.of(entity));
+            when(repository.findActiveByTokenHash(TokenAtRest.hash(token))).thenReturn(Optional.of(entity));
 
             Optional<AgentWebhookTokenEntity> result = service.findActiveByToken(token);
 
             assertThat(result).isPresent().contains(entity);
-            verify(repository).findActiveByToken(token);
+            verify(repository).findActiveByTokenHash(TokenAtRest.hash(token));
         }
 
         @Test
         @DisplayName("should return empty when token is inactive according to repository")
         void shouldReturnEmptyWhenInactive() {
             String token = service.generateToken();
-            when(repository.findActiveByToken(token)).thenReturn(Optional.empty());
+            when(repository.findActiveByTokenHash(TokenAtRest.hash(token))).thenReturn(Optional.empty());
 
             assertThat(service.findActiveByToken(token)).isEmpty();
         }

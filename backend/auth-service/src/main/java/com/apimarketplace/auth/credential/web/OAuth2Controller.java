@@ -238,14 +238,23 @@ public class OAuth2Controller {
             return;
         }
 
+        // WARN, not ERROR, for the two malformed-request cases below. This endpoint has to be
+        // public (a provider redirects the browser here with no session of ours), so it gets
+        // scanned: production logged over a hundred bare GETs carrying neither code nor state
+        // between 2026-09-02 and 2026-09-21, against 29 genuine callbacks in the same period,
+        // every one of which carried its code. At ERROR that noise sits in the same dashboards
+        // and alerts as our own failures and dilutes them, which is the actual cost. A request
+        // that arrives malformed from the open internet is bad INPUT, not a system error.
+        // callback_failed below stays ERROR: that one is ours.
         if (code == null || code.isBlank()) {
-            log.error("Missing authorization code in callback");
+            log.warn("Missing authorization code in callback (state {}): malformed or unsolicited request",
+                    state == null || state.isBlank() ? "absent too" : "present");
             response.sendRedirect(frontendUrl + "/dashboard/credentials?error=missing_code");
             return;
         }
 
         if (state == null || state.isBlank()) {
-            log.error("Missing state in callback");
+            log.warn("Missing state in callback although a code was present: malformed or unsolicited request");
             response.sendRedirect(frontendUrl + "/dashboard/credentials?error=missing_state");
             return;
         }

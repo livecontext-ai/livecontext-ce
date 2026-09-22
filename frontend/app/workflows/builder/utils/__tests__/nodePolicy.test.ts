@@ -7,6 +7,7 @@ import {
   nodeSupportsPolicy,
   isContinueOnFailureBlocked,
   isExecuteOnceBlocked,
+  nodeCallsProvider,
 } from '../nodePolicy';
 
 function makeNode(type: string, kind: string, id = `${kind}-1`): Node<BuilderNodeData> {
@@ -128,5 +129,88 @@ describe('gating - mirrors WorkflowPlanParser rejections', () => {
     const mcp = makeNode('flowNode', 'action');
     const policy = { retryCount: 1, continueOnFailure: true, executeOnce: true };
     expect(gateNodePolicyForNode(policy, mcp)).toEqual(policy);
+  });
+});
+
+describe('providerRetryMaxWaitSec', () => {
+  // The one field of the block where 0 is a STATEMENT and not a default. Absent means "the
+  // platform waits out a rate limit for me"; 0 means "do not, I pace my own calls". Every other
+  // numeric field here resolves 0 to unset and drops it, so this field needed its own coercion,
+  // and collapsing the two states would silently re-enable the retry it exists to switch off.
+  it('keeps 0, which every other numeric field drops', () => {
+    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: 0 })).toEqual({
+      providerRetryMaxWaitSec: 0,
+    });
+    expect(sanitizeNodePolicy({ retryCount: 0 })).toBeUndefined();
+  });
+
+  it('keeps a positive budget', () => {
+    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: 60 })).toEqual({
+      providerRetryMaxWaitSec: 60,
+    });
+  });
+
+  it('coerces a numeric string, the shape a number input produces', () => {
+    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: '30' })).toEqual({
+      providerRetryMaxWaitSec: 30,
+    });
+    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: '0' })).toEqual({
+      providerRetryMaxWaitSec: 0,
+    });
+  });
+
+  it('drops a value the backend would reject rather than sending it', () => {
+    // -5 and 'soon' are what the backend refuses; sending them would turn a typo into a refused
+    // save of the whole plan instead of a field the user can correct.
+    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: -5 })).toBeUndefined();
+    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: 'soon' })).toBeUndefined();
+    expect(sanitizeNodePolicy({ providerRetryMaxWaitSec: null })).toBeUndefined();
+  });
+
+  it('survives the type gate on EVERY node type, including ones that call no provider', () => {
+    // Deliberate: the gate runs on every save. Dropping an inert field here would mean that
+    // opening an agent-built workflow and saving it silently deleted a setting nobody removed.
+    const core = makeNode('flowNode', 'code', 'code-1');
+    expect(gateNodePolicyForNode({ providerRetryMaxWaitSec: 0 }, core)).toEqual({
+      providerRetryMaxWaitSec: 0,
+    });
+  });
+});
+
+describe('nodeCallsProvider', () => {
+  // This decides whether the provider-retry field is OFFERED. The only defensible answer is the one
+  // the plan emitter gives, because a node the emitter does not turn into a `mcps` entry has
+  // nowhere for the setting to land: `attachNodePolicies` joins on emitted entries. A second,
+  // similar-looking predicate disagreed with it in both directions, so these tests compare against
+  // the emitter's own rule rather than restating a list.
+  function withToolData(node: Node<BuilderNodeData>): Node<BuilderNodeData> {
+    // The two fields toolData actually requires, so this is a shape the builder can really hold.
+    return { ...node, data: { ...node.data, toolData: { apiName: 'Slack', method: 'POST' } } };
+  }
+
+  it('needs the tool data, not merely the absence of another family', () => {
+    // The half a deny-list drops. A node with no toolData and no apiData is never emitted as a
+    // `mcps` entry, so offering a provider-only control on it offers a setting that cannot land.
+    expect(nodeCallsProvider(makeNode('flowNode', 'action'))).toBe(false);
+    expect(nodeCallsProvider(withToolData(makeNode('flowNode', 'action', 'tool-2')))).toBe(true);
+  });
+
+  it('an apiData node counts too, like the emitter', () => {
+    const node = makeNode('flowNode', 'action', 'api-1');
+    const withApi = { ...node, data: { ...node.data, apiData: { apiName: 'Slack' } } };
+    expect(nodeCallsProvider(withApi)).toBe(true);
+  });
+
+  it('every excluded family stays excluded even carrying tool data', () => {
+    // One assertion per exclusion, so deleting any single clause of the shared predicate fails a
+    // named test rather than passing silently.
+    expect(nodeCallsProvider(withToolData(makeNode('triggerNode', 'entry', 'entry-1')))).toBe(false);
+    expect(nodeCallsProvider(withToolData(makeNode('noteNode', 'note', 'note-1')))).toBe(false);
+    expect(nodeCallsProvider(withToolData(makeNode('agentNode', 'reasoning', 'agent-1')))).toBe(false);
+    expect(nodeCallsProvider(withToolData(makeNode('interfaceNode', 'interface', 'interface-1')))).toBe(false);
+    expect(nodeCallsProvider(withToolData(makeNode('crudNode', 'crud', 'crud-1')))).toBe(false);
+    expect(nodeCallsProvider(withToolData(makeNode('decisionNode', 'decision', 'decision-1')))).toBe(false);
+    expect(nodeCallsProvider(withToolData(makeNode('mergeNode', 'merge', 'merge-1')))).toBe(false);
+    expect(nodeCallsProvider(withToolData(makeNode('flowNode', 'code', 'code-1')))).toBe(false);
   });
 });

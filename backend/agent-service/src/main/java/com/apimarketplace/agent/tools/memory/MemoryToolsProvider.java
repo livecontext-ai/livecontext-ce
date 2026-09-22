@@ -114,10 +114,9 @@ public class MemoryToolsProvider implements ToolsProvider {
                 .build(),
             stringParam("title", "Short label, max " + MemoryService.MAX_TITLE_CHARS + " chars (for: save)", false),
             stringParam("summary", "ONE line, max " + limits.getMaxSummaryChars() + " chars. This is the line "
-                + "injected into every agent's context "
-                + "in this workspace, so it must state the fact rather than point at it. (for: save)", false),
-            stringParam("content", "Optional body, max " + limits.getMaxContentChars() + " chars. NOT injected "
-                + "into context; returned by get. "
+                + "injected into the index for agents in scope, so it must state the fact rather than point at it. (for: save)", false),
+            stringParam("content", "Optional body, max " + limits.getMaxContentChars() + " chars. Returned by get; "
+                + "injected into context only when pinned. "
                 + "Omitting it on a save that overwrites KEEPS the existing body; pass an empty string to clear "
                 + "it. (for: save)", false),
             stringParam("slug", "Stable handle. Omit on a first save (derived from title); pass it to overwrite an "
@@ -134,7 +133,8 @@ public class MemoryToolsProvider implements ToolsProvider {
             boolParam("pinned", "Inject the full body on every run instead of just the summary. Only a few entries "
                 + "can be pinned. Default false. (for: save)", false, false),
             enumParam("scope", "Where a SAVE lands: 'workspace' (default, shared with every agent here) or "
-                    + "'agent' (private to you). Reads always cover both, so there is nothing to pass on "
+                    + "'agent' (only this agent recalls it; workspace members can still manage it). Reuse the existing "
+                    + "scope when correcting a memory. Reads cover both, so there is nothing to pass on "
                     + "get/list/search/delete. (for: save)", false,
                 List.of("workspace", "agent")),
             stringParam("query", "Words to match. On search it covers bodies too; on list it filters titles, "
@@ -156,13 +156,13 @@ public class MemoryToolsProvider implements ToolsProvider {
             .name("memory")
             .description("""
                 Long-term memory: durable facts about the user and the work, kept across conversations in this \
-                workspace. WHEN this workspace has any, the one-line summary of every entry appears in your \
-                context under 'Long-term memory'; read that index and use get to open the one you need. If \
-                that heading is not there, list(as_index=true) gives you the same index. Save a fact when \
-                you learn something that will still matter in a conversation that has not happened yet, and \
-                especially when the user corrects you. Declarative facts only ("the user prefers X"), never instructions \
-                ("always do X"). Memory is what is TRUE; a skill is how to DO something.
-                Call memory(action='help') for full documentation and examples.
+                workspace. When past preferences or decisions help, read the 'Long-term memory' index, or \
+                list(as_index=true) if absent; get relevant details and search missing facts. Save confirmed \
+                lasting preferences and corrections. Before updating, get the entry and reuse its slug AND scope; \
+                replace contradictory content. Declarative facts, never instructions, secrets or task progress. \
+                Current requests take priority. Attribute personal facts: workspace memory is shared. Keep entries \
+                concise and unpinned by default. Read-only or disabled memory must not interrupt the task.
+                Call memory(action='help') for guidance and examples.
                 """)
             .category(ToolCategory.AGENT)
             .parameters(params)

@@ -216,6 +216,19 @@ export interface WorkflowsPage {
   folderTrail: ResourceFolder[];
   /** The requested folder no longer exists: this page is the top level, drop the filter. */
   folderMissing?: boolean;
+  /**
+   * The node types actually present in this workspace, with how many workflows carry each,
+   * so the picker offers only options that can return something. Counted before the
+   * node-type filter is applied, so an option keeps its count while it is ticked.
+   */
+  nodeTypeFacets: NodeTypeFacet[];
+}
+
+/** One option of the node-type filter: the token and how many rows carry it. */
+export interface NodeTypeFacet {
+  /** Token as stored on the row, e.g. `mcp:gmail`, `core:loop`, `interface`. */
+  value: string;
+  count: number;
 }
 
 /**
@@ -304,7 +317,14 @@ export interface PagedStepsResponse {
 export interface DataSource {
   id: string;
   name: string;
+  /**
+   * Owning user. The datasource service serializes this record with snake_case
+   * `@JsonProperty` names, so `tenant_id` is what actually arrives; the camelCase form is
+   * kept for other producers. Read BOTH - reading only `tenantId` yields undefined against
+   * the real API and silently drops the owner from the UI.
+   */
   tenantId?: string;
+  tenant_id?: string;
   type?: string;
   description?: string;
   createdAt?: string;
@@ -414,6 +434,17 @@ export interface Agent {
   creditsFree?: number | null;
   budgetResetMode?: 'cumulative' | 'monthly' | 'weekly';
   budgetLastReset?: string | null;
+  /**
+   * Server verdict: this agent's own cap refuses its next run, scheduled runs included.
+   *
+   * NOT `creditsFree === 0`. `creditsConsumed` is only zeroed when the agent next EXECUTES,
+   * so a weekly or monthly agent that reached its cap in the previous period reads zero free
+   * and is not blocked at all. Resolved server-side with that pending reset applied, which is
+   * also why it cannot be recomputed here.
+   */
+  budgetBlocked?: boolean;
+  /** When `budgetBlocked` lifts by itself. Null or absent when it never does. */
+  budgetBlockedUntil?: string | null;
   // Observability counter columns
   totalExecutions?: number;
   totalTokensUsed?: number;
@@ -444,12 +475,13 @@ export interface Agent {
 
 /**
  * Shape accepted by `agentService.updateAgent` and `createAgent`.
- * Server-managed budget fields (`creditsConsumed`, `creditsReserved`, `creditsFree`) are
- * stripped at compile time via `Omit` so client code cannot accidentally send them.
+ * Server-managed budget fields (`creditsConsumed`, `creditsReserved`, `creditsFree`,
+ * `budgetBlocked`, `budgetBlockedUntil`) are stripped at compile time via `Omit` so client
+ * code cannot accidentally send them - the server rejects them with 400 if it ever does.
  */
 export type AgentUpdateInput = Partial<
   Omit<Agent, 'creditsConsumed' | 'creditsConsumedFromSubagents' | 'creditsReserved'
-    | 'creditsFree' | 'budgetLastReset'
+    | 'creditsFree' | 'budgetLastReset' | 'budgetBlocked' | 'budgetBlockedUntil'
     | 'totalExecutions' | 'totalTokensUsed' | 'totalToolCalls' | 'successCount'
     | 'failureCount' | 'cancelledCount' | 'loopDetectedCount' | 'totalDurationMs'
     | 'lastExecutionAt' | 'createdAt' | 'updatedAt' | 'id' | 'tenantId'>
@@ -681,6 +713,12 @@ export interface WorkflowPublication {
   isApplication?: boolean;
   /** Pre-computed node icon props for marketplace card display */
   nodeIcons?: NodeIconData[];
+  /**
+   * Node-type tokens of the published plan (`mcp:gmail`, `core:loop`, `interface`, ...),
+   * denormalized on the publication row so a list can filter on them without loading the
+   * plan snapshot. Empty on rows published before this was introduced.
+   */
+  nodeTypes?: string[];
   /** Display mode: how the publication renders in the marketplace */
   displayMode?: 'WORKFLOW' | 'INTERFACE' | 'APPLICATION' | 'AGENT' | 'TABLE' | 'SKILL';
   category?: {
@@ -1054,6 +1092,30 @@ export interface WorkflowPlanVersion {
   createdBy?: string;
 }
 
+/**
+ * One PERSON who edited a resource, as returned by `listRecentEditors`.
+ *
+ * Several saves by the same user collapse into one entry carrying their most recent one
+ * plus how many they made, so this answers "who works on this", not "what changed".
+ */
+export interface ResourceEditor {
+  /** The editing user's id. Matches the workspace roster's member ids. */
+  userId: string;
+  /**
+   * Backend-resolved name, present only as a fallback. Prefer the workspace roster (it
+   * carries an avatar too); this is what names an editor who has since LEFT the workspace.
+   */
+  displayName?: string | null;
+  /** ISO timestamp of this editor's most recent save. */
+  editedAt?: string | null;
+  /** How many stored versions this editor wrote, within the retention window. */
+  editCount: number;
+}
+
+export interface ResourceEditorsResponse {
+  editors: ResourceEditor[];
+}
+
 export interface WorkflowVersionDetail extends WorkflowPlanVersion {
   plan: any;
 }
@@ -1377,6 +1439,15 @@ export interface PlatformCredentialPublicInfo {
   maxCredits?: string;
   /** The quantity the quote was computed for, echoed back when one was supplied. */
   quantity?: string;
+  /**
+   * What the call's own choices did to the published rate, echoed back when a
+   * factor was supplied.
+   *
+   * <p>A surface prints the rate, the size and the total together, and a total
+   * that is not their product reads as an arithmetic error unless the third
+   * factor is there to be named. Absent for a call at the published rate.
+   */
+  priceMultiplier?: string;
   /** Default markup of the latest version when it is set (may be absent / null). */
   defaultMarkupCredits?: string;
   /** Version number of the latest pricing snapshot when one exists. */
@@ -1832,7 +1903,8 @@ export interface ExecutionModeResponse {
 export interface ConditionEvaluation {
   type: 'if' | 'elseif' | 'else';
   expression: string | null;
-  result: boolean;
+  /** Null when the branch has no condition to evaluate: an else, a switch default. */
+  result: boolean | null;
   destination: string | null;
 }
 
@@ -1976,14 +2048,29 @@ export interface DetailedStepDataResponse {
 }
 
 /**
- * Branch evaluation info for Decision nodes.
+ * Branch evaluation info as a branching node reports it.
+ *
+ * Matches `BranchEvaluationReport` on the backend. Read rows through
+ * `normalizeBranchEvaluation` rather than casting to this: rows written before the
+ * shape was unified carry per-node spellings (`branch_type`, `resolved_condition`,
+ * `choice_label`, `resolved_expression`) and no `selected` at all.
  */
 export interface BranchEvaluation {
+  index: number;
   branch: string;
-  condition: string | null;
+  condition: string;
   resolved: string | null;
+  /** Null when the branch has no condition: an else, a default. */
   result: boolean | null;
   selected: boolean;
+  /** `taken` is a loop's exit port: the run took it BECAUSE the condition was false. */
+  outcome: 'matched' | 'not_matched' | 'matched_not_selected' | 'taken' | 'fallback' | 'error';
+  error?: string;
+  unresolved?: Array<{ reference: string; reason: string }>;
+  /** What the author named this branch. A switch case and an option choice carry one. */
+  case_label?: string;
+  choice_label?: string;
+  choice_id?: string;
 }
 
 /**

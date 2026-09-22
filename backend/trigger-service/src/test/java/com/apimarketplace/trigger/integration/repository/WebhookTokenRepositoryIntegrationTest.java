@@ -1,5 +1,10 @@
 package com.apimarketplace.trigger.integration.repository;
 
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.common.security.CredentialEncryptionService;
+import com.apimarketplace.common.security.token.TokenAtRestBootstrap;
+import org.springframework.context.annotation.Import;
+
 import com.apimarketplace.trigger.domain.WebhookTokenEntity;
 import com.apimarketplace.trigger.repository.WebhookTokenRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -19,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Tests webhook token CRUD, lookup by token, and workflow/trigger-based queries.
  */
 @DataJpaIntegrationTest
+@Import({CredentialEncryptionService.class, TokenAtRestBootstrap.class})
 class WebhookTokenRepositoryIntegrationTest {
 
     @Autowired
@@ -66,16 +72,69 @@ class WebhookTokenRepositoryIntegrationTest {
             UUID workflowId = UUID.randomUUID();
             persistToken(workflowId, "trigger:webhook", "unique-token-abc");
 
-            Optional<WebhookTokenEntity> found = webhookTokenRepository.findByToken("unique-token-abc");
+            Optional<WebhookTokenEntity> found = webhookTokenRepository.findByTokenHash(TokenAtRest.hash("unique-token-abc"));
 
             assertThat(found).isPresent();
             assertThat(found.get().getWorkflowId()).isEqualTo(workflowId);
+            assertThat(found.get().getToken()).isEqualTo("unique-token-abc");
+        }
+
+        @Test
+        @DisplayName("stores the token as ENC: ciphertext beside its keyed hash, never in clear")
+        void storesCiphertextAndHash() {
+            persistToken(UUID.randomUUID(), "trigger:webhook", "wh_secret_value");
+            entityManager.flush();
+
+            Object[] raw = (Object[]) entityManager.getEntityManager()
+                    .createNativeQuery("SELECT token, token_hash FROM trigger.webhook_tokens WHERE token_hash = :h")
+                    .setParameter("h", TokenAtRest.hash("wh_secret_value"))
+                    .getSingleResult();
+
+            assertThat((String) raw[0]).startsWith("ENC:").doesNotContain("wh_secret_value");
+            assertThat(TokenAtRest.decrypt((String) raw[0])).isEqualTo("wh_secret_value");
+            assertThat(raw[1]).isEqualTo(TokenAtRest.hash("wh_secret_value"));
+        }
+
+        @Test
+        @DisplayName("a pre-change row (plaintext, no hash) misses on the hash and is resolved, unchanged, by the native legacy fallback")
+        void legacyPlaintextRowResolvesThroughFallback() {
+            UUID workflowId = UUID.randomUUID();
+            entityManager.getEntityManager().createNativeQuery(
+                    "INSERT INTO trigger.webhook_tokens (workflow_id, trigger_id, token, token_hash, state, created_at, updated_at) "
+                            + "VALUES (:wf, 'trigger:webhook', 'wh_legacy_plain', NULL, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+                    .setParameter("wf", workflowId).executeUpdate();
+            entityManager.clear();
+
+            assertThat(webhookTokenRepository.findByTokenHash(TokenAtRest.hash("wh_legacy_plain"))).isEmpty();
+            Optional<WebhookTokenEntity> legacy = webhookTokenRepository.findLegacyPlaintext("wh_legacy_plain");
+
+            assertThat(legacy).isPresent();
+            assertThat(legacy.get().getToken()).as("converter passes a plaintext column through").isEqualTo("wh_legacy_plain");
+            assertThat(legacy.get().getWorkflowId()).isEqualTo(workflowId);
+            // read-only: the row is still plaintext afterwards
+            Object raw = entityManager.getEntityManager()
+                    .createNativeQuery("SELECT token FROM trigger.webhook_tokens WHERE workflow_id = :wf")
+                    .setParameter("wf", workflowId).getSingleResult();
+            assertThat(raw).isEqualTo("wh_legacy_plain");
+        }
+
+        @Test
+        @DisplayName("a regenerated token is looked up by its new hash and no longer by the old one")
+        void regenerateMovesTheHash() {
+            WebhookTokenEntity saved = persistToken(UUID.randomUUID(), "trigger:webhook", "wh_before");
+            saved.setToken("wh_after");
+            webhookTokenRepository.saveAndFlush(saved);
+            entityManager.clear();
+
+            assertThat(webhookTokenRepository.findByTokenHash(TokenAtRest.hash("wh_before"))).isEmpty();
+            assertThat(webhookTokenRepository.findByTokenHash(TokenAtRest.hash("wh_after")))
+                    .isPresent().get().extracting(WebhookTokenEntity::getToken).isEqualTo("wh_after");
         }
 
         @Test
         @DisplayName("should return empty for non-existent token")
         void shouldReturnEmptyForNonExistentToken() {
-            Optional<WebhookTokenEntity> found = webhookTokenRepository.findByToken("does-not-exist");
+            Optional<WebhookTokenEntity> found = webhookTokenRepository.findByTokenHash(TokenAtRest.hash("does-not-exist"));
             assertThat(found).isEmpty();
         }
     }

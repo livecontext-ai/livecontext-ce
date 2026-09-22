@@ -171,6 +171,16 @@ export default function BillingPage() {
           this restriction.
         </Callout>
         <p>
+          <strong>The Free plan also carries a separate monthly AI allowance.</strong> It is a third
+          bucket, distinct from the monthly grant and from pay-as-you-go, and it funds chat and agent
+          turns on the models a cloud admin has opened to the free tier. It refills every month, it
+          is never spent on anything else (a workflow node, a web search, an image, or a model
+          outside that list), and it can be emptied but never driven negative. Its size is configured
+          per plan, so the pricing page quotes the live figure. Paid plans carry no allowance because
+          their ordinary credits already fund agents. Like the monthly credits beside it, it arrives
+          once the account&apos;s email is verified.
+        </p>
+        <p>
           Grants route to a bucket by their own type: one-time top-ups and referral rewards (and their
           clawbacks) land on PAYG; renewals, admin grants, and refunds land on the sub bucket.
         </p>

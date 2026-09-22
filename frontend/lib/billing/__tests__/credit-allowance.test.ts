@@ -15,6 +15,18 @@ describe('resolveMonthlyAllowance', () => {
     expect(FREE_MONTHLY_CREDITS).toBe(1_000);
   });
 
+  it('gives a FREE row that holds a real credit pack the PACK, not the 1,000 reset', () => {
+    // grantsBasePack is true for any row with creditQuantity > 0, whatever the plan code, and
+    // a tier index above 0 can only come from a quantity that matched a tier cost exactly. So
+    // the backend grants this row 10,000 and the gauge used to measure it against 1,000 -
+    // which, once the wallet card started naming a date, became a dated promise of the wrong
+    // amount.
+    expect(resolveMonthlyAllowance('FREE', 1)).toBe(10_000);
+    expect(resolveMonthlyAllowance('FREE', 4)).toBe(100_000);
+    // Tier 0 is the no-pack case and still reads the plan: FREE keeps its monthly reset.
+    expect(resolveMonthlyAllowance('FREE', 0)).toBe(FREE_MONTHLY_CREDITS);
+  });
+
   it('treats a missing plan code as FREE, not as "unknown"', () => {
     // The billing payload omits the subscription row entirely for an account
     // that has never subscribed; that account still gets the monthly reset.

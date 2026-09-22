@@ -126,7 +126,8 @@ export default function AboutInformationContent() {
     <div className="space-y-8">
       <div className="rounded-xl border border-theme p-6">
         <div className="flex items-center gap-3 mb-6">
-          <LogoAnimate size="md" className="text-theme-primary" />
+          {/* Decorative: a card ornament beside the heading, not a named image. */}
+          <LogoAnimate size="md" className="text-theme-primary" decorative />
           <div>
             <h2 className="text-lg font-semibold text-theme-primary">About Us</h2>
             <p className="text-sm text-theme-secondary">The platform that puts AI to work for you</p>

@@ -23,8 +23,8 @@ export interface AskUserQuestionCardProps {
    * to its editable state so the person can submit again.
    */
   onSubmit?: (answers: AskUserAnswer[], toolCallId: string) => Promise<boolean> | boolean | void;
-  /** Skip - the user chose not to answer. */
-  onDismiss?: (toolCallId: string) => void;
+  /** Skip - resolves false on failure so the user can retry. */
+  onDismiss?: (toolCallId: string) => Promise<boolean> | boolean | void;
   className?: string;
 }
 
@@ -146,9 +146,14 @@ export function AskUserQuestionCard({
     setStep(step - 1);
   };
 
-  const dismiss = () => {
+  const dismiss = async () => {
+    if (pending) return;
     setPending(true);
-    onDismiss?.(pendingQuestion.toolCallId);
+    try {
+      if (await onDismiss?.(pendingQuestion.toolCallId) === false) setPending(false);
+    } catch {
+      setPending(false);
+    }
   };
 
   /**

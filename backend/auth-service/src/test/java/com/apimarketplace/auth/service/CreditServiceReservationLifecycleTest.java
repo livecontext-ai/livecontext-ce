@@ -498,14 +498,19 @@ class CreditServiceReservationLifecycleTest {
     }
 
     @Test
-    @DisplayName("CE compat: markupEnabled=false commit returns COMMITTED without DB read")
+    @DisplayName("CE compat: markupEnabled=false commit says BILLING_DISABLED, not COMMITTED, "
+            + "without a DB read")
     void ceCommitNoOp() {
+        // The distinction carries money now that a caller reads this outcome to decide whether it
+        // may show an amount AS CHARGED - a generated asset carries the price it cost. Nothing was
+        // charged here and no ledger row exists, so a success word would put a price on a purchase
+        // that never happened. It was harmless while the value was ignored.
         creditService = new CreditService(subscriptionRepository, ledgerRepository, pricingService,
                 true, false, false);
 
         CommitOutcome out = creditService.commitReservation(SOURCE_ID, PROJECTED, "p", "m");
 
-        assertThat(out).isEqualTo(CommitOutcome.COMMITTED);
+        assertThat(out).isEqualTo(CommitOutcome.BILLING_DISABLED);
         verify(ledgerRepository, never()).findFirstBySourceId(any());
     }
 

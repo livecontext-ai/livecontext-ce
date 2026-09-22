@@ -116,6 +116,7 @@ describe('AcquirePublicationModal - CE-exclusive', () => {
       active: {
         publication,
         ceMode: false,
+        demo: false,
         inline: true,
         status: 'ce-exclusive',
         progress: 0,

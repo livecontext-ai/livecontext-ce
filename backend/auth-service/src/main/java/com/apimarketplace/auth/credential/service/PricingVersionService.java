@@ -110,6 +110,26 @@ public class PricingVersionService {
     @Transactional(readOnly = true)
     public Optional<FrozenMarkup> resolveFrozenMarkup(Long pricingVersionId, UUID apiToolId,
                                                        String modelId, BigDecimal quantity) {
+        return resolveFrozenMarkup(pricingVersionId, apiToolId, modelId, quantity, null);
+    }
+
+    /**
+     * Same frozen descriptor, for a call whose CHOICES move it off the
+     * published rate.
+     *
+     * <p>A relayed 1080p render costs the platform owner more than the 720p one
+     * the rate is quoted for, and the relay reads that factor back out of the
+     * body it was sent rather than being told it. Applied to the amount here,
+     * beside the rate and the clamps, so the relayed price and the direct one
+     * are reached by the same arithmetic.
+     *
+     * @param multiplier factor for this call, or null for one at the published
+     *                   rate. Null leaves every amount exactly as it was.
+     */
+    @Transactional(readOnly = true)
+    public Optional<FrozenMarkup> resolveFrozenMarkup(Long pricingVersionId, UUID apiToolId,
+                                                       String modelId, BigDecimal quantity,
+                                                       BigDecimal multiplier) {
         Optional<PlatformCredentialPricingVersion> version = versionRepo.findById(pricingVersionId);
         if (version.isEmpty()) {
             return Optional.empty();
@@ -119,10 +139,14 @@ public class PricingVersionService {
         if (quantity != null) {
             // Measured: the row converts the platform measurement into its own
             // published unit and multiplies. Same method the direct path uses.
-            rate = policy.resolveEffectivePrice(version.get(), entry, quantity);
+            rate = policy.resolveEffectivePrice(version.get(), entry, quantity, multiplier);
         } else {
             warnIfUnitPriced(entry, apiToolId);
-            rate = policy.resolveEffectivePriceWithoutQuantity(version.get(), entry);
+            // The factor still applies to a call nobody could measure: it is a
+            // statement about WHAT was asked for, not about how big it was, and
+            // a flat-priced model that sells a resolution has no quantity to
+            // begin with.
+            rate = policy.resolveEffectivePrice(version.get(), entry, null, multiplier);
         }
         return Optional.of(new FrozenMarkup(
                 version.get().getId(),

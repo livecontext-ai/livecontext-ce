@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit tests for {@link BridgeAvailabilityFilter}.
@@ -184,6 +185,61 @@ class BridgeAvailabilityFilterTest {
         Map<String, Object> base = baseWith("codex", "openai");
         filter.filter(base);
         assertThat(names(base)).containsExactly("openai");
+    }
+
+    @Test
+    @DisplayName("runnableMap() requires auth too, which is the whole point of having both maps")
+    void runnableMapRequiresAuthNotJustInstall() throws IOException {
+        // The admin Models panel reads this one to decide whether routing a model to a
+        // CLI is a good idea. An installed-but-logged-out CLI runs NOTHING (every
+        // dispatch comes back "please log in"), and a link to it fails every run of the
+        // model rather than falling back, so the two maps MUST disagree here. If
+        // runnableMap ever returns the installed map, this is the test that says so.
+        String url = startBridge("{\"clis\":{"
+                + cli("codex", true, false) + ","      // installed, not logged in
+                + cli("claudeCode", true, true) + ","  // installed and logged in
+                + cli("geminiCli", false, false) + "}}");
+        BridgeAvailabilityFilter filter = new BridgeAvailabilityFilter(url);
+
+        assertThat(filter.runnableMap())
+                .as("logged-out codex cannot run, however installed it is")
+                .containsEntry("codex", false)
+                .containsEntry("claudeCode", true)
+                .containsEntry("geminiCli", false);
+        assertThat(filter.installedMap())
+                .as("the looser map still reports codex as present, which is why it is the wrong "
+                        + "signal for a decision")
+                .containsEntry("codex", true);
+    }
+
+    @Test
+    @DisplayName("runnableMap() degrades to installed on a bridge too old to report auth")
+    void runnableMapDegradesWhenAuthIsUnreported() throws IOException {
+        // The javadoc promises this, and it is the promise a consumer relies on when it
+        // renders the answer as a decision: an older bridge must not read as "logged out"
+        // for every CLI it has. Covered at the filter level already, but the map is what
+        // the admin badge reads.
+        String url = startBridge("{\"clis\":{\"codex\":{\"id\":\"codex\",\"installed\":true}}}");
+
+        assertThat(new BridgeAvailabilityFilter(url).runnableMap()).containsEntry("codex", true);
+    }
+
+    @Test
+    @DisplayName("runnableMap() hands out an unmodifiable view, like installedMap()")
+    void runnableMapIsUnmodifiable() throws IOException {
+        String url = startBridge("{\"clis\":{" + cli("codex", true, true) + "}}");
+        Map<String, Boolean> runnable = new BridgeAvailabilityFilter(url).runnableMap();
+
+        assertThatThrownBy(() -> runnable.put("codex", false))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    @DisplayName("runnableMap() is empty when the bridge cannot be reached (unknown, not false)")
+    void runnableMapIsEmptyWhenUnverifiable() {
+        // Empty means "can't tell": the panel renders unknown rather than accusing a CLI
+        // of being missing when nobody was asked.
+        assertThat(new BridgeAvailabilityFilter("").runnableMap()).isEmpty();
     }
 
     @Test

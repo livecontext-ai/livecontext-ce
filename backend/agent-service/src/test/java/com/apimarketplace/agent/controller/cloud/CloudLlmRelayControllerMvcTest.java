@@ -96,7 +96,7 @@ class CloudLlmRelayControllerMvcTest {
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(response("done", 11, 7));
-        when(creditClient.checkChatBudget(eq(CLOUD_USER_ID), eq(PROVIDER), eq(MODEL), anyInt(), anyInt()))
+        when(creditClient.checkChatBudget(eq(CLOUD_USER_ID), eq(PROVIDER), eq(MODEL), anyInt(), anyInt(), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
         when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(),
                 any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
@@ -130,7 +130,7 @@ class CloudLlmRelayControllerMvcTest {
         when(authClient.userOwnsActiveCeLink(CLOUD_USER_ID, INSTALL_ID)).thenReturn(true);
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
-        when(creditClient.checkChatBudget(eq(CLOUD_USER_ID), eq(PROVIDER), eq(MODEL), anyInt(), anyInt()))
+        when(creditClient.checkChatBudget(eq(CLOUD_USER_ID), eq(PROVIDER), eq(MODEL), anyInt(), anyInt(), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
         lenient().when(creditClient.consumeCredits(any(), any(), any(), any(), any(), anyInt(), anyInt(),
                 any(com.apimarketplace.common.credit.LlmCacheTokens.class)))

@@ -14,6 +14,7 @@ import com.apimarketplace.orchestrator.repository.SignalWaitRepository;
 import com.apimarketplace.orchestrator.repository.WorkflowRepository;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import com.apimarketplace.orchestrator.services.WorkflowBoardService;
+import com.apimarketplace.orchestrator.services.NodeTypeFilters;
 import com.apimarketplace.orchestrator.services.WorkflowIconExtractor;
 import com.apimarketplace.orchestrator.services.WorkflowManagementService;
 import com.apimarketplace.trigger.client.TriggerClient;
@@ -99,6 +100,9 @@ public class WorkflowListController {
             @RequestParam(value = "q", required = false) String q,
             @RequestParam(value = "sort", required = false) String sort,
             @RequestParam(value = "visibility", required = false) String visibility,
+            @RequestParam(value = "nodeTypes", required = false) String nodeTypes,
+            @RequestParam(value = "includeNodeTypeFacets", required = false, defaultValue = "false")
+            boolean includeNodeTypeFacets,
             @RequestParam(value = "folderId", required = false) String folderId,
             @RequestParam(value = "includeFolders", required = false, defaultValue = "false")
             boolean includeFolders) {
@@ -173,6 +177,25 @@ public class WorkflowListController {
                 .collect(Collectors.toList());
         }
 
+        // NODE TYPES (V483). Applied here, next to the other whole-set filters and
+        // before the folder logic, so the folder tiles below count what the filter
+        // actually leaves - pick "Gmail" and the tiles tell you which folders hold a
+        // Gmail workflow.
+        //
+        // The facets that populate the picker are counted after the folder narrowing
+        // below - see the comment there.
+        Set<String> requestedNodeTypes = NodeTypeFilters.parse(nodeTypes);
+        // Kept for the facets, which are counted further down: they must describe the
+        // set MINUS this filter (so a ticked option keeps its count) but PLUS the
+        // folder narrowing that has not happened yet (so an option can never promise
+        // rows that live in another folder).
+        List<WorkflowEntity> beforeNodeTypeFilter = workflowEntities;
+        if (!requestedNodeTypes.isEmpty()) {
+            workflowEntities = workflowEntities.stream()
+                .filter(w -> NodeTypeFilters.matches(w.getNodeTypes(), requestedNodeTypes))
+                .collect(Collectors.toList());
+        }
+
         // FOLDERS (V448). Two rules decide what the page shows:
         //   * A SEARCH looks everywhere. Someone typing a name wants the workflow, not a
         //     lesson about where they filed it - so an active `q` ignores the folder filter
@@ -180,9 +203,9 @@ public class WorkflowListController {
         //     already list).
         //   * Otherwise `folderId` narrows to one level: `root` = the workflows filed
         //     nowhere, an id = that folder's own workflows (its subfolders show as tiles).
-        // The tiles are built from the set as it stands HERE - after search and visibility,
-        // before the folder narrowing - so a tile counts exactly what the caller may see,
-        // and counts it over the folder's whole subtree.
+        // The tiles are built from the set as it stands HERE - after search, visibility
+        // and node types, before the folder narrowing - so a tile counts exactly what the
+        // caller may see, and counts it over the folder's whole subtree.
         boolean searching = q != null && !q.isBlank();
         UUID folderFilter = parseFolderId(folderId);
         // Asked for a level but not for a folder id ("root", blank, or something
@@ -199,11 +222,31 @@ public class WorkflowListController {
             folderMissing = true;
         }
         List<WorkflowEntity> folderAggregateSource = workflowEntities;
-        if (!searching && (rootOnly || folderFilter != null)) {
-            final UUID wanted = folderFilter;
+        boolean narrowingToFolder = !searching && (rootOnly || folderFilter != null);
+        final UUID wantedFolder = folderFilter;
+        if (narrowingToFolder) {
             workflowEntities = workflowEntities.stream()
-                .filter(w -> java.util.Objects.equals(w.getFolderId(), wanted))
+                .filter(w -> java.util.Objects.equals(w.getFolderId(), wantedFolder))
                 .collect(Collectors.toList());
+        }
+
+        // The picker's options, counted HERE: after the folder narrowing, before the
+        // node-type filter. Counting before the narrowing was wrong in a way that
+        // never errors - inside a folder, an option whose workflows all live
+        // elsewhere would advertise a count and then produce an empty grid, which is
+        // exactly the promise the picker makes ("no choice can lead to an empty
+        // page"). Asked for rather than always computed: this endpoint also serves
+        // the node pickers and other callers with no filter UI, and counting walks
+        // every workflow's plan.
+        List<Map<String, Object>> nodeTypeFacets = null;
+        if (includeNodeTypeFacets) {
+            List<WorkflowEntity> facetSource = narrowingToFolder
+                    ? beforeNodeTypeFilter.stream()
+                        .filter(w -> java.util.Objects.equals(w.getFolderId(), wantedFolder))
+                        .toList()
+                    : beforeNodeTypeFilter;
+            nodeTypeFacets = NodeTypeFilters.facets(
+                    facetSource.stream().map(WorkflowEntity::getNodeTypes).toList());
         }
 
         // Order the full (filtered) set, then slice. name/lastModified/lastExecuted read entity
@@ -266,6 +309,11 @@ public class WorkflowListController {
         response.put("totalCount", totalCount);
         response.put("page", safePage);
         response.put("size", safeSize);
+        // The picker's options travel with the list they filter: one request, and the
+        // counts can never describe a different set than the rows shown.
+        if (nodeTypeFacets != null) {
+            response.put("nodeTypeFacets", nodeTypeFacets);
+        }
         if (includeFolders) {
             // Tiles for THIS level, each ordered by the same key as the rows below them, plus
             // the trail so the page can render the path it navigated into.

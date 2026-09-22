@@ -12,6 +12,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @ComponentScan(basePackages = {
         "com.apimarketplace.publication",
         "com.apimarketplace.common.storage",
+        "com.apimarketplace.common.security", // CredentialEncryptionService + TokenAtRestBootstrap (shared_links tokens at rest)
         "com.apimarketplace.auth.client"
 })
 @EnableJpaRepositories(basePackages = {

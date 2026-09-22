@@ -206,6 +206,74 @@ class FilterNodeTest {
         }
 
         @Test
+        @DisplayName("Should report how many items each condition turned away")
+        void shouldReportRejectionsPerCondition() {
+            // A filter reported only totals, so an empty result named no culprit and the
+            // reader had to bisect the conditions by hand.
+            List<Core.FilterCondition> conditions = List.of(
+                new Core.FilterCondition("status", "equals", "active"),
+                new Core.FilterCondition("name", "equals", "Alice")
+            );
+
+            FilterNode node = buildNode(conditions, "and", "{{mcp:step.output.items}}");
+            mockResolvedItems(List.of(
+                Map.of("name", "Alice", "status", "active"),
+                Map.of("name", "Bob", "status", "active"),
+                Map.of("name", "Carol", "status", "archived")
+            ));
+
+            NodeExecutionResult result = node.execute(context);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> reported = (List<Map<String, Object>>) params.get("conditions");
+
+            assertEquals(2, reported.size());
+            // Carol alone fails the status condition; Bob and Carol both fail the name one.
+            assertEquals(1, reported.get(0).get("turned_away"));
+            assertEquals(2, reported.get(1).get("turned_away"));
+            // Neither obvious name is free: this node's output already uses
+            // `rejected_items` for the ARRAY of dropped rows and `rejected_count` for
+            // their total. Reusing either would be one spelling for two ideas.
+            assertFalse(reported.get(0).containsKey("rejected_items"));
+            assertFalse(reported.get(0).containsKey("rejected_count"));
+            // In `and` mode the per-condition counts can exceed the total: Carol fails
+            // both conditions, so 1 + 2 > 2 rejected rows. That is not double counting.
+            assertEquals(2, result.output().get("rejected_count"));
+        }
+
+        @Test
+        @DisplayName("Should count per-condition rejections in OR mode too")
+        void shouldReportRejectionsPerConditionInOrMode() {
+            // In `or` a rejected row failed EVERY condition, so each count equals the
+            // total. The and-mode case cannot show that, and the two modes take
+            // different branches through the evaluation loop.
+            List<Core.FilterCondition> conditions = List.of(
+                new Core.FilterCondition("status", "equals", "active"),
+                new Core.FilterCondition("name", "equals", "Alice")
+            );
+
+            FilterNode node = buildNode(conditions, "or", "{{mcp:step.output.items}}");
+            mockResolvedItems(List.of(
+                Map.of("name", "Alice", "status", "archived"),
+                Map.of("name", "Carol", "status", "archived")
+            ));
+
+            NodeExecutionResult result = node.execute(context);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> reported = (List<Map<String, Object>>) params.get("conditions");
+
+            // Carol alone is rejected (Alice matches the name condition).
+            assertEquals(1, result.output().get("rejected_count"));
+            assertEquals(1, reported.get(0).get("turned_away"));
+            assertEquals(1, reported.get(1).get("turned_away"));
+        }
+
+        @Test
         @DisplayName("Should reject items not matching all conditions in AND mode")
         void shouldRejectItemsNotMatchingAllConditions() {
             List<Core.FilterCondition> conditions = List.of(

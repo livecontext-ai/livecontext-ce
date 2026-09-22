@@ -3,9 +3,11 @@ package com.apimarketplace.agent.bridge;
 import com.apimarketplace.agent.domain.BridgeProviders;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Hand-curated source of truth for which models each local-CLI bridge
@@ -96,15 +98,21 @@ public final class BridgeAllowlist {
             // real openai *API* id but is NOT routable via Codex with a ChatGPT
             // account (the CLI returns a typed 400 "not supported when using
             // Codex with a ChatGPT account"), so it must never be exposed here.
+            // The 6 generation keeps the codename shape (astra), which is exactly
+            // why no pattern can be reintroduced: a rule able to guess "astra"
+            // would also match the bare gpt-6 ids Codex refuses. Added by hand
+            // with V484, like every codex entry.
             // This is the exact set the Codex CLI model list returns for a
             // ChatGPT Plus account, verified out of band.
             "codex",        Set.of(
+                    "gpt-6-astra",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "gpt-5.6-luna",
                     "gpt-5.5",
                     "gpt-5.4",
                     "gpt-5.4-mini",
+                    "gpt-5.4-nano",
                     "gpt-5.3-codex",
                     "gpt-5.2"
             ),
@@ -125,6 +133,32 @@ public final class BridgeAllowlist {
                     "devstral-small-2"
             )
     );
+
+    /**
+     * The underlying cloud provider each bridge routes to, for the CATALOG: the sync
+     * ({@code BridgeModelDeriver}) derives its bridge rows from the cloud provider
+     * named here, and the admin Models panel reads the INVERSE to offer a one-click
+     * execution link from a billed cloud model to its CLI. Deliberately NOT shared with
+     * {@code ChatCompactionOrchestrator}'s same-shaped map, which answers a different
+     * question (which provider family's COLD-zone cap applies) and differs on purpose:
+     * it sends {@code mistral-vibe} to {@code openai}, where this one sends it to
+     * {@code mistral}.
+     *
+     * <p>{@code gemini-cli} maps to our {@code google} slug (LiteLLM calls it
+     * {@code gemini}); {@code mistral-vibe} maps to {@code mistral}, whose ids it
+     * only partly shares (see {@link #LITELLM_LOOKUP_ALIAS}).
+     */
+    public static final Map<String, String> BRIDGE_TO_CLOUD_PROVIDER = Map.of(
+            "claude-code",  "anthropic",
+            "codex",        "openai",
+            "gemini-cli",   "google",
+            "mistral-vibe", "mistral"
+    );
+
+    /** Inverse of {@link #BRIDGE_TO_CLOUD_PROVIDER} - one bridge per cloud provider. */
+    private static final Map<String, String> CLOUD_PROVIDER_TO_BRIDGE =
+            BRIDGE_TO_CLOUD_PROVIDER.entrySet().stream()
+                    .collect(Collectors.toUnmodifiableMap(Map.Entry::getValue, Map.Entry::getKey));
 
     /**
      * For enrichment only: when the bridge id doesn't match a LiteLLM feed
@@ -236,9 +270,67 @@ public final class BridgeAllowlist {
         return provider != null && BRIDGE_PROVIDERS.contains(provider);
     }
 
-    /** Convenience: is {@code (provider, modelId)} allow-listed? */
+    /**
+     * Convenience: is {@code (provider, modelId)} allow-listed? Null-safe on both
+     * halves, like {@link #matchesDiscoveryPattern}: {@link #MODELS} is an immutable
+     * map, whose {@code get(null)} throws rather than answering "not allowed".
+     */
     public static boolean isAllowed(String provider, String modelId) {
+        if (provider == null || modelId == null) return false;
         Set<String> models = MODELS.get(provider);
         return models != null && models.contains(modelId);
+    }
+
+    /**
+     * The CLI bridge that executes {@code cloudProvider}'s models, or {@code null}
+     * when that provider has no CLI (deepseek, openrouter, ...). Provider slugs are
+     * lowercase, so the lookup trims + lowercases; a bridge slug maps to nothing
+     * (a bridge is not the cloud side of another bridge).
+     */
+    public static String bridgeForCloudProvider(String cloudProvider) {
+        if (cloudProvider == null || cloudProvider.isBlank()) return null;
+        return CLOUD_PROVIDER_TO_BRIDGE.get(cloudProvider.trim().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * True when {@code bridgeProvider}'s CLI can run {@code modelId} - either it is
+     * on the curated floor ({@link #MODELS}) or it matches the bridge's
+     * version-flexible {@link #DISCOVERY_PATTERNS}. This is the same union the
+     * catalog derives its bridge rows from, so it answers "would
+     * {@code cli --model <id>} be a routable pair?" without needing a catalog row.
+     */
+    public static boolean routesModel(String bridgeProvider, String modelId) {
+        // Slugs are matched verbatim here (unlike bridgeForCloudProvider, which trims and
+        // lowercases): every caller passes a canonical bridge slug, either a MODELS key or
+        // the value bridgeForCloudProvider just returned.
+        return isAllowed(bridgeProvider, modelId) || matchesDiscoveryPattern(bridgeProvider, modelId);
+    }
+
+    /**
+     * The CLI bridge that could EXECUTE a billed {@code (cloudProvider, modelId)}
+     * pair verbatim, or {@code null} when there is none. Both halves must hold: the
+     * provider has a CLI, AND that CLI routes this model id - so an OpenAI id the
+     * Codex CLI rejects (a bare {@code gpt-5.6}, an image model) yields {@code null}
+     * instead of a link that fails at run time.
+     *
+     * <p>The second half is {@link #routesModel}, i.e. the curated floor UNION the
+     * discovery patterns, which is what lets a just-released version of a routed
+     * family be linked without a code change. It inherits that layer's documented
+     * limit (see {@link #DISCOVERY_PATTERNS}): a brand-new id can reach the feed
+     * before the CLI binary on the bridge host is upgraded to route it, and no CLI
+     * exposes a model list to close the gap. So this answers "does that CLI route
+     * this family", not "is that exact id runnable on the host right now".
+     *
+     * <p>The model id is deliberately used verbatim on both sides: the bridge id
+     * conventions match the cloud API ids for claude-code / codex / gemini-cli.
+     * {@code mistral-vibe} is the odd one out, since its ids are {@code ~/.vibe} config
+     * aliases: a real mistral catalog id ({@code devstral-2512}) therefore has no
+     * counterpart, while the alias itself ({@code devstral-2}) would legitimately map
+     * to {@code mistral-vibe} if a row for it ever existed under {@code mistral}.
+     */
+    public static String cliCounterpart(String cloudProvider, String modelId) {
+        String bridge = bridgeForCloudProvider(cloudProvider);
+        if (bridge == null || modelId == null || modelId.isBlank()) return null;
+        return routesModel(bridge, modelId) ? bridge : null;
     }
 }

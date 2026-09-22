@@ -13,7 +13,11 @@ vi.mock('next/navigation', () => ({
 vi.mock('next/link', () => ({ default: ({ children }: any) => <a>{children}</a> }));
 vi.mock('@tanstack/react-query', () => ({
   useQuery: () => ({ data: null, isLoading: false }),
-  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  // Creating a schedule asks the notification bell for its automation rows again, which reads
+  // the query's state before deciding. A partial mock of this package throws from inside the
+  // create's `.then()`, where the form swallows it as an auto-create failure - so the symptom
+  // is an unrelated assertion, not an error naming this line.
+  useQueryClient: () => ({ invalidateQueries: vi.fn(), getQueryState: () => undefined }),
 }));
 vi.mock('@/lib/api', () => ({ apiClient: { get: vi.fn(), post: vi.fn() } }));
 vi.mock('@/lib/utils/locale', () => ({ getClientLocale: () => 'en' }));

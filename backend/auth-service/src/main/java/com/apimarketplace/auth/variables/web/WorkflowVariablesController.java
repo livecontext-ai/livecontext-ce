@@ -147,7 +147,7 @@ public class WorkflowVariablesController {
         if (guard != null) return guard;
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
         String orgRole = tenantResolver.resolveOrgRole(httpRequest);
-        if (organizationId != null && "VIEWER".equalsIgnoreCase(orgRole)) {
+        if (organizationId != null && orgRole != null && "VIEWER".equalsIgnoreCase(orgRole.trim())) {
             return ResponseEntity.status(403).body(Map.of(
                     "error", "org_role_read_only",
                     "message", "Viewers cannot modify workspace variables"));

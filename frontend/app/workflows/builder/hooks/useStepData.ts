@@ -56,7 +56,12 @@ export interface WorkflowStepData {
   itemNumber: number | null;
 }
 
-export function useStepData(runId: string | undefined, stepAlias: string | undefined) {
+export function useStepData(
+  runId: string | undefined,
+  stepAlias: string | undefined,
+  options: { epoch?: number | null; enabled?: boolean } = {},
+) {
+  const enabled = options.enabled !== false;
   const queryClient = useQueryClient();
   const prevRunIdRef = useRef<string | undefined>(undefined);
   // Inspector is disabled in publication preview (see useRunData).
@@ -73,14 +78,14 @@ export function useStepData(runId: string | undefined, stepAlias: string | undef
   }, [runId, queryClient]);
 
   // Get workflow run UUID from public runId (cached & shared with useRunData)
-  const { data: workflowRunId } = useQuery({
+  const { data: workflowRunId, isLoading: runLoading, error: runError, refetch: refetchRun } = useQuery({
     queryKey: ['workflow-run', runId],
     queryFn: async () => {
       if (!runId) return null;
       const run = await orchestratorApi.getRun(runId);
       return run.id as string;
     },
-    enabled: !!runId && !inPreview,
+    enabled: enabled && !!runId && !inPreview,
     staleTime: 5 * 60 * 1000, // 5 min - run UUID never changes
     refetchOnMount: false,
     refetchOnWindowFocus: false,
@@ -94,7 +99,7 @@ export function useStepData(runId: string | undefined, stepAlias: string | undef
   useStepCompletionInvalidation({
     runId,
     stepAlias,
-    enabled: !!stepAlias,
+    enabled: enabled && !!stepAlias,
     onInvalidate: () => {
       queryClient.invalidateQueries({
         queryKey: ['step-data', workflowRunId, stepAlias],
@@ -116,8 +121,11 @@ export function useStepData(runId: string | undefined, stepAlias: string | undef
     hasNextPage,
     fetchNextPage,
     isFetchingNextPage,
+    refetch,
   } = useInfiniteQuery({
-    queryKey: ['step-data', workflowRunId, stepAlias],
+    queryKey: options.epoch === undefined
+      ? ['step-data', workflowRunId, stepAlias]
+      : ['step-data', workflowRunId, stepAlias, options.epoch],
     queryFn: async ({ pageParam }) => {
       if (!workflowRunId || !stepAlias) {
         return { content: [] as WorkflowStepData[], totalElements: 0, totalPages: 0, page: 0, size: PAGE_SIZE };
@@ -127,10 +135,11 @@ export function useStepData(runId: string | undefined, stepAlias: string | undef
         stepAlias,
         pageParam as number,
         PAGE_SIZE,
+        options.epoch,
       );
       return result;
     },
-    enabled: !!workflowRunId && !!stepAlias && !inPreview,
+    enabled: enabled && !!workflowRunId && !!stepAlias && !inPreview,
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
       if (!lastPage) return undefined;
@@ -161,12 +170,13 @@ export function useStepData(runId: string | undefined, stepAlias: string | undef
 
   const totalElements = infiniteData?.pages?.[0]?.totalElements ?? stepData.length;
 
-  const error = queryError instanceof Error ? queryError.message : null;
+  const error = (runError ?? queryError) instanceof Error ? (runError ?? queryError)!.message : null;
 
   return {
     stepData,
-    loading,
+    loading: loading || runLoading,
     error,
+    refetch: runError ? refetchRun : refetch,
     // Progressive-load hooks consumed by StepDataTable's LoadOlderSentinel.
     // Older inspector surfaces that ignored these (and only read stepData)
     // continue to work unchanged because the flat array reflects loaded pages.

@@ -2,6 +2,8 @@ package com.apimarketplace.agent.completion;
 
 import com.apimarketplace.agent.domain.CompletionRequest;
 import com.apimarketplace.agent.domain.CompletionResponse;
+import com.apimarketplace.agent.domain.KeyRoute;
+import com.apimarketplace.agent.domain.UsageInfo;
 import com.apimarketplace.agent.cloud.RuntimeLlmProviderResolver;
 import com.apimarketplace.agent.factory.LLMProviderFactory;
 import com.apimarketplace.agent.loop.AgentLoopContext;
@@ -68,14 +70,46 @@ public class ProviderLlmJsonInvoker {
      *                 {@code null} is accepted for system-internal calls.
      */
     public String invoke(String provider, String model, String system, String user, String tenantId) {
+        return invokeWithUsage(provider, model, system, user, tenantId).content();
+    }
+
+    /**
+     * What one completion produced AND what it consumed.
+     *
+     * <p>The token counts exist on every {@link CompletionResponse} and were discarded
+     * here, which is why the COLD summariser was the one LLM call in the platform that
+     * nobody paid for: its {@code COMPACTION_SUMMARY} source type is allow-listed in
+     * billing and resolved by observability, but no usage ever reached either, so no
+     * ledger row could be written. Nine summaries ran in production and billed zero.
+     *
+     * @param usage may be {@code null} - a provider is not obliged to report counts, and a
+     *              summary that ran is worth more than a summary refused for lack of a
+     *              receipt, so the caller bills what it has and keeps going.
+     */
+    public record InvocationResult(String content, UsageInfo usage) {}
+
+    /** {@link #invoke} plus the counts, for a caller that has to bill the call. Unpinned. */
+    public InvocationResult invokeWithUsage(String provider, String model, String system,
+                                            String user, String tenantId) {
+        return invokeWithUsage(provider, model, system, user, tenantId, null);
+    }
+
+    /**
+     * {@link #invokeWithUsage(String, String, String, String, String)} with the key route
+     * the caller pinned for this execution: it rides on the request so the provider never
+     * re-decides whose key to use from the calling thread.
+     */
+    public InvocationResult invokeWithUsage(String provider, String model, String system,
+                                            String user, String tenantId, KeyRoute keyRoute) {
         Objects.requireNonNull(provider, "provider");
         Objects.requireNonNull(model, "model");
         Objects.requireNonNull(user, "user");
 
-        LLMProvider llm = resolveProvider(provider, tenantId);
+        LLMProvider llm = resolveProvider(provider, tenantId, keyRoute);
 
         CompletionRequest request = CompletionRequest.builder()
                 .tenantId(tenantId)
+                .keyRoute(keyRoute)
                 .model(model)
                 .systemPrompt(system)
                 .userPrompt(user)
@@ -94,15 +128,16 @@ public class ProviderLlmJsonInvoker {
             throw new IllegalStateException(
                     "json-completion provider=" + provider + " model=" + model + " returned empty content");
         }
-        return stripFence(raw);
+        return new InvocationResult(stripFence(raw), response.usage());
     }
 
-    private LLMProvider resolveProvider(String provider, String tenantId) {
+    private LLMProvider resolveProvider(String provider, String tenantId, KeyRoute keyRoute) {
         if (providerResolver == null) {
             return providerFactory.getProvider(provider);
         }
         AgentLoopContext context = AgentLoopContext.builder()
                 .tenantId(tenantId)
+                .keyRoute(keyRoute)
                 .provider(provider)
                 .build();
         return providerResolver.resolve(provider, context);

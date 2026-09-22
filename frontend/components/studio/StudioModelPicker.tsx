@@ -4,7 +4,10 @@ import * as React from 'react';
 import { ArrowLeft, Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Popover, PopoverTrigger } from '@/components/ui/popover';
+// A menu opened from the studio is drawn on the studio's own ground: it renders in a portal on
+// the document, so it cannot inherit the surface's tokens and has to be handed them.
+import { StudioPopoverContent } from '@/components/studio/StudioPopoverContent';
 // The app's own menu surface and row. PopoverContent's stock `bg-popover` is a token this theme
 // does not define, so a menu built on the bare primitive renders with NO background.
 import { menuItemClass, menuSurfaceClass } from '@/components/ui/menu';
@@ -48,6 +51,14 @@ export interface StudioModelPickerProps {
   onCredentialIdChange?: (id: number | null) => void;
   /** What the published rate multiplies, so the pane prices the call it belongs to. */
   quantity?: number | null;
+  /**
+   * What the call's own choices do to that rate, already computed by the composer.
+   *
+   * <p>Passed through rather than recomputed: this pane and the price beside the send button are
+   * two statements about ONE call, and the cache entry they share is keyed on it. Recomputing here
+   * from a second reading of the form is how the two come to name different prices.
+   */
+  priceMultiplier?: number | null;
   /**
    * Drop the model's NAME from the trigger, leaving the provider icon.
    *
@@ -129,6 +140,7 @@ export function StudioModelPicker({
   credentialId = null,
   onCredentialIdChange,
   quantity = null,
+  priceMultiplier = null,
   compact = false,
   disabled,
 }: StudioModelPickerProps) {
@@ -149,6 +161,10 @@ export function StudioModelPicker({
     [providers, provider],
   );
 
+  // CredentialSection persists its automatic key choice. Only mount it for the
+  // selected model: browsing another provider or format must not change the payer.
+  const paneModel = providerGroup?.models.find((model) => model.model === selected?.model) ?? null;
+
   /**
    * Opening lands where the reader already is, not back at the start.
    *
@@ -157,7 +173,33 @@ export function StudioModelPicker({
    * out to the providers and the formats, so the stepped path is intact; it just is not imposed on
    * a reader who has already walked it.
    */
+  /**
+   * A credential form is up, somewhere on the document rather than inside this menu.
+   *
+   * <p>This is what makes "add my own key" reachable from the studio at all. The form is a dialog,
+   * and a dialog renders in a portal OUTSIDE this popover, so without this the first click inside it
+   * is a click outside the popover: the menu closes, the section that owns the form unmounts, and
+   * the form the reader just opened disappears under their cursor. They press the button again, and
+   * it happens again.
+   *
+   * <p>Held in a REF rather than in state, and deliberately: nothing on screen changes when the
+   * form opens, so there is nothing to re-render, and a value that only guards callbacks has to be
+   * readable by a callback Radix captured before the form existed. State would give those callbacks
+   * a stale `false` at exactly the moment they matter.
+   */
+  const keyFormOpenRef = React.useRef(false);
+  const handleKeyFormOpenChange = React.useCallback((formOpen: boolean) => {
+    keyFormOpenRef.current = formOpen;
+  }, []);
+  /** Refuse any dismissal while the form is up; everything else behaves exactly as before. */
+  const keepOpenWhileKeyForm = React.useCallback((event: Event) => {
+    if (keyFormOpenRef.current) event.preventDefault();
+  }, []);
+
   const handleOpenChange = React.useCallback((next: boolean) => {
+    // Closing is refused outright while the form is up, not merely on the outside-click path:
+    // the dialog also takes FOCUS, and Escape inside it bubbles here.
+    if (!next && keyFormOpenRef.current) return;
     if (next) {
       if (selected) {
         setKind(selected.kind);
@@ -213,7 +255,15 @@ export function StudioModelPicker({
         </Button>
       </PopoverTrigger>
 
-      <PopoverContent align="end" className={`${menuSurfaceClass} max-h-[60vh] w-80 overflow-y-auto`}>
+      <StudioPopoverContent
+        align="end"
+        className={`${menuSurfaceClass} max-h-[60vh] w-80 overflow-y-auto`}
+        // Three doors, because Radix dismisses on three different events and a form the reader is
+        // typing into has to survive all of them. See `keyFormOpen`.
+        onPointerDownOutside={keepOpenWhileKeyForm}
+        onFocusOutside={keepOpenWhileKeyForm}
+        onInteractOutside={keepOpenWhileKeyForm}
+      >
         {kinds.length === 0 ? (
           // Served, but with nothing in it. An administrator can seed it, so the reason is stated
           // rather than the control simply being empty.
@@ -306,23 +356,24 @@ export function StudioModelPicker({
                     key that does not exist and meet the refusal at submit time instead.
                     <p>It also brings the reader's own keys with it, so choosing "my key" shows
                     them immediately instead of sending the reader to a second control. */}
-                {onCredentialSourceChange && onCredentialIdChange && (
+                {paneModel && onCredentialSourceChange && onCredentialIdChange && (
                   <div className="mt-1 border-t border-theme pt-2">
                     <CredentialSection
                       toolCredentials={[{
-                        credentialName: providerGroup.models[0].integrationName ?? providerGroup.key,
+                        credentialName: paneModel.integrationName ?? providerGroup.key,
                         isRequired: true,
                         displayName: providerGroup.label,
                       }]}
                       selectedCredentialId={credentialId}
                       onCredentialSelect={onCredentialIdChange}
-                      integration={providerGroup.models[0].integrationName ?? providerGroup.key}
-                      apiToolId={(selected ?? providerGroup.models[0]).apiToolId}
-                      modelId={(selected ?? providerGroup.models[0]).model}
+                      integration={paneModel.integrationName ?? providerGroup.key}
+                      apiToolId={paneModel.apiToolId}
+                      modelId={paneModel.model}
                       quantity={quantity}
+                      priceMultiplier={priceMultiplier}
                       // What the call is COUNTED in, so the quote can refuse a rate that cannot
                       // price it rather than showing an amount every run is then refused for.
-                      quantityUnit={(selected ?? providerGroup.models[0]).measuredUnit}
+                      quantityUnit={paneModel.measuredUnit}
                       // Every row of this catalogue is a generation, and a generation is never
                       // sold on the credential-wide default.
                       isGeneration
@@ -332,6 +383,10 @@ export function StudioModelPicker({
                       showPlatformPricingNotes={false}
                       credentialSource={credentialSource}
                       onCredentialSourceChange={onCredentialSourceChange}
+                      // Connecting a provider key from here is the point of this pane on a model
+                      // the platform does not sell. The form lives on the document, so this menu
+                      // has to be told to stay open while it is up.
+                      onWizardOpenChange={handleKeyFormOpenChange}
                     />
                   </div>
                 )}
@@ -339,7 +394,7 @@ export function StudioModelPicker({
             )}
           </>
         )}
-      </PopoverContent>
+      </StudioPopoverContent>
     </Popover>
   );
 }

@@ -36,9 +36,6 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ApiCatalogSnapshotReader {
 
-    /** Mirrors {@code CredentialTemplateController.NATIVE_CORE_CREDENTIAL_NAMES}. */
-    static final List<String> NATIVE_CORE_CREDENTIAL_NAMES = List.of("smtp", "imap");
-
     private final JdbcTemplate jdbcTemplate;
 
     public record Snapshot(List<ApiRow> apis, List<CredentialTemplateRow> credentialTemplates) {
@@ -168,7 +165,8 @@ public class ApiCatalogSnapshotReader {
 
         // 6. Credential templates backing a snapshotted API, plus the native
         //    core-node templates. Custom-API templates never ship.
-        String nativeInList = "'" + String.join("','", NATIVE_CORE_CREDENTIAL_NAMES) + "'";
+        String nativeInList =
+                com.apimarketplace.catalog.service.credential.NativeCoreCredentials.sqlInList();
         List<Map<String, Object>> templateRows = jdbcTemplate.queryForList("""
                 SELECT c.credential_name, c.variant, c.display_name, c.description,
                        c.credential_type, c.auth_type, c.test_endpoint, c.documentation_url,

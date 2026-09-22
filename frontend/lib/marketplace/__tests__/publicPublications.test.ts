@@ -10,6 +10,7 @@ import {
   fetchPublicationBySlug,
   fetchShowcaseRender,
   fetchPublicationReviews,
+  fetchVerifiedPublisherHandles,
   gatewayBaseUrl,
   mapPublication,
   mapPublications,
@@ -662,5 +663,80 @@ describe('fetchPublicationReviews', () => {
     await fetchPublicationReviews('');
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('fetchVerifiedPublisherHandles', () => {
+  beforeEach(() => {
+    process.env.GATEWAY_SERVICE_URL = 'http://gw:8080';
+  });
+  afterEach(() => {
+    restoreEnv();
+    vi.unstubAllGlobals();
+  });
+
+  it('asks about each DISTINCT author once, lowercased, and answers a set', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ verified: ['ada'] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const verified = await fetchVerifiedPublisherHandles(['Ada', 'ada', 'linus', null, '  ']);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0])
+        .toBe('http://gw:8080/api/users/public/verified-handles?handles=ada,linus');
+    expect(verified).toEqual(new Set(['ada']));
+  });
+
+  it('lowercases what comes back, so the caller can compare either casing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ verified: ['Ada'] }),
+    }));
+
+    expect(await fetchVerifiedPublisherHandles(['ada'])).toEqual(new Set(['ada']));
+  });
+
+  it('splits above the backend batch cap rather than sending one oversized query', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ verified: [] }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchVerifiedPublisherHandles(Array.from({ length: 150 }, (_, i) => `user${i}`));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers empty without fetching when there is no author to ask about', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await fetchVerifiedPublisherHandles([null, undefined, ''])).toEqual(new Set());
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('degrades to no badges when the gateway fails - a public page must still render', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+
+    expect(await fetchVerifiedPublisherHandles(['ada'])).toEqual(new Set());
+  });
+
+  it('ignores a payload of the wrong shape instead of throwing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ verified: 'ada' }),
+    }));
+
+    expect(await fetchVerifiedPublisherHandles(['ada'])).toEqual(new Set());
+  });
+
+  it('percent-encodes each handle, so a crafted value cannot forge query parameters', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ verified: [] }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchVerifiedPublisherHandles(['ada&ids=1']);
+
+    expect(fetchMock.mock.calls[0][0]).toContain('ada%26ids%3D1');
   });
 });

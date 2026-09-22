@@ -308,4 +308,161 @@ class RelayedGenerationMeasurementTest {
                     .isEqualTo(RelayedGenerationMeasurement.Measured.NOTHING);
         }
     }
+
+    @Nested
+    @DisplayName("what the call's own choices did to its price")
+    class Factor {
+
+        /**
+         * A model that sells a caller-chosen resolution and takes up to three
+         * reference images, which is the shape of the shipped video endpoints.
+         */
+        private GenerationSpec modulatedSpec() {
+            return parse("""
+                {
+                  "kind": "video",
+                  "assetPath": "content.video_url",
+                  "modelParam": "model",
+                  "paramMap": {
+                    "prompt": "content[0].text",
+                    "duration_seconds": "duration",
+                    "resolution": "resolution",
+                    "reference_image": {
+                      "path": "content[1].image_url.url",
+                      "encoding": "data_url",
+                      "role": "reference",
+                      "maxItems": 3
+                    }
+                  },
+                  "models": [
+                    {"id": "vid-mod", "upstream": "vendor-mod", "label": "Modulated",
+                     "capabilities": ["prompt", "duration_seconds", "resolution", "reference_image"],
+                     "required": ["prompt", "resolution"],
+                     "constraints": {"resolution": {"allowed": ["480p", "720p"]}},
+                     "price": {"unit": "second", "unitCredits": 100,
+                               "modifiers": [
+                                 {"param": "resolution", "multiply": {"480p": 1, "720p": 2}},
+                                 {"param": "reference_image", "perAsset": 0.1}
+                               ]}}
+                  ]
+                }
+                """);
+        }
+
+        @Test
+        @DisplayName("a model that declares no modifiers reports none, so nothing changes for it")
+        void noModifiersReportsNothing() {
+            var measured = RelayedGenerationMeasurement.measure(videoSpec(),
+                    Map.of("model", "vendor-pro", "duration", 10));
+            assertThat(measured.priceMultiplier()).isNull();
+        }
+
+        @Test
+        @DisplayName("reads the resolution back out of the body rather than being told it")
+        void readsTheValueFromTheBody() {
+            // A factor the install declared would be a factor the install could
+            // declare as 1, which is the same hole the quantity has.
+            var measured = RelayedGenerationMeasurement.measure(modulatedSpec(),
+                    Map.of("model", "vendor-mod", "duration", 10, "resolution", "720p"));
+            assertThat(measured.priceMultiplier()).isEqualByComparingTo("2");
+        }
+
+        @Test
+        @DisplayName("counts the files the body actually carries, walking the slot forward")
+        void countsTheFilesInTheSlot() {
+            Map<String, Object> body = Map.of(
+                    "model", "vendor-mod",
+                    "duration", 10,
+                    "resolution", "480p",
+                    "content", List.of(
+                            Map.of("type", "text", "text", "a cat"),
+                            Map.of("image_url", Map.of("url", "data:image/png;base64,AAA")),
+                            Map.of("image_url", Map.of("url", "data:image/png;base64,BBB"))));
+            assertThat(RelayedGenerationMeasurement.measure(modulatedSpec(), body).priceMultiplier())
+                    .isEqualByComparingTo("1.2");
+        }
+
+        @Test
+        @DisplayName("an element carrying no file is SKIPPED, and the scan keeps going past it")
+        void anEmptyElementIsSkippedNotTreatedAsTheEnd() {
+            // Named "stops at the first empty slot" once, which is the opposite of what the code
+            // does: it `continue`s. The old fixture had a single image after the text element, so
+            // BOTH rules produced 1.1 and the assertion could not tell them apart - a name that
+            // described a behaviour nothing had, guarding nothing.
+            //
+            // This body discriminates. Stop-at-the-gap counts one image and reports 1.1; the
+            // shipped skip-and-continue counts two and reports 1.2. A relayed call whose body has
+            // a hole between two references is the ordinary case, because a caller who fills slot
+            // 1 and slot 3 produces exactly that.
+            Map<String, Object> body = Map.of(
+                    "model", "vendor-mod",
+                    "duration", 10,
+                    "resolution", "480p",
+                    "content", java.util.Arrays.asList(
+                            Map.of("type", "text", "text", "a cat"),
+                            Map.of("image_url", Map.of("url", "data:image/png;base64,AAA")),
+                            Map.of("image_url", Map.of("url", "")),
+                            Map.of("image_url", Map.of("url", "data:image/png;base64,BBB"))));
+            assertThat(RelayedGenerationMeasurement.measure(modulatedSpec(), body).priceMultiplier())
+                    .isEqualByComparingTo("1.2");
+        }
+
+        @Test
+        @DisplayName("more files than the slot takes are counted in FULL, not clamped down")
+        void moreFilesThanTheSlotTakesAreCountedInFull() {
+            // The relay executes the body it is handed and never re-validates it against the
+            // descriptor; only the direct path refuses an over-full slot. Clamping the COUNT at
+            // maxItems therefore had the provider process every file and the cloud charge for the
+            // first few - an install setting its own price, which is what this class exists to
+            // stop. The model below takes 3 references; this body carries 5.
+            java.util.List<Object> content = new java.util.ArrayList<>();
+            content.add(Map.of("type", "text", "text", "a cat"));
+            for (int i = 0; i < 5; i++) {
+                content.add(Map.of("image_url", Map.of("url", "data:image/png;base64,A" + i)));
+            }
+            Map<String, Object> body = Map.of(
+                    "model", "vendor-mod", "duration", 10, "resolution", "480p",
+                    "content", content);
+
+            assertThat(RelayedGenerationMeasurement.measure(modulatedSpec(), body).priceMultiplier())
+                    .isEqualByComparingTo("1.5");
+        }
+
+        @Test
+        @DisplayName("a call at the reference tier with no files reports 1, not nothing")
+        void referenceTierReportsOne() {
+            var measured = RelayedGenerationMeasurement.measure(modulatedSpec(),
+                    Map.of("model", "vendor-mod", "duration", 10, "resolution", "480p"));
+            assertThat(measured.priceMultiplier()).isEqualByComparingTo("1");
+        }
+
+        @Test
+        @DisplayName("the factor does NOT touch the size, which stays what the clip is")
+        void theSizeIsUnchanged() {
+            var measured = RelayedGenerationMeasurement.measure(modulatedSpec(),
+                    Map.of("model", "vendor-mod", "duration", 10, "resolution", "720p"));
+            assertThat(measured.quantity()).isEqualByComparingTo("10");
+            assertThat(measured.quantityUnit()).isEqualTo("second");
+        }
+
+        @Test
+        @DisplayName("agrees with the direct path, which is the whole point of reading it here")
+        void agreesWithTheDirectPath() {
+            GenerationSpec spec = modulatedSpec();
+            GenerationSpec.Model model = spec.model("vid-mod").orElseThrow();
+            Map<String, Object> unified = new java.util.LinkedHashMap<>();
+            unified.put("prompt", "a cat");
+            unified.put("duration_seconds", 10);
+            unified.put("resolution", "720p");
+            unified.put("reference_image", List.of("file-a"));
+            GenerationRequestBuilder.Built direct = GenerationRequestBuilder.build(spec, model, unified);
+
+            // The relay reads the body the direct path just built, so the two
+            // arithmetics have to land on the same number or one install is
+            // charged differently from another for the same request.
+            var relayed = RelayedGenerationMeasurement.measure(spec, direct.params());
+            assertThat(relayed.priceMultiplier()).isEqualByComparingTo(direct.priceMultiplier());
+            assertThat(relayed.priceMultiplier()).isEqualByComparingTo("2.2");
+        }
+    }
 }

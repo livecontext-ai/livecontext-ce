@@ -42,7 +42,10 @@ vi.mock('@/lib/providers/smart-providers', () => ({
   useAuth: () => ({ isAuthenticated: authState.isAuthenticated, hasRole }),
 }));
 
-vi.mock('@/lib/edition', () => ({ IS_CE: false }));
+// IS_MANAGED_CLOUD is read by isSettingsNavItemVisible, for entries gated
+// managedCloudOnly (a narrower rule than hiddenInCE - it also hides them on
+// self-hosted enterprise).
+vi.mock('@/lib/edition', () => ({ IS_CE: false, IS_MANAGED_CLOUD: true }));
 
 const searchConversations = vi.fn();
 // Only the client is stood in for. `conversationKind` is a pure reader the component uses to route
@@ -186,15 +189,22 @@ describe('GlobalSearchBar searching', () => {
   });
 
   it('ArrowDown/ArrowUp move and wrap the active option, Enter picks it', async () => {
+    // The query must match NO settings section, or the list this walks is not the list it
+    // describes. It was 'chat', which matches the "Agents & Chat" settings label: settings
+    // sections are matched client-side and listed before the conversations that come from the
+    // network, so the first option was a settings row and every assertion below was off by one.
+    //
+    // 'invoice' is the same word the sibling test above uses for the same reason. What is under
+    // test here is the wrap, not which groups match a word.
     searchConversations.mockResolvedValue({
       content: [
-        { id: 'c1', title: 'First chat' },
-        { id: 'c2', title: 'Second chat' },
+        { id: 'c1', title: 'First invoice' },
+        { id: 'c2', title: 'Second invoice' },
       ],
     });
 
     render(<GlobalSearchBar />);
-    await typeAndSettle('chat');
+    await typeAndSettle('invoice');
     const input = screen.getByTestId('global-search-input');
 
     const selectedLabels = () =>
@@ -202,13 +212,13 @@ describe('GlobalSearchBar searching', () => {
         .filter(o => o.getAttribute('aria-selected') === 'true')
         .map(o => o.textContent);
 
-    expect(selectedLabels()).toEqual(['First chat']);
+    expect(selectedLabels()).toEqual(['First invoice']);
     fireEvent.keyDown(input, { key: 'ArrowDown' });
-    expect(selectedLabels()).toEqual(['Second chat']);
+    expect(selectedLabels()).toEqual(['Second invoice']);
     fireEvent.keyDown(input, { key: 'ArrowDown' }); // wraps to the first
-    expect(selectedLabels()).toEqual(['First chat']);
+    expect(selectedLabels()).toEqual(['First invoice']);
     fireEvent.keyDown(input, { key: 'ArrowUp' }); // wraps back to the last
-    expect(selectedLabels()).toEqual(['Second chat']);
+    expect(selectedLabels()).toEqual(['Second invoice']);
 
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(safeNavigate).toHaveBeenCalledWith('/app/c/c2');

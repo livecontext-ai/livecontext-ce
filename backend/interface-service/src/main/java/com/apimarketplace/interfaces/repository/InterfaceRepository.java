@@ -20,9 +20,9 @@ public interface InterfaceRepository extends JpaRepository<InterfaceEntity, UUID
     @Deprecated(since = "Batch-C", forRemoval = false)
     List<InterfaceEntity> findByTenantIdOrderByCreatedAtDesc(String tenantId);
 
-    // ===== Paged-list whole-set projections (exclude @Lob templates + data JSONB) =====
+    // ===== Paged-list whole-set projections (exclude the template columns + data JSONB) =====
     // listInterfacesPaged loads the WHOLE tenant/org set only to sort + slice one page, so it must
-    // never pull the heavy html/css/js LOBs + data JSONB of every row. These return the lightweight
+    // never pull the heavy html/css/js text + data JSONB of every row. These return the lightweight
     // {@link InterfaceListView}; the page's full entities are then fetched by id via findAllById.
 
     /** Tenant-scoped whole-set, light projection (default paged-list path). */
@@ -110,9 +110,16 @@ public interface InterfaceRepository extends JpaRepository<InterfaceEntity, UUID
      * orchestrator's {@code RecentActivityAggregatorService}. Backed by the
      * V235 partial index {@code idx_interfaces_org_updated_at}. Pass a
      * {@code PageRequest.of(0, 50)} pageable to cap the result set.
+     *
+     * <p>Returns {@link InterfaceRecentActivityView}, NOT the entity. Loading the entity here is
+     * what surfaced the 2026-09-18 outage, though the cause was the {@code @Lob} mapping since
+     * removed from {@code InterfaceEntity}; what remains is the cost - 50 rows of page templates
+     * fetched to emit a list of names. Widen this back only if you are prepared to pay that.
      */
-    @Query("SELECT i FROM InterfaceEntity i WHERE i.organizationId = :orgId ORDER BY i.updatedAt DESC")
-    List<InterfaceEntity> findRecentByOrganizationIdStrict(@Param("orgId") String orgId, Pageable pageable);
+    @Query("SELECT i.id AS id, i.name AS name, i.updatedAt AS updatedAt, i.tenantId AS tenantId "
+            + "FROM InterfaceEntity i WHERE i.organizationId = :orgId ORDER BY i.updatedAt DESC")
+    List<InterfaceRecentActivityView> findRecentByOrganizationIdStrict(@Param("orgId") String orgId,
+                                                                       Pageable pageable);
 
     @Modifying
     @Query("DELETE FROM InterfaceEntity i WHERE i.sourceWorkflowId = :sourceWorkflowId")

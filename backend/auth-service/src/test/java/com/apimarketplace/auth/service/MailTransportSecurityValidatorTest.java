@@ -14,6 +14,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayName("MailTransportSecurityValidator (S-3 invitation security pass)")
 class MailTransportSecurityValidatorTest {
 
+    /**
+     * Bounded timeouts, so these cases are about TLS / AUTH only.
+     *
+     * <p>Deliberately NOT described as "what application.yml ships": these are
+     * hand-fed values and drifted from the shipped ones once already. What the
+     * real yml binds is covered by {@link MailTransportConfigBindingTest}, which
+     * boots it.
+     */
+    private static MailTransportSecurityValidator validator(String host, boolean tls, boolean auth) {
+        return new MailTransportSecurityValidator(host, tls, auth, 5000, 5000, 5000);
+    }
+
     @Nested
     @DisplayName("local-dev hosts: validator passes regardless of TLS / AUTH")
     class LocalDevHosts {
@@ -21,19 +33,19 @@ class MailTransportSecurityValidatorTest {
         @Test
         @DisplayName("localhost without STARTTLS - accepted (Mailhog default)")
         void localhostAcceptedEvenWithoutTls() {
-            new MailTransportSecurityValidator("localhost", false, false).validate();
-            new MailTransportSecurityValidator("LOCALHOST", false, false).validate();
-            new MailTransportSecurityValidator("127.0.0.1", false, false).validate();
-            new MailTransportSecurityValidator("::1", false, false).validate();
-            new MailTransportSecurityValidator("mailhog", false, false).validate();
-            new MailTransportSecurityValidator("mailpit", false, false).validate();
-            new MailTransportSecurityValidator("smtp-dev", false, false).validate();
+            validator("localhost", false, false).validate();
+            validator("LOCALHOST", false, false).validate();
+            validator("127.0.0.1", false, false).validate();
+            validator("::1", false, false).validate();
+            validator("mailhog", false, false).validate();
+            validator("mailpit", false, false).validate();
+            validator("smtp-dev", false, false).validate();
         }
 
         @Test
         @DisplayName("local dev host with trailing whitespace - still accepted (trim)")
         void localhostWithWhitespaceTrimmed() {
-            new MailTransportSecurityValidator("  localhost  ", false, false).validate();
+            validator("  localhost  ", false, false).validate();
         }
     }
 
@@ -46,7 +58,7 @@ class MailTransportSecurityValidatorTest {
                 + "pre-fix this booted silently and leaked tokens in cleartext")
         void realHostWithoutStarttlsFailsBoot() {
             assertThatThrownBy(() ->
-                    new MailTransportSecurityValidator("smtp.sendgrid.net", false, true).validate())
+                    validator("smtp.sendgrid.net", false, true).validate())
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("STARTTLS is disabled");
         }
@@ -56,7 +68,7 @@ class MailTransportSecurityValidatorTest {
                 + "an open relay would let attackers send mail as us")
         void realHostWithoutAuthFailsBoot() {
             assertThatThrownBy(() ->
-                    new MailTransportSecurityValidator("smtp.mailgun.org", true, false).validate())
+                    validator("smtp.mailgun.org", true, false).validate())
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("SMTP AUTH is disabled");
         }
@@ -65,8 +77,8 @@ class MailTransportSecurityValidatorTest {
         @DisplayName("real host with both STARTTLS and AUTH enabled - boots cleanly")
         void realHostWithProperConfigBoots() {
             // No exception = the @PostConstruct returns normally.
-            new MailTransportSecurityValidator("smtp.sendgrid.net", true, true).validate();
-            new MailTransportSecurityValidator("EMAIL-SMTP.us-east-1.amazonaws.com", true, true).validate();
+            validator("smtp.sendgrid.net", true, true).validate();
+            validator("EMAIL-SMTP.us-east-1.amazonaws.com", true, true).validate();
         }
     }
 
@@ -75,8 +87,68 @@ class MailTransportSecurityValidatorTest {
             + "and triggers the STARTTLS check (won't silently pass)")
     void nullHostFailsClosed() {
         assertThatThrownBy(() ->
-                new MailTransportSecurityValidator(null, false, true).validate())
+                validator(null, false, true).validate())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("STARTTLS is disabled");
+    }
+
+    @Nested
+    @DisplayName("unbounded transport: fail-fast, because a hung send holds a request thread")
+    class Timeouts {
+
+        @Test
+        @DisplayName("PRE-FIX REPRO: no timeout properties at all MUST fail boot - this is what "
+                + "deleting the block from application.yml looks like, and pre-fix it booted and "
+                + "left /api/auth/forgot-password able to pin a thread per call, forever")
+        void absentTimeoutsFailBoot() {
+            assertThatThrownBy(() ->
+                    new MailTransportSecurityValidator("localhost", false, false, 0, 0, 0).validate())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("connectiontimeout");
+        }
+
+        @Test
+        @DisplayName("each of the three is checked on its own, so losing one is not masked by the others")
+        void eachTimeoutIsCheckedIndividually() {
+            assertThatThrownBy(() ->
+                    new MailTransportSecurityValidator("smtp.sendgrid.net", true, true, 0, 5000, 5000).validate())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("mail.smtp.connectiontimeout");
+            assertThatThrownBy(() ->
+                    new MailTransportSecurityValidator("smtp.sendgrid.net", true, true, 5000, 0, 5000).validate())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("mail.smtp.timeout");
+            assertThatThrownBy(() ->
+                    new MailTransportSecurityValidator("smtp.sendgrid.net", true, true, 5000, 5000, 0).validate())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("mail.smtp.writetimeout");
+        }
+
+        @Test
+        @DisplayName("a negative value is refused too - JavaMail reads it as infinite, same as zero")
+        void negativeIsRefused() {
+            assertThatThrownBy(() ->
+                    new MailTransportSecurityValidator("localhost", false, false, -1, 5000, 5000).validate())
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("checked BEFORE the local-dev host allowance, because a frozen Mailpit hangs a read "
+                + "exactly as long as a real relay would")
+        void localDevHostDoesNotExemptTheTimeouts() {
+            // The host allow-list waives STARTTLS and AUTH. It must not waive this.
+            assertThatThrownBy(() ->
+                    new MailTransportSecurityValidator("mailpit", false, false, 5000, 0, 5000).validate())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("mail.smtp.timeout");
+        }
+
+        @Test
+        @DisplayName("a bounded transport boots cleanly (the SHIPPED values are checked by "
+                + "MailTransportConfigBindingTest, which reads the real yml)")
+        void shippedDefaultsBoot() {
+            new MailTransportSecurityValidator("localhost", false, false, 5000, 5000, 5000).validate();
+            new MailTransportSecurityValidator("smtp.sendgrid.net", true, true, 5000, 5000, 5000).validate();
+        }
     }
 }

@@ -1827,6 +1827,58 @@ class AgentCrudModuleTest {
         }
 
         @Test
+        @DisplayName("cloud: the 'what you CAN use' list after a bad pair hides the bridges from a non-admin")
+        void notAvailableListHidesBridgesFromACloudUser() {
+            assertThat(notAvailableListFor("USER"))
+                .as("offering claude-code here would send the agent into a save the guard "
+                    + "refuses two calls later")
+                .doesNotContain("claude-code →")
+                .contains("openai → gpt-5");
+        }
+
+        @Test
+        @DisplayName("cloud: the same list keeps the bridges for an ADMIN, whose save the guard admits")
+        void notAvailableListKeepsBridgesForACloudAdmin() {
+            assertThat(notAvailableListFor("ADMIN,USER"))
+                .contains("claude-code → claude-opus-4-7")
+                .contains("openai → gpt-5");
+        }
+
+        @Test
+        @DisplayName("cloud: absent roles are a non-admin for that list too")
+        void notAvailableListHidesBridgesWhenRolesAreAbsent() {
+            assertThat(notAvailableListFor(null)).doesNotContain("claude-code →");
+        }
+
+        /** The error text of a create on an unavailable pair, in cloud, for a caller with these roles. */
+        private String notAvailableListFor(String roles) {
+            var cloudGuard = new com.apimarketplace.agent.service.BridgeProviderSaveGuard();
+            cloudGuard.setAuthMode(""); // cloud
+            module.setBridgeProviderSaveGuard(cloudGuard);
+            when(modelCatalogService.isModelAvailable("anthropic", "claude-sonnet-4-6")).thenReturn(false);
+            when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
+                new AvailableModel("openai", "gpt-5", "top", 1),
+                new AvailableModel("claude-code", "claude-opus-4-7", "top", 2)
+            ));
+            Map<String, Object> credentials = new HashMap<>(Map.of("turnId", "turn-1"));
+            if (roles != null) {
+                credentials.put("__userRoles__", roles);
+            }
+            ToolExecutionContext context = new ToolExecutionContext(
+                TENANT, credentials, Map.of(), null, null, null, null, null);
+
+            Map<String, Object> params = new HashMap<>(Map.of(
+                "action", "create", "name", "Agent", "system_prompt", "hello",
+                "model_provider", "anthropic", "model_name", "claude-sonnet-4-6"
+            ));
+            Optional<ToolExecutionResult> result = module.execute("create", params, TENANT, context);
+
+            assertThat(result).isPresent();
+            assertThat(result.get().success()).isFalse();
+            return result.get().error();
+        }
+
+        @Test
         @DisplayName("create with empty catalog tells the agent to stop and inform the user (no admin-UI references)")
         void createWithEmptyCatalog() {
             when(modelCatalogService.isModelAvailable(anyString(), anyString())).thenReturn(false);
@@ -2817,6 +2869,249 @@ class AgentCrudModuleTest {
             assertThatThrownBy(() -> AgentCrudModule.validateAvatarParam("just some text"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("preset:");
+        }
+    }
+
+    @Nested
+    @DisplayName("budgets - which capped agents are about to stop")
+class BudgetsAction {
+
+        private AgentEntity capped(String name, String cap, String consumed, String reserved,
+                                   String mode, java.time.Instant lastReset) {
+            AgentEntity a = new AgentEntity();
+            a.setId(UUID.randomUUID());
+            a.setName(name);
+            a.setTenantId(TENANT);
+            a.setCreditBudget(cap == null ? null : new BigDecimal(cap));
+            a.setCreditsConsumed(consumed == null ? null : new BigDecimal(consumed));
+            a.setCreditsReserved(reserved == null ? null : new BigDecimal(reserved));
+            a.setBudgetResetMode(mode);
+            a.setBudgetLastReset(lastReset);
+            return a;
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> budgets(Map<String, Object> params) {
+            Optional<ToolExecutionResult> r = module.execute("budgets", params, TENANT, ctx());
+            assertThat(r).isPresent();
+            assertThat(r.get().success()).isTrue();
+            return (Map<String, Object>) r.get().data();
+        }
+
+        @SuppressWarnings("unchecked")
+        private List<Map<String, Object>> rows(Map<String, Object> result) {
+            return (List<Map<String, Object>>) result.get("agents");
+        }
+
+        @Test
+        @DisplayName("uncapped agents are left out: they have no threshold to be near")
+        void uncappedAgentsAreOmitted() {
+            when(agentService.listAgents(eq(TENANT), any(), any())).thenReturn(List.of(
+                    capped("No cap", null, "9999", "0", "cumulative", null),
+                    capped("Capped", "100", "10", "0", "cumulative", null)));
+
+            Map<String, Object> result = budgets(Map.of());
+
+            assertThat(result).containsEntry("capped_agents", 1);
+            assertThat(rows(result)).singleElement()
+                    .extracting(row -> row.get("name")).isEqualTo("Capped");
+        }
+
+        @Test
+        @DisplayName("orders closest-to-the-cap first, because this list is read top-down")
+        void ordersByHowCloseEachOneIs() {
+            when(agentService.listAgents(eq(TENANT), any(), any())).thenReturn(List.of(
+                    capped("Quiet", "100", "5", "0", "cumulative", null),
+                    capped("Almost", "100", "95", "0", "cumulative", null),
+                    capped("Halfway", "100", "50", "0", "cumulative", null)));
+
+            assertThat(rows(budgets(Map.of()))).extracting(row -> row.get("name"))
+                    .containsExactly("Almost", "Halfway", "Quiet");
+        }
+
+        @Test
+        @DisplayName("counts credits a sub-agent is holding as committed, not as free")
+        void reservedCreditsCountAgainstTheCap() {
+            // 40 spent and 45 committed to a descendant leaves 15, not 60. Reporting 60 free
+            // would put an agent on the edge of its cap in the ok bucket.
+            when(agentService.listAgents(eq(TENANT), any(), any())).thenReturn(List.of(
+                    capped("Parent", "100", "40", "45", "cumulative", null)));
+
+            Map<String, Object> row = rows(budgets(Map.of())).get(0);
+
+            assertThat(row).containsEntry("status", "near");
+            assertThat(row).containsEntry("used_ratio", 0.85d);
+            assertThat((BigDecimal) row.get("free")).isEqualByComparingTo("15");
+        }
+
+        @Test
+        @DisplayName("reports POST-reset figures, so a rolled-over agent is not flagged")
+        void aRolledOverAgentReadsNearZero() {
+            // The stored counter still sits at the cap: it is only zeroed when the agent next
+            // RUNS. Reporting the raw figure would put a monthly agent in the blocked bucket
+            // for the whole month after its allowance came back, which is the one thing this
+            // action must not do - it is read in order to act.
+            when(agentService.listAgents(eq(TENANT), any(), any())).thenReturn(List.of(
+                    capped("Monthly", "100", "100", "0", "monthly",
+                            java.time.Instant.now().minus(45, java.time.temporal.ChronoUnit.DAYS))));
+
+            Map<String, Object> result = budgets(Map.of());
+            Map<String, Object> row = rows(result).get(0);
+
+            assertThat(row).containsEntry("status", "ok");
+            assertThat(row).containsEntry("used_ratio", 0.0d);
+            assertThat(result).containsEntry("blocked", 0);
+        }
+
+        @Test
+        @DisplayName("a spent cap reads blocked, and says when it lifts when it does")
+        void aSpentCapReadsBlocked() {
+            when(agentService.listAgents(eq(TENANT), any(), any())).thenReturn(List.of(
+                    capped("Forever", "10", "12", "0", "cumulative", null),
+                    capped("Until", "10", "12", "0", "monthly", java.time.Instant.now())));
+
+            Map<String, Object> result = budgets(Map.of());
+            assertThat(result).containsEntry("blocked", 2);
+
+            Map<String, Object> forever = rows(result).stream()
+                    .filter(r -> "Forever".equals(r.get("name"))).findFirst().orElseThrow();
+            Map<String, Object> until = rows(result).stream()
+                    .filter(r -> "Until".equals(r.get("name"))).findFirst().orElseThrow();
+
+            assertThat(forever).containsEntry("status", "blocked");
+            // Absent, not null: a cumulative cap never lifts, and a reader told a key exists
+            // will branch on its presence.
+            assertThat(forever).doesNotContainKey("blocked_until");
+            assertThat(until).containsEntry("status", "blocked");
+            assertThat(until).containsKey("blocked_until");
+        }
+
+        @Test
+        @DisplayName("the threshold moves what counts as near, and never hides a blocked agent")
+        void thresholdMovesTheNearBucket() {
+            when(agentService.listAgents(eq(TENANT), any(), any())).thenReturn(List.of(
+                    capped("Half", "100", "50", "0", "cumulative", null),
+                    capped("Spent", "100", "200", "0", "cumulative", null)));
+
+            assertThat(budgets(Map.of())).containsEntry("near", 0);
+            assertThat(budgets(Map.of("threshold", 0.4d))).containsEntry("near", 1);
+            // A blocked agent is blocked at any threshold: it is a fact about the cap, not a
+            // position relative to it.
+            assertThat(budgets(Map.of("threshold", 0.99d))).containsEntry("blocked", 1);
+        }
+
+        @Test
+        @DisplayName("an agent that overshot reads ABOVE 1, which is the figure that says by how much")
+        void usedRatioIsNotClamped() {
+            // The help used to promise "0 to 1" while the code emitted 2.0. Clamping would have
+            // been the wrong fix: a reader wants to know an agent is at twice its cap, not that
+            // it is at "the maximum". So the figure stays honest and the help was corrected.
+            when(agentService.listAgents(eq(TENANT), any(), any())).thenReturn(List.of(
+                    capped("Overshot", "100", "200", "0", "cumulative", null)));
+
+            assertThat(rows(budgets(Map.of())).get(0)).containsEntry("used_ratio", 2.0d);
+        }
+
+        @Test
+        @DisplayName("accepts a threshold sent as a string, which is what an LLM often sends")
+        void acceptsAStringThreshold() {
+            when(agentService.listAgents(eq(TENANT), any(), any())).thenReturn(List.of(
+                    capped("Half", "100", "50", "0", "cumulative", null)));
+
+            assertThat(budgets(Map.of("threshold", "0.4"))).containsEntry("near", 1);
+        }
+
+        @Test
+        @DisplayName("refuses a string that is not a number instead of falling back silently")
+        void refusesAnUnparseableThreshold() {
+            Optional<ToolExecutionResult> r = module.execute("budgets",
+                    Map.of("threshold", "most of it"), TENANT, ctx());
+
+            assertThat(r.get().success()).isFalse();
+            assertThat(r.get().error()).contains("threshold");
+        }
+
+        @Test
+        @DisplayName("refuses NaN, which passes every range check and empties the near bucket")
+        void refusesNaN() {
+            // The value that makes a bare range guard useless: every comparison against NaN
+            // is false, so "NaN <= 0" and "NaN > 1" both fail, "ratio >= NaN" is never true
+            // so nothing is ever near, and the literal NaN is not valid JSON on the way out.
+            Optional<ToolExecutionResult> asString = module.execute("budgets",
+                    Map.of("threshold", "NaN"), TENANT, ctx());
+            assertThat(asString.get().success()).isFalse();
+
+            Optional<ToolExecutionResult> asNumber = module.execute("budgets",
+                    Map.of("threshold", Double.NaN), TENANT, ctx());
+            assertThat(asNumber.get().success()).isFalse();
+        }
+
+        @Test
+        @DisplayName("refuses a threshold outside 0 to 1 rather than guessing")
+        void refusesAnImpossibleThreshold() {
+            Optional<ToolExecutionResult> tooHigh = module.execute("budgets",
+                    Map.of("threshold", 1.5d), TENANT, ctx());
+            assertThat(tooHigh).isPresent();
+            assertThat(tooHigh.get().success()).isFalse();
+
+            Optional<ToolExecutionResult> zero = module.execute("budgets",
+                    Map.of("threshold", 0d), TENANT, ctx());
+            assertThat(zero.get().success()).isFalse();
+        }
+
+        @Test
+        @DisplayName("a long answer is cut, says so, and keeps its counts honest")
+        void aLongAnswerIsCutAndSaysSo() {
+            // The Javadoc calls this list "short by construction", which is true of the SHAPE
+            // and was not true of the count: a workspace that caps 120 agents got 120 rows in
+            // one tool result. The cut keeps the rows nearest their cap, which are the ones the
+            // reader acts on, and the counts are computed before it so a truncated answer still
+            // states the real size of the problem.
+            List<AgentEntity> many = new java.util.ArrayList<>();
+            for (int i = 0; i < 120; i++) {
+                many.add(capped("Agent " + i, "100", String.valueOf(i), "0", "cumulative", null));
+            }
+            when(agentService.listAgents(eq(TENANT), any(), any())).thenReturn(many);
+
+            Map<String, Object> result = budgets(Map.of());
+
+            assertThat(result).containsEntry("capped_agents", 120);
+            assertThat(result).containsEntry("truncated", true);
+            assertThat(result).containsEntry("showing", 50);
+            assertThat(rows(result)).hasSize(50);
+            // Closest to the cap first, so the cut drops the far end.
+            assertThat(rows(result).get(0)).containsEntry("name", "Agent 119");
+        }
+
+        @Test
+        @DisplayName("a short answer does not claim to be cut")
+        void aShortAnswerIsNotMarkedTruncated() {
+            when(agentService.listAgents(eq(TENANT), any(), any())).thenReturn(List.of(
+                    capped("One", "100", "10", "0", "cumulative", null)));
+
+            assertThat(budgets(Map.of())).doesNotContainKey("truncated");
+        }
+
+        @Test
+        @DisplayName("shows only the agents the caller is allowed to see")
+        void honoursTheAgentRestriction() {
+            // Spend is information about an agent. A restricted caller must not learn it for
+            // agents outside its allowlist, the same way list refuses to show them at all.
+            AgentEntity visible = capped("Visible", "100", "90", "0", "cumulative", null);
+            AgentEntity hidden = capped("Hidden", "100", "99", "0", "cumulative", null);
+            when(agentService.listAgents(eq(TENANT), any(), any()))
+                    .thenReturn(List.of(visible, hidden));
+
+            Optional<ToolExecutionResult> r = module.execute("budgets", Map.of(), TENANT,
+                    ctxWithAllowedAgents(List.of(visible.getId().toString())));
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) r.get().data();
+            assertThat(data).containsEntry("capped_agents", 1);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> visibleRows = (List<Map<String, Object>>) data.get("agents");
+            assertThat(visibleRows).singleElement()
+                    .extracting(row -> row.get("name")).isEqualTo("Visible");
         }
     }
 }

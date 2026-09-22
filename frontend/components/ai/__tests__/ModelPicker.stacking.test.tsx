@@ -25,7 +25,7 @@ vi.mock('@/lib/hooks/useModelCostBasis', () => ({
   useModelCostBasis: () => ({ basis: null, isLoading: false }),
 }));
 vi.mock('@/lib/hooks/useMonthlyCreditsCannotPay', () => ({
-  useMonthlyCreditsCannotPay: () => ({ blocked: false, isLoading: false }),
+  useMonthlyCreditsCannotPay: () => ({ blocked: false, blockedForModel: () => false, freeTierForModel: () => false, prefersFreeTierModels: false, isLoading: false }),
 }));
 vi.mock('next/image', () => ({ default: () => null }));
 // Inline the Radix Select and capture the className handed to SelectContent -

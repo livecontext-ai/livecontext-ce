@@ -14,8 +14,9 @@ import { cn } from '@/lib/utils';
  * Sentinel {@link Props.value} meaning "aggregate across every workspace" rather
  * than a single workspace. The Quota page maps it to {@code allWorkspaces=true}
  * on the usage reads (which then return the full payer aggregate, including
- * unattributed/legacy rows). Only offered when {@link Props.includeAllOption} is
- * set - Storage has no cross-workspace aggregate, so it never shows this option.
+ * unattributed/legacy rows). The Storage page has no backend aggregate and sums
+ * each workspace client-side instead. Only offered when
+ * {@link Props.includeAllOption} is set.
  */
 export const ALL_WORKSPACES_SCOPE = '__all_workspaces__';
 

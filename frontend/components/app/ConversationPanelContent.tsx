@@ -280,10 +280,21 @@ export function ConversationPanelContent({ conversationId, executionId }: Conver
     loadMessages(conversationId).then(() => scrollToBottom(false));
   }, [conversationId, executionId, loadMessages, scrollToBottom]);
 
-  // Reload messages from DB (after stream completes, to get the persisted assistant message).
-  // Resets to page 0 - the persisted message is always in the newest batch.
+  // Re-read the thread from the DB without disturbing it. Four callers, all reconciliations of
+  // a panel that is already showing this conversation: the stream finishing, the stream being
+  // stopped or erroring, a workflow agent completing, and the delayed catch-up that covers a
+  // missed subscription. SILENT for all four: none of them may raise the spinner, reset the
+  // pagination or - worst of all - clear the transcript when the fetch fails. An unchanged
+  // thread reconciles to the same array, so the only visible effect left is the persisted
+  // message appearing.
   const reloadMessages = useCallback(async () => {
-    await loadMessages(conversationId);
+    try {
+      await loadMessages(conversationId, undefined, { silent: true });
+    } catch (err) {
+      // Nothing to show: the transcript on screen is untouched and the next reload reconciles.
+      console.warn('[ConversationPanelContent] Reconciliation failed:', err);
+      return;
+    }
     scrollToBottom();
   }, [conversationId, loadMessages, scrollToBottom]);
 

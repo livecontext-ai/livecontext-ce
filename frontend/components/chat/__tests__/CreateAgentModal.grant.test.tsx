@@ -117,6 +117,21 @@ vi.mock('@/lib/api/orchestrator/schedule-settings.service', () => ({
 }));
 
 vi.mock('@/lib/providers/smart-providers', () => ({ useAuth: () => ({ hasRole: () => false }) }));
+// The modal asks which pot pays for this agent's turns, to pick a default model
+// its plan can actually run (V494). Underneath, that hook reads the credit
+// balance through the auth context these suites do not mount. Stubbed to the
+// PAID answer with the verdict already in, which is exactly how the modal
+// behaved before the question existed - so nothing below changes meaning.
+vi.mock('@/lib/hooks/useMonthlyCreditsCannotPay', () => ({
+  useMonthlyCreditsCannotPay: () => ({
+    blocked: false,
+    blockedForModel: () => false,
+    freeTierForModel: () => false,
+    prefersFreeTierModels: false,
+    verdictReady: true,
+  }),
+}));
+
 vi.mock('@/hooks/useModels', () => ({
   useVisibleModels: () => ({ providers: [], defaultModel: null, defaultProvider: null, isLoading: false }),
   getModelsCache: () => null,
@@ -426,5 +441,90 @@ describe('CreateAgentModal - long-term memory read/write axis', () => {
 
     await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
     expect(emittedToolsConfig().memoryAccessMode).toBe('write');
+  });
+});
+
+/**
+ * The hop between the modal's state and the payload builder.
+ *
+ * `toolsConfigAccess.mailbox.test.ts` proves the BUILDER emits both keys; this proves the
+ * modal hands them over, which is the half the original break lived in. Both are needed:
+ * the builder held the fields and assigned neither, and nothing failed, because
+ * `ToolsConfigShape` carries an index signature that makes an unassigned optional legal.
+ */
+describe('CreateAgentModal - mailbox grant and access mode', () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => cleanup());
+
+  const submit = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Update Agent|Create Agent/ }));
+  };
+
+  const emittedToolsConfig = () =>
+    (updateAgentMock.mock.calls[0][1] as { toolsConfig?: Record<string, unknown> }).toolsConfig ?? {};
+
+  /** The mailbox controls live in the collapsed Advanced section, so open it first. */
+  const openAdvanced = async () => {
+    fireEvent.click(await screen.findByText('modals.createAgent.advancedModeLabel'));
+  };
+
+  it('hides the permissions control until the tool is switched on', async () => {
+    renderModal({ id: 'a-mbx-off', name: 'A', toolsConfig: { mode: 'all' } });
+    await openAdvanced();
+
+    await waitFor(() => {
+      expect(screen.getByText('chatConfig.mailboxLabel')).toBeInTheDocument();
+    });
+    // The axis means nothing while the tool is off, and showing it suggests the agent has
+    // a mailbox it does not have.
+    expect(screen.queryByText('chatConfig.mailboxAccessLabel')).not.toBeInTheDocument();
+  });
+
+  it('hydrates both halves from a stored read-only mailbox agent', async () => {
+    renderModal({
+      id: 'a-mbx-r', name: 'A',
+      toolsConfig: { mode: 'all', mailbox: true, mailboxAccessMode: 'read' },
+    });
+    await openAdvanced();
+
+    await waitFor(() => {
+      expect(screen.getByText('chatConfig.mailboxAccessRead')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('chatConfig.mailboxAccessWrite')).not.toBeInTheDocument();
+  });
+
+  it('carries the grant and the mode back into the update payload untouched', async () => {
+    renderModal({
+      id: 'a-mbx-rt', name: 'A',
+      toolsConfig: { mode: 'all', mailbox: true, mailboxAccessMode: 'read' },
+    });
+    await openAdvanced();
+    await screen.findByText('chatConfig.mailboxAccessRead');
+
+    await submit();
+
+    // The round trip is the whole point: opening an agent and saving it without touching
+    // either control must not revoke its mailbox nor widen it to full access.
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    expect(emittedToolsConfig().mailbox).toBe(true);
+    expect(emittedToolsConfig().mailboxAccessMode).toBe('read');
+  });
+
+  it('emits an explicit false when the tool is switched off, since the backend merges', async () => {
+    renderModal({ id: 'a-mbx-off2', name: 'A', toolsConfig: { mode: 'all', mailbox: true } });
+    await openAdvanced();
+    // Scoped to the mailbox block: 'enabled' is the state word every opt-in toggle shows,
+    // so an unscoped query matches the generation switch sitting right above it.
+    const block = (await screen.findByText('chatConfig.mailboxLabel')).closest('div')!;
+    fireEvent.click(within(block).getByRole('button'));
+    await within(block).findByText('modals.createAgent.disabled');
+
+    await submit();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    // Omitting it would let the merge keep the previous value, so a revoked mailbox would
+    // stay granted: the one direction where a dropped key hands out access.
+    expect(emittedToolsConfig().mailbox).toBe(false);
   });
 });

@@ -67,6 +67,21 @@ public class OrganizationService {
     @Autowired(required = false)
     private CloudPlanAccess cloudPlanAccess;
 
+    // Field-injected (optional) so the 2-arg constructor + slim tests stay green.
+    //
+    // Seeds the owner's plan storage allowance at WORKSPACE BIRTH. Until this existed, the only
+    // writer of storage.organization_storage_quota.max_bytes was PlanStorageQuotaSyncer on a
+    // plan-CHANGE event, so a workspace created AFTER its owner's last plan change never received
+    // one: its quota row was materialised lazily by QuotaService.createDefaultOrganizationQuota at
+    // the FREE default (100 MB) and stayed there. Symptom (prod, user 121): one workspace on the
+    // plan's real allowance (100 GB) next to another stuck at 100 MB, same owner, same plan.
+    //
+    // Birth + plan change together cover the full (workspace x plan) cross-product, which is what
+    // makes this the closing fix rather than a third patch: V266 repaired the data once and the
+    // 2026-05-14 syncer fix covered plan changes, but neither covered a workspace born later.
+    @Autowired(required = false)
+    private PlanStorageQuotaSyncer planStorageQuotaSyncer;
+
     /** ORG_AVATAR storage source type - one active avatar per organization. */
     private static final String ORG_AVATAR_SOURCE = "ORG_AVATAR";
     private static final int MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5MB
@@ -114,6 +129,7 @@ public class OrganizationService {
 
         log.info("🏢 Added user {} as OWNER of organization {}", user.getId(), org.getId());
         if (analytics != null) analytics.organizationCreated(user.getId(), org, true);
+        seedNewWorkspaceStorageQuota(user.getId(), org.getId());
 
         return org;
     }
@@ -153,6 +169,7 @@ public class OrganizationService {
 
         log.info("🏢 Created workspace {} (slug {}, owner {}, cap {})", org.getId(), slug, owner.getId(), max);
         if (analytics != null) analytics.organizationCreated(owner.getId(), org, false);
+        seedNewWorkspaceStorageQuota(owner.getId(), org.getId());
         return org;
     }
 
@@ -162,10 +179,30 @@ public class OrganizationService {
      * missing seed/slim wiring never accidentally grants unlimited workspaces.
      */
     private Integer resolveMaxWorkspaces(Long ownerId) {
+        Plan plan = resolveGoverningPlan(ownerId);
+        // No plan row resolvable → conservative single-workspace cap. Otherwise return the plan's
+        // value AS-IS (NULL = unlimited). NB: do NOT use a `plan != null ? plan.getMaxWorkspaces() : 1`
+        // ternary - mixing Integer + int auto-unboxes and NPEs on an unlimited (null) cap.
+        if (plan == null) {
+            return 1;
+        }
+        return plan.getMaxWorkspaces();
+    }
+
+    /**
+     * The plan that governs {@code ownerId} right now: the bound cloud account's plan when
+     * CLOUD-linked, else their active subscription's plan, else FREE, else {@code null} when no
+     * plan row is resolvable at all (missing seed / slim wiring).
+     *
+     * <p>Shared by {@link #resolveMaxWorkspaces} (workspace cap) and
+     * {@link #seedNewWorkspaceStorageQuota} (storage allowance) so a workspace can never be
+     * created under one plan's cap and handed another plan's storage.
+     */
+    private Plan resolveGoverningPlan(Long ownerId) {
         Plan plan = null;
-        // CE↔Cloud: when CLOUD-linked, the workspace cap follows the bound cloud account's plan
-        // (resolved locally by code - CE and cloud share identical plan rows). So creating extra
-        // workspaces requires the cloud plan to allow them, exactly like cloud.
+        // CE↔Cloud: when CLOUD-linked, the plan follows the bound cloud account's plan (resolved
+        // locally by code - CE and cloud share identical plan rows). So creating extra workspaces
+        // requires the cloud plan to allow them, exactly like cloud.
         if (cloudPlanAccess != null && planRepository != null) {
             plan = cloudPlanAccess.governingPlanCode(ownerId).flatMap(planRepository::findByCode).orElse(null);
         }
@@ -175,13 +212,28 @@ public class OrganizationService {
         if (plan == null && planRepository != null) {
             plan = planRepository.findByCode("FREE").orElse(null);
         }
-        // No plan row resolvable → conservative single-workspace cap. Otherwise return the plan's
-        // value AS-IS (NULL = unlimited). NB: do NOT use a `plan != null ? plan.getMaxWorkspaces() : 1`
-        // ternary - mixing Integer + int auto-unboxes and NPEs on an unlimited (null) cap.
-        if (plan == null) {
-            return 1;
+        return plan;
+    }
+
+    /**
+     * Seed the storage allowance of the workspace that was just created from its owner's plan.
+     * See the {@link #planStorageQuotaSyncer} field comment for the bug this closes.
+     *
+     * <p>Writes ONLY the new workspace, never the owner's other rows: the plan resolved here can
+     * be narrower than reality (a {@code past_due} owner resolves to FREE), and a sweep would then
+     * rewrite healthy workspaces down to 100 MB. A brand-new workspace has no row to lose, so the
+     * worst case is the FREE default the lazy path would have written anyway. Best-effort and
+     * post-commit, so a storage outage can never fail the creation.
+     */
+    private void seedNewWorkspaceStorageQuota(Long ownerId, UUID organizationId) {
+        if (planStorageQuotaSyncer == null) {
+            return;
         }
-        return plan.getMaxWorkspaces();
+        Plan plan = resolveGoverningPlan(ownerId);
+        if (plan == null) {
+            return;
+        }
+        planStorageQuotaSyncer.syncOrgAfterCommit(ownerId, organizationId, plan);
     }
 
     /**

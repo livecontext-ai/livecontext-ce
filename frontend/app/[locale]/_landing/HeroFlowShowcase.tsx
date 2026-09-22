@@ -1,11 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocale, useTranslations } from 'next-intl';
 import { useLandingTheme } from '@/components/landing/LandingThemeProvider';
+import { PERSONA_KEYS } from '@/components/landing/personas/personas';
 
 // The hero visual: a self-contained, deterministic animation (public/hero-flow.html)
 // where a request is typed, the workflow builds itself node by node, then runs, with
-// a live run panel. A segmented control floating on the card switches persona
+// a live run panel. A segmented control floating on the card links to persona pages
 // (Support, Creator, Sales, Marketing, Recruiting), each a distinct workflow with its
 // own interface (approval phone, vertical video, deal dashboard, post preview,
 // candidate scorecard). It is same-origin static HTML, so we measure its own content
@@ -15,14 +17,22 @@ import { useLandingTheme } from '@/components/landing/LandingThemeProvider';
 // on the src (the src is FROZEN after mount so a later toggle never reloads and
 // restarts the animation), and every change is pushed live via postMessage
 // {type:'lc-theme'} which hero-flow.html applies as a `dark` class.
-export default function HeroFlowShowcase() {
+export default function HeroFlowShowcase({ persona }: { persona?: string }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(720);
   const { theme } = useLandingTheme();
+  const locale = useLocale();
+  const t = useTranslations('PersonaLanding');
   // Frozen initial src: a stored dark preference is restored by the provider
   // before this mounts on the client's first paint of interest; subsequent
   // toggles go through postMessage only.
-  const [src] = useState(() => `/hero-flow.html${theme === 'dark' ? '?theme=dark' : ''}`);
+  const [src] = useState(() => {
+    const params = new URLSearchParams({ locale, navigationLabel: t('common.personaNavigation') });
+    if (theme === 'dark') params.set('theme', 'dark');
+    if (persona) params.set('persona', persona);
+    for (const key of PERSONA_KEYS) params.set(`label-${key}`, t(`personas.${key}.name`));
+    return `/hero-flow.html?${params}`;
+  });
 
   // Measure the content WRAPPER (hero-flow.html's single root element), not
   // `body`: `body.scrollHeight` is at least the iframe's own viewport height, so
@@ -78,7 +88,7 @@ export default function HeroFlowShowcase() {
     <div className="hero-flow-embed">
       <iframe
         ref={ref}
-        title="Watch an automation build itself and run"
+        title={t('common.iframeTitle')}
         src={src}
         loading="eager"
         scrolling="no"

@@ -1,5 +1,9 @@
 package com.apimarketplace.orchestrator.services.approvalchannel.telegram;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.orchestrator.security.OrchestratorTokenAtRestBackfill;
+
 import com.apimarketplace.orchestrator.domain.execution.ApprovalChannelDeliveryEntity;
 import com.apimarketplace.orchestrator.domain.execution.SignalResolution;
 import com.apimarketplace.orchestrator.execution.v2.services.RunSignalResolutionService;
@@ -55,6 +59,14 @@ public class TelegramApprovalCallbackHandler {
     private final TelegramApprovalNotifier notifier;
     private final MeterRegistry meterRegistry;
 
+    /**
+     * Read-only plaintext fallback for a delivery row still stored in clear (pre-2026-09-17) when its hash lookup misses.
+     * Optional so a unit test can build the service without a database; in a Spring context
+     * the component is always present (same package tree).
+     */
+    @Autowired(required = false)
+    private OrchestratorTokenAtRestBackfill tokenBackfill;
+
     public TelegramApprovalCallbackHandler(ApprovalChannelDeliveryRepository deliveryRepository,
                                            RunSignalResolutionService runSignalResolutionService,
                                            TelegramApprovalNotifier notifier,
@@ -98,7 +110,9 @@ public class TelegramApprovalCallbackHandler {
                     ? String.valueOf(callbackQuery.get("id")) : null;
             String fromId = fromIdOf(callbackQuery);
 
-            Optional<ApprovalChannelDeliveryEntity> deliveryOpt = deliveryRepository.findByCallbackToken(token);
+            Optional<ApprovalChannelDeliveryEntity> deliveryOpt = TokenAtRest.lookup(token,
+                    deliveryRepository::findByCallbackTokenHash,
+                    t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(OrchestratorTokenAtRestBackfill.APPROVAL_CALLBACK_TOKENS, t, deliveryRepository::findLegacyPlaintext));
             if (deliveryOpt.isEmpty()) {
                 // Unknown token: stale message from a purged run, or a forged guess.
                 // Without a delivery there is no credential to even ack the tap with.

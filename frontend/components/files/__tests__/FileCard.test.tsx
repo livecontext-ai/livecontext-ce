@@ -77,6 +77,25 @@ describe('FileCard thumbnail', () => {
   it('renders a <video> first-frame preview for video files', async () => {
     const { container } = renderCard(makeEntry({ mimeType: 'video/mp4', fileName: 'clip.mp4' }));
     await waitFor(() => expect(container.querySelector('video')).toBeTruthy());
+    // Past frame zero: the first frame of a fade-in is black, which reads as a broken tile.
+    expect(container.querySelector('video')?.getAttribute('src')).toContain('#t=0.1');
+  });
+
+  it('forces the blob type of a PDF tile, and only hints it for the kinds it plays', async () => {
+    // The tile classifies by NAME, and a blob URL inherits this app's origin: a row stored as
+    // text/html under a `.pdf` name would otherwise become a same-origin document running its
+    // own script, in a grid nobody clicked. Forced, it renders as a broken PDF instead.
+    renderCard(makeEntry({ mimeType: 'text/html', fileName: 'invoice.pdf' }));
+    await waitFor(() => expect(mockUseAuthed).toHaveBeenLastCalledWith(
+      expect.stringContaining('/raw/file-1'), 'text/html', 'application/pdf',
+    ));
+    cleanup();
+
+    // A video decodes by content and executes nothing, so its stored type is left alone.
+    renderCard(makeEntry({ mimeType: 'video/webm', fileName: 'clip.mp4' }));
+    await waitFor(() => expect(mockUseAuthed).toHaveBeenLastCalledWith(
+      expect.stringContaining('/raw/file-1'), 'video/webm', undefined,
+    ));
   });
 
   it('falls back to the type icon (no media element) for non-previewable kinds', () => {

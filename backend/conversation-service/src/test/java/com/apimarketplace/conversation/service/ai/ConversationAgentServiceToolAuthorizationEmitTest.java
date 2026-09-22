@@ -218,4 +218,53 @@ class ConversationAgentServiceToolAuthorizationEmitTest {
         service.emitPendingApprovalIfPresent(null, responseWithMetadata(meta));
         verifyNoInteractions(eventBus);
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("the card's SUBJECT survives the two hops of this service, so a reload still names its workflow")
+    void carriesTheSubjectThroughToTheEvent() throws Exception {
+        // These are the two hops between the gate and the screen on the bridge path: the tool
+        // metadata becomes a pending-action row, and the row becomes the event the chat draws
+        // from. Both sides of them are tested elsewhere (the row builder, the card); delete
+        // either hop here and every one of those tests still passes while the reloaded card
+        // goes back to asking "run this action?" about a pin.
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("toolAuthorizationRequired", true);
+        meta.put("rule", "workflow:pin");
+        meta.put("toolName", "workflow");
+        meta.put("action", "pin");
+        meta.put("toolCallId", "call_77");
+        meta.put("subject", Map.of("kind", "workflow", "id", "w-1", "version", 12));
+
+        service.emitPendingApprovalIfPresent("conv-7", responseWithMetadata(meta));
+
+        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
+        verify(eventBus).publish(eq("ws:conversation:conv-7"), payload.capture());
+        Map<String, Object> event = mapper.readValue(payload.getValue(), Map.class);
+        Map<String, Object> auth = (Map<String, Object>) event.get("toolAuthorization");
+        assertThat(auth.get("rule")).isEqualTo("workflow:pin");
+        assertThat((Map<String, Object>) auth.get("subject"))
+                .containsEntry("id", "w-1")
+                .containsEntry("version", 12);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("a rule with no subject OMITS the key, the same shape the two card publishers send")
+    void omitsAnAbsentSubject() throws Exception {
+        // Three producers build this event shape and they have to agree: the frontend type
+        // declares `subject?:` (undefined) and the project's tsconfig is not strict, so a null
+        // arriving from one of them only would not be caught where it is read.
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("toolAuthorizationRequired", true);
+        meta.put("rule", "workflow:execute");
+        meta.put("toolCallId", "call_78");
+
+        service.emitPendingApprovalIfPresent("conv-8", responseWithMetadata(meta));
+
+        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
+        verify(eventBus).publish(eq("ws:conversation:conv-8"), payload.capture());
+        Map<String, Object> event = mapper.readValue(payload.getValue(), Map.class);
+        assertThat((Map<String, Object>) event.get("toolAuthorization")).doesNotContainKey("subject");
+    }
 }

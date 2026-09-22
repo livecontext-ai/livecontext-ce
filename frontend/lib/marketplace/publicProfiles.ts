@@ -31,6 +31,12 @@ export interface PublicProfile {
    * so a missing or malformed field can never turn indexing ON by accident.
    */
   searchIndexable: boolean;
+  /**
+   * Whether this account carries the verified badge (the blue check next to the
+   * name). Same strict-true reading as {@link searchIndexable}: only an explicit
+   * true grants it, so a malformed payload can never decorate a profile.
+   */
+  verified: boolean;
 }
 
 /**
@@ -65,6 +71,7 @@ export function mapProfile(raw: unknown): PublicProfile | null {
     // unexpected shape must read as "not indexable". Defaulting the other way
     // would index a profile whose owner never opted in.
     searchIndexable: row.searchIndexable === true,
+    verified: row.verified === true,
   };
 }
 

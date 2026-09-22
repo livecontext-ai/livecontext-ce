@@ -1864,6 +1864,11 @@ public class WorkflowPublicationController {
      * acquired-app / purchase cards to render (id + title + an APPLICATION shape);
      * {@code remote=true} marks it so the UI can treat it as a cloud clone. The
      * live preview + actions still use the local clone's own {@code workflowId}.
+     *
+     * <p>No {@code nodeTypes} here, deliberately: the plan snapshot lives on the
+     * cloud, so this install genuinely does not know which nodes the app uses.
+     * The node-type filter therefore never matches a remote clone - which is the
+     * honest answer, not a bug to paper over with a guess.
      */
     private static Map<String, Object> remoteAcquisitionPublication(String sourcePublicationId, Object title) {
         Map<String, Object> synth = new HashMap<>();

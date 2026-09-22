@@ -502,8 +502,10 @@ public class DataSourceTableModule implements ToolModule {
             Map.entry("delete", "Delete a table permanently (table_id REQUIRED)"),
             Map.entry("query_rows", "Query rows (table_id REQUIRED, where?, similarity?, limit? default=20). " +
                 "similarity={column, queryVector, topK?, threshold?} for vector nearest-neighbor search (RAG). Can combine with where for hybrid filtering."),
-            Map.entry("insert_rows", "Insert rows (table_id REQUIRED, rows=[{field: value, ...}]). Keys must match existing column names."),
-            Map.entry("update_rows", "Update rows matching where (table_id REQUIRED, where REQUIRED, set REQUIRED)"),
+            Map.entry("insert_rows", "Insert rows (table_id REQUIRED, rows=[{field: value, ...}]). Keys must match existing column names. "
+                + "A successful write can also return 'warnings': what the column types did with the values. Most need nothing. See help.writeWarnings."),
+            Map.entry("update_rows", "Update rows matching where (table_id REQUIRED, where REQUIRED, set REQUIRED). "
+                + "Can return 'warnings' the same way insert_rows does - see help.writeWarnings."),
             Map.entry("delete_rows", "Delete rows matching where (table_id REQUIRED, where REQUIRED)"),
             Map.entry("add_columns", "Add columns (table_id REQUIRED, columns=[{name, type, display?, defaultValue?}])"),
             Map.entry("publish",
@@ -515,6 +517,61 @@ public class DataSourceTableModule implements ToolModule {
                 "Mark the table's marketplace listing inactive. Params: table_id REQUIRED. " +
                 "Existing acquirers keep their copies - only new installs are blocked.")
         ));
+
+        Map<String, Object> writeWarnings = new LinkedHashMap<>();
+        writeWarnings.put("whatItIs", "insert_rows and update_rows answer with a 'warnings' array when "
+                + "the write SUCCEEDED and the column type had something to say about a value. It is not "
+                + "a failure and nothing is retried for you. Each entry names the column it is about.");
+        writeWarnings.put("mostAreNormalisations", "The commonest entries mean the value was stored in "
+                + "the column's canonical form and there is NOTHING to do: 'Converted date format to "
+                + "ISO', 'Converted RFC date to ISO', 'Converted compact date to ISO', 'Interpreted "
+                + "comma as decimal separator', 'Stripped non-numeric characters from', 'Clamped ... to "
+                + "minimum' / 'to maximum' (the column had a floor or a ceiling and the value was "
+                + "moved to it), 'Interpreted ... as fraction' (a progress column whose maximum is "
+                + "10 or more reads 0.75 as 75% of that maximum, not as the number 0.75 - if you "
+                + "meant the literal value, write it as a whole number). Do not rewrite these: writing "
+                + "them again produces the same note.");
+        writeWarnings.put("someAreAdvisory", "A few mean the value was KEPT and simply does not look "
+                + "right for the column: 'does not match any defined option', 'does not look like a "
+                + "valid email', 'Phone number has fewer than 7 digits', 'Invalid URL'. Act only if "
+                + "the value really is wrong. Kept does not mean untouched: an email is lowercased, "
+                + "'mailto:' and 'tel:' prefixes are stripped, and a URL with no scheme gets "
+                + "'https://' put in front - so the quoted value in the note, and the cell, are the "
+                + "CLEANED form, not the characters you sent.");
+        writeWarnings.put("theOnesThatNeedYou", "The rule: a note saying the value could not be "
+                + "PARSED, could not be READ, or could not be RESOLVED to a file needs you - nobody "
+                + "else acts on it. Two flavours, and the first one loses the value entirely. Fix "
+                + "either with update_rows.");
+        writeWarnings.put("theCellIsNowEMPTY", "'Cannot parse as number', 'Cannot parse as date', "
+                + "'Cannot parse as progress' - and 'Cannot parse as <type>' for any other column "
+                + "type - plus 'Invalid number', 'Invalid epoch value', 'Cannot convert boolean to "
+                + "date', 'File reference found in EMAIL column', 'File reference found in PHONE "
+                + "column'. The value was NOT stored: that cell is null now, and the row looks "
+                + "complete until you read it back. A messy import hits this constantly. Put the "
+                + "value in the form the column wants and write it again.");
+        writeWarnings.put("theCellIsStoredButUnusable", "'it cannot be displayed' (a file reference "
+                + "with nothing to fetch it by - the table shows the cell as unavailable), 'does not "
+                + "look like a file URL' (a bare name or path written into a file column), 'Coercion "
+                + "error' (reading the value threw, so it was kept exactly as written). The cell "
+                + "holds something and nothing can use it. For a file, write the whole ref object "
+                + "files(action='get') returned, unchanged, rather than rebuilding one from a path "
+                + "by hand.");
+        writeWarnings.put("onABulkWrite", "One note per distinct finding, not per cell: a 500-row "
+                + "import whose dates were all normalised answers with ONE note carrying a count, not "
+                + "500. A note names its column, and says how many cells it covers when it covered "
+                + "more than one - never which rows. To find those, query_rows and look.");
+        writeWarnings.put("aBadVectorIsNOTAWarning", "A vector column is the one exception: "
+                + "'Vector dimension mismatch', 'Vector element is not a number', 'Vector must not "
+                + "be empty', 'Vector must be an array of numbers', 'Cannot parse vector from "
+                + "string' do NOT come back as warnings on a successful write. They fail the whole "
+                + "call - success is false, the message reads \"Vector column '<name>': ...\", and "
+                + "NO row was created. Do not go looking for a row to repair; fix the vector and "
+                + "insert again. (A silently dropped embedding would be invisible: the row would "
+                + "look fine and similarity search would skip it forever.)");
+        writeWarnings.put("whereTheyDoNotAppear", "Only the two row-writing actions coerce values, so "
+                + "only they can warn. create stores the data[] it is given without coercion, so silence "
+                + "from create is not a statement that the values are good.");
+        help.put("writeWarnings", writeWarnings);
 
         help.put("columnNaming", Map.of(
             "rule", "Column names come from data object keys. Use descriptive names from the user's domain.",
@@ -602,7 +659,9 @@ public class DataSourceTableModule implements ToolModule {
                 "step2", "insert_rows with rows=[{columns: {invoice: <the ref from step 1>, customer: 'ACME'}}]"
             ));
         mediaColumns.put("commonMistake", "Do not write the file's name or its storage path on its own: neither can be "
-                + "resolved back to a file. Write the ref, or a URL.");
+                + "resolved back to a file. A ref you rebuild by hand from a path alone is stored but cannot be "
+                + "displayed, and the write says so in 'warnings'. Write the whole ref object "
+                + "files(action='get') returned, unchanged, or a URL.");
         mediaColumns.put("doNotFilterOnIt", "A where clause matches the STORED text, not the object you read back, "
                 + "so passing a media cell as a where value matches nothing. Filter and de-duplicate on "
                 + "a text or id column instead. For the same reason, do not copy a media cell into a "

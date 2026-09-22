@@ -34,6 +34,9 @@ export const GENERATE_PARAM_KEYS = [
   'input_image',
   'input_audio',
   'input_video',
+  'first_frame_image',
+  'last_frame_image',
+  'reference_image',
 ] as const;
 
 export type GenerateParamKey = (typeof GENERATE_PARAM_KEYS)[number];
@@ -60,6 +63,7 @@ export const GENERATE_NUMERIC_PARAMS: readonly string[] = [
 export const GENERATE_ASSET_ROLES: readonly string[] = [
   'source',
   'first_frame',
+  'last_frame',
   'reference',
   'mask',
 ];
@@ -68,6 +72,12 @@ export const GENERATE_FILE_PARAMS: readonly string[] = [
   'input_image',
   'input_audio',
   'input_video',
+  // Named by what the file IS, because a model that pins both ends of a clip
+  // and takes references besides needs three slots at once, and one image
+  // parameter can only ever carry one of them.
+  'first_frame_image',
+  'last_frame_image',
+  'reference_image',
 ];
 
 export type CredentialSourceValue = 'user' | 'platform';

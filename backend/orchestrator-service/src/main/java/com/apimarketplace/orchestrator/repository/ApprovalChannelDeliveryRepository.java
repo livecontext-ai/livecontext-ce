@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.repository;
 
+
 import com.apimarketplace.orchestrator.domain.execution.ApprovalChannelDeliveryEntity;
 import com.apimarketplace.orchestrator.domain.execution.ApprovalChannelDeliveryEntity.DeliveryStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -27,7 +28,8 @@ import java.util.Optional;
 public interface ApprovalChannelDeliveryRepository
         extends JpaRepository<ApprovalChannelDeliveryEntity, Long> {
 
-    Optional<ApprovalChannelDeliveryEntity> findByCallbackToken(String callbackToken);
+    /** Lookup by HMAC of the plaintext callback token (TokenAtRest.hash); the column itself is encrypted. */
+    Optional<ApprovalChannelDeliveryEntity> findByCallbackTokenHash(String callbackTokenHash);
 
     Optional<ApprovalChannelDeliveryEntity> findBySignalWaitIdAndChannel(Long signalWaitId, String channel);
 
@@ -45,16 +47,19 @@ public interface ApprovalChannelDeliveryRepository
     @Transactional
     @Query(value = """
         INSERT INTO orchestrator.approval_channel_deliveries
-            (signal_wait_id, channel, callback_token, status, tenant_id, org_id, run_id, node_id,
+            (signal_wait_id, channel, callback_token, callback_token_hash, status, tenant_id, org_id, run_id, node_id,
              item_id, epoch, credential_id, chat_id, allowed_user_ids, created_at)
-        VALUES (:signalWaitId, :channel, :callbackToken, 'PENDING', :tenantId, :orgId, :runId, :nodeId,
+        VALUES (:signalWaitId, :channel, :callbackTokenEncrypted, :callbackTokenHash, 'PENDING', :tenantId, :orgId, :runId, :nodeId,
              :itemId, :epoch, :credentialId, :chatId, CAST(:allowedUserIdsJson AS jsonb), :now)
         ON CONFLICT (signal_wait_id, channel) DO NOTHING
         """, nativeQuery = true)
     int insertPendingIfAbsent(
             @Param("signalWaitId") Long signalWaitId,
             @Param("channel") String channel,
-            @Param("callbackToken") String callbackToken,
+            // Native SQL bypasses the entity converter and listener: the caller passes the
+            // ciphertext (TokenAtRest.encrypt) and the hash (TokenAtRest.hash) explicitly.
+            @Param("callbackTokenEncrypted") String callbackTokenEncrypted,
+            @Param("callbackTokenHash") String callbackTokenHash,
             @Param("tenantId") String tenantId,
             @Param("orgId") String orgId,
             @Param("runId") String runId,
@@ -65,4 +70,13 @@ public interface ApprovalChannelDeliveryRepository
             @Param("chatId") String chatId,
             @Param("allowedUserIdsJson") String allowedUserIdsJson,
             @Param("now") Instant now);
+
+    /**
+     * READ-ONLY plaintext match for a row written before 2026-09-17 (token in clear, no hash).
+     * Native on purpose: a JPQL comparison would convert the parameter through the encrypting
+     * converter. Rewrites nothing; the delayed startup backfill does. Gated by the service on
+     * {@code PlaintextTokenBackfill.mayHaveLegacyRows}.
+     */
+    @Query(value = "SELECT * FROM orchestrator.approval_channel_deliveries WHERE callback_token = :plain AND callback_token_hash IS NULL", nativeQuery = true)
+    Optional<ApprovalChannelDeliveryEntity> findLegacyPlaintext(@Param("plain") String plain);
 }

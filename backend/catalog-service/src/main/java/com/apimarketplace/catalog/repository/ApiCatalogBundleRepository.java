@@ -122,6 +122,68 @@ public interface ApiCatalogBundleRepository extends JpaRepository<ApiCatalogBund
         Instant getActivatedAt();
     }
 
+    /**
+     * Everything the served envelope needs EXCEPT the payload.
+     *
+     * <p>The download used to load the entity, which drags the ~24 MB
+     * {@code payload_gz} into heap as a G1 humongous allocation on every
+     * request. The bytes are now read in slices by
+     * {@code ApiCatalogBundleChunkReader}, so serving must not touch the column
+     * here either - hence a projection whose column list stops at the metadata.
+     */
+    @Query("""
+            SELECT b.version AS version,
+                   b.schemaVersion AS schemaVersion,
+                   b.checksum AS checksum,
+                   b.signature AS signature,
+                   b.signingKeyId AS signingKeyId,
+                   b.issuer AS issuer,
+                   b.apiCount AS apiCount,
+                   b.toolCount AS toolCount,
+                   b.rawBytesSize AS rawBytesSize
+            FROM ApiCatalogBundleEntity b
+            WHERE b.active = true
+            ORDER BY b.version DESC
+            """)
+    List<ServingView> findActiveServingView();
+
+    /** As {@link #findActiveServingView()} for one specific version. */
+    @Query("""
+            SELECT b.version AS version,
+                   b.schemaVersion AS schemaVersion,
+                   b.checksum AS checksum,
+                   b.signature AS signature,
+                   b.signingKeyId AS signingKeyId,
+                   b.issuer AS issuer,
+                   b.apiCount AS apiCount,
+                   b.toolCount AS toolCount,
+                   b.rawBytesSize AS rawBytesSize
+            FROM ApiCatalogBundleEntity b
+            WHERE b.version = :version
+            """)
+    List<ServingView> findServingViewByVersion(long version);
+
+    /** The served envelope's fields, without the payload. */
+    interface ServingView {
+        Long getVersion();
+
+        Integer getSchemaVersion();
+
+        String getChecksum();
+
+        String getSignature();
+
+        String getSigningKeyId();
+
+        String getIssuer();
+
+        Integer getApiCount();
+
+        Integer getToolCount();
+
+        Integer getRawBytesSize();
+    }
+
     /** Payload-free identity of a bundle row. */
     interface ActiveBundleMeta {
         String getChecksum();

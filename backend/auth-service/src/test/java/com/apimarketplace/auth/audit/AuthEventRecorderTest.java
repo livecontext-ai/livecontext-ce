@@ -189,4 +189,53 @@ class AuthEventRecorderTest {
 
         r.recordLoginSuccess(7L, "keycloak"); // must not throw
     }
+
+    @Test
+    @DisplayName("recordLoginRateLimited writes the audit event AND both counters")
+    void loginRateLimited_metricsAndAudit() {
+        AuthMetrics metrics = mock(AuthMetrics.class);
+        AuditLogger auditLogger = mock(AuditLogger.class);
+        AuditLogger.Builder builder = mock(AuditLogger.Builder.class);
+        when(auditLogger.event(anyString())).thenReturn(builder);
+        when(builder.warn()).thenReturn(builder);
+        when(builder.failure(anyString())).thenReturn(builder);
+        when(builder.detail(anyString(), any())).thenReturn(builder);
+
+        newRecorder(metrics, auditLogger).recordLoginRateLimited("local");
+
+        // Both counters, because the two answer different questions and both had a
+        // dashboard before this method existed.
+        verify(metrics).rateLimitHit("login");
+        verify(metrics).loginFailure("local", "rate_limited");
+        // The audit row is the part that did not exist: LOGIN_RATE_LIMITED was declared in
+        // AuditEventTypes and written by nobody, so repeated refusals against one account
+        // left no trail for a security review to find.
+        verify(auditLogger).event(AuditEventTypes.LOGIN_RATE_LIMITED);
+        verify(builder).failure("rate_limited");
+        verify(builder).write();
+    }
+
+    @Test
+    @DisplayName("recordAuthTimeClaimMissing counts, and deliberately writes NO audit row")
+    void authTimeClaimMissing_metricOnly() {
+        AuthMetrics metrics = mock(AuthMetrics.class);
+        AuditLogger auditLogger = mock(AuditLogger.class);
+
+        newRecorder(metrics, auditLogger).recordAuthTimeClaimMissing("keycloak", "absent");
+
+        verify(metrics).authTimeClaimMissing("keycloak", "absent");
+        // Nothing happened to the account. This fires per REQUEST while a provider is
+        // misconfigured, so an audit row per occurrence would drown the trail it shares.
+        verifyNoInteractions(auditLogger);
+    }
+
+    @Test
+    @DisplayName("the new recorders are no-ops when no beans are wired")
+    void newRecorders_noOp_whenBeansNull() {
+        AuthEventRecorder r = newRecorder(null, null);
+        assertThatCode(() -> {
+            r.recordLoginRateLimited("local");
+            r.recordAuthTimeClaimMissing("keycloak", "absent");
+        }).doesNotThrowAnyException();
+    }
 }

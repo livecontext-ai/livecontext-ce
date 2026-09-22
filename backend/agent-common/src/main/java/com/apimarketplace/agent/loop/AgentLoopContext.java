@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.loop;
 
+import com.apimarketplace.agent.domain.KeyRoute;
 import com.apimarketplace.agent.domain.Message;
 import com.apimarketplace.agent.domain.MessageAttachment;
 import com.apimarketplace.agent.domain.SystemBlock;
@@ -86,6 +87,22 @@ public record AgentLoopContext(
      * Maximum tokens in the response
      */
     Integer maxTokens,
+
+    /**
+     * The model's total context window, in tokens, when the caller knows it.
+     *
+     * <p>Purely observational: it lets the loop report context occupancy as a FRACTION of
+     * what the model can actually hold. Before it existed the loop compared against a
+     * hard-coded 50 000 and logged {@code ERROR [CONTEXT CRITICAL]} at 6.9% of a
+     * 1M-token window, so the alarm fired on healthy runs and meant nothing.
+     *
+     * <p>{@code null} when the caller cannot resolve it - the model carries no window in the
+     * catalog, or the caller is one that never runs a loop with this context (
+     * conversation-service builds one only to convert it to a DTO; the execution path rebuilds
+     * it in agent-service). The loop then reports size without claiming a severity it has no
+     * basis for.
+     */
+    Integer contextWindow,
 
     /**
      * Temperature for generation
@@ -246,7 +263,14 @@ public record AgentLoopContext(
      * direct loop). {@code null} ⇒ unrestricted (all modules). Not used by the direct loop,
      * which scopes tools before building this context.
      */
-    List<String> enabledModules
+    List<String> enabledModules,
+
+    /**
+     * Whose API key this execution runs on, resolved once at execution start and
+     * copied verbatim onto every {@code CompletionRequest} the loop builds. Null =
+     * unpinned (provider resolves user-first by tenantId). See {@link KeyRoute}.
+     */
+    KeyRoute keyRoute
 ) {
     /**
      * Get max iterations with default

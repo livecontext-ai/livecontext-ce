@@ -154,6 +154,9 @@ export class UnifiedApiService {
   updateUserProfile = (profileData: any) => this.userService.updateUserProfile(profileData);
   getPublicProfileByHandle = (handle: string) => this.userService.getPublicProfileByHandle(handle);
   getPublicProfileById = (userId: string | number) => this.userService.getPublicProfileById(userId);
+  getVerifiedUserIds = (userIds: Array<string | number>) => this.userService.getVerifiedUserIds(userIds);
+  adminSetVerified = (payload: { target_email?: string; target_user_id?: number; verified: boolean }) =>
+    this.userService.adminSetVerified(payload);
   getRemotePublicProfileById = (userId: string | number) => this.userService.getRemotePublicProfileById(userId);
   checkUsername = (username: string) => this.userService.checkUsername(username);
   checkDisplayName = (displayName: string) => this.userService.checkDisplayName(displayName);

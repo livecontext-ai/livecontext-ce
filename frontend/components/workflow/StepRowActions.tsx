@@ -12,6 +12,10 @@ import { isFireableTrigger } from '@/app/workflows/builder/hooks/fireableTrigger
 import { canvasNodeButtonClass } from '@/components/ui/canvas-chrome';
 import { TriggerNodePinButton } from '@/app/workflows/builder/components/nodes/TriggerNodePinButton';
 import { NodePlayButton } from '@/app/workflows/builder/components/NodePlayButton';
+import { FileText } from 'lucide-react';
+import { useTranslations } from 'next-intl';
+import { useWorkflowLogsSidePanel } from '@/components/workflow/useWorkflowLogsSidePanel';
+import { useWorkflowPanelHostSafe } from '@/contexts/WorkflowPanelHostContext';
 
 interface StepRowActionsProps {
   /** Aggregated run step - `alias` is the backend step id used to fire it. */
@@ -45,7 +49,10 @@ interface StepRowActionsProps {
  * handles via the canonical handleExecuteStep path.
  */
 export function StepRowActions({ step, matchedNode, workflowId, isStepByStep, isRunActive }: StepRowActionsProps) {
+  const t = useTranslations();
   const { isRunMode, runId, setViewingEpoch } = useWorkflowMode();
+  const panelHost = useWorkflowPanelHostSafe();
+  const { openWorkflowLogs, canOpenWorkflowLogs } = useWorkflowLogsSidePanel();
   const data = matchedNode.data;
   const nodeClass = findNodeClassById(data.id || '');
   const flags = deriveNodeContextFlags(data, nodeClass?.id);
@@ -61,8 +68,9 @@ export function StepRowActions({ step, matchedNode, workflowId, isStepByStep, is
   // Gated on an active (non-terminal) run, mirroring the canvas.
   const showPlay = isFireableTrigger(flags) && isRunActive;
   const showPin = flags.isTriggerNode && !!workflowId;
+  const showLogs = !!workflowId && !!runId && canOpenWorkflowLogs;
 
-  if (sideButtons.length === 0 && !showPlay && !showPin) return null;
+  if (sideButtons.length === 0 && !showPlay && !showPin && !showLogs) return null;
 
   /**
    * Leave the focused epoch, so the epoch this launches is visible when it
@@ -72,7 +80,10 @@ export function StepRowActions({ step, matchedNode, workflowId, isStepByStep, is
    * path alone left the popover's payload triggers launching into a view the user
    * had focused elsewhere.
    */
-  const returnToAllEpochs = () => selectAllEpochs(boundRunId(workflowId, runId), setViewingEpoch);
+  const returnToAllEpochs = () => selectAllEpochs(
+    boundRunId(workflowId, runId, panelHost?.runSurfaceId),
+    setViewingEpoch,
+  );
 
   // Fire THIS trigger from the run-info popover: dispatch to WorkflowBuilder,
   // which calls the canonical handleExecuteStep path. epoch=undefined → fresh
@@ -87,6 +98,25 @@ export function StepRowActions({ step, matchedNode, workflowId, isStepByStep, is
       className="flex items-center gap-1.5 mt-2 pt-2 border-t border-theme"
       onClick={(e) => e.stopPropagation()}
     >
+      {showLogs && (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            openWorkflowLogs({
+              workflowId: workflowId!,
+              runId: runId!,
+              initialStepAlias: step.alias,
+              reuseActiveWorkflowTab: true,
+            });
+          }}
+          title={t('workflow.logs.openNodeLogs')}
+          aria-label={t('workflow.logs.openNodeLogs')}
+          className={canvasNodeButtonClass}
+        >
+          <FileText className="h-3.5 w-3.5" />
+        </button>
+      )}
       {showPin && <TriggerNodePinButton workflowId={workflowId!} />}
       {sideButtons.map(({ key, icon, title, onClick }) => (
         <button

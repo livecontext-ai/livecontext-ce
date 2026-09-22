@@ -123,6 +123,20 @@ public class ToolExecutionRequest {
     private Boolean inlineBinaries;
 
     /**
+     * How long THIS call may spend waiting out a provider's rate-limit refusal, in seconds.
+     *
+     * <p>Null leaves the platform default in place (the usual case: a caller with no retry logic
+     * of its own benefits from the 429 handling without knowing it exists). {@code 0} disables
+     * retrying for this call, which is what a workflow node sends when its author already paces
+     * the calls themselves - a loop that calls, waits and comes back would otherwise issue three
+     * requests per turn instead of one, hammering the provider hardest for the author who was
+     * most careful.
+     *
+     * <p>Seconds, not milliseconds, because this is set by a person in a form field.
+     */
+    private Integer providerRetryMaxWaitSeconds;
+
+    /**
      * V148+ billing scope discriminator. Forwarded from the
      * {@code X-Lc-Billing-Scope-Kind} HTTP header by the catalog controller.
      * {@code "RUN"} when the caller is a workflow, {@code "STREAM"} when the
@@ -266,6 +280,26 @@ public class ToolExecutionRequest {
      */
     @com.fasterxml.jackson.annotation.JsonIgnore
     private String generationQuantityUnit;
+
+    /**
+     * What the CHOICES in this call do to its price: 2 for a render the model
+     * sells at twice its published rate, 1.2 for one carrying two reference
+     * images priced at a tenth each.
+     *
+     * <p>Distinct from {@link #generationQuantity}, which says how BIG the call
+     * is. A ten second clip is ten seconds at every resolution; what changes is
+     * what those ten seconds cost. Folding one into the other would make the
+     * run report a duration nobody asked for.
+     *
+     * <p>Null means "at the published rate", which is what every model without
+     * declared modifiers sends and what every caller sent before they existed.
+     *
+     * <p>See {@link #generationModelId} for why this is never deserialized: it
+     * multiplies the amount charged, so a caller able to set it could send
+     * 0 and take the generation for free.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private java.math.BigDecimal generationPriceMultiplier;
 
     /**
      * The caller has ALREADY reserved and will settle the charge for this call

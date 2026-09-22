@@ -151,6 +151,12 @@ public class MediaNode extends BaseNode {
                     "Invalid media configuration: " + String.join("; ", errors));
             }
 
+            // The INPUTS as well as the options. For probe and concat the options map
+            // is empty, so resolved_params used to be literally {operation}: the file
+            // being probed, or the clips being joined, never appeared at all.
+            if (!plan.inputs().isEmpty()) {
+                resolvedParams.put("inputs", plan.inputs());
+            }
             resolvedParams.putAll(plan.options());
             // A caption track carries up to MAX_SUBTITLE_CUES entries. Echoing every one of
             // them into the run's stored output would multiply the step data by the length of

@@ -9,7 +9,7 @@ import {
   isTableAsset,
   assetDisplayUrl,
   fileNameFromPath,
-  isImageAsset,
+  assetPreviewKind,
 } from '../assetValue';
 import type { StorageExplorerEntry } from '@/lib/api/storage-api';
 
@@ -251,14 +251,39 @@ describe('fileNameFromPath', () => {
   });
 });
 
-describe('isImageAsset', () => {
-  it('trusts the mime type when there is one', () => {
-    expect(isImageAsset(parseAsset({ id: UUID, name: 'a', mimeType: 'image/png' })!)).toBe(true);
-    expect(isImageAsset(parseAsset({ id: UUID, name: 'a', mimeType: 'application/pdf' })!)).toBe(false);
+describe('assetPreviewKind', () => {
+  const kindOf = (raw: unknown) => assetPreviewKind(parseAsset(raw)!);
+
+  it('names each kind a cell can play or show, from the mime type', () => {
+    expect(kindOf({ id: UUID, name: 'a', mimeType: 'image/png' })).toBe('image');
+    expect(kindOf({ id: UUID, name: 'a', mimeType: 'video/mp4' })).toBe('video');
+    expect(kindOf({ id: UUID, name: 'a', mimeType: 'audio/mpeg' })).toBe('audio');
+    expect(kindOf({ id: UUID, name: 'a', mimeType: 'application/pdf' })).toBe('pdf');
   });
 
-  it('falls back to the extension when the mime type is missing', () => {
-    expect(isImageAsset(parseAsset('https://example.com/photo.JPG')!)).toBe(true);
-    expect(isImageAsset(parseAsset('https://example.com/doc.pdf')!)).toBe(false);
+  it('falls back to the file name when the mime type is missing or generic', () => {
+    // Our own raw serve answers application/octet-stream for a row with no stored mime, which is
+    // most of what workflows write. Without the name fallback every one of those is an icon.
+    expect(kindOf('https://example.com/photo.JPG')).toBe('image');
+    expect(kindOf({ id: UUID, name: 'clip.mp4', mimeType: 'application/octet-stream' })).toBe('video');
+    expect(kindOf({ id: UUID, name: 'voice.wav' })).toBe('audio');
+  });
+
+  it('reads the URL when the stored name carries no extension', () => {
+    // A name is a label a human typed; the URL is the address of the actual bytes.
+    expect(kindOf({ _type: 'file', name: 'Ma video', url: 'https://cdn.example.com/a/clip.mp4' })).toBe('video');
+  });
+
+  it('says none for what a row has no room to show', () => {
+    // Previewable in the full file view, deliberately not in a cell one line tall.
+    expect(kindOf({ id: UUID, name: 'export.csv', mimeType: 'text/csv' })).toBe('none');
+    expect(kindOf({ id: UUID, name: 'notes.md', mimeType: 'text/markdown' })).toBe('none');
+    expect(kindOf({ id: UUID, name: 'archive.zip', mimeType: 'application/zip' })).toBe('none');
+  });
+
+  it('does not read a kind out of the opaque by-id URL', () => {
+    // Every stored file shares that URL shape, so guessing from it would type them all alike.
+    // Its last segment is `raw`, which must resolve to nothing rather than to a name.
+    expect(kindOf({ _type: 'file', id: UUID, name: 'unknown' })).toBe('none');
   });
 });

@@ -82,7 +82,7 @@ class WorkflowListControllerPagedTest {
     @SuppressWarnings("unchecked")
     private List<WorkflowSummary> listWith(String sort, String visibility) {
         ResponseEntity<Map<String, Object>> resp = controller.listWorkflows(
-                TENANT, null, null, null, null, 25, 0, null, sort, visibility, null, false);
+                TENANT, null, null, null, null, 25, 0, null, sort, visibility, null, false, null, false);
         return (List<WorkflowSummary>) resp.getBody().get("workflows");
     }
 

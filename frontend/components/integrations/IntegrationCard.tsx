@@ -49,7 +49,7 @@ export function IntegrationCard({ integration }: { integration: PublicIntegratio
       <div className="mt-auto flex items-center gap-2 pt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
         {/* The endpoint count is the honest measure of depth here: it is what the
             catalog actually exposes, one tool per endpoint, and it is what makes
-            "700+ integrations" mean something more than a logo wall. */}
+            "1000+ integrations" mean something more than a logo wall. */}
         <span>
           {integration.toolCount} {integration.toolCount === 1 ? 'tool' : 'tools'}
         </span>

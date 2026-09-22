@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7-labs
 # Base images are ARG-overridable so CI can substitute the GHCR mirror
 # (ghcr.io/<repo>/base/*) and dodge Docker Hub anonymous pull rate limits;
 # the Docker Hub defaults keep local/CE builds working unauthenticated.
@@ -43,68 +44,26 @@ RUN if [ -n "$BUILD_EXTRA_CA" ]; then \
 # Copy parent POM
 COPY pom.xml .
 
-# Copy ALL module POMs (Maven reactor requires them)
-COPY common-lib/pom.xml common-lib/pom.xml
-COPY common-security/pom.xml common-security/pom.xml
-COPY common-storage-service/pom.xml common-storage-service/pom.xml
-COPY agent-common/pom.xml agent-common/pom.xml
-COPY shared-agent-lib/pom.xml shared-agent-lib/pom.xml
-COPY shared-sse-lib/pom.xml shared-sse-lib/pom.xml
-COPY datasource-client/pom.xml datasource-client/pom.xml
-COPY agent-client/pom.xml agent-client/pom.xml
-COPY interface-client/pom.xml interface-client/pom.xml
-COPY trigger-client/pom.xml trigger-client/pom.xml
-COPY publication-client/pom.xml publication-client/pom.xml
-COPY auth-client/pom.xml auth-client/pom.xml
-COPY storage-client/pom.xml storage-client/pom.xml
-COPY credential-client/pom.xml credential-client/pom.xml
-COPY conversation-client/pom.xml conversation-client/pom.xml
-COPY notification-client/pom.xml notification-client/pom.xml
-COPY catalog-service/pom.xml catalog-service/pom.xml
-COPY auth-service/pom.xml auth-service/pom.xml
-COPY storage-service/pom.xml storage-service/pom.xml
-COPY conversation-service/pom.xml conversation-service/pom.xml
-COPY trigger-service/pom.xml trigger-service/pom.xml
-COPY datasource-service/pom.xml datasource-service/pom.xml
-COPY agent-service/pom.xml agent-service/pom.xml
-COPY interface-service/pom.xml interface-service/pom.xml
-COPY publication-service/pom.xml publication-service/pom.xml
-COPY migration-service/pom.xml migration-service/pom.xml
-COPY orchestrator-service/pom.xml orchestrator-service/pom.xml
-COPY monolith-service/pom.xml monolith-service/pom.xml
+# Copy ALL module POMs (Maven reactor requires them).
+#
+# test-support is a reactor module of the parent POM. Maven READS every declared module
+# to build the reactor, even under -Dmaven.test.skip, so omitting one fails the image with
+# "Child module /app/test-support of /app/pom.xml does not exist" before a single class is
+# compiled. It was added to the parent POM by 5cc4005200 and never mirrored here, which is
+# why the CE monolith image stopped building, and with it every local e2e slot.
+#
+# The wildcard is the reason it cannot happen again. This was 30 hand-maintained COPY lines,
+# one per module, so a module added to the parent POM was simply absent here. The 13 service
+# Dockerfiles already use this form, which is why only the CE image broke while CI stayed
+# green. Naming the next module by hand would fix this instance and leave the next one.
+COPY --parents */pom.xml ./
 
 # Download dependencies (cached layer unless POMs change)
 RUN mvn -B -Pce -DskipTests dependency:go-offline || true
 
-# Copy all source code
-COPY common-lib common-lib
-COPY common-security common-security
-COPY common-storage-service common-storage-service
-COPY agent-common agent-common
-COPY shared-agent-lib shared-agent-lib
-COPY shared-sse-lib shared-sse-lib
-COPY datasource-client datasource-client
-COPY agent-client agent-client
-COPY interface-client interface-client
-COPY trigger-client trigger-client
-COPY publication-client publication-client
-COPY auth-client auth-client
-COPY storage-client storage-client
-COPY credential-client credential-client
-COPY conversation-client conversation-client
-COPY notification-client notification-client
-COPY catalog-service catalog-service
-COPY auth-service auth-service
-COPY storage-service storage-service
-COPY conversation-service conversation-service
-COPY trigger-service trigger-service
-COPY datasource-service datasource-service
-COPY agent-service agent-service
-COPY interface-service interface-service
-COPY publication-service publication-service
-COPY migration-service migration-service
-COPY orchestrator-service orchestrator-service
-COPY monolith-service monolith-service
+# Copy all source code. Same reason as the POM wildcard above: an explicit list
+# omits a new module silently, and the reactor read fails before any compile.
+COPY . .
 
 # Build the monolith fat JAR (CE profile: services produce regular JARs, monolith gets repackaged)
 RUN mvn -B -Pce -Dmaven.test.skip=true clean package

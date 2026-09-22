@@ -54,10 +54,15 @@ public class GenerationProvenanceRecorder {
      * @param credentialSource which pool actually paid, as REPORTED by the execution - not as
      *                         requested, because an omitted source lets the catalog fall back and
      *                         only one of the two is what happened
+     * @param billedCredits what the platform charged, as the ledger committed it. Null whenever
+     *                      the platform charged nothing - the reader's own key paid, or this
+     *                      install has no ledger - and null is NOT zero: see
+     *                      {@link GenerationProvenanceFields#BILLED_CREDITS}
      */
     public record Recipe(String model, String kind, String provider,
                          Map<String, Object> unified, String credentialSource,
-                         BigDecimal billedQuantity, String billedUnit) {}
+                         BigDecimal billedQuantity, String billedUnit,
+                         BigDecimal billedCredits) {}
 
     /**
      * Stamp the recipe on the asset, if there is an asset to stamp it on.
@@ -158,6 +163,12 @@ public class GenerationProvenanceRecorder {
             if (recipe.billedUnit() != null) {
                 out.put(GenerationProvenanceFields.BILLED_UNIT, recipe.billedUnit());
             }
+        }
+        // Only a positive charge is recorded. A zero would be indistinguishable on screen from a
+        // real price of nothing, and there is no such price: an unbilled generation was paid for
+        // somewhere else, which is a different fact from having cost nothing.
+        if (recipe.billedCredits() != null && recipe.billedCredits().signum() > 0) {
+            out.put(GenerationProvenanceFields.BILLED_CREDITS, recipe.billedCredits());
         }
         out.put(GenerationProvenanceFields.AT, Instant.now().toString());
         return out;

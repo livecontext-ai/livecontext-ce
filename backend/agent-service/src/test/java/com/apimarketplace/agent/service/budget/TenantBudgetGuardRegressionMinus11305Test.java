@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -83,7 +85,7 @@ class TenantBudgetGuardRegressionMinus11305Test {
         // Pre-V162: 5512 + 1102 = 6614 << 12000 → ALLOW → bug reproduces, burst lands.
         // Post-V162: max(growth, lastDelta×2, worstCase=7800) = 7800.
         //            5512 + 7800 = 13312 > 12000 → DENY via worstCase branch.
-        when(creditClient.fetchBalance("tenant-1")).thenReturn(new BigDecimal("12000"));
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any())).thenReturn(new BigDecimal("12000"));
 
         TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, opusCalculator);
 
@@ -123,7 +125,7 @@ class TenantBudgetGuardRegressionMinus11305Test {
             OPUS_CONTEXT_WINDOW, OPUS_MAX_OUTPUT);
 
         CreditConsumptionClient creditClient = mock(CreditConsumptionClient.class);
-        when(creditClient.fetchBalance("tenant-1")).thenReturn(new BigDecimal("500"));
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any())).thenReturn(new BigDecimal("500"));
 
         TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, opusCalculator);
 
@@ -152,7 +154,7 @@ class TenantBudgetGuardRegressionMinus11305Test {
             OPUS_CONTEXT_WINDOW, OPUS_MAX_OUTPUT);
 
         CreditConsumptionClient creditClient = mock(CreditConsumptionClient.class);
-        when(creditClient.fetchBalance("tenant-1")).thenReturn(new BigDecimal("2000"));
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any())).thenReturn(new BigDecimal("2000"));
 
         TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, opusCalculator);
 
@@ -184,7 +186,7 @@ class TenantBudgetGuardRegressionMinus11305Test {
 
         CreditConsumptionClient creditClient = mock(CreditConsumptionClient.class);
         // Bump balance to 1500 - comfortably above Sonnet worstCase.
-        when(creditClient.fetchBalance("tenant-1")).thenReturn(new BigDecimal("1500"));
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any())).thenReturn(new BigDecimal("1500"));
 
         TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, sonnetCalculator);
 

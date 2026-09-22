@@ -8,6 +8,7 @@ import { PROVIDER_PARAM, providerHref, resolveProviderParam } from './_component
 import { getProviderDisplayName } from '@/lib/ai-providers/providerIcons';
 import { docsHref } from '@/lib/docs/docsHostRewrite';
 import { IS_CE } from '@/lib/edition/edition';
+import { socialCard } from '@/lib/seo/socialCard';
 
 /**
  * Public model directory: every model LiveContext can run, on a chronological
@@ -44,6 +45,7 @@ export async function generateMetadata({ searchParams }: ModelsPageProps) {
     title: 'AI models',
     description: DESCRIPTION,
     alternates: { canonical: '/models' },
+    ...socialCard({ title: 'AI models', description: DESCRIPTION, path: '/models' }),
     robots: IS_CE ? { index: false, follow: false } : undefined,
   };
   if (!provider) return base;

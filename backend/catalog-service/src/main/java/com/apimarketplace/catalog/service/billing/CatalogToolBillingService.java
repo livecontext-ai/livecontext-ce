@@ -158,7 +158,7 @@ public class CatalogToolBillingService {
         }
         if (!shouldBill(scope)) {
             // Nothing to bill on this call. For an ordinary endpoint that is
-            // the end of it, and that is the behaviour of the 600+ catalog
+            // the end of it, and that is the behaviour of the 1000+ catalog
             // tools that carry no published price.
             //
             // For a RESOLD generation it is the hole this guard closes. The
@@ -183,7 +183,7 @@ public class CatalogToolBillingService {
             // Not knowing which endpoint this is means not knowing whether it is
             // a generation, so every guard below is skipped and the call goes
             // out free. For an ordinary endpoint that is correct and is what the
-            // 600+ unpriced catalog tools do. For a generation it is the whole
+            // 1000+ unpriced catalog tools do. For a generation it is the whole
             // hole again, reached by an ordinary accident rather than an exotic
             // one: resolveApiToolUuid swallows its own exceptions, so one
             // transient catalog-database fault dispatches a video on the owner's
@@ -212,7 +212,12 @@ public class CatalogToolBillingService {
         Optional<ResolvedScopeMarkupDto> resolved = credentialClient.resolveScopeMarkupRate(
                 scope.scopeKind(), scope.scopeId(), scope.userId(),
                 scope.platformCredentialId(), apiToolUuid.get(),
-                scope.generationModelId(), scope.generationQuantity());
+                scope.generationModelId(), scope.generationQuantity(),
+                // What this call's own choices do to the published rate. Null
+                // for every ordinary endpoint and for a generation whose model
+                // declares no modifiers, and auth then resolves exactly the
+                // amount it did before.
+                scope.generationPriceMultiplier());
         if (resolved.isEmpty() || resolved.get().getEffectiveMarkup() == null
                 || resolved.get().getEffectiveMarkup().signum() <= 0) {
             // An ordinary tool priced at zero is a deliberate admin choice, so
@@ -392,7 +397,7 @@ public class CatalogToolBillingService {
                 // call which pool answers; but that path tries the caller's own
                 // credential FIRST, and this caller has one. Turning "your
                 // balance is empty" into a 402 here would block a user who is
-                // paying their own provider directly, on every one of the 600+
+                // paying their own provider directly, on every one of the 1000+
                 // endpoints that carry a published markup.
                 //
                 // The relaxation is only sound while its own premise holds -
@@ -578,6 +583,9 @@ public class CatalogToolBillingService {
                 + "credential_source='user': the platform bills nothing for it.";
     }
 
+    /** Outcome of a commit for a call that reserved nothing: no row was written, none was charged. */
+    public static final String NOTHING_RESERVED = "NOTHING_RESERVED";
+
     /**
      * Post-flight commit. Catalog calls after a successful upstream response.
      * Idempotent - duplicate calls return {@code ALREADY_COMMITTED}.
@@ -588,8 +596,48 @@ public class CatalogToolBillingService {
      *                     smaller amount when partial result reduces cost
      */
     public String commitOnSuccess(String sourceId, BigDecimal actualAmount, String provider, String model) {
-        if (sourceId == null) return "COMMITTED";
+        // Nothing was reserved, so nothing was committed - which is its own answer, and neither a
+        // success nor "this deployment does not meter". It gets its own word for the reason this
+        // whole area was reworked: commitTookTheWholeAmount reads this string to decide whether an
+        // amount may be shown as CHARGED, and every state that did not debit a ledger row has to be
+        // distinguishable from the one that did. Unreachable today (the caller short-circuits on a
+        // null source id first) and left correct anyway, because the reason it is unreachable lives
+        // in another class.
+        if (sourceId == null) return NOTHING_RESERVED;
         return creditClient.scopeCommit(sourceId, actualAmount, provider, model);
+    }
+
+    /**
+     * Whether THIS commit took the whole amount that was reserved.
+     *
+     * <p>Two outcomes answer true, and the line between them and the rest is drawn on what the
+     * ledger row ends up holding, not on how alarming the outcome sounds. A COMMITTED commit
+     * charges the amount it was handed. A FLOORED one is louder - the balance had already gone
+     * negative through a concurrent debit, and the account is marked delinquent - but it charges
+     * {@code reserved} exactly, which is the figure in hand, so refusing to state it would drop a
+     * price that was really paid. A PARTIAL commit is the one that charges LESS (the balance could
+     * not cover the whole reservation) and the reduced figure never comes back here, so the
+     * reserved amount would overstate it. An expired reservation charged nothing at all,
+     * and {@code BILLING_DISABLED} means no ledger was even reached: both the credit client and the
+     * auth service answer with that word rather than a success one precisely so that this method can
+     * tell "charged" from "not metered" without knowing either deployment's configuration.
+     *
+     * <p><b>{@code ALREADY_COMMITTED} answers false, and that is deliberate.</b> It is the honest
+     * answer to "was the whole amount taken", because this caller cannot tell WHICH commit it is
+     * repeating: a partial or floored commit leaves the row as an ordinary committed one, so a
+     * retry over a charge that took less than was reserved comes back as ALREADY_COMMITTED, and
+     * reporting the reserved figure then re-opens the overstatement the partial case is refused
+     * for. The cost of the narrow reading is that a repeated commit shows no price on the asset,
+     * which is the same outcome as a generation on the reader's own key and states nothing untrue.
+     * A source id is minted per dispatch, so this is a retry of one call, never a second purchase.
+     *
+     * <p>Lives here, next to the commit it reads, because two callers need the same answer: the
+     * ordinary execution path and the CE relay, which reserves and commits on its own. Written
+     * twice, one of them would eventually report the reserved figure for a partial charge, and a
+     * price that is wrong on the high side is the one a reader disputes.
+     */
+    public static boolean commitTookTheWholeAmount(String commitOutcome) {
+        return "COMMITTED".equals(commitOutcome) || "COMMITTED_FLOORED".equals(commitOutcome);
     }
 
     /**
@@ -619,7 +667,7 @@ public class CatalogToolBillingService {
      * the catalog being briefly unreadable.
      *
      * <p>The descriptor is the definition, but reading it takes a lookup, and
-     * that lookup fails open by design so a database blip cannot stop the 600+
+     * that lookup fails open by design so a database blip cannot stop the 1000+
      * ordinary endpoints. Failing open there also lets a generation through
      * free, which is the one outcome this whole feature exists to prevent.
      *
@@ -657,7 +705,7 @@ public class CatalogToolBillingService {
      * proceed free, it is a reason to refuse: the third-party provider charges
      * the platform owner for the asset whether or not a ledger row was ever
      * written. Every OTHER call answers false here, which is what keeps the
-     * 600+ ordinary catalog endpoints on exactly the behaviour they have today.
+     * 1000+ ordinary catalog endpoints on exactly the behaviour they have today.
      *
      * <p>Public because the same question has to be asked from the one place
      * that can see a failure this service never returns: an exception thrown
@@ -854,6 +902,25 @@ public class CatalogToolBillingService {
              */
             String generationQuantityUnit,
             /**
+             * What the CHOICES in this call do to its price: 2 for a render sold
+             * at twice the model's published rate, 1.2 for one carrying two
+             * reference images priced at a tenth each. 1 (or null, read as 1)
+             * for a call at the published rate, which is every ordinary tool and
+             * every generation whose model declares no modifiers.
+             *
+             * <p>Separate from {@link #generationQuantity} because it answers a
+             * different question. The quantity is how BIG the call is and is
+             * reported back to the customer as such; this is what that size
+             * costs. Folding one into the other would have a ten second clip
+             * report twenty seconds of video because it was rendered at 1080p.
+             *
+             * <p>Derived server-side from parameters already validated against
+             * the model, exactly like the quantity, and for the same reason: a
+             * factor a caller could state is a factor a caller would state as
+             * zero.
+             */
+            java.math.BigDecimal generationPriceMultiplier,
+            /**
              * The caller around this execution has already reserved the charge
              * and will settle it itself, so this layer must neither charge again
              * nor refuse for lack of a scope. Set only by
@@ -904,7 +971,10 @@ public class CatalogToolBillingService {
                     generationModelId, generationQuantity, null, billingOwnedByCaller);
         }
 
-        /** Full form, carrying the unit the quantity was measured in. */
+        /**
+         * The form that carries the unit but not yet what the call's choices do
+         * to its price, kept for the callers that have no notion of one.
+         */
         public static BillingScope of(Long userId, String credentialSource, Long platformCredentialId,
                                        String providerKind, String provider, String model, String toolSlug,
                                        String runId, String streamId, String stepId,
@@ -913,6 +983,23 @@ public class CatalogToolBillingService {
                                        String generationModelId,
                                        java.math.BigDecimal generationQuantity,
                                        String generationQuantityUnit,
+                                       boolean billingOwnedByCaller) {
+            return of(userId, credentialSource, platformCredentialId, providerKind, provider, model,
+                    toolSlug, runId, streamId, stepId, callRef, ttlMinutes,
+                    generationModelId, generationQuantity, generationQuantityUnit, null,
+                    billingOwnedByCaller);
+        }
+
+        /** Full form, carrying the unit AND what this call's own choices cost. */
+        public static BillingScope of(Long userId, String credentialSource, Long platformCredentialId,
+                                       String providerKind, String provider, String model, String toolSlug,
+                                       String runId, String streamId, String stepId,
+                                       String callRef,
+                                       int ttlMinutes,
+                                       String generationModelId,
+                                       java.math.BigDecimal generationQuantity,
+                                       String generationQuantityUnit,
+                                       java.math.BigDecimal generationPriceMultiplier,
                                        boolean billingOwnedByCaller) {
             // Required rather than defaulted: a missing callRef does not degrade
             // the billing, it silently rebuilds the "one charge per scope" hole
@@ -935,10 +1022,16 @@ public class CatalogToolBillingService {
                 scopeKind = null;
                 scopeId = null;
             }
+            // An absurd factor is read as "no factor", never as a price of zero and never as a
+            // thousandfold charge. Belt to the controller's braces, and not redundant: a scope can
+            // be built by any caller inside this service, and the ceiling is the only thing between
+            // a bad number and a reservation.
+            java.math.BigDecimal multiplier = com.apimarketplace.common.web.BillingContextHeaders
+                    .sanitizeGenerationMultiplier(generationPriceMultiplier);
             return new BillingScope(userId, credentialSource, platformCredentialId,
                     providerKind, provider, model, toolSlug, scopeKind, scopeId, stepId,
                     callRef, ttlMinutes, generationModelId, generationQuantity,
-                    generationQuantityUnit, billingOwnedByCaller);
+                    generationQuantityUnit, multiplier, billingOwnedByCaller);
         }
     }
 

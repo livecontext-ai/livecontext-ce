@@ -140,7 +140,7 @@ describe('StepTable - every outcome of the load is reported to the parent', () =
     expect(onStepsLoaded).toHaveBeenCalledWith([]);
   });
 
-  it('reports [] when the request fails', async () => {
+  it('shows a load error and reports [] when the request fails', async () => {
     getAggregatedSteps.mockRejectedValue(new Error('boom'));
     const onStepsLoaded = vi.fn();
 
@@ -148,6 +148,9 @@ describe('StepTable - every outcome of the load is reported to the parent', () =
 
     await waitFor(() => expect(onStepsLoaded).toHaveBeenCalledTimes(1));
     expect(onStepsLoaded).toHaveBeenCalledWith([]);
+    expect((await screen.findByTestId('workflow-logs-steps-error')).textContent)
+      .toBe('workflow.logs.loadStepsError');
+    expect(screen.queryByText('No steps found')).toBeNull();
   });
 
   it('does not refetch when the parent re-renders with a fresh callback identity', async () => {

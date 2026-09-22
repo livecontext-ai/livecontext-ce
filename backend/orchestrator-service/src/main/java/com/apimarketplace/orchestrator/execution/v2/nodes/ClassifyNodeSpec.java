@@ -47,7 +47,20 @@ public class ClassifyNodeSpec implements NodeSpec {
                 OutputFieldDef.builder()
                     .key("reasoning")
                     .type("string")
-                    .description("Explanation for the classification decision")
+                    .description("Why this category was chosen. On a chat model, a "
+                        + "one-sentence explanation the model wrote. On a decision model "
+                        + "there is no explanation to write, so this holds the three "
+                        + "highest-scoring categories instead, e.g. \"urgent 0.94, normal "
+                        + "0.05\". A line for a human to read, not a value to parse: read "
+                        + "probabilities for every category and for exact values.")
+                    .build(),
+                OutputFieldDef.builder()
+                    .key("probabilities")
+                    .type("object")
+                    .description("Probability (0 to 1) per category label, e.g. "
+                        + "{\"urgent\": 0.94, \"normal\": 0.05}. Present only on a decision "
+                        + "model; absent on a chat model. Read it to tell a clear win from a "
+                        + "close call: compare the top two before acting on the category.")
                     .build(),
                 OutputFieldDef.builder()
                     .key("tokens_used")

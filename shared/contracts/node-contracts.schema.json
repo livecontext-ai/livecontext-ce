@@ -326,7 +326,8 @@
         { "name": "selected_category", "type": "string", "status": "aligned", "action": "keep", "notes": "The category label that was selected by the AI" },
         { "name": "selected_category_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Index of the selected category in the categories array" },
         { "name": "confidence", "type": "number", "status": "aligned", "action": "keep" },
-        { "name": "reasoning", "type": "string", "status": "aligned", "action": "keep", "notes": "AI reasoning for the classification" },
+        { "name": "reasoning", "type": "string", "status": "aligned", "action": "keep", "notes": "Why this category was chosen. Prose on a chat model; the ranked distribution on a decision model, which has no explanation to write" },
+        { "name": "probabilities", "type": "object", "status": "aligned", "action": "keep", "notes": "Probability per category label. Present only on a decision model; absent on a chat model" },
         { "name": "response", "type": "string", "status": "aligned", "action": "keep", "notes": "Human-readable classification result" },
         { "name": "model", "type": "string", "status": "aligned", "action": "keep" },
         { "name": "provider", "type": "string", "status": "aligned", "action": "keep" },
@@ -387,7 +388,7 @@
         { "name": "selected_branch", "type": "string", "status": "aligned", "action": "keep", "notes": "Branch type that matched: if, elsif, else" },
         { "name": "selected_branch_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Index of the selected branch (-1 if none)" },
         { "name": "skipped_branches", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Branch types that were skipped" },
-        { "name": "evaluations", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "Detailed evaluation results per branch" },
+        { "name": "evaluations", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "One entry per branch, all branching nodes sharing one shape: index, branch (the port the edge carries), condition, resolved (what the evaluation decided on), result (null when the branch has no condition), selected, outcome, error?, unresolved?" },
         { "name": "condition_expression", "type": "string", "status": "aligned", "action": "keep", "notes": "Expression of the selected branch" },
         { "name": "condition_result", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether any branch matched" }
       ],
@@ -498,7 +499,7 @@
         { "name": "matched_value", "type": "any", "status": "aligned", "action": "keep", "notes": "The value of the case that matched" },
         { "name": "skipped_cases", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Case types that were skipped" },
         { "name": "skipped_case_labels", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Labels of the skipped cases" },
-        { "name": "evaluations", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "Detailed evaluation results per case" }
+        { "name": "evaluations", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "One entry per branch, all branching nodes sharing one shape: index, branch (the port the edge carries), condition, resolved (what the evaluation decided on), result (null when the branch has no condition), selected, outcome, error?, unresolved?. A case also carries case_label; its branch is case_N or default, its resolved is the comparison that was made (subject == candidate), and it never carries error or unresolved" }
       ],
       "nestedTypes": {
         "SwitchCase": [
@@ -657,7 +658,7 @@
         { "name": "selected_choice_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Index of the selected choice" },
         { "name": "selected_branches", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Array containing the selected branch label (or empty if none matched)" },
         { "name": "skipped_branches", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Labels of branches that were not selected" },
-        { "name": "evaluations", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "Detailed evaluation results (choice_id, choice_label, expression, resolved_expression, result, error?)" }
+        { "name": "evaluations", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "One entry per branch, all branching nodes sharing one shape: index, branch (the port the edge carries), condition, resolved (what the evaluation decided on), result (null when the branch has no condition), selected, outcome, error?, unresolved?. A choice also carries choice_id and choice_label; its branch is choice_N" }
       ],
       "nestedTypes": {
         "OptionChoice": [
@@ -1042,7 +1043,8 @@
         { "name": "row_id", "type": "string", "status": "aligned", "action": "keep" },
         { "name": "created_at", "type": "datetime", "status": "aligned", "action": "keep" },
         { "name": "inserted_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of rows inserted" },
-        { "name": "inserted_values", "type": "object", "status": "aligned", "action": "keep", "notes": "Map of column names to inserted values" }
+        { "name": "inserted_values", "type": "object", "status": "aligned", "action": "keep", "notes": "Map of column names to inserted values" },
+        { "name": "warnings", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "What the column types reported about the values written, present only when there is something to say. Most entries are normalisations; one saying a value could not be parsed means that cell is now empty, and one saying it could not be read or resolved means the cell is stored but unusable" }
       ]
     },
 
@@ -1084,7 +1086,8 @@
         { "name": "message", "type": "string", "status": "aligned", "action": "keep", "notes": "Human-readable result message" },
         { "name": "updated_count", "type": "number", "status": "aligned", "action": "keep" },
         { "name": "rows_affected", "type": "number", "status": "aligned", "action": "keep" },
-        { "name": "updated_at", "type": "datetime", "status": "aligned", "action": "keep" }
+        { "name": "updated_at", "type": "datetime", "status": "aligned", "action": "keep" },
+        { "name": "warnings", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "What the column types reported about the values written, present only when there is something to say. Most entries are normalisations; one saying a value could not be parsed means that cell is now empty, and one saying it could not be read or resolved means the cell is stored but unusable" }
       ]
     },
 

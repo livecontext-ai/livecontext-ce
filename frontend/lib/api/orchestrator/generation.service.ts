@@ -63,6 +63,33 @@ export interface GenerationPrice {
   unitCredits: string;
   minCredits?: string;
   maxCredits?: string;
+  /**
+   * What the reader's own CHOICES do to that rate, as a table rather than an
+   * amount: which value multiplies the price by how much, and which file slots
+   * carry a surcharge per file attached.
+   *
+   * <p>A rate alone can only describe a call whose every option is free. It is
+   * the declared rule, not one result of it, because the form changes under the
+   * reader and the factor has to be recomputed from whatever is in it - by the
+   * same arithmetic the server bills with, which is why the table travels
+   * rather than a number.
+   *
+   * <p>Absent for a model whose price depends on nothing but its size, which is
+   * most of them.
+   */
+  modifiers?: Record<string, GenerationPriceModifier>;
+}
+
+/** One reason a call costs more than its model's published rate. */
+export interface GenerationPriceModifier {
+  /**
+   * Factor per value, keyed by the value as the seed wrote it. Exactly one
+   * entry is 1: that value is the tier the model's own rate is quoted for, and
+   * it is what a call that omits the parameter is billed at.
+   */
+  by_value?: Record<string, number | string>;
+  /** Factor added per FILE attached in this slot. Attaching none costs nothing. */
+  per_file?: number | string;
 }
 
 export interface GenerationModel {
@@ -92,7 +119,14 @@ export interface GenerationModel {
    *
    * <p>Absent for a model that takes no file.
    */
-  inputs?: Record<string, { role: string; maxItems: number }>;
+  inputs?: Record<string, {
+    role: string;
+    maxItems: number;
+    /** Slots this one only works ALONGSIDE. Sending it without them is refused, at no cost. */
+    requires?: string[];
+    /** Slots this one cannot be sent WITH: the provider reads the two as different requests. */
+    excludes?: string[];
+  }>;
   /** Subset of `accepts` the provider will refuse the call without. */
   required: string[];
   limits: Record<string, GenerationLimit>;
@@ -155,6 +189,25 @@ export interface GenerationResult {
     /** The size the run was billed on, counted in `billed_unit`. */
     billed_quantity?: number;
     billed_unit?: string;
+    /**
+     * What the call's own choices did to the model's published rate, when they
+     * did anything. Absent for a call at that rate.
+     *
+     * <p>Beside the size rather than folded into it: the size is what was
+     * produced and stays true whatever it cost, and a total that is not
+     * rate x quantity reads as an arithmetic error unless the third factor is
+     * there to be named.
+     */
+    billed_multiplier?: number;
+    /** One line per factor that moved the price, e.g. `resolution x2`. */
+    billed_multiplier_reasons?: string[];
+    /**
+     * Credits the platform charged for it.
+     *
+     * <p>Absent whenever the platform charged nothing: a provider key the reader configured
+     * themselves paid, or this install does not meter. Absent is NOT zero.
+     */
+    billed_credits?: number;
     provider_response?: Record<string, unknown>;
     /**
      * The provider's own short-lived link to an asset that was produced and CHARGED for but could

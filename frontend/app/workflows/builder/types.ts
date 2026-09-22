@@ -217,6 +217,13 @@ export interface NodePolicy {
   timeoutMs?: number;
   /** In a split context, execute only for split item 0; other items are SKIPPED. */
   executeOnce?: boolean;
+  /**
+   * How long ONE provider call made by this node may spend waiting out a rate-limit refusal,
+   * in seconds. Absent = the platform decides (it waits the delay the provider asked for).
+   * `0` = do not retry: the author paces the calls themselves, and the two layers would
+   * otherwise multiply.
+   */
+  providerRetryMaxWaitSec?: number;
 }
 
 /**
@@ -566,6 +573,21 @@ export interface BuilderNodeData {
       value: string;
     }>;
   };
+  // Schedule trigger configuration persisted into trigger.params.
+  scheduleTriggerData?: {
+    cronExpression: string;
+    timezone: string;
+    maxExecutions: number | null;
+    scheduleKind?: string;
+  };
+  // Webhook trigger configuration persisted into trigger.params.
+  webhookTriggerData?: {
+    httpMethod: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+    authType: 'none' | 'basic' | 'header' | 'jwt';
+    basicAuth?: { username: string; password: string };
+    headerAuth?: { headerName: string; headerValue: string };
+    jwtAuth?: { secretKey: string; algorithm: 'HS256' | 'HS384' | 'HS512' };
+  };
   // Form trigger data (custom form fields)
   formTriggerData?: {
     fields?: Array<{
@@ -635,6 +657,8 @@ export interface PaletteItem {
   kind: BuilderNodeKind;
   nodeType: BuilderNodeType;
   badge?: string;
+  /** Initial editor data applied when a palette item creates a node. */
+  initialData?: Partial<BuilderNodeData>;
   group: 'Inputs' | 'Actions' | 'Logic' | 'Loops' | 'Outputs' | 'Data';
 }
 

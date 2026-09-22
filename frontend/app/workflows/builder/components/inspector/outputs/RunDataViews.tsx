@@ -25,6 +25,8 @@ import {
   formatJson,
   isTabularArray,
   MAX_TABLE_COLUMNS,
+  pickTabularValue,
+  tabularFields,
 } from './runValueUtils';
 
 export type RunDataViewMode = 'tree' | 'json' | 'table';
@@ -138,7 +140,19 @@ interface JsonTableViewProps {
  */
 export function JsonTableView({ data }: JsonTableViewProps) {
   const t = useTranslations('workflowBuilder.inspector.runData');
-  const rows = isTabularArray(data) ? data : null;
+  // Which field is being laid out. A payload is rarely an array itself: the rows
+  // live under `items`, `results`, `organic_results`... The table therefore shows
+  // a SUBSET of what the tree shows, and used to do it silently - which is why it
+  // looked like the two views disagreed. The field is named on screen, and when
+  // several qualify the reader picks instead of the code guessing.
+  const fields = React.useMemo(() => tabularFields(data), [data]);
+  const [selected, setSelected] = React.useState<string | null>(null);
+  const activeField = selected && fields.includes(selected) ? selected : (fields[0] ?? null);
+  const picked = React.useMemo(
+    () => (isTabularArray(data) ? data : pickTabularValue(data, activeField ?? undefined)),
+    [data, activeField],
+  );
+  const rows = isTabularArray(picked) ? picked : null;
   const columns = React.useMemo(() => (rows ? collectTableColumns(rows) : []), [rows]);
   // Memoized because countDistinctKeys walks every row, and placed above the
   // early return because it is now a hook: below it, a value that stops being
@@ -158,6 +172,26 @@ export function JsonTableView({ data }: JsonTableViewProps) {
 
   return (
     <div className="space-y-1">
+      {!isTabularArray(data) && activeField && (
+        <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+          <span>{t('tableShowingField')}</span>
+          {fields.length > 1 ? (
+            <select
+              value={activeField}
+              onChange={(e) => setSelected(e.target.value)}
+              aria-label={t('tableShowingField')}
+              data-testid="run-data-table-field"
+              className="rounded border border-slate-200 dark:border-slate-700 bg-transparent px-1 py-0.5 text-sm font-mono text-[var(--text-primary)]"
+            >
+              {fields.map((field) => (
+                <option key={field} value={field}>{field}</option>
+              ))}
+            </select>
+          ) : (
+            <code data-testid="run-data-table-field" className="font-mono text-[var(--text-primary)]">{activeField}</code>
+          )}
+        </div>
+      )}
       <div className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700">
         <table className="w-full border-collapse text-sm" data-testid="run-data-table-view">
           <thead>

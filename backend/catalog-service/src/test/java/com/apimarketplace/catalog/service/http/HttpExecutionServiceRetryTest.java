@@ -8,6 +8,7 @@ import com.apimarketplace.common.web.UrlSafetyValidator;
 import com.apimarketplace.common.security.CredentialEncryptionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -57,6 +58,16 @@ class HttpExecutionServiceRetryTest {
 
     private HttpExecutionService service;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @AfterEach
+    void clearProviderRetryContext() {
+        // This class drives exchangeWithRetry, which counts each re-send on a thread-local. The
+        // count is per-CALL and nothing here opens a call properly, so without this every retry
+        // exercised below is still on the thread when the next test class runs in the same fork -
+        // and a class asserting "this call was answered first time" then sees somebody else's
+        // re-sends. That is how it failed in CI while passing when run alone.
+        ProviderRetryContext.clear();
+    }
 
     @BeforeEach
     void setUp() {

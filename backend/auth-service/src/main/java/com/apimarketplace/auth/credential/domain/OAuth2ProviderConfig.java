@@ -40,7 +40,8 @@ public record OAuth2ProviderConfig(
         String grantType,
         String clientIdParam,
         TokenExchangeConfig tokenExchange,
-        AccessTokenGrant longLivedExchange
+        AccessTokenGrant longLivedExchange,
+        UserScopeConfig userScopes
 ) {
 
     /** How client credentials are transmitted on the token endpoint. */
@@ -224,8 +225,60 @@ public record OAuth2ProviderConfig(
         }
     }
 
+    /**
+     * A second scope family that the provider carries in its OWN authorize parameter instead of
+     * the standard {@code scope} one.
+     *
+     * <p>Slack is the reference case and the reason this exists: its {@code scope} parameter
+     * accepts BOT scopes only, and a user-token scope such as {@code search:read} has to travel
+     * as {@code user_scope=search:read}. Putting one in {@code scope} makes Slack reject the
+     * whole installation with {@code invalid_scope} ("Invalid permissions requested"), so the
+     * split decides whether the integration can be connected at all, not how it looks.
+     *
+     * <p>Routing is by MEMBERSHIP: {@code scopes} lists the strings that belong to the family, and
+     * every scope actually being requested is sent through whichever parameter claims it. That is
+     * what lets a family member sit in {@code byokOnlyScopes} (absent from the platform-shared
+     * request, present in the BYOK/CE one) without being declared twice.
+     *
+     * <p>A provider that declares no second family gets {@link #NONE}: {@code scope} carries
+     * everything and the authorize URL is byte-identical to what it was before this field existed.
+     *
+     * @param param  the authorize-request parameter carrying the family ({@code user_scope})
+     * @param scopes the scope strings belonging to it
+     */
+    public record UserScopeConfig(String param, List<String> scopes) {
+
+        /** No second scope family: every scope goes in the standard {@code scope} parameter. */
+        public static final UserScopeConfig NONE = new UserScopeConfig(null, List.of());
+
+        public UserScopeConfig {
+            param = param == null || param.isBlank() ? null : param;
+            scopes = scopes == null ? List.of() : List.copyOf(scopes);
+        }
+
+        /** True when no member scopes are declared: the provider has a single scope family. */
+        public boolean isEmpty() {
+            return scopes.isEmpty();
+        }
+
+        /**
+         * Whether the members can actually be sent: there has to be a parameter to carry them.
+         * Members without a parameter are DROPPED from the request rather than falling back to
+         * {@code scope}, which is the whole point - see {@link #contains(String)}.
+         */
+        public boolean canRoute() {
+            return param != null && !scopes.isEmpty();
+        }
+
+        /** Whether {@code scope} belongs to this family (and so must never go in {@code scope=}). */
+        public boolean contains(String scope) {
+            return scopes.contains(scope);
+        }
+    }
+
     public OAuth2ProviderConfig {
         scopes = scopes == null ? List.of() : List.copyOf(scopes);
+        userScopes = userScopes == null ? UserScopeConfig.NONE : userScopes;
         scopeDelimiter = scopeDelimiter == null || scopeDelimiter.isEmpty() ? " " : scopeDelimiter;
         tokenAuthMethod = tokenAuthMethod == null ? AuthMethod.POST : tokenAuthMethod;
         tokenParamsLocation = tokenParamsLocation == null ? TokenParamsLocation.FORM : tokenParamsLocation;
@@ -251,7 +304,8 @@ public record OAuth2ProviderConfig(
     ) {
         this(authorizationUrl, tokenUrl, refreshUrl, scopes, scopeDelimiter, tokenAuthMethod,
                 TokenParamsLocation.FORM, pkceEnabled, authorizeExtraParams, refresh,
-                "authorizationCode", "client_id", TokenExchangeConfig.STANDARD, null);
+                "authorizationCode", "client_id", TokenExchangeConfig.STANDARD, null,
+                UserScopeConfig.NONE);
     }
 
     /**
@@ -274,12 +328,71 @@ public record OAuth2ProviderConfig(
     ) {
         this(authorizationUrl, tokenUrl, refreshUrl, scopes, scopeDelimiter, tokenAuthMethod,
                 tokenParamsLocation, pkceEnabled, authorizeExtraParams, refresh, grantType,
-                "client_id", TokenExchangeConfig.STANDARD, null);
+                "client_id", TokenExchangeConfig.STANDARD, null, UserScopeConfig.NONE);
     }
 
-    /** Joined scope string using the configured delimiter. Empty string if no scopes. */
+    /**
+     * Joined string of EVERY requested scope, both families, using the configured delimiter.
+     * Empty string if no scopes.
+     *
+     * <p>This is the record of what the user was asked to grant (stored on the OAuth state and
+     * used as the fallback granted-scope list when the provider echoes none back), not what goes
+     * in the {@code scope} request parameter - see {@link #joinedPrimaryScopes()} for that.
+     */
     public String joinedScopes() {
-        return scopes.isEmpty() ? "" : String.join(scopeDelimiter, scopes);
+        return join(scopes);
+    }
+
+    /**
+     * The scopes that travel in the standard {@code scope} parameter: everything not claimed by
+     * the {@link UserScopeConfig} family. Identical to {@link #scopes()} for the providers that
+     * declare no second family, which is all of them but Slack.
+     */
+    public List<String> primaryScopes() {
+        if (userScopes.isEmpty()) {
+            return scopes;
+        }
+        return scopes.stream().filter(s -> !userScopes.contains(s)).toList();
+    }
+
+    /**
+     * Whether a declared family member would be silently dropped from this request because no
+     * parameter carries it. Nothing in the seed corpus reaches this state (the validator refuses
+     * it), and dropping is the deliberate choice over the alternative: emitting the member on
+     * {@code scope} is the two-month Slack outage, and it fails for EVERY user rather than for the
+     * one capability. Exposed so the service can log it instead of losing it in silence.
+     */
+    public List<String> unroutableUserScopes() {
+        if (userScopes.isEmpty() || userScopes.canRoute()) {
+            return List.of();
+        }
+        return scopes.stream().filter(userScopes::contains).toList();
+    }
+
+    /**
+     * The scopes that travel in the provider's own user-scope parameter. Empty when no family is
+     * declared, and empty when none of its members are part of THIS request - which is what keeps
+     * the platform-shared authorize URL free of a family that only BYOK asks for.
+     */
+    public List<String> requestedUserScopes() {
+        if (!userScopes.canRoute()) {
+            return List.of();
+        }
+        return scopes.stream().filter(userScopes::contains).toList();
+    }
+
+    /** {@link #primaryScopes()} joined with the configured delimiter. */
+    public String joinedPrimaryScopes() {
+        return join(primaryScopes());
+    }
+
+    /** {@link #requestedUserScopes()} joined with the configured delimiter. */
+    public String joinedUserScopes() {
+        return join(requestedUserScopes());
+    }
+
+    private String join(List<String> values) {
+        return values.isEmpty() ? "" : String.join(scopeDelimiter, values);
     }
 
     /**
@@ -295,7 +408,7 @@ public record OAuth2ProviderConfig(
         return new OAuth2ProviderConfig(
                 authorizationUrl, tokenUrl, refreshUrl, newScopes, scopeDelimiter,
                 tokenAuthMethod, tokenParamsLocation, pkceEnabled, authorizeExtraParams, refresh,
-                grantType, clientIdParam, tokenExchange, longLivedExchange);
+                grantType, clientIdParam, tokenExchange, longLivedExchange, userScopes);
     }
 
     /**
@@ -314,7 +427,7 @@ public record OAuth2ProviderConfig(
                 newTokenUrl != null ? newTokenUrl : tokenUrl,
                 refreshUrl, scopes, scopeDelimiter,
                 tokenAuthMethod, tokenParamsLocation, pkceEnabled, authorizeExtraParams, refresh,
-                grantType, clientIdParam, tokenExchange, longLivedExchange);
+                grantType, clientIdParam, tokenExchange, longLivedExchange, userScopes);
     }
 
     /** Token endpoint falls back to {@code tokenUrl} when {@code refreshUrl} is not set. */
@@ -355,7 +468,8 @@ public record OAuth2ProviderConfig(
                 grantType,
                 textOrNull(oauth2Config, "clientIdParam"),
                 parseTokenExchange(oauth2Config),
-                parseAccessTokenGrant(oauth2Config.path("longLivedExchange"))
+                parseAccessTokenGrant(oauth2Config.path("longLivedExchange")),
+                parseUserScopes(oauth2Config)
         );
     }
 
@@ -410,6 +524,39 @@ public record OAuth2ProviderConfig(
             return List.of(text.split("\\s+"));
         }
         return List.of();
+    }
+
+    /**
+     * Parse the optional second scope family from the flat {@code userScopeParam} /
+     * {@code userScopes} fields.
+     *
+     * <p>Absent, empty, or a shape no members can be read from yields {@link UserScopeConfig#NONE}
+     * (the pre-existing single-parameter behaviour). Whenever members ARE identified, they are
+     * carried even if nothing can route them, so they are dropped from the request rather than
+     * falling back into {@code scope} - which is the shape that made Slack refuse every install.
+     */
+    private static UserScopeConfig parseUserScopes(JsonNode oauth2Config) {
+        JsonNode declared = oauth2Config.path("userScopes");
+        List<String> members = parseScopes(declared);
+        if (members.isEmpty()) {
+            // Nothing readable: an absent field, an empty array, or a shape no member can be read
+            // from (an object, a number). This is the one case that cannot fail closed - scopes we
+            // never identified cannot be held out of `scope` - so the seed validator refusing the
+            // shape is the only guard, and a malformed catalog bundle would get the old behaviour.
+            return UserScopeConfig.NONE;
+        }
+        // Routing requires BOTH a valid array declaration and a parameter. A null param is carried
+        // through DELIBERATELY rather than collapsing to NONE: the members are then excluded from
+        // `scope` and sent nowhere (fail closed). Collapsing would put them back in `scope`, which
+        // is the outage, on the path that actually builds configs in production - including rows
+        // written by the signed catalog bundle, where no seed validator ever runs.
+        //
+        // A non-array `userScopes` (the legacy space-delimited string form that `scopes` tolerates)
+        // is NOT a valid family: the seed validator refuses it, so accepting it here would make the
+        // two layers disagree on what a valid seed is. Its members are still identified, so they
+        // are dropped rather than sent in the bot parameter.
+        String param = declared.isArray() ? textOrNull(oauth2Config, "userScopeParam") : null;
+        return new UserScopeConfig(param, members);
     }
 
     private static AuthMethod parseAuthMethod(String raw) {

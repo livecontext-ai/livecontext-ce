@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildToolsConfigPayload, isGenerationEnabled } from '../toolsConfigAccess';
+import { buildToolsConfigPayload, isGenerationEnabled, getToolsMode } from '../toolsConfigAccess';
 
 /**
  * Generation is an opt-in agent flag persisted on toolsConfig.generation. The reader
@@ -72,5 +72,28 @@ describe('isGenerationEnabled (opt-in, independent of the image grant)', () => {
     expect(buildToolsConfigPayload({ ...base, generation: false }).generation).toBe(false);
     expect(buildToolsConfigPayload({ ...base, generation: true }).generation).toBe(true);
     expect('generation' in buildToolsConfigPayload({ ...base })).toBe(false);
+  });
+});
+
+/**
+ * `off` means "no tools at all" and is a member of the ToolsMode union, but the reader
+ * collapsed everything that was not 'none' or 'custom' into 'all'. A tool-less agent
+ * therefore rendered as "All tools" in the fleet view, which is the opposite of the truth.
+ */
+describe('getToolsMode', () => {
+  it('reports off as off, not as all', () => {
+    expect(getToolsMode({ mode: 'off' })).toBe('off');
+  });
+
+  it('still reports the other modes unchanged', () => {
+    expect(getToolsMode({ mode: 'none' })).toBe('none');
+    expect(getToolsMode({ mode: 'custom' })).toBe('custom');
+    expect(getToolsMode({ mode: 'all' })).toBe('all');
+  });
+
+  it('defaults to all when the mode is absent or unreadable', () => {
+    expect(getToolsMode({})).toBe('all');
+    expect(getToolsMode(null)).toBe('all');
+    expect(getToolsMode({ mode: 'nonsense' })).toBe('all');
   });
 });

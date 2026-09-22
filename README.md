@@ -6,12 +6,12 @@ Describe the job in chat and LiveContext builds it in front of you: a workflow y
 AI agents with scoped access and budgets you control, and a small app your team actually uses.
 Chat, Workflow, Agent and App in one self-hosted platform. No code to write, nothing to stitch together.
 
-**An open-source, self-hosted alternative to n8n, Zapier and Make, with AI agents built in.**
+**A source-available, self-hosted alternative to n8n, Zapier and Make, with AI agents built in.**
 
 [![GitHub stars](https://img.shields.io/github/stars/livecontext-ai/livecontext-ce?style=flat&logo=github&color=e11d48)](https://github.com/livecontext-ai/livecontext-ce/stargazers)
 [![Latest release](https://img.shields.io/github/v/release/livecontext-ai/livecontext-ce?color=16a34a)](https://github.com/livecontext-ai/livecontext-ce/releases/latest)
 [![Discussions](https://img.shields.io/github/discussions/livecontext-ai/livecontext-ce?color=2496ED)](https://github.com/livecontext-ai/livecontext-ce/discussions)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-2496ED.svg)](LICENSE)
+[![License: Sustainable Use](https://img.shields.io/badge/License-Sustainable_Use-2496ED.svg)](LICENSE)
 ![Java 21](https://img.shields.io/badge/Java-21-e11d48.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000.svg)
 ![Docker Compose](https://img.shields.io/badge/Docker%20Compose-ready-2496ED.svg)
@@ -70,55 +70,107 @@ This repository is the **Community Edition (CE)**: the full platform as a single
 
 ## Requirements
 
-- Docker Engine 24+ with Compose v2 (or Docker Desktop 4.x and later)
-- 4 GB RAM minimum, 8 GB recommended
+- A machine supported by the release images; see [Images](#images) before choosing ARM hardware.
+- Docker Engine 24+ with Compose v2, or Docker Desktop with Linux containers, installed and running.
+- 4 GB RAM minimum, 8 GB recommended; allow several GB of free disk space for the images and your data.
+- For the npm launcher: Node.js LTS with npm (`node --version`, `npm --version`).
+- For the repository installation: Git (`git --version`). Java and Maven are not needed to run the prebuilt images.
+- For AI features: a connected LiveContext Cloud account or your own supported provider key. Provider usage may incur charges.
 
 ## Quick start
 
-The fastest way is one npm command (Docker must be installed and running):
+Choose one installation method. Do not run both on the same machine at the same time: they use the same container names and default ports.
+
+### Option 1: npm launcher, for a local installation
+
+Run this from the directory where you want to keep the installation configuration:
 
 ```bash
-npx livecontext
+npx livecontext@latest
 ```
 
-It pulls the images, boots the whole stack, and serves on **http://localhost:3000**.
-`npx livecontext down` stops it and `npx livecontext update` upgrades it. The CLI wraps
-Docker Compose, it does not replace Docker.
+The launcher pulls the images, starts Docker Compose and prints the app URL, normally **http://localhost:3000**.
+Keep using this same directory for `npx livecontext@latest status`, `logs`, `down` and `update`.
+Configuration is in `./livecontext`; application data is in Docker volumes. Deleting that directory does not reset the database.
+For settings, copy `livecontext/.env.example` to `livecontext/.env`, edit it and run the launcher again.
+The [CLI guide](cli/README.md) explains management and limitations. Use Option 2 if you need the optional add-ons.
 
-Or run **Docker Compose** directly from a clone of this repo:
+### Option 2: Docker Compose, for local or server installations
 
 ```bash
-# From the repo root:
-docker compose up -d
+git clone https://github.com/livecontext-ai/livecontext-ce.git
+cd livecontext-ce
+cp docker/.env.ce.example .env
+```
 
-# Watch it come up. The "livecontext" service runs database migrations and registers
-# its tools on first boot; wait until it reports "healthy" and "frontend" is up:
+Before the first start on a server, edit `.env`: set your own `DB_PASSWORD` and MinIO credentials. Then start:
+
+```bash
+docker compose up -d
 docker compose ps
 ```
 
-Then open **http://localhost:3000** and create the first account (the first user becomes the admin).
-Two optional add-ons (interface screenshots/PDFs, and a browser agent with web search) are one env
-file away when you want them, see [Optional features](#optional-features) below.
+These commands also work in PowerShell (`cp` is an alias for `Copy-Item`). Compose reads `.env` automatically.
+Leave the encryption settings commented so the first boot generates and persists its keys.
+Do not change database credentials or encryption keys on an existing installation without a migration and backup.
 
-Configuration (LLM keys, SMTP, ports) is documented in [docker/README-CE.md](docker/README-CE.md).
-Copy `docker/.env.ce.example` to set your own values, and never commit it.
+The first start downloads several GB and initializes the database. Wait for `livecontext` to become **healthy** and `frontend` to start; downloads can take longer than initialization.
+Then open **http://localhost:3000**, or the port you set with `FRONTEND_PORT` in `.env`.
+If it is not ready, run `docker compose logs --tail=100 livecontext frontend` and see [Troubleshooting](docker/README-CE.md#troubleshooting).
+
+### First account and first AI request
+
+1. Create the first account; it becomes the installation administrator. Complete the setup shown in the app.
+2. Connect LiveContext Cloud, or add your own provider key in **Settings > AI providers** and select an available model.
+3. Open Chat, select that model and send a short request such as "Reply with hello" before building an automation.
+4. Connect the integrations required by your automation when prompted. Installing the catalog does not connect your external accounts.
+
+Configure SMTP before relying on password resets or invitation emails. The [configuration guide](docker/README-CE.md#e-mail-smtp) explains the relay and public URL settings.
 
 ### Running it on a server, NAS or VPS
 
-Nothing extra to build. Publish both ports (`3000` for the web UI, `8080` for the backend)
-and open the app at that machine's address: `http://192.168.1.50:3000` talks to
-`http://192.168.1.50:8080` on its own. If you put a reverse proxy in front and serve
-everything on a single origin, set `GATEWAY_PUBLIC_URL` on the `frontend` service to the
-browser-facing backend URL instead.
+On a trusted LAN, publish the web port (3000) and backend port (8080), and open `http://<server-address>:3000`.
+Set `PUBLIC_BASE_URL=http://<server-address>:3000` and `GATEWAY_PUBLIC_URL=http://<server-address>:8080` in `.env` so email links and OAuth callbacks also return to that server. Do not add a trailing slash.
 
-Deploying through Portainer, Coolify, Dokploy or a similar platform: see
-[templates/README.md](templates/README.md).
+For internet access, use HTTPS. A straightforward setup uses two HTTPS hostnames: proxy the app hostname to port 3000 and the API hostname to port 8080, including WebSocket upgrades. Set `PUBLIC_BASE_URL=https://app.example.com` and `GATEWAY_PUBLIC_URL=https://api.example.com`, then restart with `docker compose up -d`.
+The browser must be able to reach both hostnames. Limit direct access to the underlying ports to your proxy where appropriate.
+A single-origin proxy needs explicit API and WebSocket routing; changing only the URL does not create those routes.
+
+See [server setup](docker/README-CE.md#server-and-reverse-proxy-setup) and [deployment templates](templates/README.md) for details.
+
+### Manage and update
+
+For a repository installation, run these from the clone directory:
+
+```bash
+docker compose ps
+docker compose logs --tail=100 livecontext frontend
+docker compose down
+```
+
+`down` keeps Docker volumes. **`down -v` deletes the installation's data. Do not use it as a normal update or troubleshooting step.**
+Before upgrading, [back up the data, keys and configuration](docker/README-CE.md#backup-and-recovery), then:
+
+```bash
+git pull --ff-only
+docker compose pull
+docker compose up -d
+docker compose ps
+```
+
+The repository pins image versions, so pulling images without updating the repository does not select a newer release.
+Keep settings in `.env`; if you edited tracked files and Git refuses the update, preserve and reconcile those changes rather than discarding them.
 
 ### Images
 
-Built for **linux/amd64** and **linux/arm64**, so the same tag runs on an ordinary server
-and on Apple Silicon, a Raspberry Pi, Ampere or Graviton. Docker picks the right one for
-your machine. The Compose file pulls from GHCR:
+Prebuilt releases support **linux/amd64** (x86-64). **ARM64 support depends on the
+release**: before installing on Apple Silicon, Raspberry Pi, Ampere or Graviton,
+check that all four application images for that version include `linux/arm64`.
+For example, inspect an image with `docker buildx imagetools inspect <image>:<version>`.
+An amd64-only release does not provide native ARM64 images. Docker selects the
+matching architecture only when that architecture was published.
+
+The Compose file pulls these application images from GHCR:
 
 ```
 ghcr.io/livecontext-ai/livecontext-ce
@@ -132,28 +184,34 @@ rather track a line than pin an exact version.
 
 ## Optional features
 
-Two heavy features are **opt-in** and start with no container by default, keeping the base stack
-light. Each is enabled by a bundled env file (it turns on both the Docker profile and the matching
-app setting in one shot):
+Use the repository installation. Both add-ons are off by default and need extra memory and disk space.
+Keep the settings in the root `.env` so ordinary start, update and stop commands keep the same profiles.
 
-- **Interface screenshots and PDFs** (`renderer` profile). Adds a headless Playwright/Chromium
-  sidecar (~1 GB image) so interface nodes can render a PNG screenshot or a PDF. Enable it with:
-  ```bash
-  docker compose --env-file docker/.env.ce.renderer up -d
-  ```
-- **Browser agent and web search** (`browser-agent` profile). Adds a Chromium browser-use container
-  plus a SearXNG metasearch sidecar (~2 GB) so agents can browse pages (`agent_browse`) and run
-  `web_search`. Enable it with:
-  ```bash
-  docker compose --env-file docker/.env.ce.browser-agent up -d
-  ```
+For **interface screenshots and PDFs**, add:
 
-Run both by passing both env files (repeat `--env-file`). See [docker/README-CE.md](docker/README-CE.md)
-for details and tuning.
+```dotenv
+COMPOSE_PROFILES=renderer
+SCREENSHOT_RENDERER_URL=http://screenshot-renderer:8094
+```
 
-Both add-ons need this repository: the env files above are not part of the `livecontext` npm
-package and `npx livecontext` passes no `--env-file`, so **neither can be enabled through npx**.
-Clone the repo and use `docker compose` directly to turn them on.
+For the **browser agent and web search**, use:
+
+```dotenv
+COMPOSE_PROFILES=browser-agent
+WEBSEARCH_ENABLED=true
+```
+
+To enable **both**, use one combined profile value, together with both settings:
+
+```dotenv
+COMPOSE_PROFILES=renderer,browser-agent
+SCREENSHOT_RENDERER_URL=http://screenshot-renderer:8094
+WEBSEARCH_ENABLED=true
+```
+
+Then run `docker compose up -d` and `docker compose ps`. The browser image builds on first use; the renderer pulls a prebuilt image. The browser agent also needs an available LLM provider.
+Do not stack the two bundled `--env-file` examples without explicit profiles: the second `COMPOSE_PROFILES` value replaces the first.
+See the [Docker guide](docker/README-CE.md#browser-agent-agent_browse---opt-in) for the legacy env-file commands and tuning.
 
 ## What's in the box
 
@@ -161,7 +219,7 @@ Clone the repo and use `docker compose` directly to turn them on.
   human-approval steps, and triggers (schedule, webhook, chat, form, datasource).
 - **AI agents.** Chat agents that design, build and run workflows, with per-workspace skills, scoped
   tool access, per-agent credit budgets and per-agent metrics.
-- **Integration catalog.** 700+ ready-made integrations seeded at first boot, fully offline. Add your
+- **Integration catalog.** 1000+ ready-made integrations seeded at first boot, fully offline. Add your
   own as OpenAPI specs.
 - **Interfaces and apps.** Small web pages served by your workflows (forms, dashboards, approval
   screens), shareable as standalone apps.
@@ -198,16 +256,17 @@ Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
 
 ## License
 
-LiveContext CE is licensed under the **GNU Affero General Public License v3.0
-(AGPL-3.0)**, see [LICENSE](LICENSE). You are free to use, self-host, modify and
-redistribute it, including commercially. One condition matters most: if you run a
-modified version as a network service, the AGPL requires you to make the
-corresponding source of your changes available to that service's users.
+LiveContext CE is licensed under the **LiveContext Sustainable Use License
+1.0**, see [LICENSE](LICENSE). You are free to use, self-host, modify and
+redistribute it, including in production and for the internal business purposes
+of your organization. One limitation matters: you may not offer it to third
+parties on a hosted or embedded basis as a competing commercial product. For
+anything outside that, write to oss@livecontext.ai.
 
 The **LiveContext** name and logo are trademarks of their owner and are not
-covered by the AGPL, see [TRADEMARKS](TRADEMARKS). Third-party components ship
-under their own licenses, see [NOTICE](NOTICE) and
-[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
+covered by the license, see [TRADEMARKS](TRADEMARKS.md). Third-party components
+ship under their own licenses, see [NOTICE](NOTICE) and
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
 
 ---
 

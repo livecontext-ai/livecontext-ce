@@ -5,7 +5,10 @@
  *
  * {@link SidebarCreditRing} is the always-visible signal: a ring around the
  * user's avatar, discreet inside the monthly grant and gold above it. Nothing
- * is added to the top bar, so this ring is the whole indicator.
+ * is added to the top bar, so this ring is the whole indicator. It draws itself
+ * when the reader arrives, once per visit - this component is what remembers
+ * that, because `AppSidebar` mounts it from both arms of its collapsed/expanded
+ * ternary and the ring itself cannot survive the toggle.
  *
  * {@link SidebarCreditMenuSection} is the detail, and it lives at the top of
  * the user menu that the avatar opens. It used to be a hover card; a menu is a
@@ -17,9 +20,13 @@
  * their caller.
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useCreditWallet } from '@/lib/hooks/useCreditWallet';
 import { IS_CE } from '@/lib/edition';
+import {
+  creditRingRevealPlayed,
+  markCreditRingRevealPlayed,
+} from '@/lib/billing/credit-ring-reveal';
 import { CreditAvatarRing, CreditBalancePanel, useCreditTriggerLabel } from './CreditBalance';
 
 /**
@@ -49,6 +56,25 @@ export function SidebarCreditRing({
   // this surface shows no number - the ring is the only visible content.
   const label = useCreditTriggerLabel({ balance, allowance, gauge, amountVisible: false });
 
+  /*
+   * Latched into state at mount, rather than read on every render.
+   *
+   * NOT because a later read would interrupt anything - it would not, since the
+   * ring consumes `animate` only to seed its phase and ignores it afterwards.
+   * The latch is so that this component's answer does not depend on knowing
+   * that: the flag flips under it the moment the effect below runs, and a
+   * component whose prop silently contradicts its own state one render later is
+   * a trap for whoever reads it next.
+   */
+  const [animate] = useState(() => !creditRingRevealPlayed());
+  const showRing = !IS_CE && !isLoading && balance !== null && hasAllowance;
+  useEffect(() => {
+    // Marked when a ring is actually on screen, not merely when this component
+    // mounted: the wallet resolves after the sidebar does, and marking early
+    // would spend the reveal on the frames where there was nothing to reveal.
+    if (showRing) markCreditRingRevealPlayed();
+  }, [showRing]);
+
   const box = avatarSize + gap * 2;
 
   /*
@@ -74,7 +100,7 @@ export function SidebarCreditRing({
   // either: a 0% ring would read as a statement about the account rather than
   // as loading, and a ring where no denominator is knowable would claim
   // "0% used", which is precisely what we could not read.
-  if (IS_CE || isLoading || balance === null || !hasAllowance) return frame;
+  if (!showRing) return frame;
 
   return (
     <span
@@ -84,7 +110,13 @@ export function SidebarCreditRing({
       style={{ width: box, height: box }}
     >
       {children}
-      <CreditAvatarRing percent={gauge.fillPct} gold={gauge.isOver} avatarSize={avatarSize} gap={gap} />
+      <CreditAvatarRing
+        percent={gauge.fillPct}
+        gold={gauge.isOver}
+        avatarSize={avatarSize}
+        gap={gap}
+        animate={animate}
+      />
     </span>
   );
 }

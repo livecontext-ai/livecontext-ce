@@ -29,6 +29,15 @@ describe('llms.txt', () => {
       expect(llmsTxt).toContain(`https://livecontext.ai/compare/${comparison.slug}`);
     }
   });
+
+  it('links the film library', () => {
+    // Same contract as /compare above: llms.txt is the GEO entry point, and a
+    // whole public section missing from it is invisible to the readers it is
+    // written for. The films themselves are a data source now, so they cannot be
+    // enumerated from the repo: the library URL is the one that must be here,
+    // and it lists them.
+    expect(llmsTxt).toContain('https://livecontext.ai/videos');
+  });
 });
 
 describe('landing page copy', () => {

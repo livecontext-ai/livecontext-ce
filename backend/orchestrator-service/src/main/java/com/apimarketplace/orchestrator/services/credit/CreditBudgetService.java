@@ -228,7 +228,11 @@ public class CreditBudgetService {
     public boolean preflightAgentBudget(String userId, String provider, String model,
                                          int estPromptTokens, int estCompletionTokens) {
         if (creditClient == null) return true;
+        // AGENT_EXECUTION, not the default CHAT_CONVERSATION: an agent node is DEBITED as
+        // an agent execution, and the gate scopes the balance by source type (V494 - the
+        // FREE AI allowance funds some LLM sources and not others). The two answer the
+        // same today; naming it is what stops them drifting apart silently.
         return creditClient.checkChatBudget(userId, provider, model,
-                estPromptTokens, estCompletionTokens);
+                estPromptTokens, estCompletionTokens, "AGENT_EXECUTION");
     }
 }

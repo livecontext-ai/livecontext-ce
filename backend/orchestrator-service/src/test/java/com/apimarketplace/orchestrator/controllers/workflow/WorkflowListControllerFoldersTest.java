@@ -102,7 +102,7 @@ class WorkflowListControllerFoldersTest {
 
     private Map<String, Object> list(String folderId, boolean includeFolders, String q) {
         ResponseEntity<Map<String, Object>> response = controller.listWorkflows(
-                TENANT, ORG, null, null, null, 25, 0, q, null, null, folderId, includeFolders);
+                TENANT, ORG, null, null, null, 25, 0, q, null, null, null, false, folderId, includeFolders);
         return response.getBody();
     }
 
@@ -114,6 +114,84 @@ class WorkflowListControllerFoldersTest {
     @SuppressWarnings("unchecked")
     private List<ResourceFolderDto> tiles(Map<String, Object> body) {
         return (List<ResourceFolderDto>) body.get("folders");
+    }
+
+    /** A workflow filed in {@code folderId} whose plan uses one MCP integration. */
+    private WorkflowEntity workflowUsing(String name, UUID folderId, String apiSlug) {
+        WorkflowEntity workflow = workflow(name, folderId);
+        workflow.setPlan(Map.of("mcps", List.of(Map.of("id", apiSlug + "/action"))));
+        return workflow;
+    }
+
+    private Map<String, Object> listWithFacets(String folderId, String nodeTypes) {
+        return controller.listWorkflows(
+                TENANT, ORG, null, null, null, 25, 0, null, null, null,
+                nodeTypes, true, folderId, true).getBody();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> facets(Map<String, Object> body) {
+        return (List<Map<String, Object>>) body.get("nodeTypeFacets");
+    }
+
+    @Test
+    @DisplayName("node-type facets count THIS folder, so an option can never promise rows filed elsewhere")
+    void facetsAreScopedToTheOpenFolder() {
+        // Counted over the whole tenant instead, the picker would offer "Slack (1)"
+        // while standing in Marketing, and ticking it would return an empty grid with
+        // the count still showing 1 - a wrong answer with a 200 and nothing to notice.
+        WorkflowFolderEntity marketing = folder("Marketing", null);
+        given(workflowUsing("gmail in marketing", marketing.getId(), "gmail"),
+              workflowUsing("slack at top level", null, "slack"));
+
+        Map<String, Object> body = listWithFacets(marketing.getId().toString(), null);
+
+        assertThat(facets(body)).containsExactly(Map.of("value", "mcp:gmail", "count", 1));
+    }
+
+    @Test
+    @DisplayName("an option counted inside a folder returns exactly that many rows when ticked")
+    void tickingAFolderScopedOptionReturnsItsCount() {
+        WorkflowFolderEntity marketing = folder("Marketing", null);
+        given(workflowUsing("gmail in marketing", marketing.getId(), "gmail"),
+              workflowUsing("slack at top level", null, "slack"));
+
+        Map<String, Object> body = listWithFacets(marketing.getId().toString(), "mcp:gmail");
+
+        assertThat(names(body)).containsExactly("gmail in marketing");
+        assertThat(body.get("totalCount")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a ticked option keeps its count - the facets ignore the node-type filter itself")
+    void facetsIgnoreTheNodeTypeFilter() {
+        WorkflowFolderEntity marketing = folder("Marketing", null);
+        given(workflowUsing("gmail in marketing", marketing.getId(), "gmail"),
+              workflowUsing("slack in marketing", marketing.getId(), "slack"));
+
+        Map<String, Object> body = listWithFacets(marketing.getId().toString(), "mcp:gmail");
+
+        assertThat(facets(body)).containsExactlyInAnyOrder(
+                Map.of("value", "mcp:gmail", "count", 1),
+                Map.of("value", "mcp:slack", "count", 1));
+    }
+
+    @Test
+    @DisplayName("a search looks everywhere, so its facets are not narrowed to the open folder")
+    void facetsFollowTheSearchOutOfTheFolder() {
+        // The folder narrowing is skipped while searching (a name is always findable),
+        // so the facets must not narrow either or they would disagree with the rows.
+        WorkflowFolderEntity marketing = folder("Marketing", null);
+        given(workflowUsing("gmail in marketing", marketing.getId(), "gmail"),
+              workflowUsing("slack at top level", null, "slack"));
+
+        Map<String, Object> body = controller.listWorkflows(
+                TENANT, ORG, null, null, null, 25, 0, "a", null, null,
+                null, true, marketing.getId().toString(), true).getBody();
+
+        assertThat(facets(body)).containsExactlyInAnyOrder(
+                Map.of("value", "mcp:gmail", "count", 1),
+                Map.of("value", "mcp:slack", "count", 1));
     }
 
     @Test

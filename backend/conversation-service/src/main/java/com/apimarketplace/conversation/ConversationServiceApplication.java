@@ -16,6 +16,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @ComponentScan(basePackages = {
     "com.apimarketplace.conversation",
     "com.apimarketplace.common.storage",  // Scan common-storage-service beans
+    "com.apimarketplace.common.security", // CredentialEncryptionService + TokenAtRestBootstrap (share_token at rest)
     "com.apimarketplace.agent.loop",      // MainCallerRegistryBean - centralization invariant startup log (test-scope only)
     "com.apimarketplace.agent.client.queue" // AgentQueueProducer + RedisResultWaiter (PR2 chat-on-queue), @ConditionalOnProperty(scaling.agent.queue.enabled)
 })

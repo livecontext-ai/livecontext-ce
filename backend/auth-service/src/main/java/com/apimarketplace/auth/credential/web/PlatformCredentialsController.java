@@ -489,7 +489,14 @@ public class PlatformCredentialsController {
             @RequestParam(value = "modelId", required = false) String modelId,
             @RequestParam(value = "quantity", required = false) BigDecimal quantity,
             @RequestParam(value = "generation", required = false) Boolean generationEndpoint,
-            @RequestParam(value = "quantityUnit", required = false) String quantityUnit
+            @RequestParam(value = "quantityUnit", required = false) String quantityUnit,
+            // What the call's own CHOICES do to the published rate, computed by
+            // the surface from the model's declared modifiers. A quote is a
+            // display and never a charge, so a caller understating it only
+            // misquotes a price to itself; understating it is also the one
+            // direction that shows up immediately, since the amount charged is
+            // resolved again server-side from parameters this endpoint never sees.
+            @RequestParam(value = "priceMultiplier", required = false) BigDecimal priceMultiplier
     ) {
         var credOpt = service.getCredential(integrationName);
         if (credOpt.isEmpty()) {
@@ -507,8 +514,12 @@ public class PlatformCredentialsController {
             // (CeCatalogRelayService.priceFor). Sending the install's opinion of
             // what the endpoint is would add a second, weaker source for a fact
             // the responder can read first-hand.
-            Optional<Map<String, Object>> cloudInfo =
-                    cloudRelayPublicInfo(integrationName, apiToolIdRaw, modelId, quantity);
+            Optional<Map<String, Object>> cloudInfo = cloudRelayPublicInfo(
+                    integrationName, apiToolIdRaw, modelId, quantity,
+                    // The factor travels too, because the cloud CHARGES it: the relay reads it
+                    // back out of the body it executes, so a quote that dropped it would show
+                    // this install one amount and bill another for the same request.
+                    sanitizeMultiplier(priceMultiplier));
             if (cloudInfo.isPresent()) {
                 return ResponseEntity.ok(cloudInfo.get());
             }
@@ -547,7 +558,8 @@ public class PlatformCredentialsController {
             // assets, characters), the same one the billing path sends. The
             // published unit converts it, so the quote and the invoice are
             // reached by the same arithmetic instead of two copies of it.
-            var quote = pricingService.quoteLatest(cred.id(), apiToolId, modelId, quantity);
+            var quote = pricingService.quoteLatest(cred.id(), apiToolId, modelId, quantity,
+                    sanitizeMultiplier(priceMultiplier));
             var entry = quote.map(PlatformCredentialPricingService.Quote::entry).orElse(null);
             // A GENERATION quote that resolved out of the credential-wide
             // DEFAULT is not a price this platform will honour. The billing path
@@ -624,6 +636,14 @@ public class PlatformCredentialsController {
                 if (quote.get().quantity() != null) {
                     out.put("quantity", formatDecimal(quote.get().quantity()));
                 }
+                // What this call's own choices did to that rate. Echoed rather
+                // than left implicit: the surface prints the rate, the quantity
+                // and the total together, and a total that is not their product
+                // reads as an arithmetic error unless the third factor is there
+                // to be named.
+                if (quote.get().multiplier() != null) {
+                    out.put("priceMultiplier", formatDecimal(quote.get().multiplier()));
+                }
             }
         } else {
             out.put("hasPricing", pricingService.hasAnyNonZeroMarkup(cred.id()));
@@ -655,7 +675,8 @@ public class PlatformCredentialsController {
      * </ul>
      */
     private Optional<Map<String, Object>> cloudRelayPublicInfo(String integrationName, String apiToolIdRaw,
-                                                                String modelId, BigDecimal quantity) {
+                                                                String modelId, BigDecimal quantity,
+                                                                BigDecimal priceMultiplier) {
         if (cloudPlatformInfoAccess == null) {
             return Optional.empty();
         }
@@ -666,7 +687,8 @@ public class PlatformCredentialsController {
         Map<String, Object> info;
         try {
             info = access.fetchPlatformInfo(integrationName, apiToolIdRaw, modelId,
-                    quantity == null ? null : quantity.toPlainString()).orElse(null);
+                    quantity == null ? null : quantity.toPlainString(),
+                    priceMultiplier == null ? null : priceMultiplier.toPlainString()).orElse(null);
         } catch (RuntimeException e) {
             log.debug("public-info: cloud platform-info delegation failed for '{}': {}",
                     integrationName, e.getMessage());
@@ -745,6 +767,32 @@ public class PlatformCredentialsController {
 
     private static boolean isGenerationCall(Boolean generationEndpoint, String modelId) {
         return Boolean.TRUE.equals(generationEndpoint) || modelId != null;
+    }
+
+    /**
+     * A price factor this endpoint is willing to quote with.
+     *
+     * <p>Dropped rather than refused when it is absurd. This is a READ: a
+     * malformed factor must leave the screen showing the published rate, which
+     * is the true price of a call carrying no surcharge, instead of turning a
+     * price panel into an error. The amount actually charged is resolved again
+     * server-side from the parameters, so nothing here can buy anything.
+     *
+     * <p>The ceiling is literally the same CONSTANT the descriptor parser
+     * enforces, not a copy of it: both read
+     * {@code BillingContextHeaders.MAX_GENERATION_MULTIPLIER}. It used to be a
+     * 100 restated here under a javadoc claiming parity, which is the shape that
+     * drifts: raise the parser's ceiling to admit a legitimate modifier and this
+     * screen would go on silently dropping the factor, showing a reader the
+     * published rate while the server charges the surcharge.
+     *
+     * <p>The parser applies it to a model's modifiers TOGETHER, not to one
+     * factor, so a value arriving here above the ceiling cannot have come from
+     * any descriptor this platform accepts.
+     */
+    private static BigDecimal sanitizeMultiplier(BigDecimal raw) {
+        return com.apimarketplace.common.web.BillingContextHeaders
+                .sanitizeGenerationMultiplier(raw);
     }
 
     private static UUID parseUuid(String raw) {

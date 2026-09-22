@@ -11,6 +11,7 @@ import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { StepDataTableView } from './StepDataTableView';
 import { EmptyState } from '../shared/EmptyState';
 import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
+import { normalizeBranchEvaluations } from '@/lib/workflows/branchEvaluation';
 import { LoadOlderSentinel } from '@/components/agent-fleet/LoadOlderSentinel';
 
 interface StepDataTableProps {
@@ -330,10 +331,14 @@ export function StepDataTable({ runId, stepAlias, workflowId, onBreadcrumbChange
     return <EmptyState message="No step data available for this node" className="p-4 text-center" />;
   }
 
-  // Check if any step has condition evaluation data (from metadata or from dedicated fields)
+  // Check if any step has condition evaluation data (from metadata or from dedicated fields).
+  // `evaluations` is what a branching node actually writes; the three keys this used to
+  // test are written by nothing, so the column appeared only when a dedicated field
+  // happened to be set - which is never the case for the one row that most needs it, a
+  // decision where no branch matched and `condition_expression` is therefore absent.
   const hasConditionData = stepData.some(step => {
     const metadata = step.metadata || {};
-    return metadata.conditionEvaluations || metadata.conditionalSelection || metadata.conditionalSkip
+    return metadata.evaluations || metadata.condition_resolved
       || step.conditionExpression || step.selectedBranch;
   });
 
@@ -345,9 +350,10 @@ export function StepDataTable({ runId, stepAlias, workflowId, onBreadcrumbChange
   const hasSkipData = stepData.some(step => step.skipReason || step.skipSourceNode);
   const hasItemNumber = stepData.some(step => step.itemNumber != null);
 
-  // Condition-related metadata shown in dedicated column
+  // Condition-related metadata shown in the dedicated column, so it is not ALSO drawn
+  // as a raw generic JSON column beside it.
   const CONDITION_METADATA_KEYS = new Set([
-    'conditionEvaluations', 'conditionalSelection', 'conditionalSkip',
+    'evaluations', 'condition_resolved', 'skipped_branches',
   ]);
 
   // Build columns data-driven: only include fields that have actual data
@@ -445,40 +451,32 @@ export function StepDataTable({ runId, stepAlias, workflowId, onBreadcrumbChange
 
   // Format condition data for display (uses dedicated fields first, then metadata fallback)
   const formatConditionData = (step: WorkflowStepData): string => {
-    // Use dedicated fields first (from new columns)
+    const metadata = step.metadata || {};
+
+    // Use dedicated fields first (from the entity columns). The RESOLVED form is
+    // preferred over the configured one: "status == 'paid'" says what was asked,
+    // "'refunded' == 'paid'" says why the answer was no.
     if (step.selectedBranch) {
-      const expr = step.conditionExpression ? `: ${step.conditionExpression}` : '';
+      const resolved = typeof metadata.condition_resolved === 'string' ? metadata.condition_resolved : null;
+      const shown = resolved || step.conditionExpression;
+      const expr = shown ? `: ${shown}` : '';
       const result = step.conditionResult != null ? ` = ${step.conditionResult}` : '';
       return `→ ${step.selectedBranch}${expr}${result}`;
     }
 
-    // Fallback to metadata
-    const metadata = step.metadata || {};
-
-    // Check for conditionEvaluations (step SOURCE)
-    if (metadata.conditionEvaluations && Array.isArray(metadata.conditionEvaluations)) {
-      const evaluations = metadata.conditionEvaluations as any[];
-      if (evaluations.length > 0) {
-        const evalData = evaluations[0];
-        const selectedBranch = evalData.selectedBranch || 'none';
-        const branchType = evalData.selectedBranchType || 'unknown';
-        return `→ ${selectedBranch} (${branchType})`;
+    // Fallback to the evaluations the node reports. The three fallbacks that used to
+    // live here read `conditionEvaluations`, `conditionalSelection` and
+    // `conditionalSkip`, none of which any backend has ever written, so this function
+    // could only ever return a dash once the columns were empty.
+    const evaluations = normalizeBranchEvaluations(metadata.evaluations);
+    if (evaluations.length > 0) {
+      const selected = evaluations.find((evaluation) => evaluation.selected);
+      if (selected) {
+        const expr = selected.resolved ? `: ${selected.resolved}` : '';
+        const result = selected.result != null ? ` = ${selected.result}` : '';
+        return `→ ${selected.branch}${expr}${result}`;
       }
-    }
-
-    // Check for conditionalSelection (step TARGET selected)
-    if (metadata.conditionalSelection) {
-      const selection = metadata.conditionalSelection as any;
-      const condition = selection.condition || selection.resolvedCondition || 'else';
-      const branchType = selection.branchType || 'unknown';
-      return `✓ Selected (${branchType}): ${condition}`;
-    }
-
-    // Check for conditionalSkip (step TARGET skipped)
-    if (metadata.conditionalSkip) {
-      const skip = metadata.conditionalSkip as any;
-      const reason = skip.reason || skip.skipReason || 'Not selected';
-      return `✗ Skipped: ${reason}`;
+      return '→ no branch matched';
     }
 
     return '-';
@@ -582,7 +580,7 @@ export function StepDataTable({ runId, stepAlias, workflowId, onBreadcrumbChange
                           <span className="text-sm text-theme-secondary">-</span>
                         )
                       ) : isConditionsColumn ? (
-                        <span className="text-xs font-mono text-blue-600" title={JSON.stringify(step.metadata?.conditionEvaluations || step.metadata?.conditionalSelection || step.metadata?.conditionalSkip || {}, null, 2)}>
+                        <span className="text-xs font-mono text-blue-600" title={JSON.stringify(step.metadata?.evaluations ?? {}, null, 2)}>
                           {formatConditionData(step)}
                         </span>
                       ) : (

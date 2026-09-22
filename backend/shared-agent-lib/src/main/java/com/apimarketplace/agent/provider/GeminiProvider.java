@@ -47,6 +47,9 @@ public class GeminiProvider extends AbstractLLMProvider {
     // means the stream is spinning with no useful payload and we abort instead of looping.
     private static final int MAX_CONSECUTIVE_EMPTY_LINES = 100;
 
+    /** Google caps models.list at 1000 per page; the default is 50. */
+    private static final int MODELS_PAGE_SIZE = 1000;
+
     // Stage 1a.8 - inline-attachment byte cap. See AttachmentSizeGuard#DEFAULT_MAX_INLINE_BYTES
     // for the canonical constant; keep the three provider @Value defaults in lockstep with it.
     @Value("${ai.attachments.max-inline-bytes:262144}")
@@ -109,49 +112,154 @@ public class GeminiProvider extends AbstractLLMProvider {
         return apiBaseUrl;
     }
 
+    /** Request-less key (discovery): the in-flight user's or the platform's. */
     private String getCleanApiKey() {
-        String key = resolveApiKey();
+        return cleanKey(resolveApiKey());
+    }
+
+    /** The key serving ONE completion call, resolved from the request's tenant and pinned route. */
+    private String getCleanApiKey(CompletionRequest request) {
+        return cleanKey(resolveApiKey(request));
+    }
+
+    private static String cleanKey(String key) {
         if (key == null) return "";
         // Trim whitespace and remove any invisible characters
         return key.trim().replaceAll("[\\p{Cntrl}\\p{Zs}]", "");
     }
 
-    private String getApiUrlForModel(String model) {
-        return apiBaseUrl + "/" + model + ":generateContent?key=" + getCleanApiKey();
+    // Package-private (visible for testing): Google takes the key in the URL, so the
+    // request-bound key must be pinned on these two builders, not only on the headers.
+    String getApiUrlForModel(String model, CompletionRequest request) {
+        return apiBaseUrl + "/" + model + ":generateContent?key=" + getCleanApiKey(request);
     }
 
-    private String getStreamingUrlForModel(String model) {
-        return apiBaseUrl + "/" + model + ":streamGenerateContent?alt=sse&key=" + getCleanApiKey();
+    String getStreamingUrlForModel(String model, CompletionRequest request) {
+        return apiBaseUrl + "/" + model + ":streamGenerateContent?alt=sse&key=" + getCleanApiKey(request);
     }
 
     // Track current model for streaming (thread-local to handle concurrent requests)
     private final ThreadLocal<String> currentStreamingModel = new ThreadLocal<>();
 
     @Override
-    protected HttpHeaders buildHeaders() {
+    protected HttpHeaders buildHeaders(CompletionRequest request) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         return headers;
     }
 
+    /**
+     * Google's configured api-url IS the model collection
+     * ({@code .../v1beta/models}); the per-call path appends
+     * {@code /<model>:generateContent}. So discovery hits the base URL as-is.
+     */
+    @Override
+    protected String modelsEndpoint() {
+        String apiUrl = getApiUrl();
+        if (apiUrl == null || apiUrl.isBlank()) {
+            return null;
+        }
+        // models.list paginates at 50 by default and caps pageSize at 1000.
+        // Ask for the cap in one shot: Google serves tens of chat models, so a
+        // single page covers the collection by more than an order of
+        // magnitude. Left implicit, the default would silently truncate the
+        // listing, and a truncated listing is indistinguishable from a vendor
+        // that stopped serving a model - the exact confusion discovery exists
+        // to remove.
+        return apiUrl + (apiUrl.contains("?") ? "&" : "?") + "pageSize=" + MODELS_PAGE_SIZE;
+    }
+
+    /**
+     * Google accepts the key as a header. Use that rather than the
+     * {@code ?key=} query parameter the REST docs lead with: the discovery
+     * failure path logs the URL, and a key in a query string would land in the
+     * logs on every transient error.
+     */
+    @Override
+    protected HttpHeaders discoveryHeaders() {
+        // getCleanApiKey, not resolveApiKey: keys arrive with trailing
+        // newlines and stray whitespace from env files and k8s secrets, which
+        // is why every completion call already goes through the sanitiser. An
+        // unsanitised value here makes HttpHeaders reject the header, the
+        // catch-all turns that into "could not ask", and Google is reported as
+        // unreachable forever with nothing pointing at the key.
+        return discoveryHeaders(getCleanApiKey());
+    }
+
+    @Override
+    protected HttpHeaders discoveryHeaders(String apiKey) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("x-goog-api-key", apiKey);
+        return headers;
+    }
+
+    /**
+     * Google's envelope is {@code {models:[{name:"models/<id>",
+     * supportedGenerationMethods:[...]}]}}, not the OpenAI {@code data[].id}
+     * shape.
+     *
+     * <p>Filters on {@code generateContent}. The collection also carries
+     * embedding, token-counting and image models, which are not chat models
+     * and have no business in a chat catalog. Google states the capability
+     * per entry, so this is a declared fact rather than a guess on the id.
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    protected List<String> extractModelIds(Map<String, Object> body) {
+        if (body == null || !(body.get("models") instanceof List<?> entries)) {
+            return List.of();
+        }
+        // Asking for the maximum page makes overflow improbable, not
+        // impossible, and a silently short listing is indistinguishable from a
+        // retired model. Report it rather than leave the next reader trusting
+        // a comment; the ids that did arrive are still correct.
+        Object nextPage = body.get("nextPageToken");
+        if (nextPage != null && !nextPage.toString().isBlank()) {
+            log.warn("Google model listing reports more pages past the {} requested; "
+                    + "the collection is larger than one page and discovery sees only the first",
+                    MODELS_PAGE_SIZE);
+        }
+        List<String> ids = new ArrayList<>(entries.size());
+        for (Object entry : entries) {
+            if (!(entry instanceof Map<?, ?> raw)) continue;
+            Map<String, Object> model = (Map<String, Object>) raw;
+
+            Object methods = model.get("supportedGenerationMethods");
+            if (!(methods instanceof List<?> methodList)
+                    || !methodList.contains("generateContent")) {
+                continue;
+            }
+
+            Object name = model.get("name");
+            if (name == null || name.toString().isBlank()) continue;
+            String id = name.toString().trim();
+            // "models/gemini-3-pro" is the resource name; the callable model
+            // id - what the rest of the catalog stores - is the last segment.
+            int slash = id.lastIndexOf('/');
+            if (slash >= 0) id = id.substring(slash + 1);
+            if (!id.isBlank()) ids.add(id);
+        }
+        return ids;
+    }
+
     @Override
     public CompletionResponse complete(CompletionRequest request) {
-        if (!isConfigured()) {
-            throw new LLMProviderException(getProviderName(),
-                "Provider is not configured. API key is missing.");
+        String problem = configurationProblem(request);
+        if (problem != null) {
+            throw new LLMProviderException(getProviderName(), problem);
         }
 
         try {
             String model = request.model() != null ? request.model() : getDefaultModel();
             Map<String, Object> requestBody = buildRequestBody(request);
-            HttpHeaders headers = buildHeaders();
+            HttpHeaders headers = buildHeaders(request);
             HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
 
             log.debug("Sending request to Gemini with model {}", model);
 
             @SuppressWarnings("unchecked")
             ResponseEntity<Map> response = restTemplate.exchange(
-                getApiUrlForModel(model),
+                getApiUrlForModel(model, request),
                 HttpMethod.POST,
                 entity,
                 Map.class
@@ -167,7 +275,11 @@ public class GeminiProvider extends AbstractLLMProvider {
             }
 
         } catch (HttpClientErrorException e) {
-            return handleHttpError(e);
+            // With the request, so a rejection of the caller's OWN key says so here too: this
+            // class copies complete() and completeStreaming() rather than inheriting them, so
+            // anything added to the shared ones has to be repeated or Gemini is the one
+            // provider where the message never appears.
+            return handleHttpError(e, request);
         } catch (LLMProviderException e) {
             throw e;
         } catch (Exception e) {
@@ -179,8 +291,9 @@ public class GeminiProvider extends AbstractLLMProvider {
 
     @Override
     public void completeStreaming(CompletionRequest request, com.apimarketplace.agent.streaming.StreamingCallback callback) {
-        if (!isConfigured()) {
-            callback.onError("Provider is not configured. API key is missing.");
+        String problem = configurationProblem(request);
+        if (problem != null) {
+            callback.onError(problem);
             return;
         }
 
@@ -197,11 +310,11 @@ public class GeminiProvider extends AbstractLLMProvider {
             // Note: Gemini doesn't need stream:true in body, it's controlled by endpoint
 
             // Create connection to streaming endpoint
-            String streamUrl = getStreamingUrlForModel(model);
+            String streamUrl = getStreamingUrlForModel(model, request);
             log.debug("Gemini streaming URL: {}", streamUrl.replaceAll("key=.*", "key=***"));
             java.net.URL url = new java.net.URL(streamUrl);
             java.net.HttpURLConnection connection = (java.net.HttpURLConnection) url.openConnection();
-            setupStreamingConnection(connection);
+            setupStreamingConnection(connection, request);
 
             // Send request
             requestJson = objectMapper.writeValueAsString(requestBody);
@@ -240,7 +353,10 @@ public class GeminiProvider extends AbstractLLMProvider {
                 log.error("🚨 [GEMINI] Request body that caused error ({} chars):\n{}",
                     requestJson.length(),
                     requestJson.length() > 2000 ? requestJson.substring(0, 2000) + "..." : requestJson);
-                callback.onError("HTTP " + responseCode + ": " + errorMessage);
+                String ownKeyProblem = ownKeyRejection(request, responseCode);
+                callback.onError(ownKeyProblem != null
+                    ? ownKeyProblem
+                    : "HTTP " + responseCode + ": " + errorMessage);
                 return;
             }
 
@@ -681,7 +797,7 @@ public class GeminiProvider extends AbstractLLMProvider {
         try {
             int prefixTokenCount = estimatePrefixTokens(systemInstruction, request.tools());
             java.util.Optional<String> cacheName = cachedContentManager.getOrCreate(
-                    getCleanApiKey(),
+                    getCleanApiKey(request),
                     modelName,
                     systemInstruction == null ? "" : systemInstruction,
                     request.tools(),

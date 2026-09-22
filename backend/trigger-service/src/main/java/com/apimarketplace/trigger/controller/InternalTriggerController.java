@@ -183,6 +183,12 @@ public class InternalTriggerController {
         return ResponseEntity.ok(tokenService.findWorkflowIdsWithTokens(workflowIds));
     }
 
+    @PostMapping("/tokens/active-trigger-ids-by-workflow")
+    public ResponseEntity<Map<UUID, Set<String>>> findActiveTriggerIdsByWorkflow(
+            @RequestBody List<UUID> workflowIds) {
+        return ResponseEntity.ok(tokenService.findActiveTriggerIdsByWorkflow(workflowIds));
+    }
+
     @SuppressWarnings("unchecked")
     @PostMapping("/tokens/cleanup-orphans")
     @Transactional

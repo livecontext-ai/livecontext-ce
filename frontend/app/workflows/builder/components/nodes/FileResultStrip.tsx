@@ -147,7 +147,15 @@ export function FilePreviewCard({
   // 'other' kinds pass null too: no media bytes are fetched for them at all.
   const signedSrc = kind !== 'other' ? (file.previewUrl || null) : null;
   const mediaSrc = kind !== 'other' && !signedSrc ? (fileRefToUrl(file, { inline: true }) || null) : null;
-  const authed = useAuthedObjectUrl(mediaSrc, resolveMediaMimeType(file.mimeType, file.name));
+  const authed = useAuthedObjectUrl(
+    mediaSrc,
+    resolveMediaMimeType(file.mimeType, file.name),
+    // A PDF is FRAMED below, so its bytes become a document on this app's origin. `inlineKindOf`
+    // types a page by NAME as well as by mime, so a row stored as text/html under a `.pdf` name
+    // would otherwise run its own script here - on the builder canvas and on a published
+    // showcase canvas. Forced, it renders as a broken page instead. See useAuthedObjectUrl.
+    kind === 'pdf' ? 'application/pdf' : undefined,
+  );
   const url = signedSrc ?? authed.url;
   const loading = signedSrc ? false : authed.loading;
   const error = signedSrc ? false : authed.error;

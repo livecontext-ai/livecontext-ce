@@ -22,7 +22,6 @@ import { HomeSuggestionChips } from '@/components/chat/HomeSuggestionChips';
 import { HomeModeSwitch } from '@/components/chat/HomeModeSwitch';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { HomeQuickOpenButton } from '@/components/chat/HomeQuickOpenButton';
-import { useFirstBuildPromptProposal } from '@/lib/onboarding/useFirstBuildPromptProposal';
 
 type StreamError = {
   message: string;
@@ -170,34 +169,6 @@ export function ChatPageLayout({
       dataSourceId: expandedDataSourceId,
     });
   }, [expandedDataSourceId, messageHistoryProps.messages, enableDataSource]);
-
-  // Onboarding may have left a first message proposed for this account: fill the
-  // composer with it once, so the first screen shows the thing to ask rather
-  // than an empty box. It is only PROPOSED - the user presses send.
-  //
-  // Filling it trips the interaction pause above, which is what we want: a
-  // concrete sentence on screen should not compete with a rotating title.
-  //
-  // Gated on the composer being ON SCREEN, not merely on `showWelcomeMessage`.
-  // The welcome view is the LAST arm of a ternary chain, so the data-source and
-  // dashboard views win over it while that flag is still true; consuming the
-  // proposal there would spend it on a composer nobody is looking at and report
-  // it as filled. That is why this sits below those two values rather than with
-  // the other hooks at the top.
-  //
-  // The composer's OWN conversationId rather than the page's, so the slot left
-  // alone is the one the composer on screen reads. ChatPageV2 does not put
-  // `conversationId` in composerProps today, so this is `undefined` and both
-  // resolve to the new-chat slot: the coupling is right rather than currently
-  // load-bearing.
-  const welcomeComposerOnScreen =
-    showWelcomeMessage && !(expandedDataSourceContent && isDataView) && !dashboardPath;
-  useFirstBuildPromptProposal(
-    welcomeComposerOnScreen,
-    composerProps.inputValue,
-    composerProps.onInputChange,
-    composerProps.conversationId,
-  );
 
   // Helper function to minimize datasource - navigate back to chat
   const handleMinimizeDataSource = () => {

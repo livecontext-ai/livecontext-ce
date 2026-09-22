@@ -60,6 +60,22 @@ public class SignalWaitEntity {
     @Column(name = "signal_config", columnDefinition = "jsonb")
     private Map<String, Object> signalConfig;
 
+    /**
+     * The parking node's {@code resolved_params}, captured at yield.
+     *
+     * <p>A node that yields AWAITING_SIGNAL never persists a step row of its own: the row
+     * it gets is the one written when the signal resolves, and that one used to carry the
+     * SIGNAL's fields alone. So an interface, an approval or a long wait resolved its
+     * configuration and then had nowhere to report it, on any path, at any moment of the
+     * run. This carries it across the pause.
+     *
+     * <p>Null for a signal registered before V500, and for any caller that does not pass
+     * one; the resume path falls back to signal bookkeeping alone, as it always did.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "reported_params", columnDefinition = "jsonb")
+    private Map<String, Object> reportedParams;
+
     @Column(name = "epoch", nullable = false)
     private int epoch;
 
@@ -318,6 +334,14 @@ public class SignalWaitEntity {
 
     public void setSignalConfig(Map<String, Object> signalConfig) {
         this.signalConfig = signalConfig;
+    }
+
+    public Map<String, Object> getReportedParams() {
+        return reportedParams;
+    }
+
+    public void setReportedParams(Map<String, Object> reportedParams) {
+        this.reportedParams = reportedParams;
     }
 
     public int getEpoch() {

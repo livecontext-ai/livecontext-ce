@@ -11,6 +11,8 @@ import org.slf4j.LoggerFactory;
 import jakarta.mail.*;
 import jakarta.mail.internet.*;
 import java.util.*;
+import com.apimarketplace.orchestrator.services.failure.UserActionableFailure;
+import com.apimarketplace.orchestrator.services.mail.MailTimeouts;
 
 /**
  * SendEmail node - Sends emails via SMTP using platform credentials.
@@ -28,6 +30,7 @@ public class SendEmailNode extends BaseNode {
 
     private final Core.SendEmailConfig sendEmailConfig;
     private CredentialClient credentialClient;
+    private MailTimeouts mailTimeouts = MailTimeouts.defaults();
 
     public SendEmailNode(String nodeId, Core.SendEmailConfig sendEmailConfig) {
         super(nodeId, NodeType.SEND_EMAIL);
@@ -38,6 +41,10 @@ public class SendEmailNode extends BaseNode {
     public void acceptServices(ServiceRegistry registry) {
         super.acceptServices(registry);
         this.credentialClient = registry.getCredentialClient();
+        // A mocked registry answers null; keep the defaults rather than a null field, so
+        // "nobody configured this" and "a test did not stub it" behave identically.
+        MailTimeouts configured = registry.getMailTimeouts();
+        if (configured != null) this.mailTimeouts = configured;
     }
 
     @Override
@@ -54,14 +61,14 @@ public class SendEmailNode extends BaseNode {
                 throw new IllegalStateException("CredentialClient is not available");
             }
 
-            // Use specific credential from plan if selected, otherwise fall back to default
+            // Use the default only when the caller did not select an account.
             Long credentialId = sendEmailConfig != null ? sendEmailConfig.credentialId() : null;
             Optional<CredentialSummaryDto> smtpCred;
             if (credentialId != null) {
                 smtpCred = credentialClient.getCredentialById(context.tenantId(), credentialId);
                 if (smtpCred.isEmpty()) {
-                    logger.warn("Selected SMTP credential {} not found, falling back to default", credentialId);
-                    smtpCred = credentialClient.getDefaultCredential(context.tenantId(), SMTP_INTEGRATION);
+                    throw new IllegalStateException("Selected SMTP credential is unavailable. "
+                            + "Reconnect or select that account before running; no other sender was used.");
                 }
             } else {
                 smtpCred = credentialClient.getDefaultCredential(context.tenantId(), SMTP_INTEGRATION);
@@ -82,7 +89,8 @@ public class SendEmailNode extends BaseNode {
             boolean smtpUseTls = resolveUseTls(getString(cred, "use_tls"));
             // Surfaced so a failed send shows WHY the transport was chosen: "useTls=true" on a
             // relay with no STARTTLS is the whole diagnosis, and it is otherwise invisible.
-            resolvedParams.put("useTls", smtpUseTls);
+            // `smtpUseTls`, the name SendEmailConfig uses. It was reported as `useTls`.
+            resolvedParams.put("smtpUseTls", smtpUseTls);
 
             // 2. Resolve per-email fields from node config via SpEL
             String toEmail = resolveExpression(
@@ -121,6 +129,37 @@ public class SendEmailNode extends BaseNode {
             if (nodeFromEmail != null && !nodeFromEmail.isBlank()) resolvedParams.put("fromEmail", fromEmail);
             if (replyTo != null && !replyTo.isBlank()) resolvedParams.put("replyTo", replyTo);
 
+            // Everything else the author configured. A message that went to the wrong
+            // place, or arrived without its copy list, is diagnosed from these; leaving
+            // them out meant the Params column showed a send that could not be checked
+            // against what was asked for. smtpPassword is deliberately absent: this map
+            // is persisted and displayed, so no credential may enter it.
+            if (notBlank(fromName)) resolvedParams.put("fromName", fromName);
+            if (notBlank(ccEmail)) resolvedParams.put("ccEmail", ccEmail);
+            if (notBlank(bccEmail)) resolvedParams.put("bccEmail", bccEmail);
+            // `bodyLength`, not the body, exactly as code.code and sftp.localContent
+            // do. An HTML template of 50 KB inside a split over 500 rows would write
+            // 25 MB of duplicated body into workflow_step_data and render it 500 times.
+            if (notBlank(body)) resolvedParams.put("bodyLength", body.length());
+            // smtpHost / smtpPort / smtpUsername / credentialId are deliberately NOT
+            // reported. The first three are read from the CREDENTIAL, not the plan
+            // (see getString(cred, ...) above), so persisting them would publish a
+            // shared credential's SMTP login into every step row. And PlanSecretRedactor
+            // already strips credentialId from ssh/sftp/database/sendEmail/emailInbox
+            // for share-link visitors, on the grounds that "a reference to one of the
+            // author's credentials is not the viewer's to see" - resolved_params is read
+            // by the same people, so widening it here would undo that decision sideways.
+            // Resolved, not raw: the documented usage is to pass the original
+            // message id from an email_inbox output, so these are always templates in
+            // real use and the raw form would show `{{...}}` where the reader needs
+            // the Message-ID the mail actually threaded on.
+            String resolvedInReplyTo = resolveExpression(
+                    sendEmailConfig != null ? sendEmailConfig.inReplyTo() : null, context);
+            String resolvedReferences = resolveExpression(
+                    sendEmailConfig != null ? sendEmailConfig.references() : null, context);
+            if (notBlank(resolvedInReplyTo)) resolvedParams.put("inReplyTo", resolvedInReplyTo);
+            if (notBlank(resolvedReferences)) resolvedParams.put("references", resolvedReferences);
+
             // 3. Validate required fields
             if (smtpHost == null || smtpHost.isBlank()) {
                 throw new IllegalArgumentException("SMTP host is missing in credential configuration");
@@ -133,7 +172,7 @@ public class SendEmailNode extends BaseNode {
             }
 
             // 4. Build SMTP session
-            Properties props = buildSmtpProperties(smtpHost, smtpPort, smtpUsername, smtpUseTls);
+            Properties props = buildSmtpProperties(smtpHost, smtpPort, smtpUsername, smtpUseTls, mailTimeouts);
 
             Session session;
             if (smtpUsername != null && !smtpUsername.isBlank()) {
@@ -181,7 +220,14 @@ public class SendEmailNode extends BaseNode {
             return NodeExecutionResult.success(nodeId, result);
 
         } catch (Exception e) {
-            logger.error("SendEmail execution failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
+            // A missing credential is the caller's to fix and is already reported on the node,
+            // so it is logged as a refusal rather than an error. Anything else keeps ERROR with
+            // its stack trace: that is the shape only the platform can act on.
+            if (UserActionableFailure.isUserActionable(e.getMessage())) {
+                logger.warn("SendEmail refused: nodeId={}, reason={}", nodeId, e.getMessage());
+            } else {
+                logger.error("SendEmail execution failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
+            }
             Map<String, Object> failOutput = new LinkedHashMap<>();
             failOutput.put("node_type", "SEND_EMAIL");
             failOutput.put("item_index", context.itemIndex());
@@ -277,6 +323,12 @@ public class SendEmailNode extends BaseNode {
      * disabled.
      */
     static Properties buildSmtpProperties(String smtpHost, int smtpPort, String smtpUsername, boolean smtpUseTls) {
+        return buildSmtpProperties(smtpHost, smtpPort, smtpUsername, smtpUseTls, MailTimeouts.defaults());
+    }
+
+    static Properties buildSmtpProperties(String smtpHost, int smtpPort, String smtpUsername,
+                                          boolean smtpUseTls, MailTimeouts timeouts) {
+        MailTimeouts effective = timeouts != null ? timeouts : MailTimeouts.defaults();
         Properties props = new Properties();
         props.put("mail.smtp.host", smtpHost);
         props.put("mail.smtp.port", String.valueOf(smtpPort));
@@ -297,9 +349,11 @@ public class SendEmailNode extends BaseNode {
             }
         }
 
-        props.put("mail.smtp.connectiontimeout", "10000");
-        props.put("mail.smtp.timeout", "10000");
-        props.put("mail.smtp.writetimeout", "10000");
+        // Connect, read and write answer three different questions and must not share one
+        // number: reaching the host, waiting for its reply, and pushing a large attachment up.
+        props.put("mail.smtp.connectiontimeout", String.valueOf(effective.smtpConnectMs()));
+        props.put("mail.smtp.timeout", String.valueOf(effective.smtpReadMs()));
+        props.put("mail.smtp.writetimeout", String.valueOf(effective.smtpWriteMs()));
         return props;
     }
 

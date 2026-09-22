@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import {
   ArrowLeft, ArrowRight, Check, History, Loader2, Sparkles, X, FolderOpen,
-  Download, AlertCircle, LayoutGrid, PenLine, Upload,
+  Coins, Download, AlertCircle, LayoutGrid, PenLine, Pencil, Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,10 @@ import { useTranslations } from 'next-intl';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { generationService, type GenerationModel, type GenerationResult }
   from '@/lib/api/orchestrator/generation.service';
+import { ASSET_ACCEPT, ASSET_PARAMS, MAX_ASSET_SLOTS, NUMBER_PARAMS, packAssetsByMaxItems }
+  from '@/lib/generation/paramSpec';
+import { assetRoleHint, assetRoleLabel, paramLabel, type LabelTranslator }
+  from '@/lib/generation/labels';
 import { useGenerationModels } from '@/hooks/useGenerationModels';
 import { useGenerationOptions } from '@/hooks/useGenerationOptions';
 import {
@@ -30,12 +34,16 @@ import { useRouter } from '@/i18n/navigation';
 import { orchestratorApi } from '@/lib/api';
 import type { PlatformCredentialPublicInfo } from '@/lib/api/orchestrator/types';
 import { platformQuantityFor } from '@/app/workflows/builder/utils/generateParams';
+import { priceFactorReasons, priceMultiplierFor } from '@/lib/generation/priceModifiers';
+import { describePriceFactors, withQuotedPriceReason } from '@/lib/generation/price';
+import { generationQuoteKey } from '@/lib/generation/quoteKey';
 // The formats and the provider mark are drawn the same way here and in the
 // history that lists what was generated: one list, one icon per format.
 import { FORMAT_ICONS, FORMAT_ORDER, ProviderIcon } from '@/lib/generation/formats';
 // What this workspace has already generated, and the recipe behind each asset. The SAME list the
 // Files page shows: one idea of what a past generation is, in both places a reader looks for it.
 import { GenerationHistoryList } from '@/components/generation/GenerationHistoryList';
+import { describeCharge } from '@/lib/generation/price';
 import { useInvalidateGenerationHistory } from '@/hooks/useGenerationHistory';
 import type { GenerationProvenance } from '@/lib/api/storage-api';
 // The SAME credential section the workflow inspector uses for this exact
@@ -137,26 +145,10 @@ function recipeFileRefs(value: unknown): FileRef[] {
 }
 
 
-/** Unified parameters the form offers, and how each is entered. */
-const TEXT_PARAMS = ['negative_prompt', 'voice', 'language', 'style', 'aspect_ratio', 'resolution', 'quality'];
-const NUMBER_PARAMS = ['duration_seconds', 'n', 'seed'];
-
-/**
- * Parameters that carry a FILE rather than a value.
- *
- * <p>They cannot share the text field the others use: the platform needs the
- * bytes, so what travels is the whole file handle an upload returns. Typed into
- * a text box, a path or a URL reaches the backend and is refused there, which is
- * a worse place to learn it than here.
- */
-const ASSET_PARAMS = ['input_image', 'input_audio', 'input_video'] as const;
-
-/** What the picker will offer for each kind of input, so the reader is not shown every file they own. */
-const ASSET_ACCEPT: Record<string, string> = {
-  input_image: 'image/*',
-  input_audio: 'audio/*',
-  input_video: 'video/*',
-};
+/* The vocabulary is imported, not restated. This file kept its own copy of which parameters carry
+   a file and which are numbers, and the studio kept another: the day the catalogue grew three file
+   slots, the copy that was not updated did not fail, it simply stopped offering them - a field the
+   reader could not fill and no error anywhere. */
 
 /**
  * One icon per step, and three DIFFERENT ones.
@@ -258,19 +250,9 @@ function assetLabel(
   role: string | undefined,
   index: number,
   total: number,
-  t: ReturnType<typeof useTranslations>,
+  t: LabelTranslator,
 ): string {
-  const base = role ? t(`assetRoles.${role}`) : paramLabel(name, t);
-  // Numbered only when there are several, because "Source image 1" on a field
-  // that takes exactly one invites the reader to look for a second.
-  return total > 1 ? `${base} ${index + 1}` : base;
-}
-
-/** Same for a parameter: an unlabelled one is shown by its contract name. */
-function paramLabel(name: string, t: ReturnType<typeof useTranslations>): string {
-  return [...TEXT_PARAMS, ...NUMBER_PARAMS, ...ASSET_PARAMS].includes(name)
-    ? t(`params.${name}`)
-    : name;
+  return assetRoleLabel({ name, role, slots: total }, t, index);
 }
 
 /**
@@ -297,6 +279,12 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
   // The file viewer's own words for saving a file: same action, same object, so
   // the dialog does not invent a second vocabulary for it.
   const tFile = useTranslations('fileDetail');
+  // The price is worded once, by the cards that show a past generation - including the ones in this
+  // dialog's own history tab - and read here rather than said again.
+  const tHistory = useTranslations('generationHistory');
+  // The generation vocabulary: parameter labels and the price-factor wording, so the sentence
+  // this dialog shows is the one the studio shows for the same call.
+  const tGen = useTranslations('generation');
   const router = useRouter();
   // A finished generation belongs at the top of the history, on this screen and on the Files page
   // that may be open behind it. Both read one cache, so one invalidation refreshes both.
@@ -441,12 +429,31 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
    * form. It is not converted into the price's unit here: the published row
    * owns that conversion and answers with the unit it priced in.
    */
+  /**
+   * The file slots, shaped exactly as the submission below sends them.
+   *
+   * <p><b>Why this is not left to the submission alone.</b> The files live in their own state,
+   * beside `params` rather than inside it, so a price computed from `params` prices a call with no
+   * images and the run then sends three. That is silent and it is money: a model that charges per
+   * reference image quotes the published rate here and is billed the surcharge by the server, which
+   * measures the body it actually received. The studio composer had exactly this bug.
+   *
+   * <p>So the shaping is written ONCE and read by both, rather than repeated: the cap and the
+   * single-versus-list rule are what decide how many files are sent, and a second copy of them is a
+   * second answer to "how many files is this call" that only diverges under a provider nobody
+   * tested.
+   */
+  const assetParams = useMemo(
+    () => packAssetsByMaxItems<FileRef>(selected, assets),
+    [assets, selected],
+  );
+
   const quantityFor = useCallback((m: GenerationModel): number | null => {
     const typed: Record<string, unknown> = m.model === modelId
-      ? { prompt, ...params }
+      ? { prompt, ...params, ...assetParams }
       : {};
     return platformQuantityFor(m.price?.unit, typed, m.defaultQuantity);
-  }, [modelId, prompt, params]);
+  }, [modelId, prompt, params, assetParams]);
 
   /**
    * The one quote request, stated once so the two callers below cannot send two
@@ -455,12 +462,23 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
    */
   const quoteFor = useCallback((m: GenerationModel) => {
     const quantity = quantityFor(m);
+    // What the reader's own CHOICES do to the rate. The run is charged with it, so a quote that
+    // left it out states a price the generation never costs.
+    const priceMultiplier = priceMultiplierFor(
+      m, m.model === modelId ? { prompt, ...params, ...assetParams } : {},
+    );
     return {
-      // Same key shape as the inspector's, so a model already quoted there is
-      // served from cache instead of re-asked.
-      queryKey: ['platform-credential-public-info',
-        m.integrationName?.toLowerCase() ?? '', m.apiToolId, m.model, quantity, true,
-        m.measuredUnit ?? null],
+      // The shared key, so a model already quoted by the inspector or the studio is served from
+      // cache instead of re-asked.
+      queryKey: generationQuoteKey({
+        integrationName: m.integrationName,
+        apiToolId: m.apiToolId,
+        modelId: m.model,
+        quantity,
+        generation: true,
+        quantityUnit: m.measuredUnit,
+        priceMultiplier,
+      }),
       queryFn: () => orchestratorApi.getPlatformCredentialPublicInfo(
         m.integrationName as string, m.apiToolId,
         // Every row of this catalogue is a generation. Stated rather than
@@ -468,11 +486,12 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
         // billing path does: a generation is not sold on the credential-wide
         // default, and a rate of one dimension cannot price a call counted in
         // another.
-        { modelId: m.model, quantity, generation: true, quantityUnit: m.measuredUnit },
+        { modelId: m.model, quantity, generation: true, quantityUnit: m.measuredUnit,
+          priceMultiplier },
       ),
       staleTime: 5 * 60_000,
     };
-  }, [quantityFor]);
+  }, [quantityFor, modelId, prompt, params, assetParams]);
 
   /**
    * The quote for the model actually chosen, asked for on its own.
@@ -567,8 +586,16 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
     const index = modelsOfKind.findIndex((row) => row.model === m.model);
     const query = index < 0 ? undefined : quoteQueries[index];
     if (query?.isLoading) return '';
-    return describeQuotedPrice(query?.data, t, tUnits) || t('price.unpriced');
-  }, [modelsOfKind, quoteQueries, t, tUnits]);
+    // WITH the reason, under the same rule the studio composer uses: the amount already carries
+    // the factor, so an option showing only the total states a number the rate and the size do
+    // not produce.
+    return withQuotedPriceReason(
+      describeQuotedPrice(query?.data, t, tUnits) || t('price.unpriced'),
+      query?.data,
+      priceFactorReasons(m, m.model === modelId ? { prompt, ...params, ...assetParams } : {}),
+      tGen,
+    );
+  }, [modelsOfKind, quoteQueries, t, tUnits, tGen, modelId, prompt, params, assetParams]);
 
   // Reset everything when the modal closes, so reopening never shows the
   // previous run's answer as if it were this one's.
@@ -894,7 +921,7 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
    * numeric (a guidance scale, a strength, a step count) reached the provider as text.
    */
   const isNumericParam = useCallback((name: string): boolean => {
-    if (NUMBER_PARAMS.includes(name)) return true;
+    if ((NUMBER_PARAMS as readonly string[]).includes(name)) return true;
     const limit = selected?.limits?.[name];
     return typeof limit?.min === 'number' || typeof limit?.max === 'number';
   }, [selected]);
@@ -998,12 +1025,10 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
       }
       // Input files travel as the WHOLE handle. The backend turns it into what
       // the chosen provider takes, which differs per provider, so sending a
-      // path or a link instead would only work by accident.
-      for (const [key, refs] of Object.entries(assets)) {
-        const supplied = refs.filter(Boolean);
-        if (supplied.length === 0) continue;
-        body[key] = (selected?.inputs?.[key]?.maxItems ?? 1) > 1 ? supplied : supplied[0];
-      }
+      // path or a link instead would only work by accident. Shaped ONCE, above,
+      // because the price is computed from the same shaping: two copies of the
+      // cap is how a call gets quoted with no images and billed with three.
+      Object.assign(body, assetParams);
       const answer = await generationService.execute({
         model: selected.model,
         params: body,
@@ -1068,7 +1093,7 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
     } finally {
       setRunning(false);
     }
-  }, [selected, prompt, params, recipeParams, isNumericParam, assets, credentialSource,
+  }, [selected, prompt, params, recipeParams, isNumericParam, assetParams, credentialSource,
       credentialId, onGenerated, invalidateHistory, t]);
 
   if (!isOpen) return null;
@@ -1344,6 +1369,14 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
                     apiToolId={selected.apiToolId}
                     modelId={selected.model}
                     quantity={quantityFor(selected)}
+                    // The SAME factor the dialog's own estimate was quoted with: one call, one
+                    // cache entry, one amount on screen.
+                    priceMultiplier={priceMultiplierFor(selected, { prompt, ...params, ...assetParams })}
+                    // The same sentence the studio composer shows. This dialog applied the factor
+                    // to the amount it quotes and said nothing about it.
+                    priceFactorReason={describePriceFactors(
+                      priceFactorReasons(selected, { prompt, ...params, ...assetParams }), tGen,
+                    )}
                     // What the call is COUNTED in, so the quote can refuse a
                     // rate that cannot price it rather than showing an amount
                     // every run is then refused for.
@@ -1410,8 +1443,18 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
                       // the wrong thing, and a single picker on a model that
                       // composes three images hid two thirds of what it can do.
                       const slots = (ASSET_PARAMS as readonly string[]).includes(name)
-                        ? Math.max(1, Math.min(shape?.maxItems ?? 1, 8))
+                        ? Math.max(1, Math.min(shape?.maxItems ?? 1, MAX_ASSET_SLOTS))
                         : 1;
+                      // WHAT the model does with the file, not only which file to pick. Two slots
+                      // on one model differ by this sentence and by nothing else on screen, and a
+                      // reader who guesses wrong pays for the wrong video.
+                      const roleHint = assetRoleHint({ name, role: shape?.role, slots }, t);
+                      // And the two rules that decide whether the call is accepted at all. Both are
+                      // refusals the reader would otherwise meet by pressing Generate.
+                      const slotName = (other: string) =>
+                        assetLabel(other, selected.inputs?.[other]?.role, 0, 1, t);
+                      const goesWith = (shape?.requires ?? []).map(slotName);
+                      const notWith = (shape?.excludes ?? []).map(slotName);
                       return (
                         <div key={name} className="space-y-1">
                           {(ASSET_PARAMS as readonly string[]).includes(name) ? (
@@ -1423,6 +1466,19 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
                                in the DOM, hidden but still labelled, so the
                                label and keyboard focus keep working. */
                             <div className="space-y-2">
+                              {roleHint && (
+                                <p className="text-xs text-theme-muted">{roleHint}</p>
+                              )}
+                              {goesWith.length > 0 && (
+                                <p className="text-xs text-theme-muted">
+                                  {t('assetPairing.goesWith', { slots: goesWith.join(', ') })}
+                                </p>
+                              )}
+                              {notWith.length > 0 && (
+                                <p className="text-xs text-theme-muted">
+                                  {t('assetPairing.notWith', { slots: notWith.join(', ') })}
+                                </p>
+                              )}
                               {Array.from({ length: slots }, (_, slot) => {
                                 const id = `generation-param-${name}-${slot}`;
                                 const key = `${name}#${slot}`;
@@ -1629,6 +1685,20 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
                       })}
                     </p>
                   )}
+                  {/* What it cost, in the same words and the same unit as the cards under the
+                      Past generations tab of this very dialog. Stating the size it was billed on
+                      and not the amount left the one screen a reader sees straight after spending
+                      as the only one that could not answer what they had just spent. Absent when
+                      the platform charged nothing, and never drawn as a zero. */}
+                  {typeof result.data.billed_credits === 'number' && result.data.billed_credits > 0 && (
+                    <p
+                      className="inline-flex items-center gap-1 text-xs text-theme-secondary"
+                      title={tHistory('costTitle')}
+                    >
+                      <Coins className="h-3 w-3 flex-shrink-0" />
+                      {describeCharge(result.data.billed_credits, tHistory)}
+                    </p>
+                  )}
                   {/* The asset itself, in the SAME viewer /app/files opens when
                       you click a file: image, video with controls, audio player,
                       pdf, or a rendered text/json/csv preview. It used to be a
@@ -1759,7 +1829,13 @@ export const CreateGenerationModal: React.FC<CreateGenerationModalProps> = ({
 
           {!showHistory && step === 3 && !running && (
             <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={() => setStep(2)}>{t('again')}</Button>
+              {/* The same verb and the same pencil as every past-generation card, because it is
+                  the same action: go back to the form with this recipe in it and change something.
+                  It read "Change something" here and "Reuse" two panels away, on one screen. */}
+              <Button variant="ghost" onClick={() => setStep(2)}>
+                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                {t('modify')}
+              </Button>
               <Button onClick={onClose}>{t('close')}</Button>
             </div>
           )}

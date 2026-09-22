@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,6 +44,10 @@ public class SummarizeNode extends BaseNode {
 
         // Build resolved_params early so every exit path can include it
         Map<String, Object> earlyInputData = new LinkedHashMap<>();
+        // `inputExpression`, NOT `input`: see the sibling collection nodes. The success
+        // path reports the resolved rows under `input`.
+        // `input` keeps the plan's name; the companion key below says which state the row
+        // is in, because the success path puts the resolved ROWS under `input`.
         earlyInputData.put("input", config.input());
         // `aggregation_count` stays snake_case on purpose. The plan has no such
         // key - it has `aggregations` - so the plan-name rule has nothing to say
@@ -61,14 +66,14 @@ public class SummarizeNode extends BaseNode {
         // Input is required
         String inputExpr = config.input();
         if (inputExpr == null || inputExpr.isBlank()) {
-            Map<String, Object> failOutput = Map.of("resolved_params", earlyInputData);
+            Map<String, Object> failOutput = Map.of("resolved_params", ReportedParams.forReport(earlyInputData));
             return NodeExecutionResult.failureWithOutput(nodeId,
                 "Input expression is required. Configure the 'input' field with a reference like {{core:step.output.items}}",
                 failOutput, System.currentTimeMillis() - startTime);
         }
 
         if (templateAdapter == null) {
-            Map<String, Object> failOutput = Map.of("resolved_params", earlyInputData);
+            Map<String, Object> failOutput = Map.of("resolved_params", ReportedParams.forReport(earlyInputData));
             return NodeExecutionResult.failureWithOutput(nodeId, "Template adapter not available",
                 failOutput, System.currentTimeMillis() - startTime);
         }
@@ -129,7 +134,7 @@ public class SummarizeNode extends BaseNode {
             result.put("itemIndex", context.itemIndex());
             result.put("item_id", context.itemId());
             Map<String, Object> inputData = new LinkedHashMap<>();
-            inputData.put("input", items);
+            inputData.put("input", ReportedParams.reportValue(items));
             inputData.put("input_count", items.size());
             inputData.put("aggregations", config.aggregations().stream()
                     .map(a -> Map.of(
@@ -146,7 +151,7 @@ public class SummarizeNode extends BaseNode {
 
         } catch (Exception e) {
             logger.error("Summarize execution failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
-            Map<String, Object> failOutput = Map.of("resolved_params", earlyInputData);
+            Map<String, Object> failOutput = Map.of("resolved_params", ReportedParams.forReport(earlyInputData));
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(),
                 failOutput, System.currentTimeMillis() - startTime);
         }

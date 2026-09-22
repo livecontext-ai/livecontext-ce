@@ -92,12 +92,32 @@ public class InternalCredentialLookupController {
                         c.id(),
                         c.name(),
                         c.integration(),
-                        c.status() != null ? c.status().name() : null))
+                        c.status() != null ? c.status().name() : null,
+                        c.type() != null ? c.type().name() : null,
+                        c.scopes() == null ? List.of() : c.scopes(),
+                        c.isDefault()))
                 .toList());
     }
 
-    /** Identity only. Adding a field that can carry secret material here is a bug. */
-    public record CredentialIdentity(Long id, String name, String integration, String status) {
+    /**
+     * Identity only. Adding a field that can carry secret material here is a bug.
+     *
+     * <p>{@code type}, {@code scopes} and {@code is_default} are identity, not material:
+     * they are what a caller needs to answer "which of these accounts can run THIS
+     * endpoint", which is the question this endpoint exists for. An OAuth scope is a
+     * permission label the user consented to on the provider's own screen, already shown
+     * back to them in the credentials list; it unlocks nothing on its own. Without them a
+     * caller wanting to compare accounts had only {@code /all}, which answers with
+     * decrypted secrets for every row including the ones it is about to reject.
+     */
+    public record CredentialIdentity(
+            Long id,
+            String name,
+            String integration,
+            String status,
+            String type,
+            List<String> scopes,
+            @com.fasterxml.jackson.annotation.JsonProperty("is_default") boolean isDefault) {
     }
 
     private static boolean matchesOwnerOrOrg(Credential c, String userId, String organizationId) {

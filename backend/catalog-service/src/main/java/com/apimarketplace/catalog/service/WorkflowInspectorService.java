@@ -64,6 +64,12 @@ public class WorkflowInspectorService {
      * sibling helper in {@code CredentialTemplateController}. Without this gate, the
      * May 2026 Salesforce-style incident would reproduce on the workflow-builder
      * inspector side (81 OAuth2 integrations silently hidden from node credential pickers).
+     *
+     * <p>The {@link PlatformCredentialStatusDto#holdsOAuthClient()} gate mirrors the sibling
+     * too: an admin-disabled OAuth row stays listed, because the user can still connect with
+     * their own client. Without it the inspector kept hiding the integration even after the
+     * settings page stopped, which is the worse half of the two - the node inspector is where
+     * a user connects the credential a step actually needs.
      */
     private Set<String> fetchDisabledVariantKeys() {
         try {
@@ -73,7 +79,8 @@ public class WorkflowInspectorService {
                 if (Boolean.FALSE.equals(dto.getEnabled())
                         && dto.getName() != null
                         && dto.getVariant() != null
-                        && dto.isConfigured()) {
+                        && dto.isConfigured()
+                        && !dto.holdsOAuthClient()) {
                     keys.add(dto.getName() + "::" + dto.getVariant());
                 }
             }

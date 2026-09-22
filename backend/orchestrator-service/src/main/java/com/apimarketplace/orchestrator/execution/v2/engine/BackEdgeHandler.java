@@ -16,6 +16,7 @@ import com.apimarketplace.orchestrator.services.TemplateEngine;
 import com.apimarketplace.orchestrator.services.cache.RunScopedCache;
 import com.apimarketplace.orchestrator.services.context.StepOutputsWriter;
 import com.apimarketplace.orchestrator.services.epoch.WorkflowEpochService;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.services.streaming.EdgeStatusService;
 import com.apimarketplace.orchestrator.services.streaming.bus.WorkflowEventPublisher;
 import com.apimarketplace.orchestrator.services.streaming.events.LoopEventType;
@@ -459,8 +460,11 @@ public class BackEdgeHandler implements RunScopedCache {
 
             boolean hasNextIterationRoom = state.shouldContinue();
             BackEdgeState nextState = hasNextIterationRoom ? state.incrementIteration() : null;
-            boolean conditionResult = hasNextIterationRoom && evaluateCondition(
-                condition, currentContext, edgeId, loopCoreKey, nextState.iteration(), maxIterations);
+            BackEdgeConditionOutcome conditionOutcome = hasNextIterationRoom
+                ? evaluateConditionDetailed(condition, currentContext, edgeId, loopCoreKey,
+                    nextState.iteration(), maxIterations)
+                : BackEdgeConditionOutcome.notEvaluated("iteration cap reached");
+            boolean conditionResult = conditionOutcome.result();
 
             // state.iteration() = body iter that just completed. Next body would run
             // at iteration+1; admissible iff (iteration + 1) < maxIterations - encoded
@@ -575,7 +579,16 @@ public class BackEdgeHandler implements RunScopedCache {
                 if (loopCoreNode != null) {
                     Map<String, Object> terminationOutput = new LinkedHashMap<>();
                     terminationOutput.put("node_type", "LOOP");
-                    terminationOutput.put("resolved_params", loopResolvedParams(loopCoreNode, terminatedState));
+                    terminationOutput.put("resolved_params",
+                        loopResolvedParams(loopCoreNode, terminatedState, conditionOutcome.resolved()));
+                    // What the condition became on the iteration that ended the loop. It was
+                    // computed every time round and kept only in a DEBUG log. The whole set
+                    // enrichLoopFields reads, not half of it: this is the LAST row a looped
+                    // run leaves, so it is the one the inspector shows, and a partial set
+                    // left its Condition column and its evaluations table blank.
+                    addLoopConditionFields(terminationOutput, loopCoreNode, terminatedState,
+                        conditionOutcome, conditionResult,
+                        BACK_EDGE_OVERFLOW_REASON.equals(reason));
                     terminationOutput.put("loop_node", loopCoreKey);
                     terminationOutput.put("iteration", terminatedState.iteration());
                     terminationOutput.put("maxIterations", terminatedState.maxIterations());
@@ -721,8 +734,11 @@ public class BackEdgeHandler implements RunScopedCache {
 
             boolean hasNextIterationRoom = state.shouldContinue();
             BackEdgeState nextState = hasNextIterationRoom ? state.incrementIteration() : null;
-            boolean conditionResult = hasNextIterationRoom && evaluateCondition(
-                condition, currentContext, edgeId, loopCoreKey, nextState.iteration(), maxIterations);
+            BackEdgeConditionOutcome conditionOutcome = hasNextIterationRoom
+                ? evaluateConditionDetailed(condition, currentContext, edgeId, loopCoreKey,
+                    nextState.iteration(), maxIterations)
+                : BackEdgeConditionOutcome.notEvaluated("iteration cap reached");
+            boolean conditionResult = conditionOutcome.result();
 
             if (conditionResult) {
                 currentContext = currentContext.withGlobalData(stateKey, nextState);
@@ -812,7 +828,16 @@ public class BackEdgeHandler implements RunScopedCache {
                 if (loopCoreNode != null && eventService != null) {
                     Map<String, Object> terminationOutput = new LinkedHashMap<>();
                     terminationOutput.put("node_type", "LOOP");
-                    terminationOutput.put("resolved_params", loopResolvedParams(loopCoreNode, terminatedState));
+                    terminationOutput.put("resolved_params",
+                        loopResolvedParams(loopCoreNode, terminatedState, conditionOutcome.resolved()));
+                    // What the condition became on the iteration that ended the loop. It was
+                    // computed every time round and kept only in a DEBUG log. The whole set
+                    // enrichLoopFields reads, not half of it: this is the LAST row a looped
+                    // run leaves, so it is the one the inspector shows, and a partial set
+                    // left its Condition column and its evaluations table blank.
+                    addLoopConditionFields(terminationOutput, loopCoreNode, terminatedState,
+                        conditionOutcome, conditionResult,
+                        BACK_EDGE_OVERFLOW_REASON.equals(reason));
                     terminationOutput.put("loop_node", loopCoreKey);
                     terminationOutput.put("iteration", terminatedState.iteration());
                     terminationOutput.put("maxIterations", terminatedState.maxIterations());
@@ -1219,6 +1244,22 @@ public class BackEdgeHandler implements RunScopedCache {
     }
 
     /**
+     * What a back-edge condition evaluated to, and what it resolved to on the way.
+     *
+     * <p>The resolved form was computed on every iteration and written only to a DEBUG
+     * log, so the row a terminated loop leaves behind said nothing about the condition
+     * that ended it. "Why did my loop stop at 3" had no evidence anywhere a user looks.
+     *
+     * @param resolved the expression with its references substituted, or a sentence
+     *                 saying why it was not evaluated
+     */
+    record BackEdgeConditionOutcome(boolean result, String resolved) {
+        static BackEdgeConditionOutcome notEvaluated(String why) {
+            return new BackEdgeConditionOutcome(false, "(not evaluated: " + why + ")");
+        }
+    }
+
+    /**
      * Evaluate the loop condition using TemplateEngine.
      *
      * @param condition            expression from the loop Core or the back-edge marker
@@ -1234,9 +1275,20 @@ public class BackEdgeHandler implements RunScopedCache {
             String loopCoreKey,
             Integer prospectiveIteration,
             Integer maxIterations) {
+        return evaluateConditionDetailed(condition, context, edgeId, loopCoreKey,
+                prospectiveIteration, maxIterations).result();
+    }
+
+    private BackEdgeConditionOutcome evaluateConditionDetailed(
+            String condition,
+            ExecutionContext context,
+            String edgeId,
+            String loopCoreKey,
+            Integer prospectiveIteration,
+            Integer maxIterations) {
         // No condition means always continue (until maxIterations)
         if (condition == null || condition.isBlank()) {
-            return true;
+            return new BackEdgeConditionOutcome(true, "(no condition)");
         }
 
         try {
@@ -1271,12 +1323,53 @@ public class BackEdgeHandler implements RunScopedCache {
             var evalResult = templateEngine.evaluateConditionWithDetailsWithMap(condition, evalContext);
             logger.debug("[BackEdge] Condition evaluated: condition={}, resolved={}, result={}",
                 condition, evalResult.resolvedExpression(), evalResult.result());
-            return evalResult.result();
+            return new BackEdgeConditionOutcome(evalResult.result(), evalResult.resolvedExpression());
 
         } catch (Exception e) {
             logger.error("[BackEdge] Condition evaluation failed: condition={}, error={}", condition, e.getMessage());
-            return false;
+            return new BackEdgeConditionOutcome(false, "(evaluation failed: " + e.getMessage() + ")");
         }
+    }
+
+    /**
+     * The condition fields {@code StepDataPersistenceService.enrichLoopFields} reads,
+     * written onto the row a terminated loop leaves behind.
+     *
+     * <p>Keys are the snake_case ones the enrichment reads. {@code maxIterations} is
+     * also on this output in camelCase for the persisted schema, and the two are not
+     * interchangeable: writing only the camelCase one left Max blank in the inspector.
+     */
+    void addLoopConditionFields(Map<String, Object> output,
+                                        ExecutionNode loopCoreNode,
+                                        BackEdgeState terminatedState,
+                                        BackEdgeConditionOutcome outcome,
+                                        boolean conditionResult,
+                                        boolean overflowed) {
+        output.put("condition_resolved", outcome.resolved());
+        output.put("condition_result", conditionResult);
+
+        String condition = null;
+        int maxIterations = terminatedState != null ? terminatedState.maxIterations() : 0;
+        if (loopCoreNode instanceof com.apimarketplace.orchestrator.execution.v2.nodes.LoopNode loopNode) {
+            condition = loopNode.getLoopCondition();
+            maxIterations = loopNode.getMaxIterations();
+        }
+        output.put("loop_condition", condition);
+        output.put("condition_expression", condition);
+        output.put("max_iterations", maxIterations);
+
+        // The SAME port this row reports as selected_path four lines below. On an overflow
+        // the loop hit its cap while its condition still wanted to iterate, which FAILS the
+        // run (max_iterations_reached) and deliberately does NOT re-arm the exit. Naming
+        // "exit" here would tell the reader, on the one row they open to ask why the loop
+        // stopped, that the run took a port it was refused.
+        String port = overflowed ? "failed" : "exit";
+        boolean hasCondition = condition != null && !condition.isBlank();
+        output.put("evaluations", List.of(hasCondition
+            ? com.apimarketplace.orchestrator.execution.v2.nodes.BranchEvaluationReport.evaluated(
+                0, port, condition, outcome.resolved(), conditionResult, true, null, List.of())
+            : com.apimarketplace.orchestrator.execution.v2.nodes.BranchEvaluationReport.fallback(
+                0, port, true)));
     }
 
     /**
@@ -1293,15 +1386,23 @@ public class BackEdgeHandler implements RunScopedCache {
      * runs in. Same key, same meaning, and the honest value for this moment.
      */
     private Map<String, Object> loopResolvedParams(ExecutionNode loopCoreNode,
-                                                   BackEdgeState terminatedState) {
+                                                   BackEdgeState terminatedState,
+                                                   String lastResolvedCondition) {
         Map<String, Object> resolvedParams = new LinkedHashMap<>();
         if (loopCoreNode instanceof com.apimarketplace.orchestrator.execution.v2.nodes.LoopNode loopNode) {
             String condition = loopNode.getLoopCondition();
             resolvedParams.put("loopCondition", condition != null ? condition : "(none)");
             resolvedParams.put("maxIterations", loopNode.getMaxIterations());
+            // The resolved form belongs to the LAST evaluation, the one that ended the
+            // loop, and is reported under its own key rather than replacing the
+            // configured expression: re-resolving now would read a context the loop no
+            // longer runs in, which is why loopCondition deliberately stays configured.
+            if (condition != null && !condition.isBlank() && lastResolvedCondition != null) {
+                resolvedParams.put("lastConditionResolved", lastResolvedCondition);
+            }
         } else if (terminatedState != null) {
             resolvedParams.put("maxIterations", terminatedState.maxIterations());
         }
-        return resolvedParams;
+        return ReportedParams.forReport(resolvedParams);
     }
 }

@@ -33,6 +33,11 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/components/workflow/ShareWorkflowModal', () => ({
   PublishWorkflowModal: () => null,
 }));
+// The version history it mounts asks for the bell's automation rows again after a pin, since
+// pinning is what puts a workflow in them. The real hook reaches for a QueryClient this suite
+// has no provider for; the ask is pinned by the call-site guard in
+// lib/api/orchestrator/__tests__/automationRowMutations.callSites.test.ts.
+vi.mock('@/hooks/useHomeStatus', () => ({ useRefreshHomeStatus: () => () => {} }));
 vi.mock('@/components/LoadingSpinner', () => ({ default: () => <span data-testid="spinner" /> }));
 
 import { WorkflowPanelActions } from '../WorkflowPanelActions';

@@ -26,6 +26,18 @@ describe('ExecutionService.getRunState - coalescer', () => {
     vi.clearAllMocks();
   });
 
+  it('propagates output retrieval errors to logs while preserving legacy null behavior', async () => {
+    mockedGet.mockRejectedValue(new Error('Output unavailable'));
+    await expect(service.getStepOutputObjectAtPath('wf', 'run', 12, 'output', { throwOnError: true })).rejects.toThrow('Output unavailable');
+    await expect(service.getStepOutputObjectAtPath('wf', 'run', 12, 'output')).resolves.toBeNull();
+  });
+
+  it('returns the unmodified output payload in strict mode', async () => {
+    mockedGet.mockResolvedValue({ items: [{ title: 'Result' }] });
+    await expect(service.getStepOutputObjectAtPath('wf', 'run', 12, 'output', { throwOnError: true })).resolves.toEqual({ items: [{ title: 'Result' }] });
+    expect(mockedGet).toHaveBeenCalledWith('/workflows/wf/runs/run/steps/12/output/object', { params: { path: 'output' } });
+  });
+
   it('coalescesConcurrentCallsForSameRunId', async () => {
     let resolveFetch: (v: any) => void = () => {};
     const fetchPromise = new Promise((resolve) => { resolveFetch = resolve; });

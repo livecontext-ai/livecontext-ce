@@ -6,6 +6,7 @@ import { fetchPublicProfile, fetchPublicationsByPublisher } from '@/lib/marketpl
 import PublicationCardSsr from '@/app/marketplace/_components/PublicationCardSsr';
 import { fetchPublicBadges, publicBadgeName } from '@/lib/marketplace/publicBadges';
 import { PublicBadgeShowcase } from '@/components/badges/PublicBadgeShowcase';
+import { VerifiedBadgeIcon } from '@/components/profile/VerifiedBadgeIcon';
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://livecontext.ai';
 
@@ -75,7 +76,10 @@ export default async function PublicProfilePage({
     <LandingShell>
       <div className="mx-auto w-full max-w-5xl px-3 py-6 sm:px-6 md:py-10">
         <header className="mb-8">
-          <h1 className="text-2xl font-semibold text-[var(--text-primary)] md:text-3xl">{name}</h1>
+          <div className="flex min-w-0 items-center gap-2">
+            <h1 className="text-2xl font-semibold text-[var(--text-primary)] md:text-3xl">{name}</h1>
+            <VerifiedBadgeIcon verified={profile.verified} size="lg" />
+          </div>
           <p className="mt-1 text-sm text-[var(--text-muted)]">@{profile.handle}</p>
           {profile.bio && (
             <p className="mt-4 max-w-2xl text-sm text-[var(--text-secondary)]">{profile.bio}</p>
@@ -98,7 +102,14 @@ export default async function PublicProfilePage({
           <div className="grid grid-cols-1 gap-x-5 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
             {publications.map((publication) => (
               // h3: this grid already sits under the "Published apps" h2.
-              <PublicationCardSsr key={publication.id} publication={publication} headingLevel="h3" />
+              // Every card on this page is by the profile owner, so their badge is
+              // already resolved - no per-card lookup.
+              <PublicationCardSsr
+                key={publication.id}
+                publication={publication}
+                headingLevel="h3"
+                publisherVerified={profile.verified}
+              />
             ))}
           </div>
         )}

@@ -35,6 +35,7 @@ import { ResizableNodeWrapper } from './ResizableNodeWrapper';
 import { useBrowserLiveView } from './shared/useBrowserLiveView';
 import { useTranslations } from 'next-intl';
 import { useAgentActivity } from '@/components/agent-fleet/hooks/useAgentActivityStream';
+import { useWorkflowPanelHostSafe } from '@/contexts/WorkflowPanelHostContext';
 
 import { ItemNavigator } from '../inspector/outputs/ItemNavigator';
 import { FileNodePreview } from './FileNodePreview';
@@ -56,7 +57,10 @@ const FLEET_RESOURCE_ICONS: Record<string, { icon: React.ComponentType<{ classNa
   web_search: { icon: Globe, bg: 'bg-blue-50 dark:bg-blue-900/30 text-blue-500 dark:text-blue-400' },
 };
 
-export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
+export function FlowNode({ data, selected, id, previewViewport }: NodeProps<BuilderNodeData> & {
+  /** Offline previews can supply the authored viewport without loading an entity. */
+  previewViewport?: { width: number; height: number };
+}) {
   // Handle sides follow the canvas reading direction. Safe variant: nodes also
   // render on provider-less surfaces (marketplace preview, snapshots).
   const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
@@ -66,6 +70,7 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
   const visuals = getNodeVisual(data.kind);
   const { targetRef: nodeRef, isVisible: showActions, show } = useHoverVisibility<HTMLDivElement>();
   const { isRunMode, isPreviewOnly, isApplicationMode, runId, viewingEpoch, setViewingEpoch, workflowId } = useWorkflowMode();
+  const panelHost = useWorkflowPanelHostSafe();
   const hideHandles = isRunMode || isPreviewOnly;
   const isFleetMode = !!(data.fleetBottomHandles || data.fleetTopHandle);
   // The fleet AGENT node specifically (not chips, and never a workflow-builder node).
@@ -197,8 +202,8 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
   // shape as the capture. Render result first (a run reads its frozen snapshot), entity as
   // fallback; undefined keeps the thumbnail's classic 1280x800 default.
   const interfaceFormatViewport = React.useMemo(
-    () => resolveInterfaceFormat(renderData?.format ?? interfaceDetails?.format) ?? undefined,
-    [renderData?.format, interfaceDetails?.format],
+    () => resolveInterfaceFormat(renderData?.format ?? interfaceDetails?.format) ?? previewViewport,
+    [renderData?.format, interfaceDetails?.format, previewViewport],
   );
 
   // Get render data for run mode
@@ -587,9 +592,21 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
       {/* Fleet edit-mode action cluster - centered ABOVE the node on hover,
           neutral pill style (the workflow builder's delete/duplicate moved into
           the bottom bar; the fleet cluster keeps the top placement).
-          Per-type: agent/model → Edit only; web_search/skill → Delete only; tool /
-          workflow/interface/table → Delete + Edit. Grouping nodes (provider/folder/
-          category/aggregator) and the "All tools" pseudo-chip get no buttons. */}
+          Per-type: agent → Edit + Delete; model → Edit only; web_search/skill →
+          Delete only; tool / workflow/interface/table → Delete + Edit. Grouping nodes
+          (provider/folder/category/aggregator) and the "All tools" pseudo-chip get no
+          buttons.
+
+          The agent node's Delete is NOT the same verb as its neighbours': on every
+          other node it unlinks the resource from the agent, on the agent itself it
+          deletes the agent. Same cluster, opposite blast radius, so that one button
+          gets its own label and a red hover - a neutral trash beside an identical
+          neutral trash is how someone destroys an agent meaning to unhook a tool.
+
+          And it appears only where the canvas says it may: `fleetCanDeleteAgent` is
+          decided by canDeleteAgentNode and injected per node, because a sub-agent on
+          the single-agent canvas is ALSO an `agent-<id>` node and deleting it there
+          would destroy a collaborator the user was trying to detach. */}
       {(data as any)?.fleetEditMode && isFleetMode && (() => {
         const rt = fleetResourceType;
         const isContainer = id.startsWith('provider-') || id.startsWith('folder-')
@@ -601,7 +618,7 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
         const isAllAccessChip = rt === 'tool' && id.endsWith('-tool-all-tools');
         let canEdit = false;
         let canDelete = false;
-        if (isFleetAgentNode) { canEdit = true; }
+        if (isFleetAgentNode) { canEdit = true; canDelete = !!(data as any)?.fleetCanDeleteAgent; }
         else if (isContainer || isAllAccessChip) { /* none */ }
         else if (rt === 'model') { canEdit = true; }
         else if (rt === 'web_search') { canDelete = true; }
@@ -614,11 +631,17 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
         const onFleetEdit = (data as any)?.onFleetEdit as ((id: string) => void) | undefined;
         const onFleetDelete = (data as any)?.onFleetDelete as ((id: string) => void) | undefined;
         // Localized tooltips injected by AgentFleetCanvas (keeps this shared node i18n-agnostic).
-        const labels = (data as any)?.fleetEditLabels as { edit?: string; remove?: string } | undefined;
+        const labels = (data as any)?.fleetEditLabels as { edit?: string; remove?: string; deleteAgent?: string } | undefined;
+        // "Delete <the agent>" vs "remove <this resource> from the agent". Only an
+        // agent node the canvas cleared for deletion reaches the first meaning.
+        const deleteIsDestructive = isFleetAgentNode && canDelete;
         // Neutral button (no red) for the fleet canvas top cluster. Square like
         // every other button hanging off a node, one radius step below them since
         // it is smaller.
         const btnClass = 'flex h-6 w-6 items-center justify-center rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] text-[var(--text-primary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)] transition-colors';
+        // Same geometry, red on hover: the one button in this cluster that destroys
+        // a resource instead of unlinking one.
+        const destructiveBtnClass = 'flex h-6 w-6 items-center justify-center rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] text-[var(--text-primary)] hover:bg-red-600 hover:border-red-600 hover:text-white transition-colors';
         return (
           <div
             className={`absolute top-0 left-1/2 z-20 flex flex-row gap-1 nodrag nopan transition-opacity duration-200 ${showActions ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
@@ -630,7 +653,12 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
               </button>
             )}
             {canDelete && onFleetDelete && (
-              <button onClick={(e) => { e.stopPropagation(); onFleetDelete(id); }} title={labels?.remove} className={btnClass}>
+              <button
+                onClick={(e) => { e.stopPropagation(); onFleetDelete(id); }}
+                title={deleteIsDestructive ? (labels?.deleteAgent || labels?.remove) : labels?.remove}
+                aria-label={deleteIsDestructive ? (labels?.deleteAgent || labels?.remove) : labels?.remove}
+                className={deleteIsDestructive ? destructiveBtnClass : btnClass}
+              >
                 <Trash2 className="h-3 w-3" />
               </button>
             )}
@@ -726,7 +754,7 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
               // Done BEFORE either branch: the new epoch must be visible when it
               // arrives, and a payload trigger's run starts later, from the panel,
               // where nothing would return the canvas to all epochs.
-              selectAllEpochs(boundRunId(workflowId, runId), setViewingEpoch);
+              selectAllEpochs(boundRunId(workflowId, runId, panelHost?.runSurfaceId), setViewingEpoch);
               if (focusPanelTab) {
                 // triggerId names THIS trigger: several triggers can share a
                 // type, and matching on type alone opens the first one's tab.

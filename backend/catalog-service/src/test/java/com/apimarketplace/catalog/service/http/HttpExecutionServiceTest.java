@@ -3735,6 +3735,57 @@ class HttpExecutionServiceTest {
         }
 
         @Test
+        @DisplayName("credential storing one comma-joined blob: passes, the grant really holds it")
+        void preflightWithCommaJoinedStoredScopes_passes() {
+            // auth-service parses the provider's answer at CONNECT time and only learned to
+            // split on a comma in Sep 2026; it never re-parses on refresh. So a credential
+            // connected before that holds ONE element naming every scope, and comparing it
+            // as-is refused a grant that was entirely correct. TikTok and LinkedIn both answer
+            // comma-delimited.
+            ApiEntity api = createTestApi("https://open.tiktokapis.com/v2");
+            api.setPlatformCredentialName("tiktok");
+            ApiToolEntity tool = createTestTool("/post/publish/video/init/");
+            tool.setRequiredScopes(List.of("video.publish"));
+            when(userCredentialService.getCredentialScopes("user-1", "myCred"))
+                    .thenReturn(Optional.of(new com.apimarketplace.credential.client.dto.CredentialScopesDto(
+                            "oauth2", List.of("user.info.basic,video.list,video.upload,video.publish"))));
+
+            assertDoesNotThrow(() -> service.preflightScopeCheck("user-1", "myCred", api, tool));
+        }
+
+        @Test
+        @DisplayName("comma-joined blob that genuinely lacks the scope: still refused")
+        void preflightWithCommaJoinedStoredScopes_missingStillThrows() {
+            ApiEntity api = createTestApi("https://open.tiktokapis.com/v2");
+            api.setPlatformCredentialName("tiktok");
+            ApiToolEntity tool = createTestTool("/post/publish/video/init/");
+            tool.setRequiredScopes(List.of("video.publish"));
+            when(userCredentialService.getCredentialScopes("user-1", "myCred"))
+                    .thenReturn(Optional.of(new com.apimarketplace.credential.client.dto.CredentialScopesDto(
+                            "oauth2", List.of("user.info.basic,video.list,video.upload"))));
+
+            com.apimarketplace.catalog.service.exception.InsufficientScopesException ex =
+                    assertThrows(com.apimarketplace.catalog.service.exception.InsufficientScopesException.class,
+                            () -> service.preflightScopeCheck("user-1", "myCred", api, tool));
+            assertEquals(Set.of("video.publish"), ex.getMissingScopes());
+        }
+
+        @Test
+        @DisplayName("a scope containing a space is matched whole, not split into two")
+        void preflightWithSpaceBearingScope_passes() {
+            // workday.json declares "Tenant Non-Configurable". Splitting the granted side alone
+            // would compare it as two tokens and refuse a credential that holds it.
+            ApiEntity api = createTestApi("https://api.workday.com");
+            ApiToolEntity tool = createTestTool("/workers");
+            tool.setRequiredScopes(List.of("Tenant Non-Configurable"));
+            when(userCredentialService.getCredentialScopes("user-1", "myCred"))
+                    .thenReturn(Optional.of(new com.apimarketplace.credential.client.dto.CredentialScopesDto(
+                            "oauth2", List.of("Tenant Non-Configurable"))));
+
+            assertDoesNotThrow(() -> service.preflightScopeCheck("user-1", "myCred", api, tool));
+        }
+
+        @Test
         @DisplayName("auth-service unreachable (Optional.empty): fails open - caller proceeds")
         void preflightCredentialClientError_failsOpen() {
             ApiEntity api = createTestApi("https://api.example.com");

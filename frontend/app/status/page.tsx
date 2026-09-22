@@ -29,6 +29,7 @@ import {
   statusTokenLabel,
 } from '@/lib/status/format';
 import { IS_CE } from '@/lib/edition/edition';
+import { socialCard } from '@/lib/seo/socialCard';
 
 /**
  * Public status page: what is up right now, what is not, and 90 days of measured
@@ -69,6 +70,7 @@ export const metadata = {
   description:
     'Live availability of the LiveContext platform: current state per component, ongoing incidents and 90 days of measured uptime.',
   alternates: { canonical: '/status' },
+  ...socialCard({ title: 'Status', description: 'Live availability of the LiveContext platform: current state per component, ongoing incidents and 90 days of measured uptime.', path: '/status' }),
   robots: IS_CE ? { index: false, follow: false } : undefined,
 };
 

@@ -47,4 +47,18 @@ public interface CreditDeadLetterHandler {
                                    String provider, String model,
                                    Integer promptTokens, Integer completionTokens,
                                    String errorReason, String organizationId);
+
+    /**
+     * Same, with the key route the consumption was meant to be billed under
+     * ({@code OWN_KEY} / {@code PLATFORM} / {@code null}). The default drops it so a handler
+     * that predates the route keeps working; the HTTP handler forwards it and the replay
+     * then bills an own-key turn its flat fee instead of the token rate.
+     */
+    default void persistFailedConsumption(String tenantId, String sourceType, String sourceId,
+                                          String provider, String model,
+                                          Integer promptTokens, Integer completionTokens,
+                                          String errorReason, String organizationId, String keyRoute) {
+        persistFailedConsumption(tenantId, sourceType, sourceId, provider, model,
+                promptTokens, completionTokens, errorReason, organizationId);
+    }
 }

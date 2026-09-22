@@ -177,6 +177,81 @@ public final class ConceptsHelpProvider {
         return result;
     }
 
+    /**
+     * A map that keeps the order it was written in.
+     *
+     * <p>{@code Map.of} does not: its iteration order is unspecified and varies between JVM runs.
+     * For a reference block an agent reads top to bottom, the order carries meaning (the field a
+     * reader meets first, the trap stated before the remedy), and shuffling it per boot makes the
+     * same help read differently on two installs.
+     */
+    private static Map<String, Object> orderedMap(Object... keysAndValues) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < keysAndValues.length; i += 2) {
+            map.put(String.valueOf(keysAndValues[i]), keysAndValues[i + 1]);
+        }
+        return map;
+    }
+
+    // ==================== NODE POLICY ====================
+
+    public static Map<String, Object> getNodePolicyHelp() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("title", "Execution Policy - How One Node Behaves On Failure");
+        result.put("description",
+            "nodePolicy is a per-node block that says what happens when the node fails: how many "
+                + "times to try again, how long one attempt may take, whether the rest of the "
+                + "workflow continues past the failure, and how long a provider call may spend "
+                + "waiting out a rate-limit refusal. It is set OUTSIDE params, like connect_after "
+                + "and mock, because it is not a parameter of the node's type. A node without a "
+                + "policy behaves exactly as it does today: one attempt, no waiting, and a failure "
+                + "that marks every node after it SKIPPED.");
+
+        result.put("SET_AND_CLEAR", orderedMap(
+            "on_creation", "workflow(action='add_node', type='http_request', label='Fetch Page', connect_after='Start', params={url: '...'}, nodePolicy={retryCount: 2, retryBackoffMs: 5000})",
+            "on_existing", "workflow(action='modify', node='Fetch Page', nodePolicy={retryCount: 2, retryBackoffMs: 5000, timeoutMs: 30000})",
+            "whole_block", "The block is REPLACED, never merged: send every field you want, not only the one you are changing. That is what makes a setting removable.",
+            "clear", "workflow(action='modify', node='Fetch Page', nodePolicy={}) - removes the policy; the node runs with the platform defaults again.",
+            "inspect", "workflow(action='describe', node='Fetch Page') shows the node's current nodePolicy block, and get_plan carries it on the node entry."));
+
+        result.put("FIELDS", orderedMap(
+            "retryCount", "Extra attempts after a failed one. Default 0. Total attempts = retryCount + 1. Each attempt re-executes the node with the same input, so a node with side effects (an email, an API write, a row insert) repeats them, which is exactly why this is opt-in per node and not a platform default.",
+            "retryBackoffMs", "Wait between attempts, in milliseconds. Default 0. It blocks only this node's branch (and, inside a split, only this item), never the sibling branches.",
+            "timeoutMs", "Bound on ONE attempt, in milliseconds. Default 0 = unbounded. A timed-out attempt is an ordinary failed attempt: it composes with retryCount and with continueOnFailure. Best-effort, and worth being honest about: the abandoned work is interrupted, not undone, so anything it already sent stays sent. It bounds the node body only, so a node that waits for a signal (approval, interface, wait timer) returns immediately and its wait is never bounded by this.",
+            "continueOnFailure", "Default false. When every attempt has failed the node is still FAILED, but the workflow keeps going into its successors instead of marking them SKIPPED. The run still ends FAILED or PARTIAL_SUCCESS as it would have. REFUSED on decision, switch and option nodes: a failed branching node selected no port, so continuing would take ALL of them at once.",
+            "executeOnce", "Default false. Inside a split, execute for item 0 only and mark every other item SKIPPED with an executeOnce reason. Outside a split it does nothing (one execution is already the semantic), and it does NOT limit loop iterations, so a node in a loop body still runs every iteration. REFUSED on split, aggregate, merge and loop nodes. If branch routing sends item 0 elsewhere, the node executes for NO item.",
+            "providerRetryMaxWaitSec", "CATALOG TOOL STEPS ONLY. How long ONE provider call may spend waiting out a rate-limit refusal, in SECONDS. Omit it to leave the platform budget in place: a 429 usually carries the delay the provider asked for, and the platform honours it, so a burst limit recovers inside the same node execution. Set 0 to turn that off, which makes the call fail on the first refusal and leaves the pacing to you. It can only TIGHTEN the platform budget (10 seconds by default, and a self-hosted install can change it), never raise it: a larger number is capped at that budget, because the step is waiting inside ONE HTTP call and sleeping past that window would fail the step while the provider call went through and was charged. A per-attempt timeoutMs bounds it too, to half that window, and caps a value you set yourself at the same ceiling, for the same reason. Refused on any other node type, because nothing there would read it."));
+
+        result.put("THE_ONE_TRAP", orderedMap(
+            "why", "Your retry and the platform's retry MULTIPLY. A node set to retryCount=2 (3 attempts) around a call the platform re-sends twice is up to 9 requests to a provider that just asked you to slow down, so an author who was careful ends up hammering it harder than one who was not.",
+            "automatic", "Setting retryCount > 0 already implies providerRetryMaxWaitSec=0: the platform stands down under a node that retries. You do not need to write both.",
+            "manual", "Set providerRetryMaxWaitSec=0 yourself when the pacing lives somewhere the platform cannot see: a loop with a wait node and a back edge, a schedule that spreads calls out, or a sleep inside a code node.",
+            "one_direction", "The setting only ever REDUCES waiting. A number larger than the platform budget (10 seconds by default) is capped at it, so there is no way to ask a step to wait longer than the call it is waiting inside; when a provider's Retry-After is longer than that budget the step fails fast with the provider's own refusal, which you handle with retryCount or a loop.",
+            "timeout_bounds_it_too", "A node with timeoutMs set gets HALF that window as its provider-retry budget, and a value you set yourself is capped at the same ceiling, because the attempt has to pay for the requests as well as the wait. Without that, a 3s timeoutMs around a provider asking for 5s abandoned the attempt while the call went on to succeed and be charged: the run said FAILED and the credit was spent."));
+
+        result.put("WHAT_YOU_SEE", orderedMap(
+            "attempts", "Every failed attempt is reported as it happens, annotated policy_attempt and policy_max_attempts, so a retrying node is visible while it retries. Only the LAST outcome counts as the node's status.",
+            "timeout", "A timed-out attempt is flagged policy_timeout in the node's output and metadata, with a TIMEOUT message.",
+            "provider_retry", "A provider re-send happens INSIDE one tool call, so the node stays RUNNING and emits nothing while it waits. Afterwards workflow(action='get_node_output', ...) reports _provider_retries with the count. Absent means the call was answered first time.",
+            "any_policy_annotates", "A node carrying ANY policy, even one whose only field is providerRetryMaxWaitSec, reports policy_attempt and policy_max_attempts on its result (1 and 1 when nothing was retried). A node with no policy block at all does not. Nothing about the execution changes; the fields are simply there to read.",
+            "billing", "One node execution costs ONE credit however many attempts it took. An agent node still pays its LLM tokens per attempt that reached the model, and a provider re-send spends your own quota with that provider."));
+
+        result.put("NOT_ON", orderedMap(
+            "triggers_and_notes", "A trigger starts the run and a note annotates the canvas, so neither is an executed step and neither takes a policy. Put it on the node that does the work.",
+            "continueOnFailure", "decision, switch, option.",
+            "executeOnce", "split, aggregate, merge, loop.",
+            "providerRetryMaxWaitSec", "Anything that is not a catalog tool step: AI nodes, core nodes (http_request included), table nodes, interface nodes. Each is refused with the reason, so you find out on the call rather than on the run."));
+
+        result.put("TYPICAL_FLOW", List.of(
+            "1. A step calls a flaky provider: workflow(action='modify', node='Fetch Page', nodePolicy={retryCount: 2, retryBackoffMs: 3000, timeoutMs: 30000}).",
+            "2. A step must not stop the run: add continueOnFailure=true and read the node's status afterwards instead of assuming it succeeded.",
+            "3. The workflow already paces itself in a loop: workflow(action='modify', node='Post Update', nodePolicy={providerRetryMaxWaitSec: 0}) so the platform adds no requests underneath you (that node must be the tool step itself, not the loop).",
+            "4. One setup call inside a split: put executeOnce=true on it, and the other items are SKIPPED with that reason rather than repeating it.",
+            "5. Verify with workflow(action='execute', ...) then workflow(action='get_node_output', ...): _provider_retries and policy_attempt tell you what actually happened."));
+
+        return result;
+    }
+
     // ==================== VARIABLES ====================
 
     public static Map<String, Object> getVariablesHelp() {

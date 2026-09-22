@@ -12,9 +12,22 @@ import java.math.BigDecimal;
  * Tenant-level budget guard.
  *
  * <p>Wraps {@link CreditConsumptionClient} to enforce the tenant/subscription credit
- * balance before each iteration. Uses {@code fetchBalance()} (cached client-side) plus
- * a local cost projection to refuse iterations that would push the tenant into
- * negative balance.</p>
+ * balance before each iteration. Uses {@code fetchLlmSpendableBalance()} (cached
+ * client-side) plus a local cost projection to refuse iterations that would push the
+ * tenant into negative balance.</p>
+ *
+ * <p><b>Why the SPENDABLE balance and not {@code fetchBalance()} (V494).</b> A FREE
+ * account holds a second pot, the AI allowance, which only LLM work may draw on. This
+ * guard sits on exactly that path, so the allowance is part of the budget here: asking
+ * for the plain balance would stop a free agent at zero while the pot funding it was
+ * still full. The distinction is not cosmetic in the other direction either, which is
+ * why the workflow budget and the image gate deliberately keep {@code fetchBalance()}:
+ * quoting the allowance to them would advertise money they can never spend.</p>
+ *
+ * <p>The provider and model are passed with it, because the allowance only funds the
+ * models an admin opened to the free tier. Without them the guard would quote a pot no
+ * debit on THIS model can draw, and budget an agent loop against money it cannot spend -
+ * the same error as withholding it, in the other direction.</p>
  *
  * <p>Tenant guard is intended to be the <em>first</em> guard in the chain because it
  * dominates: when the macro budget is gone, the agent budget is moot.</p>
@@ -96,7 +109,8 @@ public final class TenantBudgetGuard implements PreIterationGuard {
             ? BALANCE_REFRESH_EVERY_N_ITERATIONS_ZERO_COST
             : BALANCE_REFRESH_EVERY_N_ITERATIONS;
         if (cachedBalance == null || iterationsSinceFetch >= refreshInterval) {
-            cachedBalance = creditClient.fetchBalance(ctx.tenantId());
+            cachedBalance = creditClient.fetchLlmSpendableBalance(
+                    ctx.tenantId(), ctx.provider(), ctx.model());
             iterationsSinceFetch = 0;
         } else {
             iterationsSinceFetch++;

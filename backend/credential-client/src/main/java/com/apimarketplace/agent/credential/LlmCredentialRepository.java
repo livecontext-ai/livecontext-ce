@@ -116,29 +116,9 @@ public class LlmCredentialRepository {
         //        platform-managed routing, e.g. for managed billing)
         //    The branching lives ONLY here so the caller's flow is uniform.
         if (userId != null && !userId.isBlank()) {
-            try {
-                Optional<CredentialSummaryDto> userCred =
-                        credentialClient.getDefaultCredential(userId, integrationName);
-                if (userCred.isPresent()) {
-                    Map<String, Object> data = userCred.get().getCredentialData();
-                    if (isProxyMode(data)) {
-                        log.debug("User cred for {}={} is proxy-mode - falling through to platform",
-                                userId, integrationName);
-                    } else {
-                        Optional<String> userKey = extractApiKey(data);
-                        if (userKey.isPresent()) {
-                            return userKey;
-                        }
-                        log.debug("User cred for {}={} has no_proxy mode but api_key blank/missing - falling through",
-                                userId, integrationName);
-                    }
-                }
-            } catch (Exception e) {
-                // Best-effort: a credential-service failure on the user lookup
-                // falls through to platform - strictly more conservative than a
-                // hard failure that breaks the LLM call altogether.
-                log.warn("Failed to resolve user credential for user={}, integration={}: {}",
-                        userId, integrationName, e.getMessage());
+            Optional<String> userKey = resolveUserKey(userId, integrationName);
+            if (userKey.isPresent()) {
+                return userKey;
             }
         }
 
@@ -147,6 +127,66 @@ public class LlmCredentialRepository {
             return credentialClient.getPlatformCredentialForIntegration(integrationName);
         } catch (Exception e) {
             log.error("Failed to get platform API key for provider {}: {}", providerName, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Whether {@code userId} holds a saved credential that would actually serve a call
+     * to {@code providerName}: a default {@code llm_<provider>} credential in
+     * {@code no_proxy} mode with a non-blank {@code api_key}. This is the SAME question
+     * step 1 of {@link #findApiKeyByProviderName(String, String)} answers, asked
+     * without returning the secret, so the per-execution key-route pin and the
+     * per-call key resolution cannot disagree on what counts as "the user's key".
+     * A lookup failure answers false (the route falls to the platform key).
+     */
+    public boolean hasUsableUserKey(String userId, String providerName) {
+        return findUserApiKeyByProviderName(userId, providerName).isPresent();
+    }
+
+    /**
+     * The user's OWN saved key for {@code providerName}, and ONLY that: no platform
+     * fallback. Empty when the user has no default credential, opted into {@code proxy}
+     * mode, saved a blank key, or the lookup failed. This is what an {@code OWN_KEY}-pinned
+     * call resolves through, so that such a call can never silently run on the platform key.
+     */
+    public Optional<String> findUserApiKeyByProviderName(String userId, String providerName) {
+        String integrationName = toIntegrationName(providerName);
+        if (integrationName == null || userId == null || userId.isBlank()) {
+            return Optional.empty();
+        }
+        return resolveUserKey(userId, integrationName);
+    }
+
+    /**
+     * Step 1 of the resolution chain, the only place that reads a user's saved LLM
+     * credential: present iff the default credential exists, is not {@code proxy}
+     * mode, and carries a non-blank {@code api_key}. Best-effort: a credential-service
+     * failure answers empty so the caller falls through to the platform key, strictly
+     * more conservative than a hard failure that breaks the LLM call altogether.
+     */
+    private Optional<String> resolveUserKey(String userId, String integrationName) {
+        try {
+            Optional<CredentialSummaryDto> userCred =
+                    credentialClient.getDefaultCredential(userId, integrationName);
+            if (userCred.isEmpty()) {
+                return Optional.empty();
+            }
+            Map<String, Object> data = userCred.get().getCredentialData();
+            if (isProxyMode(data)) {
+                log.debug("User cred for {}={} is proxy-mode - falling through to platform",
+                        userId, integrationName);
+                return Optional.empty();
+            }
+            Optional<String> userKey = extractApiKey(data);
+            if (userKey.isEmpty()) {
+                log.debug("User cred for {}={} has no_proxy mode but api_key blank/missing - falling through",
+                        userId, integrationName);
+            }
+            return userKey;
+        } catch (Exception e) {
+            log.warn("Failed to resolve user credential for user={}, integration={}: {}",
+                    userId, integrationName, e.getMessage());
             return Optional.empty();
         }
     }
@@ -219,6 +259,18 @@ public class LlmCredentialRepository {
         }
         String suffix = ":" + providerName;
         hasDbKeyCache.keySet().removeIf(k -> k.endsWith(suffix));
+    }
+
+    /**
+     * Clear ONE user's cached hasDbKey slot for a provider. Called after that user saves,
+     * removes or switches their own key, so their catalog reflects it without waiting out
+     * the TTL and without touching any other user's slot.
+     */
+    public void clearHasDbKeyCache(String userId, String providerName) {
+        if (userId == null || providerName == null) {
+            return;
+        }
+        hasDbKeyCache.remove(cacheKeyFor(userId, providerName));
     }
 
     private static String cacheKeyFor(String userId, String providerName) {

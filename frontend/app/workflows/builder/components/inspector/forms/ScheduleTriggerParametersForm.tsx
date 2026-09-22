@@ -15,11 +15,13 @@ import { Button } from '@/components/ui/button';
 import type { BuilderNodeData } from '../../../types';
 import { useTranslations } from 'next-intl';
 import { OptionalSection } from '../OptionalSection';
+import { TIMEZONE_PRESETS, localTimezone, timezoneOptionsFor } from '@/lib/schedule/timezoneOptions';
 import { usePathname } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
 import { usePopoverPosition } from '../../../hooks/ui/usePopoverPosition';
 import { scheduleSettingsService } from '@/lib/api/orchestrator';
+import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import type { ScheduleOverview, ScheduleConfig } from '@/lib/api/orchestrator';
 import { buildStandaloneSourceNodeId } from '../../../utils/standaloneSourceNodeId';
 import { findAdoptableSchedule } from '../../../utils/findAdoptableSchedule';
@@ -118,6 +120,10 @@ export function ScheduleTriggerParametersForm({
 }: ScheduleTriggerParametersFormProps) {
   const t = useTranslations('workflowBuilder.inspector.scheduleTrigger');
   const pathname = usePathname();
+  // Creating, editing or deleting a trigger changes what the notification bell lists as armed
+  // and when its rows say they next fire. That payload is invalidated by nothing, so it has to
+  // be asked for here, as every other producer of a row does.
+  const refreshAutomations = useRefreshHomeStatus();
 
   // Extract workflowId from URL (handles /workflow/[id] and /workflows/[id])
   const workflowId = React.useMemo(() => {
@@ -236,6 +242,7 @@ export function ScheduleTriggerParametersForm({
       sourceNodeId,
     })
       .then((schedule) => {
+        refreshAutomations();
         pendingOrCreatedSchedules.set(nodeDataId, schedule.id);
         setAllSchedules((prev) => [schedule, ...prev]);
         if (scheduleConfig) {
@@ -344,9 +351,12 @@ export function ScheduleTriggerParametersForm({
     syncTimeoutRef.current = setTimeout(() => {
       scheduleSettingsService.update(standaloneScheduleId, {
         cron, timezone, maxExecutions: maxExec ?? undefined,
+      }).then(() => {
+        // The cron that just changed is the countdown the bell prints.
+        refreshAutomations();
       }).catch(() => { /* silent */ });
     }, 1000);
-  }, [standaloneScheduleId, isRunMode]);
+  }, [standaloneScheduleId, isRunMode, refreshAutomations]);
 
   // ---------------------------------------------------------------------------
   // Update helpers - single setData() path keeps state shape stable.
@@ -616,21 +626,19 @@ export function ScheduleTriggerParametersForm({
               <SelectValue placeholder={t('selectTimezone')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="UTC">UTC</SelectItem>
-              <SelectItem value="Europe/Paris">Europe/Paris</SelectItem>
-              <SelectItem value="Europe/London">Europe/London</SelectItem>
-              <SelectItem value="America/New_York">America/New_York</SelectItem>
-              <SelectItem value="America/Los_Angeles">America/Los_Angeles</SelectItem>
-              <SelectItem value="Asia/Tokyo">Asia/Tokyo</SelectItem>
-              <SelectItem value="Asia/Shanghai">Asia/Shanghai</SelectItem>
+              {/* Always includes the zone this trigger is ACTUALLY in, which is not always
+                  one of the seven: a workflow created from the agenda's empty slot carries
+                  the calendar's display zone, and a Select whose value matches no item
+                  renders an empty trigger over a schedule that has one. */}
               {(() => {
-                const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
-                const presetZones = new Set([
-                  'UTC', 'Europe/Paris', 'Europe/London', 'America/New_York',
-                  'America/Los_Angeles', 'Asia/Tokyo', 'Asia/Shanghai',
-                ]);
-                if (presetZones.has(local)) return null;
-                return <SelectItem value={local}>{local} ({t('localTimezone')})</SelectItem>;
+                const local = localTimezone();
+                return timezoneOptionsFor(scheduleData.timezone).map((zone) => (
+                  <SelectItem key={zone} value={zone}>
+                    {zone === local && !TIMEZONE_PRESETS.includes(zone)
+                      ? `${zone} (${t('localTimezone')})`
+                      : zone}
+                  </SelectItem>
+                ));
               })()}
             </SelectContent>
           </Select>

@@ -322,6 +322,66 @@ export async function embeddedLogin(email: string, password: string): Promise<{ 
 }
 
 /**
+ * Asks for a password reset link.
+ *
+ * <p>Deliberately reports success for a NON-EXISTENT address too, because the
+ * backend answers identically on purpose: any difference here would turn the
+ * form into an account enumeration oracle. So this helper cannot tell the caller
+ * whether a mail was actually sent, and the page must not pretend otherwise.
+ *
+ * <p>There is no "this install has no mail server" answer to surface, and there
+ * cannot be: the backend answers 200 for every outcome, because a delivery
+ * failure is only ever observable for an address that HAS an account. An error
+ * from here therefore means the request itself failed (offline, proxy, 500), not
+ * that the address was rejected.
+ */
+export async function embeddedForgotPassword(email: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/proxy/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return { success: false, error: err.message || err.error || 'Request failed' };
+    }
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message || 'Network error' };
+  }
+}
+
+/**
+ * Redeems a reset token and sets the new password.
+ *
+ * <p>No tokens are saved on success: the backend has just revoked every refresh
+ * token for that user, which is the point of a reset. The caller sends the
+ * person to the login page to authenticate with the new password.
+ */
+export async function embeddedResetPassword(
+  token: string,
+  newPassword: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/proxy/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, newPassword }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return { success: false, error: err.message || err.error || 'Reset failed' };
+    }
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message || 'Network error' };
+  }
+}
+
+/**
  * Register helper - calls backend and saves tokens.
  */
 export async function embeddedRegister(

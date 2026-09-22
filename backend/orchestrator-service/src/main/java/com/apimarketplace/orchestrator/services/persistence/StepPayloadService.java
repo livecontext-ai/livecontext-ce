@@ -477,6 +477,11 @@ public class StepPayloadService {
                     .isMocked(outputClean);
             Object mockSource = outputClean.get(
                     com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.MOCK_SOURCE);
+            // Captured before the cleanup that would drop it, and re-injected below. The platform
+            // waits out a provider's rate-limit refusal INSIDE one tool call, so the node stays
+            // RUNNING and emits nothing: without this, a step that silently took ten seconds
+            // longer is indistinguishable from a slow provider.
+            int providerRetries = readProviderRetries(outputClean);
 
             // Transform output to expected DB schema format BEFORE removing redundant fields.
             // Schema mappers select exactly the fields they need from raw output,
@@ -504,6 +509,10 @@ public class StepPayloadService {
                             com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.MOCK_SOURCE,
                             mockSource);
                 }
+            }
+
+            if (providerRetries > 0) {
+                outputClean.put("_provider_retries", providerRetries);
             }
 
             // Inject standard execution envelope fields
@@ -755,5 +764,25 @@ public class StepPayloadService {
         } catch (IllegalArgumentException e) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * How many times the provider call behind this step was re-sent, read from the catalog's own
+     * response metadata ({@code output.metadata.providerRetries}).
+     *
+     * <p>Absent for every step that was not re-sent, and for every node type that is not a catalog
+     * call, so nothing changes for them.
+     */
+    @SuppressWarnings("unchecked")
+    private int readProviderRetries(Map<String, Object> output) {
+        if (output == null) {
+            return 0;
+        }
+        Object metadata = output.get("metadata");
+        if (!(metadata instanceof Map<?, ?> map)) {
+            return 0;
+        }
+        Object retries = ((Map<String, Object>) map).get("providerRetries");
+        return retries instanceof Number n ? n.intValue() : 0;
     }
 }

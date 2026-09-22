@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.apimarketplace</groupId>
+        <artifactId>apimarketplace-parent</artifactId>
+        <version>0.1.6</version>
+    </parent>
+
+    <artifactId>test-support</artifactId>
+    <name>Test Support</name>
+    <description>Helpers shared by the test trees of several modules. Consumed with scope=test only.</description>
+    <packaging>jar</packaging>
+
+    <!--
+      Why a module rather than a test-jar: no module in this repo produces or consumes a
+      test-jar, so introducing that machinery for one helper would be a new build pattern to
+      learn and maintain. A plain jar that every consumer declares with <scope>test</scope>
+      needs no plugin configuration and no install-order surprises.
+
+      Why not common-lib's main sources: this code would then ship inside every production
+      jar. It is test scaffolding and belongs nowhere near a running service.
+
+      Keep the dependency list minimal. Anything added here lands on the test classpath of
+      every consumer and can mask a missing declaration in the consumer's own pom.
+    -->
+    <dependencies>
+        <!-- Assumptions.abort(), for the local-dev branch of the scratch-database gate. -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+        </dependency>
+
+        <!-- This module's OWN tests. The helper it ships decides whether a SQL test runs at all,
+             so it is exactly the kind of code that must not be trusted by inspection: turning its
+             CI branch back into a silent skip would disarm every consumer at once, with nothing
+             anywhere turning red. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

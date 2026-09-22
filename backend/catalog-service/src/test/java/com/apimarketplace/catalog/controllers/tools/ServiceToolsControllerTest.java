@@ -224,4 +224,28 @@ class ServiceToolsControllerTest {
             assertThat(catalog.lastToolName).isNull();
         }
     }
+
+    @Test
+    @DisplayName("a body-supplied orgRole never reaches the execution context")
+    void bodyOrgRoleIsIgnored() {
+        // The body was a second channel for the privilege axis on a gateway-routed endpoint. The
+        // gateway strips the caller's own identity HEADERS but not the body, so a user whose
+        // gateway resolved no active org could name a workspace and assert OWNER in it. Every
+        // internal caller sends the role as a header from the same source it filled the body with,
+        // so nothing legitimate needs the body read. orgId is still accepted from the body, and is
+        // asserted here so the two are not conflated by a later reader.
+        StubProvider catalog = new StubProvider("catalog", ToolCategory.GENERATION);
+        ServiceToolsController controller = new ServiceToolsController(List.of(catalog));
+
+        controller.executeTool(requestFor("tenant-1"), Map.of(
+                "tool", "catalog",
+                "parameters", Map.of("action", "search"),
+                "orgId", "victim-org",
+                "orgRole", "OWNER"));
+
+        assertThat(catalog.lastContext.orgRole())
+                .as("a body-supplied role must never reach the execution context")
+                .isNull();
+        assertThat(catalog.lastContext.orgId()).isEqualTo("victim-org");
+    }
 }

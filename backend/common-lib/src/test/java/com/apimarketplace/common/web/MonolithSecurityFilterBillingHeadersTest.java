@@ -45,15 +45,19 @@ class MonolithSecurityFilterBillingHeadersTest {
         return (ServletRequest req, ServletResponse res) -> captured.set(req);
     }
 
+    /**
+     * Every header of the set, forged. DERIVED from {@link BillingContextHeaders#ALL} rather than
+     * listed: the list was hardcoded at six while the set grew to eight, so the assertion that
+     * loops over the set read null for the two newcomers because nothing had SET them, not
+     * because the filter stripped them. A fixture that does not track the set turns the guard
+     * into a formality.
+     */
     private static MockHttpServletRequest withBillingHeaders(String remoteAddr) {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", EXECUTE_PATH);
         request.setRemoteAddr(remoteAddr);
-        request.addHeader("X-Lc-Generation-Model", "a-cheap-model");
-        request.addHeader("X-Lc-Generation-Quantity", "0.000001");
-        request.addHeader("X-Lc-Generation-Unit", "call");
-        request.addHeader("X-Lc-Billing-Scope-Kind", "RUN");
-        request.addHeader("X-Lc-Billing-Scope-Id", "someone-elses-run");
-        request.addHeader("X-Lc-Billing-Step-Id", "step-1");
+        for (String header : BillingContextHeaders.ALL) {
+            request.addHeader(header, "forged-" + header);
+        }
         return request;
     }
 
@@ -105,9 +109,14 @@ class MonolithSecurityFilterBillingHeadersTest {
 
         HttpServletRequest seen = (HttpServletRequest) captured.get();
         assertThat(seen).isNotNull();
-        assertThat(seen.getHeader("X-Lc-Generation-Model")).isEqualTo("a-cheap-model");
-        assertThat(seen.getHeader("X-Lc-Generation-Quantity")).isEqualTo("0.000001");
-        assertThat(seen.getHeader("X-Lc-Generation-Unit")).isEqualTo("call");
+        // Every header of the set survives the loopback, derived rather than listed for the same
+        // reason the fixture is: a hardcoded subset here would stop covering the set as it grows,
+        // and this is the assertion that proves the CE self-call is not collateral damage.
+        for (String header : BillingContextHeaders.ALL) {
+            assertThat(seen.getHeader(header))
+                .as("%s must survive an in-process loopback call", header)
+                .isEqualTo("forged-" + header);
+        }
     }
 
     @Test
@@ -122,6 +131,13 @@ class MonolithSecurityFilterBillingHeadersTest {
                         "X-Lc-Billing-Step-Id",
                         "X-Lc-Generation-Model",
                         "X-Lc-Generation-Quantity",
-                        "X-Lc-Generation-Unit");
+                        "X-Lc-Generation-Unit",
+                        "X-Lc-Generation-Multiplier",
+                        // Attribution, added 2026-09-16: CatalogV1Controller read these two and
+                        // neither edge stripped them, so a client could attribute its own API
+                        // calls to someone else's workflow. The sweep in the gateway's
+                        // BillingContextHeadersTest had been failing on exactly this.
+                        "X-Lc-Workflow-Id",
+                        "X-Lc-Node-Id");
     }
 }

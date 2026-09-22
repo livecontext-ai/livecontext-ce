@@ -162,6 +162,12 @@ class MemoryInjectionCallsiteInvariantTest {
             // changes a routing decision and is paid for on every call.
             "ClassifyService.java",
             "GuardrailService.java",
+            // The bare completion behind COLD-summary compaction, served by a CLI in
+            // restricted mode when a link sends it there. Its system prompt is the
+            // SUMMARISER's (conversation-service builds it), not an agent's: memory
+            // here would be summarised into the envelope and then recalled as if it
+            // had been said in the chat. It also carries no agent id to load it for.
+            "JsonCompletionService.java",
             // Builds a prompt for an EXTERNAL CLI session. The only consumer of that
             // response is the MCP stdio server (mcp/agent-cli-server.mjs), and it reads
             // exactly two fields from it: sessionId and availableTools. systemPrompt is

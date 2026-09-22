@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { organizationApi } from '@/lib/api/organization-api';
+import { loadWorkspaceMembers } from '@/lib/api/workspaceMembers';
 import { useCurrentOrg } from '@/lib/stores/current-org-store';
 import { useAuth } from '@/lib/providers/smart-providers';
 import type { TaskPerson } from '@/lib/api/orchestrator/task.types';
@@ -9,11 +9,15 @@ import type { TaskPerson } from '@/lib/api/orchestrator/task.types';
 /**
  * Teammates assignable to a task (Jira-style human assignee / reviewer).
  *
- * Source of truth is the active workspace's member list (`organizationApi
- * .getOrganization(currentOrgId).members`), which always includes the current
- * user - flagged `isSelf` (matched by email) and sorted first so the picker can
+ * Source of truth is the active workspace's member roster, which always includes the
+ * current user - flagged `isSelf` (matched by email) and sorted first so the picker can
  * surface "(You)" for self-assignment. Returns `[]` until an active workspace is
  * resolved (`currentOrgId` null pre-hydration); the picker then shows agents only.
+ *
+ * The roster comes from the shared `loadWorkspaceMembers` cache rather than a private
+ * `getOrganization` call, so a page showing both this picker and resource attribution
+ * fetches the members ONCE. What is local to this hook is the shape, not the fetch:
+ * `isSelf` and the self-first ordering are a picker concern and stay here.
  */
 export function useTaskPeople(): TaskPerson[] {
   const { currentOrgId } = useCurrentOrg();
@@ -25,15 +29,18 @@ export function useTaskPeople(): TaskPerson[] {
     if (!currentOrgId) { setPeople([]); return; }
     let cancelled = false;
 
-    organizationApi.getOrganization(currentOrgId)
-      .then((org) => {
+    loadWorkspaceMembers(currentOrgId)
+      .then((roster) => {
         if (cancelled) return;
-        const members = Array.isArray(org?.members) ? org.members : [];
-        const mapped: TaskPerson[] = members.map((m) => ({
-          userId: String(m.userId),
-          displayName: m.displayName || m.email || `User ${m.userId}`,
-          avatarUrl: m.avatarUrl ?? null,
-          email: m.email ?? null,
+        if (!roster) { setPeople([]); return; }
+        const mapped: TaskPerson[] = Array.from(roster.values()).map((m) => ({
+          userId: m.userId,
+          // The shared roster falls back to the bare id when a member has neither name nor
+          // email; a picker row reading "42" is a worse label than "User 42", so the picker
+          // keeps its own wording for that case.
+          displayName: m.displayName === m.userId ? `User ${m.userId}` : m.displayName,
+          avatarUrl: m.avatarUrl,
+          email: m.email,
           isSelf: !!myEmail && (m.email || '').toLowerCase() === myEmail,
         }));
         // Self first, then alphabetical by display name.

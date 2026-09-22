@@ -4,6 +4,7 @@ import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.catalog.service.generation.GenerationAssetResolver;
+import com.apimarketplace.catalog.service.generation.GenerationProvenanceRecorder;
 import com.apimarketplace.catalog.service.generation.GenerationInputResolver;
 import com.apimarketplace.catalog.service.generation.GenerationLimits;
 import com.apimarketplace.catalog.service.generation.DynamicOptionsResolver;
@@ -31,6 +32,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -58,6 +60,7 @@ class GenerationToolTest {
     private StorageClient storage;
     private com.apimarketplace.catalog.service.generation.GenerationProvenanceRecorder provenanceRecorder;
     private GenerationToolsProvider provider;
+    private GenerationModule module;
 
     private static GenerationSpec spec(String json) {
         try {
@@ -80,6 +83,42 @@ class GenerationToolTest {
               }]
             }
             """);
+
+    /**
+     * A model whose PRICE moves with a choice that is not its size.
+     *
+     * <p>Ten seconds at 1080p and ten seconds at 720p are the same ten seconds and not the same
+     * amount of money. The factor is the only thing that expresses that, and it travels beside the
+     * size rather than inside it, so the run still reports the duration that was produced.
+     */
+    private static final GenerationSpec MODULATED_SPEC = spec("""
+            {
+              "kind": "video", "modelParam": "model", "assetPath": "content.video_url",
+              "paramMap": {
+                "prompt": "content[0].text", "duration_seconds": "duration",
+                "resolution": "resolution"
+              },
+              "constants": { "content[0].type": "text" },
+              "models": [{
+                "id": "vid-tiered", "upstream": "vendor-tiered", "label": "Vid Tiered",
+                "capabilities": ["prompt", "duration_seconds", "resolution"],
+                "required": ["resolution"],
+                "constraints": {
+                  "duration_seconds": { "allowed": [5, 10] },
+                  "resolution": { "allowed": ["720p", "1080p"] }
+                },
+                "price": {
+                  "unit": "second", "unitCredits": 30,
+                  "modifiers": [
+                    { "param": "resolution", "multiply": { "720p": 1, "1080p": 2 } }
+                  ]
+                }
+              }]
+            }
+            """);
+
+    private static final GenerationRegistry.GenerationModel MODULATED =
+            model(MODULATED_SPEC, "vid-tiered");
 
     private static final GenerationSpec VOICE_SPEC = spec("""
             {
@@ -291,11 +330,15 @@ class GenerationToolTest {
         // dispatch, and a mock of the thing under test would prove nothing.
         DynamicOptionsResolver optionsResolver = mock(DynamicOptionsResolver.class);
         when(optionsResolver.unifiedDynamicParameters(any())).thenReturn(java.util.Set.of());
-        provider = new GenerationToolsProvider(new GenerationModule(registry, executeModule, assetResolver,
+        // Kept in a field so the storage pre-check suite can wire a StorageClient onto the very
+        // module the provider dispatches to (it is an optional field-injected dependency, null
+        // here, which is exactly the "no pre-check" behaviour every other test expects).
+        module = new GenerationModule(registry, executeModule, assetResolver,
                 new com.apimarketplace.catalog.service.ResponseShaper(),
                 new GenerationInputResolver(storage, 20_971_520L), optionsResolver,
                 mock(com.apimarketplace.catalog.service.generation.PlatformSalesResolver.class), interfaceClient,
-                provenanceRecorder));
+                provenanceRecorder);
+        provider = new GenerationToolsProvider(module);
 
         when(registry.list(null)).thenReturn(List.of(VIDEO, VOICE));
         when(registry.list("video")).thenReturn(List.of(VIDEO));
@@ -385,6 +428,34 @@ class GenerationToolTest {
             assertThat(help.get("concepts").toString())
                     .contains("files(action='get')")
                     .contains("download_file");
+        }
+
+        @Test
+        @DisplayName("the model listing explains what a generation costs to READ BACK, not only "
+                + "what it will cost to run")
+        void modelsExplainTheChargeItReports() {
+            // The listing already explains the price model. What it did not say is that the answer
+            // reports the amount actually taken, and that a missing one means the platform charged
+            // nothing - the reading an agent needs before it totals a set of generations.
+            Map<String, Object> models = data(call("generation", params("action", "models")));
+
+            assertThat(String.valueOf(models.get("cost_note")))
+                    .contains("billed_credits")
+                    .contains("ABSENT MEANS NOT CHARGED BY THE PLATFORM");
+        }
+
+        @Test
+        @DisplayName("what create RETURNS names every field it returns, including what it cost")
+        void theReturnsLineNamesTheCharge() {
+            // The one line an agent reads to know the shape it gets back. A field the tool returns
+            // and this line omits is a field nobody reads: the payload is not explored, it is
+            // consumed by whatever the description said would be in it.
+            Map<String, Object> help = data(call("generation", params("action", "help")));
+            String create = ((Map<?, ?>) help.get("actions")).get("create").toString();
+
+            assertThat(create).contains("billed_credits");
+            // And the rule that stops it being summed as a zero.
+            assertThat(create).contains("ABSENT MEANS NOT CHARGED BY THE PLATFORM");
         }
     }
 
@@ -609,11 +680,23 @@ class GenerationToolTest {
     class RecordsTheRecipe {
 
         private ToolExecutionResult generate() {
+            return generate(Map.of("ok", true));
+        }
+
+        /** The execution's answer, whose {@code metadata} is where the charge and the payer travel. */
+        private ToolExecutionResult generate(Map<String, Object> payload) {
             when(executeModule.executeGeneration(any(), any(), any()))
-                    .thenReturn(Optional.of(ToolExecutionResult.success(Map.of("ok", true))));
+                    .thenReturn(Optional.of(ToolExecutionResult.success(payload)));
             return provider.execute("generation", params(
                     "action", "create", "model", "vid-fast", "prompt", "a cat", "duration_seconds", 5),
                     chatContext());
+        }
+
+        private GenerationProvenanceRecorder.Recipe capturedRecipe() {
+            ArgumentCaptor<GenerationProvenanceRecorder.Recipe> recipe =
+                    ArgumentCaptor.forClass(GenerationProvenanceRecorder.Recipe.class);
+            verify(provenanceRecorder).record(any(), recipe.capture(), any(), any());
+            return recipe.getValue();
         }
 
         @Test
@@ -634,6 +717,85 @@ class GenerationToolTest {
                     // The size the run was billed on has to come back on a replay, or the variant
                     // costs a different amount than the asset it varies.
                     .containsEntry("duration_seconds", 5);
+        }
+
+        @Test
+        @DisplayName("records what the platform charged, read from the execution rather than "
+                + "recomputed from today's published rate")
+        void recordsWhatTheExecutionCharged() {
+            // The seam between the two halves of this feature: the execution reports the amount its
+            // reservation committed, and the recipe is where that amount survives. Replacing this
+            // reading with null leaves every other suite green and the price gone from every card.
+            generate(Map.of("ok", true, "metadata",
+                    Map.of("credentialSource", "platform", "billedCredits", 78)));
+
+            assertThat(capturedRecipe().billedCredits()).isEqualByComparingTo(new java.math.BigDecimal("78"));
+        }
+
+        @Test
+        @DisplayName("survives the JSON round trip that turns the amount into a double, without "
+                + "inventing a fraction the ledger does not have")
+        void readsTheAmountWhateverNumberTypeItArrivesAs() {
+            // The value crosses an HTTP hop before it gets here, so it arrives as whatever Jackson
+            // made of it. Read through the double itself, 0.1 would become 0.1000000000000000055.
+            generate(Map.of("ok", true, "metadata", Map.of("billedCredits", 0.1d)));
+
+            assertThat(capturedRecipe().billedCredits()).isEqualByComparingTo(new java.math.BigDecimal("0.1"));
+        }
+
+        @Test
+        @DisplayName("hands the caller what it cost, beside the size it was charged on")
+        void reportsTheChargeToTheCaller() {
+            // The agent reads the RESULT, not the execution layer's metadata. Left only in
+            // provider_response.metadata, the price of a call would be reachable but undocumented,
+            // under a key whose help says it holds the provider's payload.
+            ToolExecutionResult r = generate(Map.of("ok", true, "metadata",
+                    Map.of("credentialSource", "platform", "billedCredits", 78)));
+
+            assertThat(r.success()).isTrue();
+            assertThat(((Map<?, ?>) r.data()).get("billed_credits"))
+                    .isEqualTo(new java.math.BigDecimal("78"));
+        }
+
+        @Test
+        @DisplayName("tells the caller nothing about a price of zero either, whatever reaches it")
+        void reportsNoChargeForZero() {
+            // Belt to the settlement's braces: the execution refuses to report a zero, so this can
+            // only be reached if that ever changes. Untested, it was a guard a mutation walked
+            // straight through - and the amount it guards is the one an agent quotes to a person.
+            ToolExecutionResult r = generate(Map.of("ok", true, "metadata",
+                    Map.of("credentialSource", "platform", "billedCredits", 0)));
+
+            assertThat(((Map<?, ?>) r.data()).containsKey("billed_credits")).isFalse();
+        }
+
+        @Test
+        @DisplayName("tells the caller NOTHING about a price when the platform charged nothing, so "
+                + "an absent charge cannot be read as a free one")
+        void reportsNoChargeWhenThePlatformDidNotCharge() {
+            ToolExecutionResult r = generate(Map.of("ok", true, "metadata",
+                    Map.of("credentialSource", "user")));
+
+            assertThat(((Map<?, ?>) r.data()).containsKey("billed_credits")).isFalse();
+        }
+
+        @Test
+        @DisplayName("records NO amount when the execution reported none, so nothing is invented "
+                + "for a generation the platform did not charge for")
+        void recordsNoAmountWhenTheExecutionReportedNone() {
+            // The reader's own key paid, the install does not meter, or the endpoint has no
+            // published price. Each of them arrives here as an absent key, and absent is not zero.
+            generate(Map.of("ok", true, "metadata", Map.of("credentialSource", "user")));
+
+            assertThat(capturedRecipe().billedCredits()).isNull();
+        }
+
+        @Test
+        @DisplayName("records NO amount for a value that is not a number, rather than a broken one")
+        void ignoresAnAmountThatIsNotANumber() {
+            generate(Map.of("ok", true, "metadata", Map.of("billedCredits", "not-a-number")));
+
+            assertThat(capturedRecipe().billedCredits()).isNull();
         }
 
         @Test
@@ -1096,6 +1258,97 @@ class GenerationToolTest {
             assertThat(billingCaptor.getValue().quantityUnit())
                     .as("a bare 10 is a count of seconds or of images, and the two are priced apart")
                     .isEqualTo("second");
+        }
+
+        @Test
+        @DisplayName("the FACTOR travels beside the size, in its own field, not folded into it")
+        void theFactorTravelsBesideTheSize() {
+            // The seam: `GenerationBilling` is a positional record of
+            // (String, BigDecimal, String, BigDecimal), and the two BigDecimals are the size and
+            // the factor. Swapping them COMPILES. So the two numbers here are deliberately
+            // different - ten seconds at 2x - because with equal values the test would pass on
+            // the wiring it exists to check.
+            //
+            // What is at stake if the factor is dropped instead: a 1080p render is reserved and
+            // charged at the 720p rate on every call, silently, and the only trace is an invoice
+            // nobody has a reason to distrust.
+            when(registry.resolve("vid-tiered")).thenReturn(Optional.of(MODULATED));
+
+            call("generation", params("action", "create", "model", "vid-tiered",
+                    "prompt", "a cat", "duration_seconds", 10, "resolution", "1080p"));
+
+            verify(executeModule).executeGeneration(any(), any(), billingCaptor.capture());
+            assertThat(billingCaptor.getValue().quantity())
+                    .as("ten seconds stay ten seconds however much they cost")
+                    .isEqualByComparingTo("10");
+            assertThat(billingCaptor.getValue().quantityUnit()).isEqualTo("second");
+            assertThat(billingCaptor.getValue().priceMultiplier())
+                    .as("the 1080p tier of this model is priced at twice its published rate")
+                    .isEqualByComparingTo("2");
+        }
+
+        @Test
+        @DisplayName("the SAME model at its reference tier is dispatched at the published rate")
+        void theReferenceTierIsNotSurcharged() {
+            // Guards against the factor being hard-coded to satisfy the test above, and pins the
+            // half that matters to every existing model: a tier listed at 1 is the rate as
+            // published, so nothing about this call is different from before factors existed.
+            when(registry.resolve("vid-tiered")).thenReturn(Optional.of(MODULATED));
+
+            call("generation", params("action", "create", "model", "vid-tiered",
+                    "prompt", "a cat", "duration_seconds", 10, "resolution", "720p"));
+
+            verify(executeModule).executeGeneration(any(), any(), billingCaptor.capture());
+            assertThat(billingCaptor.getValue().priceMultiplier()).isEqualByComparingTo("1");
+        }
+
+        @Test
+        @DisplayName("a model that declares no modifiers at all is dispatched at its published rate")
+        void anUnmodulatedModelIsUnchanged() {
+            // The 600+ endpoints that existed before any of this. They must reach the biller with
+            // a factor that changes nothing, whatever the descriptor says about anything else.
+            call("generation", params("action", "create", "model", "vid-fast",
+                    "prompt", "a cat", "duration_seconds", 10));
+
+            verify(executeModule).executeGeneration(any(), any(), billingCaptor.capture());
+            assertThat(billingCaptor.getValue().priceMultiplier()).isEqualByComparingTo("1");
+        }
+
+        @Test
+        @DisplayName("the caller is TOLD the factor and why, so a total that is not rate x size reads")
+        void theFactorIsReportedToTheCaller() {
+            // Reported in the result, not only applied to the charge. Without it an agent is handed
+            // a size and an amount that do not multiply out, and cannot tell a surcharge from an
+            // arithmetic error except by generating again.
+            when(registry.resolve("vid-tiered")).thenReturn(Optional.of(MODULATED));
+
+            ToolExecutionResult r = call("generation", params("action", "create",
+                    "model", "vid-tiered", "prompt", "a cat",
+                    "duration_seconds", 10, "resolution", "1080p"));
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> out = (Map<String, Object>) r.data();
+            assertThat(out.get("billed_multiplier")).isEqualTo(new java.math.BigDecimal("2"));
+            assertThat((java.util.List<String>) out.get("billed_multiplier_reasons"))
+                    .as("the reason names the CHOICE, since that is the only half the caller controls")
+                    .containsExactly("resolution x2");
+            // And the size is still the size.
+            assertThat((java.math.BigDecimal) out.get("billed_quantity"))
+                    .isEqualByComparingTo(new java.math.BigDecimal("10"));
+        }
+
+        @Test
+        @DisplayName("a call at the published rate reports NO factor, rather than a x1 on every turn")
+        void theBaseRateIsNotAnnounced() {
+            when(registry.resolve("vid-tiered")).thenReturn(Optional.of(MODULATED));
+
+            ToolExecutionResult r = call("generation", params("action", "create",
+                    "model", "vid-tiered", "prompt", "a cat",
+                    "duration_seconds", 10, "resolution", "720p"));
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> out = (Map<String, Object>) r.data();
+            assertThat(out).doesNotContainKeys("billed_multiplier", "billed_multiplier_reasons");
         }
 
         @Test
@@ -1625,6 +1878,144 @@ class GenerationToolTest {
             // untitled, and this tool documents both shapes as equal.
             assertThat(capturePersisted().getName()).isEqualTo("a nested cat");
             assertThat(capturePersisted().getPrompt()).isEqualTo("a nested cat");
+        }
+    }
+
+    /**
+     * Refusing a generation when the account has no storage room, BEFORE the provider is called.
+     *
+     * <p>Billing is committed inside {@code executeGeneration}; the storage gate only runs later,
+     * when the asset is made durable. An account with no room therefore used to pay for every
+     * generation and keep none of them, and the failure said only that the asset "could not be
+     * stored". So the assertion that matters in every test below is not the error code, it is
+     * {@code verify(executeModule, never()).executeGeneration(...)}: no dispatch, no charge.
+     */
+    @Nested
+    @DisplayName("storage pre-check - do not charge for what cannot be stored")
+    class StoragePreCheck {
+
+        private com.apimarketplace.storage.client.StorageClient storageClient;
+
+        private void wireStorage(boolean hasRoom) {
+            storageClient = mock(com.apimarketplace.storage.client.StorageClient.class);
+            when(storageClient.hasRoomFor(any(), any(), anyLong())).thenReturn(hasRoom);
+            org.springframework.test.util.ReflectionTestUtils.setField(module, "storageClient", storageClient);
+        }
+
+        private Map<String, Object> aGeneration() {
+            return params("action", "create", "model", "vid-fast", "prompt", "a boat");
+        }
+
+        @Test
+        @DisplayName("a full account is refused WITHOUT dispatching, so nothing is charged")
+        void fullAccountNeverReachesTheProvider() {
+            wireStorage(false);
+
+            ToolExecutionResult r = call("generation", aGeneration());
+
+            verify(executeModule, never()).executeGeneration(any(), any(), any());
+            assertThat(r.success()).isFalse();
+            assertThat(r.errorCode()).isEqualTo(ToolErrorCode.QUOTA_EXCEEDED);
+        }
+
+        @Test
+        @DisplayName("the refusal tells the caller they were NOT charged, which is the whole point")
+        void refusalSaysNoChargeHappened() {
+            wireStorage(false);
+
+            ToolExecutionResult r = call("generation", aGeneration());
+
+            assertThat(r.error()).contains("NOT been charged");
+            assertThat(r.error()).doesNotContain("You have been charged");
+        }
+
+        @Test
+        @DisplayName("probes for 1 byte: the asset size is unknowable up front, so it asks 'any room at all?'")
+        void probesOneByte() {
+            wireStorage(true);
+            when(executeModule.executeGeneration(any(), any(), any())).thenReturn(
+                    Optional.of(ToolExecutionResult.success(Map.of("data", List.of(Map.of())))));
+
+            call("generation", aGeneration());
+
+            // Not the 100 MB asset cap: probing for the worst case would refuse a small image
+            // whenever less than 100 MB remained, which is a false refusal of a call the account
+            // could well afford.
+            verify(storageClient).hasRoomFor(any(), any(), eq(1L));
+        }
+
+        @Test
+        @DisplayName("probes the tenant from the execution context, which is who the asset is stored for")
+        void probesTheContextTenant() {
+            wireStorage(true);
+            when(executeModule.executeGeneration(any(), any(), any())).thenReturn(
+                    Optional.of(ToolExecutionResult.success(Map.of("data", List.of(Map.of())))));
+            ToolExecutionContext ctx = mock(ToolExecutionContext.class);
+            when(ctx.tenantId()).thenReturn("tenant-from-context");
+
+            provider.execute("generation", aGeneration(), ctx);
+
+            // The same id the asset is stored under (GenerationAssetResolver is handed
+            // context.tenantId() too), so the probe and the write speak about one account.
+            verify(storageClient).hasRoomFor(eq("tenant-from-context"), any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("no execution context -> probes the tenant the call carries, not null")
+        void noContextFallsBackToTheCallTenant() {
+            wireStorage(true);
+            when(executeModule.executeGeneration(any(), any(), any())).thenReturn(
+                    Optional.of(ToolExecutionResult.success(Map.of("data", List.of(Map.of())))));
+
+            // Straight at the module, because GenerationToolsProvider derives the tenant FROM the
+            // context and so passes null for both when there is none: routed that way the
+            // fallback is reached but has nothing to fall back to, and the assertion below could
+            // not tell null from a real id. Callers that hold a tenant without a context (the
+            // asset resolver uses the same fallback) are the ones this branch serves.
+            module.execute("create", aGeneration(), "tenant-from-call", null);
+
+            verify(storageClient).hasRoomFor(eq("tenant-from-call"), any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("names no workspace, so storage-service scopes the probe from the request as the upload will")
+        void namesNoWorkspace() {
+            wireStorage(true);
+            when(executeModule.executeGeneration(any(), any(), any())).thenReturn(
+                    Optional.of(ToolExecutionResult.success(Map.of("data", List.of(Map.of())))));
+
+            call("generation", aGeneration());
+
+            // Passing an explicit workspace here would OVERRIDE the active one server-side and
+            // could probe a different bucket than the upload lands in.
+            verify(storageClient).hasRoomFor(any(), eq((String) null), anyLong());
+        }
+
+        @Test
+        @DisplayName("an account with room generates exactly as before")
+        void roomAvailableProceeds() {
+            wireStorage(true);
+            when(executeModule.executeGeneration(any(), any(), any())).thenReturn(
+                    Optional.of(ToolExecutionResult.success(Map.of("data", List.of(Map.of())))));
+
+            ToolExecutionResult r = call("generation", aGeneration());
+
+            verify(executeModule).executeGeneration(any(), any(), any());
+            assertThat(r.success()).isTrue();
+        }
+
+        @Test
+        @DisplayName("no storage client wired -> generation runs, exactly as it did before this guard")
+        void noStorageClientStillGenerates() {
+            // The field is optional on purpose (CE wiring, slim contexts). Absent means no
+            // pre-check, never a blocked generation.
+            when(executeModule.executeGeneration(any(), any(), any())).thenReturn(
+                    Optional.of(ToolExecutionResult.success(Map.of("data", List.of(Map.of())))));
+
+            ToolExecutionResult r = call("generation", aGeneration());
+
+            verify(executeModule).executeGeneration(any(), any(), any());
+            assertThat(r.success()).isTrue();
         }
     }
 }

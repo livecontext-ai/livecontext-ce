@@ -8,14 +8,18 @@ import {
   fetchPublicationBySlug,
   fetchPublicationReviews,
   fetchShowcaseRender,
+  fetchVerifiedPublisherHandles,
 } from '@/lib/marketplace/publicPublications';
 import { isIndexable, marketplacePath, metaDescription } from '@/lib/marketplace/indexability';
 import { listingJsonLd } from '@/lib/marketplace/listingJsonLd';
 import { buildPublicGraph } from '@/lib/marketplace/publicPlanGraph';
 import { WorkflowNodeIcons } from '@/components/WorkflowNodeIcons';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
+import { VerifiedBadgeIcon } from '@/components/profile/VerifiedBadgeIcon';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
-import { Flag, Star } from 'lucide-react';
+import { Flag, Play, Star } from 'lucide-react';
+import { fetchVideoForMarketplaceSlug } from '@/app/videos/_lib/publicVideos';
+import { formatTimecode, videoPath } from '@/app/videos/_lib/videos';
 import PublicAppPreview from './_components/PublicAppPreview';
 import PublicWorkflowDiagram from './_components/PublicWorkflowDiagram';
 import { NextIntlClientProvider } from 'next-intl';
@@ -29,7 +33,7 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://livecontext.ai';
  * ISR rather than SSG: the catalog is open-ended and grows whenever anyone
  * publishes, so there is no build-time list of slugs to pre-render. New
  * listings must be reachable without a deploy, which also means
- * `dynamicParams` stays at its default (true) here, unlike /compare and /blog
+ * `dynamicParams` stays at its default (true) here, unlike /compare
  * whose content lives in the repo.
  */
 // Literal on purpose: Next requires route segment config to be statically
@@ -56,7 +60,12 @@ export async function generateMetadata({
   const noIndex = IS_CE || !isIndexable(publication);
 
   return {
-    title,
+    // `absolute` because this title already names the brand. Left as a plain
+    // string it is fed to the root layout's `title.template` ("%s - LiveContext")
+    // and every listing rendered "<listing> - LiveContext Marketplace -
+    // LiveContext" in the tab, the SERP and every share preview. The share
+    // blocks below take no template, so they keep the plain string.
+    title: { absolute: title },
     description,
     alternates: { canonical: url },
     // Both blocks are spelled out in full: Next merges metadata shallowly per
@@ -97,10 +106,21 @@ export default async function MarketplaceListingPage({
   // or exposes anonymously. Neither is allowed to take the page down: a missing
   // showcase or an unreadable plan simply drops its section.
   const graph = buildPublicGraph(publication.planSnapshot);
-  const [showcase, reviewPage] = await Promise.all([
+  const [showcase, reviewPage, verifiedPublishers, film] = await Promise.all([
     publication.hasShowcase ? fetchShowcaseRender(publication.id) : Promise.resolve(null),
     fetchPublicationReviews(publication.id),
+    // One author on this page. Public reviews carry no reviewer identity at all
+    // (stripped server-side), so no badge is resolvable for them by design.
+    fetchVerifiedPublisherHandles([publication.publisherHandle]),
+    // The film that demonstrates THIS listing, if one exists. Best-effort like
+    // the showcase beside it: the section disappears, the page does not. The
+    // link goes both ways on purpose, because this is the page where someone
+    // decides to install, and five minutes of the thing running is the best
+    // argument the listing has.
+    fetchVideoForMarketplaceSlug(slug),
   ]);
+  const publisherVerified = !!publication.publisherHandle
+    && verifiedPublishers.has(publication.publisherHandle.toLowerCase());
 
   const url = `${SITE_URL}${marketplacePath(slug)}`;
 
@@ -146,11 +166,15 @@ export default async function MarketplaceListingPage({
             (publication.publisherHandle ? (
               // Only link when the publisher has a public handle: their profile
               // is otherwise private and the URL would 404.
-              <Link href={`/u/${publication.publisherHandle}`} className="no-underline hover:underline">
+              <Link href={`/u/${publication.publisherHandle}`} className="inline-flex items-center gap-1 no-underline hover:underline">
                 by {publication.publisherName}
+                <VerifiedBadgeIcon verified={publisherVerified} />
               </Link>
             ) : (
-              <span>by {publication.publisherName}</span>
+              <span className="inline-flex items-center gap-1">
+                by {publication.publisherName}
+                <VerifiedBadgeIcon verified={publisherVerified} />
+              </span>
             ))}
           {publication.categoryName && <span>{publication.categoryName}</span>}
           {publication.reviewCount > 0 && (
@@ -164,6 +188,46 @@ export default async function MarketplaceListingPage({
           <p className="mt-6 whitespace-pre-line text-base leading-relaxed text-[var(--text-secondary)]">
             {publication.description}
           </p>
+        )}
+
+        {film && (
+          <section className="mt-10">
+            <h2 className="text-lg font-semibold text-[var(--text-primary)]">Watch it being built</h2>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">
+              {`A ${formatTimecode(film.durationSeconds)} film of this automation being built and run, with its full transcript.`}
+            </p>
+            <Link
+              href={videoPath(film.slug)}
+              className="group mt-4 flex gap-4 overflow-hidden rounded-xl border border-[var(--border-color)] transition-colors hover:bg-[var(--bg-secondary)]"
+            >
+              <span className="relative block w-40 shrink-0 sm:w-56" style={{ aspectRatio: '16 / 9' }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={film.poster}
+                  alt={film.posterAlt}
+                  width={1280}
+                  height={720}
+                  loading="lazy"
+                  className="h-full w-full object-cover"
+                />
+                <span
+                  className="absolute left-1/2 top-1/2 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow-lg"
+                  style={{ background: 'rgba(9, 9, 11, 0.78)' }}
+                  aria-hidden="true"
+                >
+                  <Play className="h-3.5 w-3.5 translate-x-[1px] fill-white text-white" />
+                </span>
+              </span>
+              <span className="flex min-w-0 flex-col justify-center py-3 pr-4">
+                <span className="text-sm font-medium text-[var(--text-primary)] group-hover:underline">
+                  {film.title}
+                </span>
+                <span className="mt-1 line-clamp-2 text-sm text-[var(--text-secondary)]">
+                  {film.tagline}
+                </span>
+              </span>
+            </Link>
+          </section>
         )}
 
         <NextIntlClientProvider locale="en" messages={PREVIEW_MESSAGES}>
@@ -221,8 +285,9 @@ export default async function MarketplaceListingPage({
               variant="neutral"
             />
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-[var(--text-primary)]">
-                {publication.publisherName ?? 'Anonymous publisher'}
+              <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]">
+                <span className="truncate">{publication.publisherName ?? 'Anonymous publisher'}</span>
+                <VerifiedBadgeIcon verified={publisherVerified} />
               </p>
               {/* Only linked when the publisher has a public handle: their
                   profile is otherwise private and the URL would 404. */}

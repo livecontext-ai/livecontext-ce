@@ -621,4 +621,70 @@ class XmlNodeTest {
             }
         };
     }
+
+    @Nested
+    @DisplayName("what the Params column says this node ran with")
+    class ReportedConfiguration {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> paramsOf(NodeExecutionResult result) {
+            return (Map<String, Object>) result.output().get("resolved_params");
+        }
+
+        @Test
+        @DisplayName("`rootElement` is the string the conversion USES, not a second resolution of it")
+        void reportsTheRootElementTheNodeUses() {
+            // executeJsonToXml names the root from the CONFIGURED string. Reporting a
+            // resolved one named an element the document does not have.
+            Core.XmlConfig config = new Core.XmlConfig(
+                "jsonToXml", "{\"a\":\"1\"}", "{{trigger:start.root}}", false);
+            XmlNode node = new XmlNode("core:xml", config);
+
+            Map<String, Object> params = paramsOf(node.execute(context));
+
+            assertEquals("{{trigger:start.root}}", params.get("rootElement"));
+        }
+
+        @Test
+        @DisplayName("`value` is the document the node WORKED on, the same meaning that key has on its sibling nodes")
+        void reportsTheDocumentItConverted() {
+            // One key, one meaning: `value` is the resolved data here, on ConvertToFileNode
+            // and on CompressionNode. Reporting the template on one and the data on another
+            // is the drift this alignment exists to remove.
+            Core.XmlConfig config = new Core.XmlConfig("xmlToJson", "<root><a>1</a></root>", null, false);
+            XmlNode node = new XmlNode("core:xml", config);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isSuccess());
+            assertEquals("<root><a>1</a></root>", paramsOf(result).get("value"));
+        }
+
+        @Test
+        @DisplayName("a FAILURE reports the document the node tried to parse, not the expression")
+        void reportsTheDocumentOnFailure() {
+            // Malformed XML fails in the parser, after `value` resolved. The failure row is
+            // the one a reader opens, and it must say what was parsed.
+            Core.XmlConfig config = new Core.XmlConfig("xmlToJson", "<root><unclosed>", null, false);
+            XmlNode node = new XmlNode("core:xml", config);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isFailure());
+            assertEquals("<root><unclosed>", paramsOf(result).get("value"));
+        }
+
+        @Test
+        @DisplayName("a document too large for a step row is described instead of copied")
+        void boundsAnOversizedDocument() {
+            String hugeXml = "<root>" + "<a>x</a>".repeat(5_000) + "</root>";
+            Core.XmlConfig config = new Core.XmlConfig("xmlToJson", hugeXml, null, false);
+            XmlNode node = new XmlNode("core:xml", config);
+
+            String reported = String.valueOf(paramsOf(node.execute(context)).get("value"));
+
+            assertTrue(reported.length() < 300, "persisted per step row: " + reported.length() + " chars");
+            assertTrue(reported.contains("chars"), "and the reader is told what was cut: " + reported);
+        }
+    }
 }

@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,6 +50,10 @@ public class FilterNode extends BaseNode {
 
         // Build resolved_params early so it's available in all result paths
         Map<String, Object> earlyInputData = new LinkedHashMap<>();
+        // `input` keeps the plan's name and the shape V167 documents for the `config`
+        // output field, which shares this map. A FAILED row needs no companion key saying the
+        // expression was never evaluated: the row is already FAILED and carries its error, so
+        // the key would be a constant string on every failure of five node types.
         earlyInputData.put("input", inputExpression);
         earlyInputData.put("conditions", conditions.stream()
                 .map(c -> Map.of(
@@ -65,7 +70,7 @@ public class FilterNode extends BaseNode {
             failureOutput.put("item_index", context.itemIndex());
             failureOutput.put("itemIndex", context.itemIndex());
             failureOutput.put("item_id", context.itemId());
-            failureOutput.put("resolved_params", earlyInputData);
+            failureOutput.put("resolved_params", ReportedParams.forReport(earlyInputData));
             return NodeExecutionResult.failureWithOutput(nodeId,
                 "Input expression is required. Configure the 'input' field with a reference like {{core:step.output.items}}",
                 failureOutput, System.currentTimeMillis() - startTime);
@@ -82,7 +87,7 @@ public class FilterNode extends BaseNode {
                 failureOutput.put("item_index", context.itemIndex());
                 failureOutput.put("itemIndex", context.itemIndex());
                 failureOutput.put("item_id", context.itemId());
-                failureOutput.put("resolved_params", earlyInputData);
+                failureOutput.put("resolved_params", ReportedParams.forReport(earlyInputData));
                 return NodeExecutionResult.failureWithOutput(nodeId, "Template adapter not available",
                     failureOutput, System.currentTimeMillis() - startTime);
             }
@@ -101,6 +106,11 @@ public class FilterNode extends BaseNode {
             // Filter each item in the resolved list
             List<Map<String, Object>> filteredItems = new ArrayList<>();
             List<Map<String, Object>> rejectedItems = new ArrayList<>();
+            // How many items each condition turned away. A filter reported only totals,
+            // so "0 items" named no culprit and the reader had to bisect the conditions
+            // by hand. Counted on REJECTED items only: an accepted item tells nothing,
+            // and this keeps the extra evaluations proportional to what was dropped.
+            int[] rejectedByCondition = new int[conditions.size()];
             for (Object item : resolvedItems) {
                 if (item instanceof Map) {
                     Map<String, Object> itemMap = (Map<String, Object>) item;
@@ -114,6 +124,11 @@ public class FilterNode extends BaseNode {
                         filteredItems.add(itemMap);
                     } else {
                         rejectedItems.add(itemMap);
+                        for (int ci = 0; ci < conditions.size(); ci++) {
+                            if (!evaluateCondition(conditions.get(ci), itemMap)) {
+                                rejectedByCondition[ci]++;
+                            }
+                        }
                     }
                 }
             }
@@ -133,14 +148,30 @@ public class FilterNode extends BaseNode {
             result.put("itemIndex", context.itemIndex());
             result.put("item_id", context.itemId());
             Map<String, Object> inputData = new LinkedHashMap<>();
-            inputData.put("input", resolvedItems);
+            // Bounded: this is the whole upstream collection, and resolved_params is
+            // persisted on the row of every item of every split. Under the budget it is
+            // reported exactly as it is; above it, described by shape.
+            inputData.put("input", ReportedParams.reportValue(resolvedItems));
             inputData.put("input_count", resolvedItems.size());
-            inputData.put("conditions", conditions.stream()
-                    .map(c -> Map.of(
-                        "field", c.field() != null ? c.field() : "",
-                        "operator", c.operator(),
-                        "value", String.valueOf(c.value())))
-                    .toList());
+            List<Map<String, Object>> reportedConditions = new ArrayList<>(conditions.size());
+            for (int ci = 0; ci < conditions.size(); ci++) {
+                Core.FilterCondition c = conditions.get(ci);
+                Map<String, Object> reported = new LinkedHashMap<>();
+                reported.put("field", c.field() != null ? c.field() : "");
+                reported.put("operator", c.operator());
+                reported.put("value", String.valueOf(c.value()));
+                // `turned_away`, because both obvious names are taken by this node's own
+                // output and would mean something else: `rejected_items` is the ARRAY of
+                // dropped rows and `rejected_count` is their TOTAL. This is per condition,
+                // counted over rejected rows only, so in `and` mode the values can sum to
+                // more than the total: one row can fail several conditions at once.
+                reported.put("turned_away", rejectedByCondition[ci]);
+                reportedConditions.add(reported);
+            }
+            // Reported INSIDE the existing `conditions` entries rather than under a new
+            // key: the params panel is the node's configuration, and a new top-level key
+            // there would read as a parameter nobody configured.
+            inputData.put("conditions", reportedConditions);
             inputData.put("mode", mode);
             result.put("resolved_params", inputData);
 
@@ -156,7 +187,7 @@ public class FilterNode extends BaseNode {
             failureOutput.put("item_index", context.itemIndex());
             failureOutput.put("itemIndex", context.itemIndex());
             failureOutput.put("item_id", context.itemId());
-            failureOutput.put("resolved_params", earlyInputData);
+            failureOutput.put("resolved_params", ReportedParams.forReport(earlyInputData));
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failureOutput, duration);
         }
     }

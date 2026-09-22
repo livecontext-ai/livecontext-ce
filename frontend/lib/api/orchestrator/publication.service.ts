@@ -65,10 +65,17 @@ export type HighlightDisplayMode =
   | 'AGENT'
   | 'TABLE'
   | 'SKILL'
-  // Curated row for the public landing page. NOT a publication type - its bucket
-  // holds APPLICATION-type publications, curated separately from the APPLICATION
-  // bucket (which drives the in-chat highlights row).
-  | 'LANDING';
+  // Curated rows for the public pages. NOT publication types - these buckets hold
+  // APPLICATION-type publications, curated separately from the APPLICATION bucket
+  // (which drives the in-chat highlights row). LANDING is the home page; each
+  // LANDING_* is one /for/<persona> page, so a persona shows its own apps.
+  | 'LANDING'
+  | 'LANDING_OPS'
+  | 'LANDING_CREATOR'
+  | 'LANDING_SUPPORT'
+  | 'LANDING_SALES'
+  | 'LANDING_MARKETING'
+  | 'LANDING_RECRUITING';
 
 /**
  * Slim publication shape returned by `/api/publications/highlights/{displayMode}`.

@@ -21,6 +21,7 @@ vi.mock('next-intl', () => ({
 }));
 
 import ChangelogModal from '../ChangelogModal';
+import { WELCOME_GIFT_FLAG } from '@/lib/onboarding/welcomeGiftHandoff';
 
 vi.mock('@/hooks/useChangelog', () => ({
   useChangelog: () => mockUseChangelog(),
@@ -136,17 +137,25 @@ describe('ChangelogModal', () => {
     expect(screen.queryByText('See what changed')).not.toBeInTheDocument();
   });
 
-  it('does not stack on top of the welcome-gift modal', () => {
-    // A first run is a guided sequence; a release note has no business interrupting it. The hook
-    // keeps the panel quiet during onboarding itself, and this flag covers the modals queued right
-    // after it.
-    sessionStorage.setItem('lc_show_welcome_gift', '1');
+  it.each([WELCOME_GIFT_FLAG, 'lc_show_app_suggestions'])(
+    'does not stack on top of an onboarding modal still queued (%s)',
+    (flag) => {
+      // A first run is a guided sequence; a release note has no business interrupting it. The hook
+      // keeps the panel quiet during onboarding itself, and these flags cover the modals queued
+      // right after it. Both are checked because they are queued together and either can be the
+      // one still standing: the welcome gift stays flagged for as long as the reader reads it.
+      //
+      // The flag comes from the module that WRITES it, not from a literal. Spelled out, this case
+      // went on passing after the gift modal was replaced, asserting a contract no producer could
+      // break any more.
+      sessionStorage.setItem(flag, '1');
 
-    render(<ChangelogModal />);
-    settle();
+      render(<ChangelogModal />);
+      settle();
 
-    expect(screen.queryByText('See what changed')).not.toBeInTheDocument();
-  });
+      expect(screen.queryByText('See what changed')).not.toBeInTheDocument();
+    },
+  );
 
   it('does not stack on the suggested-apps modal either', () => {
     sessionStorage.setItem('lc_show_app_suggestions', '1');
@@ -215,5 +224,31 @@ describe('ChangelogModal', () => {
 
     expect(screen.queryByText('See all updates')).not.toBeInTheDocument();
     expect(screen.getByTestId('changelog-dismiss')).toBeInTheDocument();
+  });
+
+  /**
+   * Regression: a long entry clipped its own footer.
+   *
+   * DialogContent is a `grid` capped at `max-h-[90vh]`, and this panel passes
+   * `overflow-hidden` (it must: the media is flush to the rounded corners and would
+   * otherwise square them off), which twMerge-overrides the base `overflow-y-auto`.
+   * With no scroll region of its own the middle row could not be clamped, so on a
+   * short window the entry overflowed the cap and the reader lost part of the footer.
+   * Measured on the shipped copy before the fix: the German, French and Portuguese
+   * entries overflowed a 640px-tall viewport by 17px.
+   *
+   * Asserted on the CLASSES rather than on measured geometry because jsdom has no
+   * layout: it computes no viewport, no `vh`, and every height is zero, so a pixel
+   * assertion here would pass whatever the component does. `min-h-0` is the half that
+   * is easy to drop as redundant-looking and is what lets a grid row shrink below its
+   * content, so it is named explicitly.
+   */
+  it('lets the body scroll, so a long entry cannot clip the footer out of reach', () => {
+    render(<ChangelogModal />);
+    settle();
+
+    const body = screen.getByText('One entry, the newest, shown once.').parentElement;
+    expect(body).toHaveClass('overflow-y-auto');
+    expect(body).toHaveClass('min-h-0');
   });
 });

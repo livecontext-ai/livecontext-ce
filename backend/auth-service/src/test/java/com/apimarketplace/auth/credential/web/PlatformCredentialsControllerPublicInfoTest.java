@@ -59,7 +59,7 @@ class PlatformCredentialsControllerPublicInfoTest {
     void missingCredential_returnsUnavailable() {
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.empty());
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         Map<String, Object> body = response.getBody();
@@ -80,7 +80,7 @@ class PlatformCredentialsControllerPublicInfoTest {
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.empty());
         when(pricingService.hasAnyNonZeroMarkup(cred.id())).thenReturn(false);
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -97,7 +97,7 @@ class PlatformCredentialsControllerPublicInfoTest {
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.empty());
         when(pricingService.hasAnyNonZeroMarkup(cred.id())).thenReturn(false);
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -112,7 +112,7 @@ class PlatformCredentialsControllerPublicInfoTest {
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.empty());
         when(pricingService.hasAnyNonZeroMarkup(cred.id())).thenReturn(true);
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -131,7 +131,7 @@ class PlatformCredentialsControllerPublicInfoTest {
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.empty());
         when(pricingService.hasAnyNonZeroMarkup(cred.id())).thenReturn(false);
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -147,7 +147,7 @@ class PlatformCredentialsControllerPublicInfoTest {
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.empty());
         when(pricingService.hasAnyNonZeroMarkup(cred.id())).thenReturn(false);
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -165,7 +165,7 @@ class PlatformCredentialsControllerPublicInfoTest {
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.of(version));
         when(pricingService.hasAnyNonZeroMarkup(cred.id())).thenReturn(true);
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -183,7 +183,7 @@ class PlatformCredentialsControllerPublicInfoTest {
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.of(version));
         when(pricingService.hasAnyNonZeroMarkup(cred.id())).thenReturn(true);
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, null, null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -200,10 +200,10 @@ class PlatformCredentialsControllerPublicInfoTest {
         PlatformCredentialPricingVersion version = pricingVersion(cred.id(), 2, new BigDecimal("0.05"));
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.of(version));
-        when(pricingService.quoteLatest(cred.id(), toolId, null, null))
+        when(pricingService.quoteLatest(cred.id(), toolId, null, null, null))
                 .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(new BigDecimal("0.42"), 1L, null, null)));
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, toolId.toString(), null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, toolId.toString(), null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -228,12 +228,12 @@ class PlatformCredentialsControllerPublicInfoTest {
         perMinute.setUnitCredits(new BigDecimal("480"));
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.of(version));
-        when(pricingService.quoteLatest(cred.id(), toolId, "music-v1", new BigDecimal("60")))
+        when(pricingService.quoteLatest(cred.id(), toolId, "music-v1", new BigDecimal("60"), null))
                 .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                         new BigDecimal("480"), 1L, perMinute, BigDecimal.ONE)));
 
         ResponseEntity<Map<String, Object>> response = controller.publicInfo(
-                INTEGRATION, toolId.toString(), "music-v1", new BigDecimal("60"), null, null);
+                INTEGRATION, toolId.toString(), "music-v1", new BigDecimal("60"), null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -253,10 +253,10 @@ class PlatformCredentialsControllerPublicInfoTest {
         PlatformCredentialPricingVersion version = pricingVersion(cred.id(), 1, null);
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.of(version));
-        when(pricingService.quoteLatest(cred.id(), toolId, null, null))
+        when(pricingService.quoteLatest(cred.id(), toolId, null, null, null))
                 .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(BigDecimal.ZERO, 1L, null, null)));
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, toolId.toString(), null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, toolId.toString(), null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -271,10 +271,10 @@ class PlatformCredentialsControllerPublicInfoTest {
         UUID toolId = UUID.randomUUID();
         when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.empty());
-        when(pricingService.quoteLatest(cred.id(), toolId, null, null))
+        when(pricingService.quoteLatest(cred.id(), toolId, null, null, null))
                 .thenReturn(Optional.empty());
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, toolId.toString(), null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, toolId.toString(), null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -292,7 +292,7 @@ class PlatformCredentialsControllerPublicInfoTest {
         when(pricingService.findLatest(cred.id())).thenReturn(Optional.empty());
         when(pricingService.hasAnyNonZeroMarkup(cred.id())).thenReturn(true);
 
-        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, "not-a-uuid", null, null, null, null);
+        ResponseEntity<Map<String, Object>> response = controller.publicInfo(INTEGRATION, "not-a-uuid", null, null, null, null, null);
 
         Map<String, Object> body = response.getBody();
         assertThat(body).isNotNull();
@@ -324,12 +324,12 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id())).thenReturn(Optional.of(version));
             // entry == null is exactly "the version default applied".
-            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10")))
+            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10"), null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("0.05"), 1L, null, new BigDecimal("10"))));
 
             Map<String, Object> body = controller.publicInfo(
-                    INTEGRATION, toolId.toString(), "seedance-2.0", new BigDecimal("10"), null, null).getBody();
+                    INTEGRATION, toolId.toString(), "seedance-2.0", new BigDecimal("10"), null, null, null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(false);
@@ -348,12 +348,12 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", null))
+            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", null, null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("0.05"), 1L, null, null)));
 
             Map<String, Object> body = controller.publicInfo(
-                    INTEGRATION, toolId.toString(), "seedance-2.0", null, null, null).getBody();
+                    INTEGRATION, toolId.toString(), "seedance-2.0", null, null, null, null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("versionDefaultOnly")).isEqualTo(true);
@@ -373,18 +373,103 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10")))
+            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10"), null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("600"), 1L, perSecond, new BigDecimal("10"))));
 
             Map<String, Object> body = controller.publicInfo(
-                    INTEGRATION, toolId.toString(), "seedance-2.0", new BigDecimal("10"), null, null).getBody();
+                    INTEGRATION, toolId.toString(), "seedance-2.0", new BigDecimal("10"), null, null, null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(true);
             assertThat(body.get("markupCredits")).isEqualTo("600");
             assertThat(body.get("priceUnit")).isEqualTo("second");
             assertThat(body).doesNotContainKey("versionDefaultOnly");
+        }
+
+        @Test
+        @DisplayName("the factor the caller's choices reached is priced with, and echoed back")
+        void aPriceFactorIsQuotedAndExplained() {
+            // The amount alone cannot be checked: 1200 beside "60 credits per second" and a size of
+            // 10 reads as an arithmetic error unless the third number is there to be named. And a
+            // quote that dropped the factor would show 600 next to a button that spends 1200.
+            PlatformCredentialResponse cred = credential(true, true);
+            UUID toolId = UUID.randomUUID();
+            PricingVersionEntry perSecond = new PricingVersionEntry();
+            perSecond.setMarkupCredits(BigDecimal.ZERO);
+            perSecond.setPriceUnit("second");
+            perSecond.setUnitCredits(new BigDecimal("60"));
+            when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
+            when(pricingService.findLatest(cred.id()))
+                    .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
+            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10"),
+                    new BigDecimal("2")))
+                    .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
+                            new BigDecimal("1200"), 1L, perSecond, new BigDecimal("10"),
+                            new BigDecimal("2"))));
+
+            Map<String, Object> body = controller.publicInfo(
+                    INTEGRATION, toolId.toString(), "seedance-2.0", new BigDecimal("10"), null, null,
+                    new BigDecimal("2")).getBody();
+
+            assertThat(body).isNotNull();
+            assertThat(body.get("markupCredits")).isEqualTo("1200");
+            assertThat(body.get("priceMultiplier")).isEqualTo("2");
+        }
+
+        @Test
+        @DisplayName("a factor above the ceiling is dropped: no descriptor can reach it")
+        void aFactorAboveTheCeilingIsDropped() {
+            // The parser refuses a model whose modifiers can reach more than 100 TOGETHER, so a
+            // larger value here did not come from a price this platform published. The quote falls
+            // back to the published rate rather than failing the panel: this is a read.
+            PlatformCredentialResponse cred = credential(true, true);
+            UUID toolId = UUID.randomUUID();
+            PricingVersionEntry perSecond = new PricingVersionEntry();
+            perSecond.setMarkupCredits(BigDecimal.ZERO);
+            perSecond.setPriceUnit("second");
+            perSecond.setUnitCredits(new BigDecimal("60"));
+            when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
+            when(pricingService.findLatest(cred.id()))
+                    .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
+            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10"), null))
+                    .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
+                            new BigDecimal("600"), 1L, perSecond, new BigDecimal("10"))));
+
+            Map<String, Object> body = controller.publicInfo(
+                    INTEGRATION, toolId.toString(), "seedance-2.0", new BigDecimal("10"), null, null,
+                    new BigDecimal("250")).getBody();
+
+            assertThat(body).isNotNull();
+            assertThat(body.get("markupCredits")).isEqualTo("600");
+            assertThat(body).doesNotContainKey("priceMultiplier");
+        }
+
+        @Test
+        @DisplayName("a factor that could not come from any descriptor is dropped, not quoted")
+        void anAbsurdFactorIsDropped() {
+            // Zero would advertise a free generation the server then charges for, and this is a
+            // READ: it must fall back to the published rate rather than fail the panel.
+            PlatformCredentialResponse cred = credential(true, true);
+            UUID toolId = UUID.randomUUID();
+            PricingVersionEntry perSecond = new PricingVersionEntry();
+            perSecond.setMarkupCredits(BigDecimal.ZERO);
+            perSecond.setPriceUnit("second");
+            perSecond.setUnitCredits(new BigDecimal("60"));
+            when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
+            when(pricingService.findLatest(cred.id()))
+                    .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
+            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10"), null))
+                    .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
+                            new BigDecimal("600"), 1L, perSecond, new BigDecimal("10"))));
+
+            Map<String, Object> body = controller.publicInfo(
+                    INTEGRATION, toolId.toString(), "seedance-2.0", new BigDecimal("10"), null, null,
+                    BigDecimal.ZERO).getBody();
+
+            assertThat(body).isNotNull();
+            assertThat(body.get("markupCredits")).isEqualTo("600");
+            assertThat(body).doesNotContainKey("priceMultiplier");
         }
 
         @Test
@@ -406,12 +491,12 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, null, null))
+            when(pricingService.quoteLatest(cred.id(), toolId, null, null, null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("60"), 1L, perSecond, null)));
 
             Map<String, Object> body = controller.publicInfo(
-                    INTEGRATION, toolId.toString(), null, null, true, null).getBody();
+                    INTEGRATION, toolId.toString(), null, null, true, null, null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(false);
@@ -430,13 +515,13 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10")))
+            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10"), null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("600"), 1L, perSecond, new BigDecimal("10"))));
 
             Map<String, Object> body = controller.publicInfo(
                     INTEGRATION, toolId.toString(), "seedance-2.0", new BigDecimal("10"),
-                    true, "second").getBody();
+                    true, "second", null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(true);
@@ -458,12 +543,12 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, null, null))
+            when(pricingService.quoteLatest(cred.id(), toolId, null, null, null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("60"), 1L, perUnit, null)));
 
             Map<String, Object> body = controller.publicInfo(
-                    INTEGRATION, toolId.toString(), null, null, null, null).getBody();
+                    INTEGRATION, toolId.toString(), null, null, null, null, null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(true);
@@ -486,13 +571,13 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10")))
+            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10"), null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("600"), 1L, perImage, new BigDecimal("10"))));
 
             Map<String, Object> body = controller.publicInfo(
                     INTEGRATION, toolId.toString(), "seedance-2.0", new BigDecimal("10"),
-                    true, "second").getBody();
+                    true, "second", null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(false);
@@ -513,13 +598,13 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10")))
+            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10"), null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("600"), 1L, perMinute, new BigDecimal("10"))));
 
             Map<String, Object> body = controller.publicInfo(
                     INTEGRATION, toolId.toString(), "seedance-2.0", new BigDecimal("10"),
-                    true, "second").getBody();
+                    true, "second", null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(true);
@@ -542,13 +627,13 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10")))
+            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", new BigDecimal("10"), null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("600"), 1L, perImage, new BigDecimal("10"))));
 
             Map<String, Object> body = controller.publicInfo(
                     INTEGRATION, toolId.toString(), "seedance-2.0", new BigDecimal("10"),
-                    true, null).getBody();
+                    true, null, null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(true);
@@ -561,19 +646,19 @@ class PlatformCredentialsControllerPublicInfoTest {
             // model was named AND the caller did not report a generation
             // descriptor on the endpoint. So this is an ordinary call, and the
             // version default is precisely the price the owner published for it.
-            // Refusing here would take the default away from the 700+ endpoints
+            // Refusing here would take the default away from the 1000+ endpoints
             // it exists for.
             PlatformCredentialResponse cred = credential(true, true);
             UUID toolId = UUID.randomUUID();
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, null, null))
+            when(pricingService.quoteLatest(cred.id(), toolId, null, null, null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("0.05"), 1L, null, null)));
 
             Map<String, Object> body = controller.publicInfo(
-                    INTEGRATION, toolId.toString(), null, null, null, null).getBody();
+                    INTEGRATION, toolId.toString(), null, null, null, null, null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(true);
@@ -602,12 +687,12 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, null, null))
+            when(pricingService.quoteLatest(cred.id(), toolId, null, null, null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("0.05"), 1L, null, null)));
 
             Map<String, Object> body = controller.publicInfo(
-                    INTEGRATION, toolId.toString(), null, null, true, null).getBody();
+                    INTEGRATION, toolId.toString(), null, null, true, null, null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(false);
@@ -632,12 +717,12 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, null, null))
+            when(pricingService.quoteLatest(cred.id(), toolId, null, null, null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("250"), 1L, perEndpoint, null)));
 
             Map<String, Object> body = controller.publicInfo(
-                    INTEGRATION, toolId.toString(), null, null, true, null).getBody();
+                    INTEGRATION, toolId.toString(), null, null, true, null, null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(true);
@@ -657,12 +742,12 @@ class PlatformCredentialsControllerPublicInfoTest {
             when(service.getCredential(INTEGRATION)).thenReturn(Optional.of(cred));
             when(pricingService.findLatest(cred.id()))
                     .thenReturn(Optional.of(pricingVersion(cred.id(), 7, new BigDecimal("0.05"))));
-            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", null))
+            when(pricingService.quoteLatest(cred.id(), toolId, "seedance-2.0", null, null))
                     .thenReturn(Optional.of(new PlatformCredentialPricingService.Quote(
                             new BigDecimal("0.05"), 1L, null, null)));
 
             Map<String, Object> body = controller.publicInfo(
-                    INTEGRATION, toolId.toString(), "seedance-2.0", null, false, null).getBody();
+                    INTEGRATION, toolId.toString(), "seedance-2.0", null, false, null, null).getBody();
 
             assertThat(body).isNotNull();
             assertThat(body.get("hasPricing")).isEqualTo(false);

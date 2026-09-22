@@ -68,8 +68,8 @@ describe('useNodeLiveState', () => {
   });
 
   it('still reports a node parked on a NON-approval signal, without per-signal detail', () => {
-    // getPendingSignalsForNode only exposes USER_APPROVAL (it feeds the
-    // per-item approval UI). A timer wait must still read as waiting.
+    // This hook asks getPendingSignalsForNode for USER_APPROVAL only (it feeds
+    // the per-item approval UI). A timer wait must still read as waiting.
     const { result } = renderLiveState({
       awaitingSignalSteps: new Set([NODE_ID]),
       pendingSignals: [signal('WAIT_TIMER')],

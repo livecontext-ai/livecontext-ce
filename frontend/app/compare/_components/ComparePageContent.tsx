@@ -129,6 +129,24 @@ export default function ComparePageContent({ comparison }: { comparison: Compari
           <p className="mt-3 text-xs" style={{ color: 'var(--text-muted)' }}>
             Comparison reflects publicly available information as of {comparison.lastUpdated}. Products evolve; check both before deciding.
           </p>
+          {comparison.sources && comparison.sources.length > 0 && (
+            <p className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              Official sources:{' '}
+              {comparison.sources.map((source, idx) => (
+                <span key={source.url}>
+                  {idx > 0 && ' · '}
+                  <a
+                    href={source.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline underline-offset-2 hover:opacity-80"
+                  >
+                    {source.label}
+                  </a>
+                </span>
+              ))}
+            </p>
+          )}
         </section>
 
         {/* Why teams switch */}

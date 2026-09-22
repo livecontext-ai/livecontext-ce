@@ -122,7 +122,7 @@ public abstract class WebJobModule implements ToolModule {
             // failure paths still benefit from it (observability recording,
             // pricing computation, screenshot cleanup). The check below then
             // routes based on the post-processed payload.
-            Map<String, Object> processed = postProcess(result, parameters, context);
+            Map<String, Object> processed = postProcess(result, parameters, jobParams, context);
             if (processed.containsKey("error")) {
                 return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
                     failedError(action, String.valueOf(processed.get("error"))));
@@ -234,6 +234,18 @@ public abstract class WebJobModule implements ToolModule {
                                               Map<String, Object> parameters,
                                               ToolExecutionContext context) {
         return response;
+    }
+
+    /**
+     * Same hook, also handed the job parameters that were submitted, for a module that
+     * decided something at build time (whose key the runner was given) and must report it
+     * once the result is in. Default: the 3-arg hook.
+     */
+    protected Map<String, Object> postProcess(Map<String, Object> response,
+                                              Map<String, Object> parameters,
+                                              Map<String, Object> jobParams,
+                                              ToolExecutionContext context) {
+        return postProcess(response, parameters, context);
     }
 
     /**

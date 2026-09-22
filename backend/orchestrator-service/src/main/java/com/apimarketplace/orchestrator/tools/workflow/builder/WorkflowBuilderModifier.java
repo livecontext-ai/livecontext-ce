@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.tools.workflow.builder;
 
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.orchestrator.domain.workflow.NodeMock;
+import com.apimarketplace.orchestrator.domain.workflow.NodePolicy;
 import com.apimarketplace.orchestrator.tools.workflow.builder.creators.CreatorBase;
 import com.apimarketplace.orchestrator.utils.LabelNormalizer;
 import lombok.RequiredArgsConstructor;
@@ -182,10 +183,12 @@ public class WorkflowBuilderModifier {
         } else if (changesObj != null) {
             rawChanges = new LinkedHashMap<>((Map<String, Object>) changesObj);
         } else {
-            // Allow modify with only connect_after or only mock (no params needed)
+            // Allow modify with only connect_after, only mock, or only an execution policy
+            // (no params needed)
             String topLevelConnectAfter = (String) parameters.get("connect_after");
             if ((topLevelConnectAfter != null && !topLevelConnectAfter.isBlank())
-                    || parameters.get("mock") != null) {
+                    || parameters.get("mock") != null
+                    || NodePolicyApplier.peekRoot(parameters) != null) {
                 rawChanges = new LinkedHashMap<>();
             } else {
                 return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "'params' is required. Use same syntax as ADD:\n\n" +
@@ -219,7 +222,23 @@ public class WorkflowBuilderModifier {
             rawChanges.remove("mock");
         }
 
-        if (rawChanges.isEmpty() && (connectAfterRef == null || connectAfterRef.isBlank()) && mockObj == null) {
+        // Resolve the execution policy the same way, and LIFT IT OUT of the patch: on an mcp node
+        // every remaining key is an endpoint argument, so a nodePolicy left in `changes` would be
+        // merged into the node as a parameter and sent to the provider. The caller's `parameters`
+        // is only READ - it belongs to the caller and may be immutable; `rawChanges` is our own
+        // copy, and is the one that must come out clean.
+        Object rootPolicy = NodePolicyApplier.peekRoot(parameters);
+        Object nestedPolicy = NodePolicyApplier.strip(rawChanges);
+        Object policyObj = rootPolicy != null ? rootPolicy : nestedPolicy;
+        String policyError = NodePolicyApplier.validate(policyObj);
+        if (policyError != null) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                policyError + " The node was left unchanged. See "
+                    + "workflow(action='help', topics=['node_policy']).");
+        }
+
+        if (rawChanges.isEmpty() && (connectAfterRef == null || connectAfterRef.isBlank())
+                && mockObj == null && policyObj == null) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "'params' object cannot be empty.");
         }
 
@@ -235,6 +254,14 @@ public class WorkflowBuilderModifier {
         String aliasConflict = findAmbiguousAliasPatch(rawChanges, nodeId, node);
         if (aliasConflict != null) {
             return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, aliasConflict);
+        }
+
+        // The execution-policy rules that need the node's TYPE, checked here: before the first
+        // write below, so refusing really does leave the node untouched.
+        String policyRejection = NodePolicyApplier.rejectionForNode(nodeId, node, policyObj);
+        if (policyRejection != null) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                policyRejection + " The node was left unchanged.");
         }
 
         // HARMONIZE: Convert ADD-style params to internal storage format
@@ -315,6 +342,14 @@ public class WorkflowBuilderModifier {
             }
         }
 
+        // Apply the execution policy on the same footing as the mock: whole-block replacement,
+        // and an empty block ({} or one whose fields are all defaults) REMOVES it. Deep-merging
+        // would make "turn the retry off" unexpressible, because the caller could never unsay a
+        // field it had set.
+        Object oldPolicyValue = node.get(NodePolicy.JSON_KEY);
+        boolean policyChanged = policyObj != null
+                && NodePolicyApplier.applyToNode(node, policyObj, nodeId);
+
         // Store old values for undo
         Map<String, Object> oldValues = new LinkedHashMap<>();
         for (String key : changes.keySet()) {
@@ -335,6 +370,9 @@ public class WorkflowBuilderModifier {
         }
         if (mockChanged) {
             oldValues.put(NodeMock.JSON_KEY, oldMockValue);
+        }
+        if (policyChanged) {
+            oldValues.put(NodePolicy.JSON_KEY, oldPolicyValue);
         }
 
         // Check if label is changing - we need to update logical mappings
@@ -484,6 +522,14 @@ public class WorkflowBuilderModifier {
                 ? "Applies to editor runs of this workflow (execute without version='pinned'). Pass "
                     + "mock_mode='off' on execute to run everything real once; production/pinned fires always ignore mocks."
                 : "Mock removed - the node executes for real again.");
+        }
+        if (policyChanged) {
+            modifiedFields.add(NodePolicy.JSON_KEY);
+            Object committed = node.get(NodePolicy.JSON_KEY);
+            result.put(NodePolicy.JSON_KEY, committed != null ? committed : Map.of());
+            result.put("node_policy_hint", committed != null
+                ? "Applies to every execution of this node, in editor and production runs alike."
+                : "Execution policy removed - the node runs with the platform defaults again.");
         }
         result.put("modified_fields", modifiedFields);
 
@@ -644,7 +690,16 @@ public class WorkflowBuilderModifier {
                     Map<String, Object> node = findNodeById(session, nodeId);
                     if (node != null && oldValues != null) {
                         for (Map.Entry<String, Object> entry : oldValues.entrySet()) {
-                            node.put(entry.getKey(), entry.getValue());
+                            if (entry.getValue() == null) {
+                                // The field did not exist before the modify, so undo must leave
+                                // it absent, not present-and-null. A null block still answers
+                                // containsKey, which is how the mock and policy reports decide
+                                // whether one is configured - undo would report a mock the node
+                                // no longer has.
+                                node.remove(entry.getKey());
+                            } else {
+                                node.put(entry.getKey(), entry.getValue());
+                            }
                         }
                         description = "Reverted changes to \"" + nodeId + "\"";
                     } else {

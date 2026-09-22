@@ -308,6 +308,16 @@ public class ApiKeyService {
      * API-key resolution for a fresh or 10-min-idle user, in BOTH editions
      * (gateway /resolve-by-api-key and the CE MonolithSecurityFilter resolver).</p>
      *
+     * <p><b>The null JWT is load-bearing, not an omission.</b> An API key is a
+     * non-interactive principal: an MCP client, a script, a workflow calling in. It
+     * presents a long-lived grant, it does not authenticate a person, so it must never
+     * appear on the login counter or in the {@code login.success} audit trail.
+     * {@code resolveUser} enforces that by needing an OIDC {@code auth_time} claim to
+     * count a sign-in, and a null token has none. Passing a real token here would make
+     * every automated caller look like a returning user. It used to: before that rule,
+     * this path published a login per key per 10 minutes for as long as the automation
+     * ran. {@code ApiKeyResolutionCountsNoLoginTest} pins it.</p>
+     *
      * @return UserResolutionResponse or null if key is invalid/user disabled
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)

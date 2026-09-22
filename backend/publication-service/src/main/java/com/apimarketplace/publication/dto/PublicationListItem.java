@@ -79,7 +79,13 @@ public record PublicationListItem(
          * finding, publishing or reading one. A SECOND AXIS - the category keeps saying what the
          * application is about.
          */
-        Boolean studio
+        Boolean studio,
+        /**
+         * V483 - raw JSON array of node-type tokens ({@code ["mcp:gmail","core:loop"]}),
+         * read as TEXT like nodeIcons and parsed in {@link #toResponseMap()}. Backs the
+         * node-type filter on the applications and marketplace lists.
+         */
+        String nodeTypes
 ) {
 
     public Map<String, Object> toResponseMap() {
@@ -137,6 +143,7 @@ public record PublicationListItem(
         response.put("totalCreditsEarned", totalCreditsEarned);
         response.put("planVersion", planVersion);
         response.put("nodeIcons", parseNodeIcons());
+        response.put("nodeTypes", parseNodeTypes());
         response.put("agentCount", agentCount != null ? agentCount : 0);
         response.put("skillCount", skillCount != null ? skillCount : 0);
         response.put("interfaceCount", interfaceCount != null ? interfaceCount : 0);
@@ -184,6 +191,21 @@ public record PublicationListItem(
             return OBJECT_MAPPER.readValue(nodeIcons, List.class);
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /**
+     * Node-type tokens as a list. Falls back to an EMPTY list rather than null
+     * (unlike {@link #parseNodeIcons()}, whose null means "draw no glyphs"): the
+     * client filters on this, and "no tokens" is a real, filterable answer while
+     * a null would force every reader to null-check a collection.
+     */
+    private Object parseNodeTypes() {
+        if (nodeTypes == null || nodeTypes.isEmpty()) return List.of();
+        try {
+            return OBJECT_MAPPER.readValue(nodeTypes, List.class);
+        } catch (Exception e) {
+            return List.of();
         }
     }
 }

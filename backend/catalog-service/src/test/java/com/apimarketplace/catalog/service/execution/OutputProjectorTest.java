@@ -482,4 +482,161 @@ class OutputProjectorTest {
         throw new IllegalStateException(
             "could not locate scripts/api-migrations/telegram.json from " + Path.of("").toAbsolutePath());
     }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Header-sourced fields.
+    //
+    // The case these exist for: LinkedIn's video upload PUTs each part to a signed URL that
+    // answers 201 with an EMPTY body and the part id in ETag, and finalizeUpload refuses the
+    // video without those ids. HttpExecutionService had always captured the headers and
+    // ToolExecutionManager dropped them, so no endpoint could declare one and the flow was
+    // unreachable. Every test below is written against that shape.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private static final String ETAG_SCHEMA =
+        "[{\"key\":\"etag\",\"type\":\"string\",\"source\":\"header\"}]";
+
+    @Test
+    @DisplayName("a field marked source=header takes its value from the response header")
+    void headerSourcedFieldIsRead() {
+        Object out = projector.project(Map.of(), ETAG_SCHEMA, Map.of("etag", "\"abc123\""));
+
+        assertEquals(Map.of("etag", "\"abc123\""), out);
+    }
+
+    @Test
+    @DisplayName("the header lookup ignores casing, because HTTP header names do")
+    void headerLookupIsCaseInsensitive() {
+        Object out = projector.project(Map.of(), ETAG_SCHEMA, Map.of("ETag", "\"abc123\""));
+
+        assertEquals("\"abc123\"", ((Map<?, ?>) out).get("etag"),
+            "a provider sending ETag rather than etag must still resolve the declared field");
+    }
+
+    @Test
+    @DisplayName("a body field and a header field are both present, each from its own source")
+    void bodyAndHeaderFieldsCoexist() {
+        String schema = "[{\"key\":\"id\",\"type\":\"string\"},"
+                      + "{\"key\":\"etag\",\"type\":\"string\",\"source\":\"header\"}]";
+
+        Object out = projector.project(Map.of("id", "urn:li:video:1", "junk", "dropped"),
+                                       schema, Map.of("etag", "e1"));
+
+        assertEquals(Map.of("id", "urn:li:video:1", "etag", "e1"), out,
+            "the body field still projects, the undeclared one is still dropped");
+    }
+
+    @Test
+    @DisplayName("a declared header that the provider did not send leaves the field absent")
+    void missingHeaderLeavesTheFieldOut() {
+        Object out = projector.project(Map.of(), ETAG_SCHEMA, Map.of("x-other", "v"));
+
+        assertFalse(((Map<?, ?>) out).containsKey("etag"),
+            "an absent header must not materialise as a null the caller then sends on");
+    }
+
+    @Test
+    @DisplayName("null headers are tolerated rather than thrown on")
+    void nullHeadersAreTolerated() {
+        Object out = projector.project(Map.of("id", "x"), ETAG_SCHEMA, null);
+
+        assertNotNull(out);
+        assertFalse(((Map<?, ?>) out).containsKey("etag"));
+    }
+
+    /**
+     * The regression guard for the other ~700 catalog APIs. None of them declares source=header,
+     * so passing headers in must leave their projection byte-identical to the two-argument call.
+     */
+    @Test
+    @DisplayName("a schema with no header-sourced field projects exactly as it did before")
+    void schemaWithoutHeaderSourceIsUnchanged() {
+        String schema = "[{\"key\":\"id\",\"type\":\"string\"},{\"key\":\"n\",\"type\":\"number\"}]";
+        Map<String, Object> body = Map.of("id", "a", "n", 7, "undeclared", true);
+
+        Object withHeaders = projector.project(body, schema, Map.of("etag", "ignored", "date", "x"));
+        Object without = projector.project(body, schema);
+
+        assertEquals(without, withHeaders,
+            "headers must not leak into a projection that did not ask for them");
+        assertEquals(Map.of("id", "a", "n", 7), withHeaders);
+    }
+
+    @Test
+    @DisplayName("no schema still returns the raw response, even with headers present")
+    void noSchemaStillNoOpWithHeaders() {
+        Map<String, Object> raw = Map.of("a", 1);
+
+        assertSame(raw, projector.project(raw, null, Map.of("etag", "e")));
+    }
+
+    /**
+     * The list-endpoint pattern (a bare JSON array at the root) crossed with a header-sourced
+     * field. The projection is a List, which cannot carry a named key, so the code keeps it under
+     * "data" rather than dropping it. Nothing in the catalog does this today; the test pins the
+     * behaviour so it cannot become silent data loss later.
+     */
+    @Test
+    @DisplayName("an array-root projection keeps its items and still surfaces the header field")
+    void arrayRootProjectionKeepsBothItsItemsAndTheHeaderField() {
+        String schema = "[{\"key\":\"id\",\"type\":\"string\"},"
+                      + "{\"key\":\"etag\",\"type\":\"string\",\"source\":\"header\"}]";
+        List<Map<String, Object>> body = List.of(Map.of("id", "a"), Map.of("id", "b"));
+
+        Object out = projector.project(body, schema, Map.of("etag", "e1"));
+
+        Map<?, ?> map = (Map<?, ?>) out;
+        assertEquals("e1", map.get("etag"));
+        assertEquals(List.of(Map.of("id", "a"), Map.of("id", "b")), map.get("data"),
+            "the projected list must survive rather than be replaced by the header field");
+    }
+
+    @Test
+    @DisplayName("a header value does not overwrite a body field of a different name")
+    void headerDoesNotDisturbUnrelatedBodyFields() {
+        String schema = "[{\"key\":\"id\",\"type\":\"string\"},"
+                      + "{\"key\":\"etag\",\"type\":\"string\",\"source\":\"header\"}]";
+
+        Object out = projector.project(Map.of("id", "kept"), schema, Map.of("etag", "e1"));
+
+        assertEquals("kept", ((Map<?, ?>) out).get("id"));
+        assertEquals("e1", ((Map<?, ?>) out).get("etag"));
+    }
+
+    /**
+     * The bug an earlier version of this feature shipped with, and the reason the shipped
+     * "missing header" test could not see it: that test used an EMPTY body, so there was nothing
+     * to leak. With a body field of the same name, the base projection copied it in and the
+     * header overlay only ever ADDED, never removed. A caller then received a value that looked
+     * like the provider's header and was in fact the body's - wrong, silent, unattributable.
+     */
+    @Test
+    @DisplayName("an absent header does NOT fall back to a body field of the same name")
+    void absentHeaderDoesNotLeakTheBodyFieldOfTheSameName() {
+        Object out = projector.project(Map.of("etag", "BODY-VALUE"), ETAG_SCHEMA, Map.of());
+
+        assertFalse(((Map<?, ?>) out).containsKey("etag"),
+            "a header-sourced field reads the header and nothing else; presenting the body's "
+                + "value as the header's fabricates a part id that finalize would reject");
+    }
+
+    @Test
+    @DisplayName("a present header wins over a body field of the same name")
+    void presentHeaderWinsOverTheSameNamedBodyField() {
+        Object out = projector.project(Map.of("etag", "BODY-VALUE"), ETAG_SCHEMA,
+                                       Map.of("etag", "HEADER-VALUE"));
+
+        assertEquals("HEADER-VALUE", ((Map<?, ?>) out).get("etag"));
+    }
+
+    @Test
+    @DisplayName("the body's other fields are untouched when a same-named one is dropped")
+    void droppingTheShadowedKeyLeavesEveryOtherFieldAlone() {
+        String schema = "[{\"key\":\"id\",\"type\":\"string\"},"
+                      + "{\"key\":\"etag\",\"type\":\"string\",\"source\":\"header\"}]";
+
+        Object out = projector.project(Map.of("id", "kept", "etag", "BODY"), schema, Map.of());
+
+        assertEquals(Map.of("id", "kept"), out);
+    }
 }

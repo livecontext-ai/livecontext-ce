@@ -1,11 +1,13 @@
 package com.apimarketplace.auth.service.util;
 
+import com.stripe.model.Price;
 import com.stripe.model.Subscription;
 import com.stripe.model.SubscriptionItem;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.function.Predicate;
 
 /**
  * Utility class for extracting billing period data from a Stripe Subscription.
@@ -34,6 +36,42 @@ public final class StripeSubscriptionPeriod {
         Long start = item.getCurrentPeriodStart();
         Long end = item.getCurrentPeriodEnd();
         return new Period(toLdt(start), toLdt(end));
+    }
+
+    /**
+     * Billing cadence of a Stripe subscription, read off the recurring interval of its BASE
+     * item: {@code "yearly"} for a {@code year} interval, {@code "monthly"} for any other, and
+     * {@code null} when it cannot be known (no items, no expanded price, no recurring block).
+     *
+     * <p>The one derivation of cadence from Stripe, shared by the cycle-change path and the
+     * webhook upsert. Items whose price {@code isCreditPackPrice} accepts are skipped so the
+     * add-on pack never speaks for the plan; the pack shares the base interval anyway, so a
+     * caller with no way to tell them apart passes {@code id -> false}.
+     *
+     * @param sub               the Stripe subscription, with {@code items.data.price} expanded
+     * @param isCreditPackPrice identifies the credit-pack price ids to skip
+     */
+    public static String cadenceOf(Subscription sub, Predicate<String> isCreditPackPrice) {
+        if (sub == null || sub.getItems() == null || sub.getItems().getData() == null) {
+            return null;
+        }
+        for (SubscriptionItem item : sub.getItems().getData()) {
+            Price price = item.getPrice();
+            if (price == null) {
+                continue;
+            }
+            if (isCreditPackPrice.test(price.getId())) {
+                continue;
+            }
+            Price.Recurring recurring = price.getRecurring();
+            if (recurring == null) {
+                return null;
+            }
+            // A recurring block with no interval never comes from Stripe; kept as "monthly"
+            // because that is what the cycle-change path did before this helper existed.
+            return "year".equals(recurring.getInterval()) ? "yearly" : "monthly";
+        }
+        return null;
     }
 
     /**

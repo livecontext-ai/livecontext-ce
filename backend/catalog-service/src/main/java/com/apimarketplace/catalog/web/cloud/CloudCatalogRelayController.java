@@ -4,6 +4,8 @@ import com.apimarketplace.auth.client.AuthClient;
 import com.apimarketplace.auth.client.dto.CeLinkEntitlementsResult;
 import com.apimarketplace.catalog.domain.dto.CeCatalogRelayRequest;
 import com.apimarketplace.catalog.service.relay.CeCatalogRelayService;
+
+import com.apimarketplace.common.web.BillingContextHeaders;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
@@ -18,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -125,7 +128,17 @@ public class CloudCatalogRelayController {
             // seeded generation never has, so it answered "not sold" for a
             // model the relay then executed and charged.
             @RequestParam(value = "modelId", required = false) String modelId,
-            @RequestParam(value = "quantity", required = false) java.math.BigDecimal quantity) {
+            @RequestParam(value = "quantity", required = false) BigDecimal quantity,
+            // What the call's own CHOICES do to the published rate. The EXECUTING
+            // path measures this itself out of the body it is sent and charges
+            // it; a probe that could not be told about it answered with the
+            // unmodified rate, so the install quoted one amount and was billed
+            // another for the same request, and neither end showed the
+            // disagreement. Trusted no further than any other probe input: this
+            // door only reads, and an install that understated it would misquote
+            // a price to itself.
+            @RequestParam(value = "priceMultiplier", required = false)
+                    BigDecimal priceMultiplier) {
         ResponseEntity<Map<String, Object>> authFailure = authorize(cloudUserId, installId);
         if (authFailure != null) {
             return authFailure;
@@ -140,8 +153,8 @@ public class CloudCatalogRelayController {
         }
         CeLinkEntitlementsResult entitlements =
                 authClient.ceLinkEntitlements(String.valueOf(cloudUserId), installId);
-        CeCatalogRelayService.PlatformInfo info =
-                relayService.platformInfo(integrationName, apiToolId, modelId, quantity);
+        CeCatalogRelayService.PlatformInfo info = relayService.platformInfo(
+                integrationName, apiToolId, modelId, quantity, sanitizeMultiplier(priceMultiplier));
         log.info("CE catalog relay platform-info cloudUser={} install={} integration={} available={} relayEligible={} subscriptionActive={}",
                 cloudUserId, installId, integrationName, info.available(), info.relayEligible(),
                 entitlements.hasSubscription());
@@ -154,6 +167,20 @@ public class CloudCatalogRelayController {
         body.put("markupCredits", info.markupCredits());
         body.put("subscriptionActive", entitlements.hasSubscription());
         body.put("relayEligible", info.relayEligible());
+        // The factor this amount was quoted WITH, echoed as every other quote door echoes it.
+        //
+        // This was the one that did not, and the surfaces gate their whole explanation on the
+        // echo: the badge beside the price, the "includes Resolution x2" sentence, the note in the
+        // parameters menu. So on a self-hosted install linked to the cloud the factor WAS applied
+        // to the amount and WAS charged, and the reader watched the price change when they picked
+        // 1080p with nothing on screen saying why - which is the exact failure this feature was
+        // built to remove, surviving on the one edition that cannot read the cloud's logs.
+        //
+        // Sanitised on the way in, so what is echoed is what was used, not what was asked.
+        BigDecimal quotedWith = sanitizeMultiplier(priceMultiplier);
+        if (quotedWith != null && quotedWith.compareTo(BigDecimal.ONE) != 0) {
+            body.put("priceMultiplier", quotedWith);
+        }
         return ResponseEntity.ok(body);
     }
 
@@ -173,5 +200,29 @@ public class CloudCatalogRelayController {
                     .body(Map.of("error", "CE_LINK_NOT_ACTIVE"));
         }
         return null;
+    }
+
+    /**
+     * A price factor this probe is willing to quote with.
+     *
+     * <p>Dropped rather than refused when it is absurd, the same rule the cloud's
+     * own quote endpoint applies. This door only READS: a malformed factor must
+     * leave the install showing the published rate, which is the true price of a
+     * call carrying no surcharge, instead of turning a price panel into an error
+     * the reader cannot act on. The amount actually charged is measured again by
+     * the executing leg out of the body it sends, so nothing arriving here can
+     * buy anything or change anything that is billed.
+     *
+     * <p>Unsanitised, a non-positive value travelled to the auth leg, which
+     * refuses it with a 400 - an error on a read, for a value the executing path
+     * would simply have ignored - and a value in the millions travelled all the
+     * way through to be quoted, clamped only by a maximum the published row may
+     * not have. The ceiling is the descriptor parser's own, and the parser
+     * enforces it on every modifier of a model TOGETHER, so a factor above it
+     * cannot have come from any seed this platform accepts.
+     */
+    @Nullable
+    private static BigDecimal sanitizeMultiplier(@Nullable BigDecimal raw) {
+        return BillingContextHeaders.sanitizeGenerationMultiplier(raw);
     }
 }

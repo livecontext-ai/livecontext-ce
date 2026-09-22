@@ -143,4 +143,81 @@ class WorkflowBuilderToolDefinitionFactoryTest {
         assertThat(tool.description()).isEqualTo("quick-ref");
         assertThat(tool.helpText()).isEqualTo("full-help");
     }
+
+    // ==================== nodePolicy ====================
+
+    private ToolParameter param(String name) {
+        return factory.buildToolDefinition().parameters().stream()
+                .filter(p -> name.equals(p.name()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(name + " param not found"));
+    }
+
+    @Test
+    @DisplayName("nodePolicy is in the SCHEMA, not only in the help: an agent cannot pass an "
+            + "argument the tool does not declare")
+    void nodePolicyIsDeclaredInTheSchema() {
+        // This project has shipped an action whose required argument lived only in its help text.
+        // The agent could read about it and had no way to send it, and the feature was green and
+        // dead. The schema is the only place a fresh agent learns a parameter exists.
+        ToolParameter policy = param("nodePolicy");
+
+        assertThat(policy.type()).isEqualTo("object");
+        assertThat(policy.required()).isFalse();
+    }
+
+    @Test
+    @DisplayName("its description says it belongs to BOTH add_node and modify")
+    void nodePolicyIsAdvertisedForBothActions() {
+        // Setting it on creation is what saves a second call for every node that needs it, so an
+        // agent that reads "(for: modify)" would do twice the work for no reason.
+        assertThat(param("nodePolicy").description())
+                .contains("(for: add_node, modify)");
+    }
+
+    @Test
+    @DisplayName("it says the policy goes OUTSIDE params, the mistake a model makes by default")
+    void nodePolicySaysItIsOutsideParams() {
+        assertThat(param("nodePolicy").description()).contains("OUTSIDE params");
+    }
+
+    @Test
+    @DisplayName("it names EVERY field the record actually has, so a seventh one cannot ship "
+            + "undocumented")
+    void nodePolicyNamesEveryFieldAndDefault() {
+        // Derived from the record, not a hand-written list. A literal list is the trap this repo
+        // keeps meeting: it certifies the author's idea of the fields, so adding a component to
+        // NodePolicy leaves the agent with a knob it can never learn about while this stays green.
+        String d = param("nodePolicy").description();
+
+        for (var component : com.apimarketplace.orchestrator.domain.workflow.NodePolicy.class
+                .getRecordComponents()) {
+            assertThat(d)
+                    .as("nodePolicy.%s is a real field and must be described to the agent",
+                            component.getName())
+                    .contains(component.getName());
+        }
+        assertThat(d).as("and its default, so no trial call is needed to find it").contains("default 0");
+    }
+
+    @Test
+    @DisplayName("it states that the two retry layers MULTIPLY, which is the one thing an author "
+            + "cannot deduce")
+    void nodePolicyStatesTheMultiplication() {
+        String d = param("nodePolicy").description();
+
+        assertThat(d).contains("MULTIPLY");
+        assertThat(d)
+                .as("and that it is handled automatically when the node itself retries")
+                .contains("retryCount > 0 implies it");
+    }
+
+    @Test
+    @DisplayName("it says how to remove a policy and where the full guide is")
+    void nodePolicySaysHowToClearAndWhereToRead() {
+        String d = param("nodePolicy").description();
+
+        assertThat(d).contains("nodePolicy={} to REMOVE");
+        assertThat(d).contains("topics=['node_policy']");
+    }
 }

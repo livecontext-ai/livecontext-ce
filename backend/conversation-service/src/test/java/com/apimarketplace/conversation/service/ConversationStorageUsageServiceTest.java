@@ -11,6 +11,7 @@ import org.springframework.jdbc.core.RowMapper;
 import java.sql.ResultSet;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -53,15 +54,22 @@ class ConversationStorageUsageServiceTest {
         assertThat(result.itemCount()).isEqualTo(12);
     }
 
+    // Was "returns zero (not throws) - preserves admin-counter resilience". That
+    // rationale no longer has a consumer: StorageReconciliationService is the ONLY caller
+    // of every /api/internal/*/storage/usage endpoint repo-wide, and the admin counters
+    // read storage.tenant_storage_breakdown instead. Against that one caller the
+    // resilience was harmful, not defensive: the reconciler writes this answer through
+    // setUsage, an ABSOLUTE set, so a swallowed failure erased the tenant's stored figure
+    // rather than degrading it. Propagating lets the internal endpoint answer 5xx and the
+    // reconciler skip the category.
     @Test
-    @DisplayName("returns zero (not throws) when SQL fails - preserves admin-counter resilience")
+    @DisplayName("propagates a SQL failure instead of reporting an erasing zero")
     @SuppressWarnings("unchecked")
-    void resilientToSqlFailure() {
+    void propagatesSqlFailure() {
         when(jdbcTemplate.queryForObject(anyString(), any(RowMapper.class), any(Object[].class)))
             .thenThrow(new IncorrectResultSetColumnCountException(1, 2));
 
-        StorageUsageDto result = service.getStorageUsage("tenant-1");
-
-        assertThat(result).isEqualTo(StorageUsageDto.zero());
+        assertThatThrownBy(() -> service.getStorageUsage("tenant-1"))
+            .isInstanceOf(IncorrectResultSetColumnCountException.class);
     }
 }

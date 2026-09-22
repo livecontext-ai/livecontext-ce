@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -105,7 +106,16 @@ public class SetNode extends BaseNode {
                 Object coerced = coerceType(resolvedValue, assignment.type());
                 resolvedFields.put(assignment.name(), coerced);
                 if (logger.isInfoEnabled()) {
-                    String preview = coerced == null ? "null" : String.valueOf(coerced);
+                    // Through the SAME two rules the column applies, because the log is as
+                    // public a sink as the row and outlives it: masked when the author's own
+                    // key names a credential, withheld when the expression pulls a workspace
+                    // variable. Before this, `resolved_params` said `<withheld: ...>` while
+                    // the line above it printed the value.
+                    Object shown = ReportedParams.isCredentialKey(assignment.name())
+                        ? ReportedParams.WITHHELD_CREDENTIAL
+                        : ReportedParams.valueFrom(
+                            assignment.value() instanceof String t ? t : null, coerced);
+                    String preview = shown == null ? "null" : String.valueOf(shown);
                     if (preview.length() > 120) preview = preview.substring(0, 120) + "...";
                     logger.info("Set resolved field: nodeId={}, name={}, type={}, rawTemplate={}, resolved={}",
                         nodeId, assignment.name(), assignment.type(), assignment.value(), preview);
@@ -131,12 +141,28 @@ public class SetNode extends BaseNode {
             // (mirrors SortNode/FilterNode pattern). Includes the upstream input AND every resolved
             // assignment so the user sees exactly what the node was given and what it produced.
             Map<String, Object> resolvedParams = new LinkedHashMap<>();
-            resolvedParams.put("input", inputData);
+            // Bounded: the upstream input is whatever the predecessor produced, with no
+            // ceiling, and this map is persisted on the row of every item of every split.
+            resolvedParams.put("input", ReportedParams.reportValue(inputData));
             resolvedParams.put("keepOnlySet", keepOnlySet);
-            for (Map.Entry<String, Object> e : resolvedFields.entrySet()) {
-                resolvedParams.put(e.getKey(), e.getValue());
+            // Each assignment under its own name, with the value the node assigned - unless
+            // the author pulled it from a workspace variable, which can be declared secret
+            // and whose scalar value must not be copied into a persisted, rendered map.
+            Map<String, String> expressionByName = new LinkedHashMap<>();
+            for (Core.SetFieldAssignment assignment : assignments) {
+                if (assignment.name() != null && assignment.value() instanceof String template) {
+                    expressionByName.put(assignment.name(), template);
+                }
             }
-            result.put("resolved_params", resolvedParams);
+            for (Map.Entry<String, Object> e : resolvedFields.entrySet()) {
+                resolvedParams.put(e.getKey(),
+                    ReportedParams.valueFrom(expressionByName.get(e.getKey()), e.getValue()));
+            }
+            // And through the key-name rule, like every other reported map. The keys here
+            // are the AUTHOR'S: an assignment named `api_key`, fed from a webhook body, is
+            // a credential under a name the author chose, and `valueFrom` above only
+            // guards the workspace-variable vector.
+            result.put("resolved_params", ReportedParams.forReport(resolvedParams));
 
             logger.info("Set completed: nodeId={}, fieldsAssigned={}, inputKeys={}, outputKeys={}, resultKeys={}",
                 nodeId, resolvedFields.size(), inputData.keySet(), output.keySet(), result.keySet());

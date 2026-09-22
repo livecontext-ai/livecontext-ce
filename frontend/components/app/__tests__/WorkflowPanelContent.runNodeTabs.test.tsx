@@ -134,12 +134,14 @@ describe('WorkflowPanelContent - Run / Add Node sub-tabs', () => {
     // Edit mode: the palette tab, no run tab.
     expect(screen.getByText('workflowBuilder.canvas.addNode')).toBeTruthy();
     expect(screen.queryByText('sidePanel.runTab')).toBeNull();
+    expect(screen.queryByText('actions.logs')).toBeNull();
 
     publishRun();
     rerender(<WorkflowPanelContent workflowId="wf-1" />);
 
     // Run mode: the run tab replaces the palette (the canvas is read-only then).
     expect(screen.getByText('sidePanel.runTab')).toBeTruthy();
+    expect(screen.getByText('actions.logs')).toBeTruthy();
     expect(screen.queryByText('workflowBuilder.canvas.addNode')).toBeNull();
   });
 

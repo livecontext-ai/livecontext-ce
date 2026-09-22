@@ -10,6 +10,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  AGENDA_PANEL_TAB_ID,
   APPLICATION_PANEL_TAB_ID,
   WORKFLOW_PANEL_TAB_ID,
   getTabResourceUrl,
@@ -45,6 +46,10 @@ describe('workflowPanelTabId', () => {
 });
 
 describe('getTabResourceUrl', () => {
+  it('opens the global agenda tab on its full-page counterpart', () => {
+    expect(getTabResourceUrl(AGENDA_PANEL_TAB_ID)).toBe('/app/agenda');
+  });
+
   it('drops the builder decoration of a legacy sub-workflow tab (the reported bug)', () => {
     // Pre-fix: '/app/workflow/builder-ef1d124a-610b-4c6b-b1d8-8fb6a6f20604'. No new tab
     // carries this id, but one opened before a reload still does.
@@ -73,8 +78,9 @@ describe('getTabResourceUrl', () => {
   it('maps the remaining resource kinds to their pages', () => {
     expect(getTabResourceUrl(`interface-${WF}`)).toBe(`/app/interface/${WF}`);
     expect(getTabResourceUrl(`datasource-${WF}`)).toBe(`/app/data/${WF}`);
-    // The agents page is one board, not one page per agent.
-    expect(getTabResourceUrl(`agent-${WF}`)).toBe('/app/agent');
+    // The agents page is one board, not one page per agent, so the agent travels in the
+    // query: without it the button landed on the bare list and the agent never opened.
+    expect(getTabResourceUrl(`agent-${WF}`)).toBe(`/app/agent?openAgent=${WF}`);
   });
 
   it('offers no page for a tab that shows no addressable resource', () => {
@@ -108,6 +114,7 @@ describe('parseTabResource', () => {
   });
 
   it('returns null for a tab id that names no resource', () => {
+    expect(parseTabResource(AGENDA_PANEL_TAB_ID)).toBeNull();
     expect(parseTabResource('files-panel')).toBeNull();
     expect(parseTabResource(WORKFLOW_PANEL_TAB_ID)).toBeNull();
     expect(parseTabResource(APPLICATION_PANEL_TAB_ID)).toBeNull();
@@ -121,5 +128,21 @@ describe('parseTabResource', () => {
     expect(getTabResourceUrl(`agent-browse-${RUN}`)).toBeNull();
     // A real agent tab is untouched.
     expect(parseTabResource(`agent-${WF}`)).toEqual({ kind: 'agent', id: WF });
+  });
+});
+
+describe('conversation tabs', () => {
+  const CONV = 'c0000000-0000-4000-8000-00000000000a';
+
+  it('parse to the conversation they show, so a deleted one can be matched and closed', () => {
+    expect(parseTabResource(`conversation-${CONV}`)).toEqual({ kind: 'conversation', id: CONV });
+  });
+
+  it('get NO page url - the id alone cannot choose between the two surfaces', () => {
+    // A conversation lives on the chat surface or the studio one and its `kind`
+    // decides which; a tab id carries no kind. Guessing the chat route renders a
+    // studio thread blank and then feeds its generation envelopes to a chat model,
+    // so the tab menu offers no destination rather than the wrong one.
+    expect(getTabResourceUrl(`conversation-${CONV}`)).toBeNull();
   });
 });

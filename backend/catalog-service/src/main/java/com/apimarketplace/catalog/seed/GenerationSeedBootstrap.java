@@ -174,7 +174,10 @@ public class GenerationSeedBootstrap {
             return Result.nothingToDo();
         }
 
-        if (bundleRepository.findFirstByActiveTrue().isPresent()) {
+        // findActiveMetadata, not findFirstByActiveTrue: this only asks WHETHER a
+        // bundle owns the catalog, and the entity finder would drag the ~24 MB
+        // payload column into heap to answer it, once on every boot.
+        if (!bundleRepository.findActiveMetadata().isEmpty()) {
             log.info("Generation seed v{} stood down: a signed API-catalog bundle owns this catalog",
                     doc.version());
             return Result.superseded(doc.version());

@@ -3,6 +3,7 @@ package com.apimarketplace.catalog.web;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.catalog.service.generation.DynamicOptionsResolver;
+import com.apimarketplace.catalog.service.generation.GenerationInputs;
 import com.apimarketplace.catalog.service.generation.GenerationLimits;
 import com.apimarketplace.catalog.service.generation.GenerationRegistry;
 import com.apimarketplace.catalog.service.generation.PlatformSalesResolver;
@@ -370,23 +371,11 @@ public class GenerationController {
         // costs bytes rather than context.
         row.put("limits", GenerationLimits.describe(m.model(), m.catalogAllowed(), 0, dynamic));
 
-            // What each FILE this model takes actually IS, and how many of them.
-            // The slot name alone ("input_image") says an image goes here; it
-            // does not say whether the image comes back changed, becomes the
-            // first frame of a clip, or only lends its style. A surface cannot
-            // label the field without that, and labelling it wrong costs a paid
-            // call.
-            Map<String, Object> inputs = new LinkedHashMap<>();
-            m.model().capabilities().stream()
-                    .filter(GenerationSpec.ASSET_PARAMS::contains)
-                    .forEach(param -> {
-                        GenerationSpec.ParamBinding binding = m.spec().paramMap().get(param);
-                        if (binding == null || binding.role() == null) return;
-                        Map<String, Object> shape = new LinkedHashMap<>();
-                        shape.put("role", binding.role().wire());
-                        shape.put("maxItems", binding.maxItems());
-                        inputs.put(param, shape);
-                    });
+            // The same block the agent's action='models' reports, from the same
+            // code: role, how many files, and what each slot cannot be sent
+            // without or sent with. Two hand-kept copies of this shaping had
+            // already drifted once on the empty case.
+            Map<String, Object> inputs = GenerationInputs.describe(m.spec(), m.model());
             if (!inputs.isEmpty()) row.put("inputs", inputs);
         // The same statement the agent's listing carries: what the call sends
         // whatever the caller passes. It is what tells two ids apart when a
@@ -421,6 +410,12 @@ public class GenerationController {
         out.put("unitCredits", plain(price.perUnit()));
         if (price.min() != null) out.put("minCredits", plain(price.min()));
         if (price.max() != null) out.put("maxCredits", plain(price.max()));
+        // What the reader's own choices do to that rate, as a table rather than
+        // an amount: the surface applies it to what is currently in the form and
+        // asks the quote for the total, so it needs the rule and not one result
+        // of it. Same shaping as the agent listing, from the same method.
+        Map<String, Object> modifiers = GenerationModule.describeModifiers(price);
+        if (!modifiers.isEmpty()) out.put("modifiers", modifiers);
         return out;
     }
 

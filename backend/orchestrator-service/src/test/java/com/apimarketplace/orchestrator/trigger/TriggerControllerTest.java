@@ -504,6 +504,94 @@ class TriggerControllerTest {
         }
 
         @Test
+        @DisplayName("that same 402 refusal is logged as a refusal, not as an error")
+        void creditExhaustedFireLogsWarnNotError() {
+            // The branch whose next statement maps this message to 402 was logging it at ERROR
+            // first, which undid the level the relay had just chosen. A mutation forcing this
+            // back to ERROR left 294 tests green before this existed.
+            ch.qos.logback.classic.Logger controllerLogger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(TriggerController.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            controllerLogger.addAppender(appender);
+            try {
+                WorkflowRunEntity run = sbsRun("run-broke-log");
+                when(runRepository.findByRunIdPublic("run-broke-log")).thenReturn(Optional.of(run));
+                when(triggerService.executeTrigger(eq(run), any(), eq(TriggerType.MANUAL), any()))
+                    .thenReturn(TriggerExecutionResult.failure(
+                        "run-broke-log", "trigger:manual_trigger", TriggerType.MANUAL,
+                        com.apimarketplace.orchestrator.services.credit.CreditExhaustion.MESSAGE));
+
+                controller.triggerManual("run-broke-log", null, null, CALLER, null);
+
+                assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+                assertThat(appender.list).anySatisfy(e ->
+                    assertThat(e.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN));
+            } finally {
+                controllerLogger.detachAppender(appender);
+            }
+        }
+
+        @Test
+        @DisplayName("a genuine failure keeps ERROR - the controller log must not go uniformly quiet")
+        void otherFailureLogsError() {
+            ch.qos.logback.classic.Logger controllerLogger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(TriggerController.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            controllerLogger.addAppender(appender);
+            try {
+                WorkflowRunEntity run = sbsRun("run-npe-log");
+                when(runRepository.findByRunIdPublic("run-npe-log")).thenReturn(Optional.of(run));
+                when(triggerService.executeTrigger(eq(run), any(), eq(TriggerType.MANUAL), any()))
+                    .thenReturn(TriggerExecutionResult.failure(
+                        "run-npe-log", "trigger:manual_trigger", TriggerType.MANUAL,
+                        "NullPointerException in core:transform"));
+
+                controller.triggerManual("run-npe-log", null, null, CALLER, null);
+
+                assertThat(appender.list).anySatisfy(e ->
+                    assertThat(e.getLevel()).isEqualTo(ch.qos.logback.classic.Level.ERROR));
+            } finally {
+                controllerLogger.detachAppender(appender);
+            }
+        }
+
+        @Test
+        @DisplayName("triggerSpecific refuses at WARN too - it is a SECOND branch, not the same one")
+        void specificFireRefusalLogsWarn() {
+            // The controller has two relay sites and triggerManual only reaches one of them.
+            // Forcing THIS one back to ERROR survived a full run of this class before the test
+            // existed, so covering the sibling was not the same as covering both.
+            ch.qos.logback.classic.Logger controllerLogger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(TriggerController.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            controllerLogger.addAppender(appender);
+            try {
+                WorkflowRunEntity run = sbsRun("run-spec-broke");
+                when(runRepository.findByRunIdPublic("run-spec-broke")).thenReturn(Optional.of(run));
+                when(triggerService.executeTrigger(eq(run), eq("trigger:manual_trigger"),
+                                                  eq(TriggerType.MANUAL), any()))
+                    .thenReturn(TriggerExecutionResult.failure(
+                        "run-spec-broke", "trigger:manual_trigger", TriggerType.MANUAL,
+                        com.apimarketplace.orchestrator.services.credit.CreditExhaustion.MESSAGE));
+
+                controller.triggerSpecific("run-spec-broke", "manual", "trigger:manual_trigger",
+                    null, null, CALLER, null);
+
+                assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+                assertThat(appender.list).anySatisfy(e ->
+                    assertThat(e.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN));
+            } finally {
+                controllerLogger.detachAppender(appender);
+            }
+        }
+
+        @Test
         @DisplayName("Any other sync failure stays 400 - only the credit case is promoted to 402")
         void otherFailuresStay400() {
             WorkflowRunEntity run = sbsRun("run-noplan");

@@ -6,6 +6,28 @@
 
 import { apiClient } from '../api-client';
 
+/**
+ * One plan row as `GET /billing/plans` serves it, keyed by plan code.
+ *
+ * <p>Only the quota fields are declared: the endpoint also returns a per-cycle
+ * `prices` map that every caller reads loosely, and typing that here would be a
+ * larger change than this file warrants. Declared at all so a consumer of the
+ * fields below is type-checked rather than asserting a shape with a cast.
+ */
+export interface BillingPlan {
+  id?: number;
+  code?: string;
+  name?: string;
+  description?: string;
+  includedStorageBytes?: number | null;
+  includedToolCredits?: number | null;
+  includedLlmTokens?: number | null;
+  /** V494: the plan's monthly AI allowance. null = this plan has none (every paid plan). */
+  includedAiCredits?: number | null;
+  maxMembers?: number | null;
+  [key: string]: unknown;
+}
+
 export interface PlanChangeRequest {
   targetPlanCode: string;
   billingCycle?: 'monthly' | 'yearly';
@@ -121,9 +143,9 @@ export class BillingApiService {
     }
   }
 
-  async getAvailablePlans(): Promise<any> {
+  async getAvailablePlans(): Promise<Record<string, BillingPlan>> {
     try {
-      return await apiClient.get<any>('/billing/plans');
+      return await apiClient.get<Record<string, BillingPlan>>('/billing/plans');
     } catch (error) {
       console.error('Error fetching available plans:', error);
       throw error;

@@ -478,7 +478,11 @@ public final class WorkflowBuilderPrompts {
                 per-model limits, but it is opt-in per agent because CREATING spends credits: do not assume you have it, and never tell
                 someone to run it. If that help says no model is available, say so instead of guessing an id.
                 Other params: prompt, duration_seconds, aspect_ratio, resolution, voice, language, quality, style, seed, negative_prompt,
-                input_image/input_audio/input_video (a WHOLE FileRef from an upstream node), credential_source ('platform' | 'user' - UNSTATED
+                input_image/input_audio/input_video (a WHOLE FileRef from an upstream node), and on a model that takes several files at
+                once first_frame_image/last_frame_image/reference_image - the still the clip opens on, the one it lands on, and what it
+                borrows a subject or a style from. Which of those a model has is the 'inputs' row of that help; a slot it does not list is
+                refused before anything is charged, and filling the wrong one is a different video you have paid for.
+                credential_source ('platform' | 'user' - UNSTATED
                 means 'platform' for this node, so check runs_on in that help first: where it says own_key_only the platform does not resell
                 that provider here and an unstated node fails on its first run).
                 A node may also carry credential_id, which names WHICH of the owner's provider keys it runs on. You cannot choose one:

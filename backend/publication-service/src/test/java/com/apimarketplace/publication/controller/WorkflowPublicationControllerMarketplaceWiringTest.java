@@ -86,7 +86,7 @@ class WorkflowPublicationControllerMarketplaceWiringTest {
                 null, null, null, null, null,
                 null, null, null, null, null, null,
                 null, null, false, null,
-                false);
+                false, null);
     }
 
     @SuppressWarnings("unchecked")

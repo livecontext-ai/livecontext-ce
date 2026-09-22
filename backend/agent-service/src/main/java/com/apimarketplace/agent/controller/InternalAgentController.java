@@ -1,5 +1,7 @@
 package com.apimarketplace.agent.controller;
 
+import com.apimarketplace.agent.client.AgentClient;
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.agent.client.dto.*;
 import com.apimarketplace.common.recentactivity.RecentActivityItemDto;
 import com.apimarketplace.common.recentactivity.RecentActivityScopeResultDto;
@@ -12,6 +14,7 @@ import com.apimarketplace.agent.domain.AgentSkillEntity;
 import com.apimarketplace.agent.domain.AgentWebhookTokenEntity;
 import com.apimarketplace.agent.domain.SkillEntity;
 import com.apimarketplace.agent.domain.SkillFolderEntity;
+import com.apimarketplace.agent.repository.AgentExecutionRepository;
 import com.apimarketplace.agent.repository.AgentRepository;
 import com.apimarketplace.agent.repository.AgentSkillRepository;
 import com.apimarketplace.agent.repository.AgentWebhookTokenRepository;
@@ -33,6 +36,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -51,6 +55,8 @@ public class InternalAgentController {
 
     private final AgentService agentService;
     private final AgentRepository agentRepository;
+    private final AgentExecutionRepository agentExecutionRepository;
+    private final OrgAccessGuard orgAccessService;
     private final AgentSkillRepository agentSkillRepository;
     private final AgentWebhookTokenRepository webhookTokenRepository;
     private final SkillRepository skillRepository;
@@ -65,6 +71,8 @@ public class InternalAgentController {
     public InternalAgentController(
             AgentService agentService,
             AgentRepository agentRepository,
+            AgentExecutionRepository agentExecutionRepository,
+            OrgAccessGuard orgAccessService,
             AgentSkillRepository agentSkillRepository,
             AgentWebhookTokenRepository webhookTokenRepository,
             SkillRepository skillRepository,
@@ -77,6 +85,8 @@ public class InternalAgentController {
             AgentActivitySnapshotService agentActivitySnapshotService) {
         this.agentService = agentService;
         this.agentRepository = agentRepository;
+        this.agentExecutionRepository = agentExecutionRepository;
+        this.orgAccessService = orgAccessService;
         this.agentSkillRepository = agentSkillRepository;
         this.webhookTokenRepository = webhookTokenRepository;
         this.skillRepository = skillRepository;
@@ -235,6 +245,105 @@ public class InternalAgentController {
         }
 
         return ResponseEntity.ok(new RecentActivityScopeResultDto(items, peerScopeCount));
+    }
+
+    // ========== Agent run history over a time window (the agenda's calendar) ==========
+
+    /**
+     * Which {@code agent_type} values are user-visible RUNS of a NAMED agent. See
+     * {@code AgentExecutionRepository#findWorkspaceRunsBetweenStrict} for why this is an
+     * allow-list and why each other value is out.
+     *
+     * <p>{@code cli} is deliberately NOT here, and that is worth stating because it looks
+     * like an omission. {@code CliAgentService.recordObservability} is the only writer of
+     * that type and it never sets {@code agent_entity_id} (the field does not appear in
+     * the class), so the query's INNER JOIN drops every such row: listing it would be a
+     * dead entry the next reader takes for coverage. A claude-code / codex chat turn DOES
+     * reach the calendar, as {@code agent} - {@code ChatObservabilityAdapter} stamps that
+     * type for every chat path, CLI providers included.
+     */
+    private static final List<String> CALENDAR_AGENT_TYPES = List.of("agent", "sub_agent");
+
+    /**
+     * Hard ceiling on one window, whatever the caller asks for. Read from the shared
+     * client rather than declared here: a caller that asks for more than the server will
+     * give receives a full page, believes it saw everything, and silently drops the rest
+     * of the window from a calendar that is supposed to say when it is incomplete.
+     */
+    private static final int WINDOW_MAX_LIMIT = AgentClient.WORKSPACE_RUNS_MAX_LIMIT;
+    private static final int WINDOW_DEFAULT_LIMIT = 1000;
+
+    /**
+     * Every agent run of the active workspace inside {@code [from, to]}, newest first.
+     * Backs the agenda page's agent history in orchestrator, which has no access to the
+     * {@code agent} schema and must ask for it.
+     *
+     * <p>ONE round trip for a whole window, projected down to what a calendar draws (see
+     * {@link com.apimarketplace.agent.client.dto.AgentRunFireDto}). {@code limit} is
+     * clamped rather than refused, and the caller is expected to treat a full page as
+     * "there are more" - the query returns the NEWEST rows, so what a cap drops is the far
+     * end of the window rather than the days being looked at.
+     *
+     * <p>GET /api/internal/agents/executions/window?from=...&to=...&limit=...
+     */
+    @GetMapping("/executions/window")
+    public ResponseEntity<?> getExecutionWindow(
+            @RequestParam("from") String from,
+            @RequestParam("to") String to,
+            @RequestParam(value = "limit", defaultValue = "" + WINDOW_DEFAULT_LIMIT) int limit,
+            HttpServletRequest httpRequest) {
+        String orgId = httpRequest.getHeader("X-Organization-ID");
+        TenantResolver.requireOrgId(orgId);
+
+        java.time.Instant fromInstant;
+        java.time.Instant toInstant;
+        try {
+            fromInstant = java.time.Instant.parse(from);
+            toInstant = java.time.Instant.parse(to);
+        } catch (java.time.format.DateTimeParseException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "from and to must be ISO-8601 instants"));
+        }
+        if (toInstant.isBefore(fromInstant)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "to must not precede from"));
+        }
+        int capped = Math.max(1, Math.min(limit, WINDOW_MAX_LIMIT));
+
+        // One row PAST the page, which is what makes "is there more" an answer rather
+        // than a guess. Asking for exactly `capped` and testing `size() >= capped` calls a
+        // window that holds exactly that many rows truncated, and the banner then sits on
+        // a complete month forever. The extra row costs one tuple and is dropped below.
+        List<AgentRunFireDto> page = agentExecutionRepository.findWorkspaceRunsBetweenStrict(
+                orgId, fromInstant, toInstant, CALENDAR_AGENT_TYPES, PageRequest.of(0, capped + 1));
+
+        // Completeness is decided HERE, on the raw rows, and shipped as a field. The
+        // caller cannot re-derive it from the list it receives, because the deny-list
+        // below shortens that list: a capped window handed to a restricted member would
+        // come back short and read as complete, and their calendar would draw empty days
+        // for a period it never covered.
+        boolean truncated = page.size() > capped;
+        List<AgentRunFireDto> runs = truncated ? page.subList(0, capped) : page;
+        // Newest-first from the query, so the last row KEPT is the oldest the page covers.
+        Instant coveredFrom = truncated ? runs.get(runs.size() - 1).startedAt() : null;
+
+        // The per-member deny-list, the same guard `getAllAgents` applies through
+        // AgentService.listAgents. Without it a member restricted from an agent is shown
+        // that agent's name, its run times, how it was launched, how it ended, and a
+        // working link into its conversation - on the very page that hides the agent from
+        // the trigger catalogue. Filtering after the cap costs a restricted member a
+        // slightly shorter window, which is why the completeness fields are computed
+        // above rather than inferred from what survives.
+        // Decoded, as AgentService does before its own deny-list call: a legacy
+        // pipe-bearing user id arrives as %7C, and an undecoded key matches no
+        // restriction row, so the filter would quietly stop filtering.
+        String tenantId = tenantResolver.resolve(httpRequest);
+        if (tenantId != null) tenantId = tenantId.replace("%7C", "|");
+        String orgRole = httpRequest.getHeader("X-Organization-Role");
+        List<AgentRunFireDto> visible = orgAccessService.filterAccessible(
+                runs, orgId, tenantId, "agent", orgRole,
+                run -> run.agentId() != null ? run.agentId().toString() : null);
+
+        return ResponseEntity.ok(AgentRunWindowDto.of(visible, truncated, coveredFrom));
     }
 
     /**
@@ -1324,6 +1433,19 @@ public class InternalAgentController {
         dto.setCreditsConsumed(entity.getCreditsConsumed());
         dto.setBudgetResetMode(entity.getBudgetResetMode());
         dto.setBudgetLastReset(entity.getBudgetLastReset());
+
+        // The VERDICT, read off the entity rather than recomputed here. Two of its inputs
+        // never leave this service: credits_reserved (deliberately not on the DTO) and the
+        // lazy reset, which has not been written yet when a caller reads the row. Asking the
+        // entity means the DTO, the agents list and the agent page all answer with one
+        // resolution, and it is the same one AgentBudgetGuard would apply on arrival.
+        // ONE clock for the three derived fields. Read separately they read three, and a
+        // monthly cap rolling over between two of them ships blocked=true with a null
+        // "until", which every consumer reads as "this never lifts".
+        java.time.Instant budgetNow = java.time.Instant.now();
+        dto.setBudgetBlocked(entity.isBudgetBlockedAt(budgetNow));
+        dto.setBudgetBlockedUntil(entity.getBudgetBlockedUntilAt(budgetNow));
+        dto.setBudgetCommitted(entity.getBudgetCommittedAt(budgetNow));
 
         // Observability counters
         dto.setTotalExecutions(entity.getTotalExecutions());

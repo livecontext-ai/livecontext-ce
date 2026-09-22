@@ -344,7 +344,8 @@ public class ErrorPolicyEngine {
      * and the provider's own delay, so the reader is told what happened rather than seeing a bare
      * 429 body.
      */
-    private Verdict retryVerdict(Long retryAfterSeconds, Long declaredWaitMs, int attemptIndex, String message) {
+    private Verdict retryVerdict(Long retryAfterSeconds, Long declaredWaitMs, int attemptIndex,
+                                 String message) {
         if (attemptIndex >= maxRetries) {
             return message == null ? Verdict.none() : Verdict.userError(message);
         }

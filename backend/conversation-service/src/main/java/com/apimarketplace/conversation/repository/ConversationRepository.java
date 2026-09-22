@@ -1,5 +1,6 @@
 package com.apimarketplace.conversation.repository;
 
+
 import com.apimarketplace.agent.summary.ColdSummaryEnvelope;
 import com.apimarketplace.conversation.entity.Conversation;
 import org.springframework.data.domain.Page;
@@ -226,7 +227,11 @@ public interface ConversationRepository extends JpaRepository<Conversation, Stri
     @Query("SELECT DISTINCT c FROM Conversation c JOIN c.messages m WHERE c.userId = :userId AND c.active = true AND LOWER(m.content) LIKE LOWER(CONCAT('%', :searchTerm, '%')) ORDER BY c.updatedAt DESC")
     Page<Conversation> findByUserIdAndMessageContentContaining(@Param("userId") String userId, @Param("searchTerm") String searchTerm, Pageable pageable);
 
-    Optional<Conversation> findByShareToken(String shareToken);
+    /**
+     * Lookup by HMAC of the plaintext share token ({@code TokenAtRest.hash}); the share_token
+     * column is encrypted with a random IV, so there is no {@code findByShareToken} on purpose.
+     */
+    Optional<Conversation> findByShareTokenHash(String shareTokenHash);
 
     /**
      * Stage 1a.2 - merge a single derivation-keyed entry into the cached
@@ -374,4 +379,13 @@ public interface ConversationRepository extends JpaRepository<Conversation, Stri
     @Query(value = "SELECT 1 FROM conversation.conversations WHERE id = :conversationId FOR KEY SHARE",
             nativeQuery = true)
     Optional<Integer> lockConversationRowIfExists(@Param("conversationId") String conversationId);
+
+    /**
+     * READ-ONLY plaintext match for a row written before 2026-09-17 (token in clear, no hash).
+     * Native on purpose: a JPQL comparison would convert the parameter through the encrypting
+     * converter. Rewrites nothing; the delayed startup backfill does. Gated by the service on
+     * {@code PlaintextTokenBackfill.mayHaveLegacyRows}.
+     */
+    @Query(value = "SELECT * FROM conversation.conversations WHERE share_token = :plain AND share_token_hash IS NULL", nativeQuery = true)
+    Optional<Conversation> findLegacyPlaintext(@Param("plain") String plain);
 }

@@ -1,5 +1,11 @@
 package com.apimarketplace.trigger.service;
 
+import java.util.Optional;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.trigger.security.TriggerTokenAtRestBackfill;
+
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.trigger.domain.WebhookTokenEntity;
@@ -32,6 +38,14 @@ public class WebhookTokenService {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final WebhookTokenRepository webhookTokenRepository;
+
+    /**
+     * Read-only plaintext fallback for a token row still stored in clear (pre-2026-09-17) when its hash lookup misses.
+     * Optional so a unit test can build the service without a database; in a Spring context
+     * the component is always present (same package tree).
+     */
+    @Autowired(required = false)
+    private TriggerTokenAtRestBackfill tokenBackfill;
 
     public WebhookTokenService(WebhookTokenRepository webhookTokenRepository) {
         this.webhookTokenRepository = webhookTokenRepository;
@@ -123,8 +137,8 @@ public class WebhookTokenService {
     }
 
     public Optional<WebhookTokenEntity> findByToken(String token) {
-        if (token == null || token.isBlank()) return Optional.empty();
-        return webhookTokenRepository.findByToken(token);
+        return TokenAtRest.lookup(token, webhookTokenRepository::findByTokenHash,
+                t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(TriggerTokenAtRestBackfill.WEBHOOK_TOKENS, t, webhookTokenRepository::findLegacyPlaintext));
     }
 
     @Transactional
@@ -195,5 +209,16 @@ public class WebhookTokenService {
     public Set<UUID> findWorkflowIdsWithTokens(Collection<UUID> workflowIds) {
         if (workflowIds == null || workflowIds.isEmpty()) return Collections.emptySet();
         return webhookTokenRepository.findWorkflowIdsWithTokens(workflowIds);
+    }
+
+    /**
+     * Return the active trigger identities grouped by workflow in one query.
+     */
+    public Map<UUID, Set<String>> findActiveTriggerIdsByWorkflow(Collection<UUID> workflowIds) {
+        if (workflowIds == null || workflowIds.isEmpty()) return Collections.emptyMap();
+        return webhookTokenRepository.findActiveByWorkflowIdIn(workflowIds).stream()
+                .collect(Collectors.groupingBy(
+                        WebhookTokenEntity::getWorkflowId,
+                        Collectors.mapping(WebhookTokenEntity::getTriggerId, Collectors.toSet())));
     }
 }

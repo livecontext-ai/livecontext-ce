@@ -263,21 +263,118 @@ class ChatControllerV3Test {
             Map<String, Object> modelsInfo = Map.of(
                     "models", Map.of("gpt-4", Map.of("provider", "openai"))
             );
-            when(agentClient.getModelsInfo(null, "user-1", "org-1")).thenReturn(modelsInfo);
+            when(agentClient.getModelsInfo(null, "user-1", "org-1", false, true)).thenReturn(modelsInfo);
 
-            ResponseEntity<Map<String, Object>> response = chatControllerV3.getAvailableModels("user-1", "org-1");
+            ResponseEntity<Map<String, Object>> response =
+                    chatControllerV3.getAvailableModels(null, "user-1", "org-1", "USER");
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).containsKey("models");
         }
 
         @Test
+        @DisplayName("a signed-in ADMIN is neither a public read nor bridge-trimmed: the catalogue comes back whole")
+        void signedInAdminGetsTheWholeCatalogue() {
+            when(agentClient.getModelsInfo(null, "user-1", "org-1", false, false)).thenReturn(Map.of());
+
+            chatControllerV3.getAvailableModels(null, "user-1", "org-1", "ADMIN");
+
+            // An admin administers the execution links THROUGH this payload, so trimming the
+            // bridges here would empty the panel that points a billed pair at a CLI.
+            verify(agentClient).getModelsInfo(null, "user-1", "org-1", false, false);
+        }
+
+        @Test
+        @DisplayName("the classification slice is forwarded, which is how a classify picker reaches a decision model")
+        void forwardsTheClassificationCategory() {
+            // The chat slice deliberately excludes decision models, and a client-side filter
+            // can only subtract from what arrives. Forwarding this category is therefore the
+            // only way the classify inspector ever sees one - re-hardcoding null here would
+            // leave the whole frontend union as dead code.
+            when(agentClient.getModelsInfo("classification", "user-1", "org-1", false, true))
+                    .thenReturn(Map.of());
+
+            chatControllerV3.getAvailableModels("classification", "user-1", "org-1", "USER");
+
+            verify(agentClient).getModelsInfo("classification", "user-1", "org-1", false, true);
+        }
+
+        @Test
+        @DisplayName("an unknown category is ignored rather than forwarded, and answers the chat slice")
+        void unknownCategoryFallsBackToChat() {
+            // This endpoint is reachable without a token and the eligibility rule downstream
+            // is permissive for a category it does not recognise, so forwarding an arbitrary
+            // value would have answered with the WHOLE catalogue to an anonymous caller.
+            when(agentClient.getModelsInfo(null, null, null, true, false)).thenReturn(Map.of());
+
+            chatControllerV3.getAvailableModels("../../anything", null, null, "USER");
+
+            verify(agentClient).getModelsInfo(null, null, null, true, false);
+        }
+
+        @Test
+        @DisplayName("a signed-in caller is NOT a public read, so the catalogue comes back whole")
+        void signedInCallerIsNotAPublicRead() {
+            when(agentClient.getModelsInfo(null, "user-1", "org-1", false, true)).thenReturn(Map.of());
+
+            chatControllerV3.getAvailableModels(null, "user-1", "org-1", "USER");
+
+            // The point here is publicRead, which stays false for a signed-in caller: a public
+            // read also widens the catalogue to providers holding no key. The bridge trimming
+            // next to it is a separate rule, asserted on its own below.
+            verify(agentClient).getModelsInfo(null, "user-1", "org-1", false, true);
+        }
+
+        @Test
+        @DisplayName("a signed-in NON-admin never receives the CLI bridges, and the server is what decides it")
+        void signedInUserNeverReceivesTheBridges() {
+            when(agentClient.getModelsInfo(null, "user-1", "org-1", false, true)).thenReturn(Map.of());
+
+            chatControllerV3.getAvailableModels(null, "user-1", "org-1", "USER");
+
+            // The CLIs run on the operator's own subscription and must never be named to an end
+            // user. This was a frontend-only guarantee until 2026-09-18: the payload carried
+            // them to every signed-in user and one picker that forgot the filtering hook would
+            // have shown them. hideBridges without publicRead: lose the bridges, keep the
+            // availability filter.
+            verify(agentClient).getModelsInfo(null, "user-1", "org-1", false, true);
+        }
+
+        @Test
+        @DisplayName("a missing role header is treated as an ordinary user, not as an admin")
+        void anAbsentRoleHeaderIsNotAnAdmin() {
+            when(agentClient.getModelsInfo(null, "user-1", "org-1", false, true)).thenReturn(Map.of());
+
+            // What Spring passes when the gateway sent no X-User-Roles at all.
+            chatControllerV3.getAvailableModels(null, "user-1", "org-1", "USER");
+
+            verify(agentClient).getModelsInfo(null, "user-1", "org-1", false, true);
+        }
+
+        @Test
+        @DisplayName("an anonymous caller IS a public read, and says so explicitly")
+        void anonymousCallerDeclaresAPublicRead() {
+            when(agentClient.getModelsInfo(null, null, null, true, false)).thenReturn(Map.of());
+
+            chatControllerV3.getAvailableModels(null, null, null, "USER");
+
+            // Declared here rather than inferred in agent-service from a missing X-User-ID: that
+            // header is equally absent on internal calls made off a request thread, so inferring
+            // would trim the catalogue for node validation on a scheduled run and not on a chat
+            // request. This controller is the one place that genuinely knows.
+            // hideBridges stays false: publicRead already drops them, and sending both would
+            // say the same thing twice on the wire.
+            verify(agentClient).getModelsInfo(null, null, null, true, false);
+        }
+
+        @Test
         @DisplayName("should handle error retrieving models")
         void shouldHandleError() {
-            when(agentClient.getModelsInfo(null, "user-1", "org-1"))
+            when(agentClient.getModelsInfo(null, "user-1", "org-1", false, true))
                     .thenThrow(new RuntimeException("Provider error"));
 
-            ResponseEntity<Map<String, Object>> response = chatControllerV3.getAvailableModels("user-1", "org-1");
+            ResponseEntity<Map<String, Object>> response =
+                    chatControllerV3.getAvailableModels(null, "user-1", "org-1", "USER");
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).containsKey("error");

@@ -162,3 +162,31 @@ test('codex-adapter: case "error" routes through applyResultMapping', async () =
   }
   assert.ok(true);
 });
+
+test('codex-adapter: turn.completed records the reasoning tokens codex actually reports', async () => {
+  // The field is `reasoning_output_tokens`, captured from codex-cli 0.154.0 in both the
+  // stdout payload and the rollout log. This path read `reasoning_tokens` - a name codex
+  // does not emit - so every reasoning token spent on this provider was recorded as zero.
+  const { adapter, ctx } = makeCtx();
+
+  await adapter.handleMessage({
+    type: 'turn.completed',
+    usage: {
+      input_tokens: 15270,
+      cached_input_tokens: 12160,
+      cache_write_input_tokens: 128,
+      output_tokens: 40,
+      reasoning_output_tokens: 32,
+    },
+  }, ctx);
+
+  const call = ctx.state.perCallUsages.at(-1);
+  assert.equal(call.promptTokens, 15270);
+  assert.equal(call.completionTokens, 40);
+  assert.equal(call.cachedTokens, 12160, 'the cached subset carries the discount');
+  assert.equal(call.reasoningTokens, 32, 'was silently 0 before');
+  // cache_write is INSIDE input_tokens for this family (15270 + 40 = the reported total),
+  // and cacheCreationInputTokens is the ADDITIVE Anthropic slot: mapping one to the other
+  // would bill those tokens twice for a codex run billed under an Anthropic pair.
+  assert.equal(call.cacheCreationInputTokens, 0);
+});

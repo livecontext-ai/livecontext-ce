@@ -696,6 +696,7 @@ public class WorkflowEpochRepository {
         }
         String sql = "SELECT e.run_id, e.trigger_id, e.epoch, e.started_at, e.closed_at, "
                 + "e.is_active, e.epoch_state, w.id AS workflow_id, w.name AS workflow_name, "
+                + "COALESCE(r.plan->'triggers', '[]'::jsonb)::text AS triggers_json, "
                 + "w.workflow_type, w.source_publication_id "
                 + "FROM workflow_epochs e "
                 + "JOIN workflow_runs r ON r.run_id_public = e.run_id "
@@ -716,6 +717,7 @@ public class WorkflowEpochRepository {
                 (java.util.UUID) rs.getObject("workflow_id"),
                 rs.getString("workflow_name"),
                 rs.getString("workflow_type"),
+                rs.getString("triggers_json"),
                 rs.getObject("source_publication_id") != null
                         ? rs.getObject("source_publication_id").toString() : null
         ), Timestamp.from(from), Timestamp.from(to), organizationId);
@@ -727,8 +729,13 @@ public class WorkflowEpochRepository {
             java.util.UUID workflowId,
             String workflowName,
             String workflowType,
+            String triggersJson,
             String sourcePublicationId
     ) {
+        public WorkspaceFireRow(EpochFireRow fire, java.util.UUID workflowId, String workflowName,
+                                String workflowType, String sourcePublicationId) {
+            this(fire, workflowId, workflowName, workflowType, null, sourcePublicationId);
+        }
     }
 
     /**

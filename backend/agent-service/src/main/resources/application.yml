@@ -51,6 +51,22 @@ spring:
           time_zone: UTC
   flyway:
     enabled: false
+  mvc:
+    async:
+      # CloudLlmRelayController.stream returns a StreamingResponseBody that relays a whole
+      # LLM completion to a CE install as NDJSON, so the container's async deadline governs
+      # the completion, not just the first byte. The default is 30s, which a single long
+      # completion routinely exceeds, and the failure is silent: the exchange is aborted on
+      # an already-committed response, so the CE side sees truncated NDJSON rather than an
+      # error. Same defect and same fix as storage-service and the CE monolith.
+      #
+      # Sizing is honest about its basis: unlike storage-service there is NO production
+      # measurement behind this number (7 days of logs show zero
+      # AsyncRequestTimeoutException on this service), so it is aligned with its two
+      # siblings rather than derived from agent-service traffic. It only ever prevents a
+      # premature abort, and it stays finite so a wedged relay releases its executor slot.
+      request-timeout: 600000
+
   jackson:
     time-zone: UTC
     serialization:
@@ -72,7 +88,15 @@ gateway:
       - /api/internal/
       - /api/agent-tools
       - /api/agents
+      # Both skills summaries are read service-to-service by conversation-service
+      # (AgentConfigProvider) with only X-User-ID, no gateway HMAC. Leaving
+      # /api/skills/default-active/summary off this list made every call 401 and the
+      # caller swallow it, so general chat silently ran with NO default-active skills.
+      # Note what listing a path means: matching is a bare prefix startsWith, so anything with
+      # network reach to this pod can call it with a forged X-User-ID. That is the same accepted
+      # exposure as the /api/agents and /api/skills/summary entries above, not a new one.
       - /api/skills/summary
+      - /api/skills/default-active/summary
       - /api/agent/cli/
 
 # Inter-service communication
@@ -158,10 +182,21 @@ ai:
       # does not supply rate limits. Every row MUST have non-null rate
       # limits so the limiter enforces a ceiling - LiteLLM only populates
       # rpm/tpm for ~1.8% of models, so these defaults catch the rest.
-      rate-limit-tpm: 60000
+      # Models curated in ai.agent.rate-limits below are skipped entirely
+      # (their columns stay NULL so the researched value wins).
+      #
+      # The TPM values are a FLOOR: CatalogMergeService raises them to
+      # contextWindow x rate-limit-tpm-context-multiplier, because a ceiling
+      # below the cost of one request makes the limiter the bottleneck rather
+      # than a safety net (prod 2026-09-11: a 1M-context model reserving ~50k
+      # tokens per agent turn against a flat 60000 ran at one call per minute).
+      # These flat numbers are what a model declaring no context window gets.
+      rate-limit-tpm: 2000000
       rate-limit-rpm: 500
-      rate-limit-tpm-per-tenant: 20000
+      rate-limit-tpm-per-tenant: 500000
       rate-limit-rpm-per-tenant: 200
+      # How many full-context requests the derived window must fit.
+      rate-limit-tpm-context-multiplier: 4
     cli:
       models:
         opus: claude-opus-4-6
@@ -198,6 +233,17 @@ ai:
         api-key: ${DEEPSEEK_API_KEY:}
         api-url: https://api.deepseek.com/v1/chat/completions
         models: deepseek-chat,deepseek-coder
+      # Decision provider - returns a typed decision, never text, so it has no
+      # /chat/completions and is NOT selectable for chat or for an Agent node. Its models
+      # carry mode='decision', which is what keeps them out of every conversational
+      # picker (ModelCategory.acceptsMode). Execution: ClassifyService dispatches to
+      # api-url; TypeSafeDecisionProvider only declares the models for the catalog.
+      typesafe:
+        enabled: ${TYPESAFE_ENABLED:true}
+        display-order: 20
+        api-key: ${TYPESAFE_API_KEY:}
+        api-url: ${TYPESAFE_API_URL:https://api.typesafe.ai/v1/systemone}
+        models: jev-latest
       # Bridge providers - CLI-based, no API key needed (OAuth subscription).
       # Models MUST match BridgeAllowlist.MODELS in shared-agent-lib
       # (backend/shared-agent-lib/.../bridge/BridgeAllowlist.java). V128 is the
@@ -211,7 +257,7 @@ ai:
       codex:
         enabled: ${BRIDGE_CODEX_ENABLED:true}
         display-order: 7
-        models: gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.5,gpt-5.4,gpt-5.4-mini,gpt-5.3-codex,gpt-5.2
+        models: gpt-6-astra,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.5,gpt-5.4,gpt-5.4-mini,gpt-5.4-nano,gpt-5.3-codex,gpt-5.2
       gemini-cli:
         enabled: ${BRIDGE_GEMINI_CLI_ENABLED:true}
         display-order: 8

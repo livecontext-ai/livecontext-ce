@@ -1,13 +1,14 @@
 /**
  * Pure helpers shared by every run-mode data view (Params column, Output column).
  *
- * They answer four questions the inspector asks about a value it got back from a
+ * They answer five questions the inspector asks about a value it got back from a
  * run, and nothing else - no React, no fetching - so each one is directly testable:
  *
  *  1. Is this string actually an unresolved template the engine failed to fill?
  *  2. Is this string actually JSON that deserves a tree instead of one long line?
  *  3. Can this value be laid out as a table (an array of row-shaped objects)?
  *  4. What exactly goes on the clipboard when the user copies it?
+ *  5. How many rows does opening it render, which is what its {n} marker must say?
  */
 
 /**
@@ -103,6 +104,46 @@ export function parseEmbeddedJson(value: unknown): unknown | undefined {
   }
 }
 
+/** The fields a recognised file reference is rendered as, in order. */
+export const FILE_REF_DISPLAY_PROPS = ['path', 'name', 'mimeType', 'size'] as const;
+
+/**
+ * How many rows a fully-opened value renders. ONE rule, for every `{n}` marker the
+ * TREE draws.
+ *
+ * Two boundaries, both deliberate. A recognised file reference nested in a JSON
+ * STRING opens onto its card, which is itself collapsed, so those four rows are one
+ * click further away than every other shape; the marker still counts them, because it
+ * describes the value, not the clicks. And `formatCellValue` counts a table cell by
+ * its raw keys instead: a cell never expands, so its number summarises the object
+ * rather than promising rows, and the two views of one payload can differ there.
+ *
+ * The marker and the rows were computed separately and disagreed. The marker
+ * subtracted `_type` while the rows below it did not, so any payload carrying a
+ * discriminator opened one row longer than the count above it announced. A second,
+ * quieter disagreement sat underneath: a file reference renders a FIXED four fields
+ * whatever else it carries, so an embedded one with an `id` (which every file
+ * produced since the opaque-URL cutover has) was counted 5 by the string row and
+ * drawn as 4 by the file row nested inside it.
+ *
+ * Nothing is subtracted from an ordinary object. Hiding `_type` would take away the
+ * one thing that says
+ * a malformed `{_type:'file', path, name}` was MEANT to be a file, which is exactly
+ * what a reader needs when a downstream fileRef parameter refuses it, and it would
+ * make a user's own `_type` field invisible in a webhook body or a table row. A
+ * RECOGNISED reference is different: its view draws four named fields on purpose, so
+ * `id`, `url` and `key` are not rows there and are not counted as ones.
+ *
+ * @param isFileRefValue whether the caller's `isFileRef` recognised this value, which
+ *                       decides whether it is drawn as a file card or as plain rows
+ */
+export function expandedRowCount(value: unknown, isFileRefValue: boolean): number {
+  if (Array.isArray(value)) return value.length;
+  if (value === null || typeof value !== 'object') return 0;
+  if (isFileRefValue) return FILE_REF_DISPLAY_PROPS.length;
+  return Object.keys(value).length;
+}
+
 /** Pretty-print any value the way the JSON view and the clipboard show it. */
 export function formatJson(value: unknown): string {
   if (value === undefined) return 'undefined';
@@ -168,9 +209,14 @@ export function formatCellValue(value: unknown): string {
 
 /**
  * A step payload is almost never an array at the top level: the rows live under
- * one field (`items`, `results`, `conditions`, …). The table view offers itself
- * when exactly ONE such field exists - with two, picking one would be an
- * arbitrary choice the reader did not make, so the tree stays.
+ * one field (`items`, `results`, `conditions`, …). This lists every field that
+ * could be laid out as rows.
+ *
+ * The table used to offer itself only when exactly ONE existed, on the reasoning
+ * that picking between two would be an arbitrary choice. The effect was worse
+ * than the problem: a payload with `items` AND `errors` lost the table view
+ * entirely, for no reason the reader could see. The picking is now the reader's,
+ * through a field selector, and the chosen field is always named on screen.
  */
 export function tabularFields(data: unknown): string[] {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return [];
@@ -181,13 +227,20 @@ export function tabularFields(data: unknown): string[] {
 
 /** Whether a table view can be offered for this payload. */
 export function hasTableView(data: unknown): boolean {
-  return isTabularArray(data) || tabularFields(data).length === 1;
+  return isTabularArray(data) || tabularFields(data).length > 0;
 }
 
-/** The value the table view lays out: the payload, or its single row-shaped field. */
-export function pickTabularValue(data: unknown): unknown {
+/**
+ * The rows the table lays out: the payload itself when it is already an array,
+ * otherwise the named field (defaulting to the first row-shaped one).
+ *
+ * Returns undefined when there is nothing tabular, so a caller cannot mistake
+ * "no rows" for "the whole payload".
+ */
+export function pickTabularValue(data: unknown, field?: string): unknown {
   if (isTabularArray(data)) return data;
   const fields = tabularFields(data);
-  if (fields.length === 1) return (data as Record<string, unknown>)[fields[0]];
-  return data;
+  if (fields.length === 0) return undefined;
+  const chosen = field && fields.includes(field) ? field : fields[0];
+  return (data as Record<string, unknown>)[chosen];
 }

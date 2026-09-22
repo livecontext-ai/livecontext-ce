@@ -49,6 +49,11 @@ import java.util.Optional;
  * - Renewal reset:         reset_sub_{subId}_{epochSec}
  * - Renewal plan/pack:     plan_sub_{subId}_{epochSec} / pack_sub_{subId}_{epochSec}
  * - Pack upgrade:          pack_sub_{subId}_upgrade_{epochSec}
+ * - Monthly credit cycle:  reset_sub_{subId}_{epochSec} / pack_sub_{subId}_{epochSec}, where the
+ *                          epoch is the CYCLE start (currentPeriodStart + N months), so a yearly
+ *                          subscription's eleven intra-year grants never collide with its
+ *                          period-start grant nor with each other (see
+ *                          {@link #attributeMonthlyCreditCycle}).
  */
 @Service
 public class CreditAttributionService {
@@ -115,7 +120,24 @@ public class CreditAttributionService {
                 grantPackCredits(userId, "pack_" + subKey + "_init", creditQuantity, plan.getCode());
             } else if (plan.getIncludedLlmTokens() != null && plan.getIncludedLlmTokens() > 0) {
                 // Internal FREE plan: grant plan-included credits (1K)
-                grantPlanCredits(userId, "plan_" + subKey + "_init", plan);
+                String planSourceId = "plan_" + subKey + "_init";
+                // V494: the AI allowance rides with this grant, and is seeded ONLY on the
+                // first one. Two properties depend on that, and both are load-bearing:
+                //
+                //  - It inherits the EMAIL-VERIFICATION gate. This method is only reached
+                //    for a FREE row through attributeCreditsIfEligible, which returns early
+                //    for an unverified user. Seeding the pot where the row is CREATED (which
+                //    is what this did first) handed 100 credits of platform-key inference to
+                //    every unverified throwaway signup, scriptably, while the 1000 monthly
+                //    credits sitting beside it stayed correctly withheld.
+                //  - It is IDEMPOTENT. This runs on EVERY login, so a refill that did not
+                //    key off the ledger row would top the pot back up to full on each one:
+                //    an unlimited allowance, refilled by reloading the page.
+                //    Taken from the grant's own return rather than a second existence
+                //    query, which is the same signal one round trip cheaper.
+                if (grantPlanCredits(userId, planSourceId, plan)) {
+                    refillAiAllowance(subscription, plan);
+                }
             }
         } catch (DataIntegrityViolationException e) {
             log.info("Duplicate credit attribution detected for subId={}, treating as idempotent skip",
@@ -254,17 +276,79 @@ public class CreditAttributionService {
                     userId, plan.getCode(), creditQuantity, sub.getId(), periodSuffix);
 
             // Reset balance to zero
-            resetBalance(userId, "reset_" + subKey + "_" + periodSuffix, sub);
+            String resetSourceId = "reset_" + subKey + "_" + periodSuffix;
+            // Every credit write below is keyed on a sourceId and therefore idempotent on
+            // its own; the allowance refill is a straight SET with no ledger row of its
+            // own, so it needs the marker above or a second call for the same period tops
+            // the pot back up. Unreachable on the scheduler path (it advances the period
+            // first, so the key is always fresh) and on a repeated
+            // AdminPlanService.assignPlan (which re-anchors currentPeriodStart, and
+            // periodKey is epoch SECONDS, so it mints a fresh key). The path it does
+            // protect is a redelivered Stripe invoice.paid: WebhookController calls
+            // attributeOnRenewal with newPeriodStart = null, so the period - and therefore
+            // the key - is identical across deliveries. No paid plan carries an allowance
+            // today, but V494 advertises it as live-tunable, so the first one that does
+            // must not hand out a free pot per redelivery.
+            if (!ledgerRepository.existsBySourceId(resetSourceId)) {
+                resetBalance(userId, resetSourceId, sub);
+            } else {
+                log.info("Balance already reset for sourceId={}, skipping", resetSourceId);
+            }
 
-            // Re-grant credits
-            if (grantsBasePack(sub, creditQuantity)) {
+            // Re-grant credits. The return value is ALSO the answer to "has this period
+            // already been attributed?", which the allowance refill below needs: the
+            // refill is a straight SET with no ledger row of its own, so without a marker
+            // a second call for the same period tops the pot back up. Taken from the
+            // grant rather than from the reset row, because resetBalance returns before
+            // writing whenever the sub bucket is already zero - the ordinary state of an
+            // account that spent its month, i.e. exactly the accounts being renewed. And
+            // taken from the CALL rather than from a second existsBySourceId, because
+            // this is the hourly sweep's hot path and the grant already asked.
+            boolean attributedNow;
+            if (grantsBasePack(sub, creditQuantity) && creditQuantity < 0) {
+                // Nothing to grant, which is NOT "already attributed": the allowance still
+                // has to be brought in line with the plan (cleared, on a plan that grants
+                // none). grantPackCredits returns false for this case AND for the
+                // already-granted one, so the two are separated here rather than there.
+                //
+                // Scoped to the base-pack branch on purpose: a negative quantity on an
+                // INTERNAL FREE row must still fall through to its plan-included grant,
+                // which is what it did before this flag existed. Short-circuiting ahead of
+                // the branch selection quietly stopped those rows renewing at all.
+                attributedNow = true;
+            } else if (grantsBasePack(sub, creditQuantity)) {
                 // Paid plans AND admin-granted comp plans (internal, non-FREE): grant the
                 // tier-0 base pack (5K at $0 when creditQuantity=0). Keeps a comp Starter/Pro/Team
                 // renewing at the 5K base every cycle - never the plan's larger allowance.
-                grantPackCredits(userId, "pack_" + subKey + "_" + periodSuffix, creditQuantity, plan.getCode());
+                attributedNow = grantPackCredits(userId, "pack_" + subKey + "_" + periodSuffix,
+                        creditQuantity, plan.getCode());
             } else if (plan.getIncludedLlmTokens() != null && plan.getIncludedLlmTokens() > 0) {
                 // Internal FREE plan: grant plan-included credits (1K)
-                grantPlanCredits(userId, "plan_" + subKey + "_" + periodSuffix, plan);
+                attributedNow = grantPlanCredits(userId, "plan_" + subKey + "_" + periodSuffix, plan);
+            } else {
+                // A plan that grants no credits at all writes NO row to key on - and the
+                // reset row is not a substitute, because resetBalance skips it whenever the
+                // balance is already zero (see its javadoc), so keying on it would re-arm
+                // the guard on every call. The only refill such a plan can need is the
+                // CLEAR (it has no allowance to grant), and clearing an already-clear pot
+                // is idempotent by construction, so it is safe to run unguarded. A plan
+                // that granted no credits but DID carry an allowance is the one shape this
+                // leaves un-refilled; it has no marker, and inventing one for a
+                // combination nothing creates would be guessing.
+                boolean clearsOnly = plan.getIncludedAiCredits() == null || plan.getIncludedAiCredits() <= 0;
+                attributedNow = clearsOnly;
+            }
+
+            // V494: refill the separate AI allowance to the plan's configured amount.
+            // A straight SET, not an add: the pot is a monthly allowance, so an unused
+            // remainder does not roll over and a mid-cycle change of the plan's amount
+            // takes effect at the next renewal. Plans with no allowance (every paid one)
+            // have the pot CLEARED, which is what stops a leftover pot from following an
+            // account onto a plan that does not grant one. An account whose e-mail is not
+            // verified is treated exactly like a plan with no allowance: the pot buys real
+            // inference, and this leg is the one the creation-path gate does not cover.
+            if (attributedNow) {
+                refillAiAllowance(sub, plan);
             }
             return RenewalOutcome.RENEWED;
         } catch (DataIntegrityViolationException e) {
@@ -272,6 +356,353 @@ public class CreditAttributionService {
                     subscription == null ? null : subscription.getId());
             return RenewalOutcome.SKIPPED;
         }
+    }
+
+    /**
+     * What {@link #attributeMonthlyCreditCycle} actually did, so the scheduler logs the truth.
+     */
+    public enum MonthlyCycleOutcome {
+        /** The next monthly cycle was due; balance reset and pack re-granted. */
+        GRANTED,
+        /**
+         * The cycle was due by the index but its ledger keys already existed, so the guards
+         * wrote nothing and only the index moved. The second line of defence doing its job (a
+         * rewound index, a replay); reported as its own outcome so the caller never announces
+         * a grant that did not happen.
+         */
+        ABSORBED,
+        /** The current cycle is already granted; nothing to do until the next month boundary. */
+        NOT_DUE,
+        /** Not eligible (row gone, not a yearly Stripe subscription, not active, no plan). */
+        SKIPPED
+    }
+
+    /**
+     * Grant the next MONTHLY credit cycle of a YEARLY Stripe subscription (V498).
+     *
+     * <p><b>Why this exists.</b> The credit pack is priced per unit per month on every cadence
+     * ($1.00 monthly, $12.00 yearly: twelve months at the monthly rate, no discount) and sold as
+     * "credits per month". A monthly subscription is re-granted on every Stripe
+     * {@code invoice.paid} ({@code subscription_cycle}); a yearly one raises that invoice once
+     * every twelve months and was therefore granted ONE month of credits for a year of payment.
+     * This method is the eleven intra-year grants that were missing. It does exactly what
+     * {@link #attributeOnRenewal} does (reset, then re-grant the pack at the row's live
+     * quantity) so a yearly customer gets, month after month, what a monthly one gets.
+     *
+     * <p><b>The cycle is anchored on the billing period, not chained.</b> Cycle {@code N}
+     * starts at {@code currentPeriodStart.plusMonths(N)}; {@code Subscription.creditCycleIndex}
+     * records the last one granted. Chaining {@code plusMonths(1)} from the previous cycle
+     * would drift on a day-29..31 anchor (Jan 31 to Feb 28 to Mar 28 ...) and end up granting a
+     * thirteenth pack a few days before the yearly renewal. The anchor is also why the index is
+     * reset by {@code Subscription.setCurrentPeriodStart}: a new billing period restarts the
+     * count. Cycle 0 is the period-start grant itself ({@code _init} or the yearly
+     * {@code invoice.paid}), never this method: this method cannot backfill a cycle 0 the
+     * renewal failed to deliver. Known, pre-existing and shared with monthly rows: the
+     * {@code invoice.paid} handler keys the renewal on the LOCAL {@code currentPeriodStart},
+     * so when it lands before the {@code customer.subscription.updated} that moves the period,
+     * the grant is keyed on the previous anchor, and if that key was already consumed the
+     * renewal grants nothing. A cycle that would start at or after {@code currentPeriodEnd}
+     * belongs to the next billing period and is left to Stripe.
+     *
+     * <p><b>Catch-up grants once, not once per missed month.</b> Several cycles can be due at
+     * once (a yearly subscription that predates the scheduler, or a long outage). The index
+     * jumps to the latest due cycle and that one is granted; intermediate cycles are not
+     * replayed, because each would have been reset by the next anyway ("credits do not roll
+     * over"), and replaying them would only write reset/grant pairs that cancel out.
+     *
+     * <p>Same locking, idempotence and write discipline as the renewal path: the row is
+     * re-read under {@code PESSIMISTIC_WRITE} and re-validated, the index moves inside this
+     * transaction BEFORE the grant so a crash retries cleanly and a concurrent pass sees the
+     * cycle taken, and the sourceIds are keyed on the cycle start so a replay is absorbed by
+     * {@code existsBySourceId}. The PAYG bucket is untouched, as on every renewal.
+     *
+     * @param now the instant the scheduler is evaluating against (one value for the whole pass)
+     * @return what actually happened, so the caller can log the truth rather than assume a grant
+     */
+    @Transactional
+    public MonthlyCycleOutcome attributeMonthlyCreditCycle(Long userId, Subscription subscription, LocalDateTime now) {
+        try {
+            Subscription sub = resolveManagedForUpdate(subscription).orElse(null);
+            if (sub == null) {
+                log.error("Cannot attribute monthly credit cycle: subscription row {} is not resolvable for update. userId={}",
+                        subscription == null ? null : subscription.getId(), userId);
+                return MonthlyCycleOutcome.SKIPPED;
+            }
+            // Re-validate UNDER the lock what the unlocked selection matched on: a cycle change
+            // to monthly, a cancellation or a plan swap may have landed since.
+            if (!isMonthlyCreditCycleEligible(sub)) {
+                log.info("Subscription {} is not eligible for a monthly credit cycle (provider={}, cadence={}, status={}), skipping",
+                        sub.getId(), sub.getProvider(), sub.getCadence(), sub.getStatus());
+                return MonthlyCycleOutcome.SKIPPED;
+            }
+            Plan plan = sub.getPlan();
+            if (plan == null) {
+                log.error("Cannot attribute monthly credit cycle: subscription {} has no plan. userId={}",
+                        sub.getId(), userId);
+                return MonthlyCycleOutcome.SKIPPED;
+            }
+
+            int granted = sub.getCreditCycleIndex();
+            int due = dueCreditCycle(sub.getCurrentPeriodStart(), sub.getCurrentPeriodEnd(), now);
+            if (due <= granted) {
+                return MonthlyCycleOutcome.NOT_DUE;
+            }
+
+            LocalDateTime cycleStart = sub.getCurrentPeriodStart().plusMonths(due);
+            int creditQuantity = sub.getCreditQuantity() != null ? sub.getCreditQuantity() : 0;
+            String subKey = "sub_" + sub.getId();
+            String cycleSuffix = periodKey(cycleStart);
+
+            log.info("Attributing monthly credit cycle {} (of a yearly period) for userId={}, plan={}, creditQty={}, subId={}, cycleStart={}",
+                    due, userId, plan.getCode(), creditQuantity, sub.getId(), cycleStart);
+
+            // Advance BEFORE granting, inside this transaction: a failed grant rolls the index
+            // back with it, a committed one can never be re-granted by the next pass.
+            sub.setCreditCycleIndex(due);
+
+            // The idempotence guard lives HERE, not inside resetBalance: V494 moved it out to
+            // the callers, because resetBalance returns before writing whenever the sub bucket
+            // is already zero, so its ledger row is not a reliable "already done" marker. This
+            // cycle CAN be replayed (an index rewound by hand, or by the documented upsert
+            // race), and without the guard the replay would zero a wallet the grant then
+            // refuses to refill - its own key is already spent. Pinned by
+            // ledgerKeyGuardHoldsWhenTheIndexIsRewound on a real database.
+            String resetSourceId = "reset_" + subKey + "_" + cycleSuffix;
+            if (!ledgerRepository.existsBySourceId(resetSourceId)) {
+                resetBalance(userId, resetSourceId, sub);
+            } else {
+                log.info("Balance already reset for sourceId={}, skipping", resetSourceId);
+            }
+
+            boolean wrote;
+            if (grantsBasePack(sub, creditQuantity)) {
+                wrote = grantPackCredits(userId, "pack_" + subKey + "_" + cycleSuffix, creditQuantity, plan.getCode());
+            } else if (plan.getIncludedLlmTokens() != null && plan.getIncludedLlmTokens() > 0) {
+                // Unreachable for a Stripe row today (grantsBasePack is true for every paid
+                // subscription); kept symmetrical with attributeOnRenewal on purpose.
+                wrote = grantPlanCredits(userId, "plan_" + subKey + "_" + cycleSuffix, plan);
+            } else {
+                wrote = false;
+            }
+            // V494: the AI allowance is a MONTHLY pot, so a yearly subscription must have it
+            // refilled every month for the same reason its credit pack is - otherwise the pot
+            // reproduces, one bucket over, the very defect this cycle exists to close. For every
+            // plan that exists today this is a no-op (no paid plan carries an allowance, so the
+            // call CLEARS an already-clear pot and returns without writing), which is precisely
+            // why it is safe to run unguarded here: it costs one comparison and it means a
+            // future allowance on a paid plan is served monthly on both cadences, not annually
+            // on one of them.
+            refillAiAllowance(sub, plan);
+            return wrote ? MonthlyCycleOutcome.GRANTED : MonthlyCycleOutcome.ABSORBED;
+        } catch (DataIntegrityViolationException e) {
+            // Parity with attributeOnRenewal. The real idempotence is the existsBySourceId guard
+            // in resetBalance / grantPackCredits; a duplicate that reaches the database is thrown
+            // inside CreditService.grantCredits's own transactional proxy, which marks this
+            // transaction rollback-only, so in production the commit fails and the pass retries
+            // next hour rather than landing here.
+            log.info("Duplicate monthly credit cycle attribution detected for subId={}, treating as idempotent skip",
+                    subscription == null ? null : subscription.getId());
+            return MonthlyCycleOutcome.SKIPPED;
+        }
+    }
+
+    /**
+     * The latest monthly cycle that has started by {@code now} and still lies inside the
+     * billing period: the largest {@code N >= 1} with
+     * {@code periodStart + N months <= now} and {@code periodStart + N months + 1 day <= periodEnd}.
+     * 0 when none is due. Every cycle start is computed from the anchor, never from the
+     * previous cycle, so a day-31 anchor yields exactly the same eleven cycles as a day-14
+     * one. The bound is the period end rather than a hard-coded 11, so a Stripe period that is
+     * not exactly twelve months (schedule phase, proration) is neither over- nor under-granted;
+     * the one-day margin is what keeps a period end that lands an hour past
+     * {@code periodStart + 12 months} (a DST shift between the UTC instant Stripe computes and
+     * a local-time anchor) from turning cycle 12 into a thirteenth pack the hour before the
+     * renewal. A cycle that would live less than a day before the renewal is the renewal's.
+     */
+    static int dueCreditCycle(LocalDateTime periodStart, LocalDateTime periodEnd, LocalDateTime now) {
+        if (periodStart == null || periodEnd == null || now == null) {
+            return 0;
+        }
+        int due = 0;
+        for (int n = 1; ; n++) {
+            LocalDateTime cycleStart = periodStart.plusMonths(n);
+            if (cycleStart.isAfter(now) || cycleStart.plusDays(1).isAfter(periodEnd)) {
+                break;
+            }
+            due = n;
+        }
+        return due;
+    }
+
+    /**
+     * When this subscription's credits will next be RE-GRANTED, or {@code null} when no next
+     * grant can be named. Every such renewal also zeroes the bucket first, but the converse
+     * does not hold and this method answers the grant, not the zeroing (see the list below).
+     *
+     * <p><b>Why a user-facing surface needs this and cannot derive it.</b> "When do my credits
+     * come back, and how many" is the one question a wallet cannot answer from its balance, and
+     * on a YEARLY subscription the obvious answer is the wrong one: the invoice is annual, the
+     * credit pack is monthly ({@link #attributeMonthlyCreditCycle}), so the next billing date is
+     * eleven months away from the next grant for most of the year. Anything that printed
+     * {@code currentPeriodEnd} for everyone would therefore tell a yearly customer to wait a year
+     * for credits that arrive in a fortnight.
+     *
+     * <p>It is computed HERE, beside {@link #dueCreditCycle}, because the two must agree by
+     * construction: this method names the instant, that one decides whether the grant is owed,
+     * and they read the same anchor with the same one-day margin. A date computed anywhere else
+     * would be a second opinion about a schedule this class owns.
+     *
+     * <p><b>THE INVARIANT: every instant this method returns is strictly in the future, and is
+     * one on which a grant actually happens.</b> Everything else is {@code null}, and callers
+     * must render that as "we are not saying" rather than substituting a date of their own:
+     * <ul>
+     *   <li><b>Not in good standing</b> ({@code past_due}, {@code incomplete}) - the grant rides
+     *       on an invoice being PAID, and nobody can date that.</li>
+     *   <li><b>A row that grants nothing</b> - see {@link #grantsAnyCredits}. An internal PAYG or
+     *       CREDIT_PACK row at quantity zero renews on schedule and is handed no credits, so
+     *       naming its renewal date would promise an amount that never arrives. Note what that
+     *       trades away: such a row IS still zeroed on its renewal, and this method stays silent
+     *       about it. Saying nothing beats naming a date beside an amount nobody will receive,
+     *       but a surface that wanted to warn about the reset itself would need its own answer,
+     *       not this one.</li>
+     *   <li><b>Cancelled, when the answer would be the renewal</b> - but ONLY then. A cancelling
+     *       YEARLY row keeps receiving its monthly packs to the end of the year it has already
+     *       paid for ({@link #isMonthlyCreditCycleEligible} does not look at the cancel flag, and
+     *       neither does the query that feeds it), so it is told about them. Refusing there was
+     *       a real defect: it silenced the feature for up to eleven months on exactly the plan
+     *       shape it was written for, and at exactly the moment its owner is asking whether
+     *       cancelling costs them this month's credits.</li>
+     *   <li><b>A date that is not in the future</b> - an internal row waits up to an hour between
+     *       its period expiring and the hourly scheduler renewing it, and a delayed
+     *       {@code invoice.paid} widens that window on a Stripe row. During it the true answer is
+     *       "imminent", which is not an instant; "+1,000 credits on {yesterday}" is not either.</li>
+     *   <li><b>A yearly cycle that is due and not yet granted</b> - the same window, on the other
+     *       branch. {@code YearlyCreditCycleScheduler} runs hourly, so between a cycle start and
+     *       its pass a grant is owed NOW; naming the following cycle there would understate the
+     *       wait by a month, and by a month for the whole of any scheduler outage. Both branches
+     *       therefore answer "imminent" the same way, with silence, rather than one of them
+     *       quietly picking the next date instead.</li>
+     *   <li><b>No period end recorded</b> - nothing to compute from.</li>
+     * </ul>
+     *
+     * @param now the instant to answer against (injected, so the caller's clock is testable)
+     */
+    public static LocalDateTime nextCreditGrantAt(Subscription subscription, LocalDateTime now) {
+        if (subscription == null || now == null) {
+            return null;
+        }
+        LocalDateTime periodEnd = subscription.getCurrentPeriodEnd();
+        if (periodEnd == null) {
+            return null;
+        }
+        // Deliberately NOT the set BillingController selects on (which includes past_due and
+        // incomplete): being selectable as "your current subscription" and being owed a future
+        // grant are different questions.
+        String status = subscription.getStatus();
+        if (status == null || !GRANTING_STATUSES.contains(status.toLowerCase())) {
+            return null;
+        }
+        if (!grantsAnyCredits(subscription)) {
+            return null;
+        }
+
+        LocalDateTime next = null;
+        if (isMonthlyCreditCycleEligible(subscription)) {
+            LocalDateTime periodStart = subscription.getCurrentPeriodStart();
+            if (dueCreditCycle(periodStart, periodEnd, now) > subscription.getCreditCycleIndex()) {
+                // A cycle is owed and the hourly pass has not made it yet. Read from the row's
+                // own index rather than from the clock, because that is what the scheduler
+                // compares against when it decides whether to grant.
+                return null;
+            }
+            next = nextCreditCycleStart(periodStart, periodEnd, now);
+        }
+        if (next == null) {
+            // Past the last intra-period cycle, or never on one: the next grant is the renewal,
+            // which is the one thing a cancelling subscription will not get.
+            if (Boolean.TRUE.equals(subscription.getCancelAtPeriodEnd())) {
+                return null;
+            }
+            next = periodEnd;
+        }
+        // Stated once, for both branches. nextCreditCycleStart already guarantees it; the
+        // periodEnd fallback guarantees nothing, and that is where the stale-row case lands.
+        return next.isAfter(now) ? next : null;
+    }
+
+    /**
+     * Whether a renewal of this row hands out any credits at all.
+     *
+     * <p>A mirror of the branch selection in {@link #attributeOnRenewal}, and it has to be:
+     * "your credits come back on the 14th" is a promise about an amount, so a row that renews
+     * and grants nothing must name no date. The case that makes this more than defensive is an
+     * internal PAYG or CREDIT_PACK row at quantity zero, which {@link #grantsBasePack}
+     * deliberately excludes and whose plan carries no included credits either. It is
+     * {@code active}, it has a period end, and before this check both wallet surfaces offered it
+     * "+5,000 credits" on a date nothing would honour.
+     *
+     * <p>A NEGATIVE quantity is treated as granting nothing, matching the first branch over
+     * there, where it is explicitly "nothing to grant".
+     */
+    private static boolean grantsAnyCredits(Subscription subscription) {
+        Plan plan = subscription.getPlan();
+        if (plan == null) {
+            return false;
+        }
+        int creditQuantity = subscription.getCreditQuantity() != null ? subscription.getCreditQuantity() : 0;
+        if (grantsBasePack(subscription, creditQuantity)) {
+            return creditQuantity >= 0;
+        }
+        return plan.getIncludedLlmTokens() != null && plan.getIncludedLlmTokens() > 0;
+    }
+
+    /**
+     * Statuses under which a further grant is actually owed. {@code trialing} is included: the
+     * trial ends on an invoice that grants, which is exactly what the caller is asking about.
+     */
+    private static final java.util.Set<String> GRANTING_STATUSES =
+            java.util.Set.of("active", "trialing");
+
+    /**
+     * The first monthly cycle start strictly AFTER {@code now} that still lies inside the
+     * billing period, or {@code null} when none does.
+     *
+     * <p>The exact mirror of {@link #dueCreditCycle}: same anchor ({@code periodStart} plus N
+     * months, never chained from the previous cycle) and the same one-day margin before
+     * {@code periodEnd}, so the cycle this returns is precisely the cycle that method will call
+     * due when that instant arrives. Returning {@code null} rather than a twelfth cycle is what
+     * hands the caller back to the yearly renewal date instead of inventing a thirteenth pack.
+     *
+     * <p>Strictly after {@code now}, because a cycle starting exactly now is already due and
+     * will be granted by the current pass; the next one a reader is waiting for is the one
+     * after it.
+     */
+    static LocalDateTime nextCreditCycleStart(LocalDateTime periodStart, LocalDateTime periodEnd,
+                                              LocalDateTime now) {
+        if (periodStart == null || periodEnd == null || now == null) {
+            return null;
+        }
+        for (int n = 1; ; n++) {
+            LocalDateTime cycleStart = periodStart.plusMonths(n);
+            if (cycleStart.plusDays(1).isAfter(periodEnd)) {
+                return null;
+            }
+            if (cycleStart.isAfter(now)) {
+                return cycleStart;
+            }
+        }
+    }
+
+    /**
+     * The monthly cycle applies to a PAID yearly subscription that is currently in good
+     * standing: {@code trialing} has not paid and {@code past_due} has stopped paying, and an
+     * internal row (FREE, comp) renews on its own monthly period through the internal
+     * scheduler, never here.
+     */
+    private static boolean isMonthlyCreditCycleEligible(Subscription sub) {
+        return "stripe".equalsIgnoreCase(sub.getProvider())
+                && "yearly".equalsIgnoreCase(sub.getCadence())
+                && "active".equalsIgnoreCase(sub.getStatus());
     }
 
     /**
@@ -305,9 +736,11 @@ public class CreditAttributionService {
      * row has vanished. Whether empty is fatal is the CALLER's decision, and the rule is simply
      * whether that caller WRITES through the entity:
      * <ul>
-     *   <li>{@link #attributeOnRenewal} always writes (at minimum {@code resetBalance} zeroes
-     *       the balance and saves), so it MUST abort on empty - regardless of whether it was
-     *       also asked to advance the period.</li>
+     *   <li>{@link #attributeOnRenewal} may write (the period advance, {@code resetBalance}
+     *       zeroing the balance, the grants, the allowance refill), so it MUST abort on empty
+     *       - regardless of whether it was also asked to advance the period. Since V494 the
+     *       "already attributed this period" check sits in that caller, so a repeat call can
+     *       now write nothing at all; the conclusion is unchanged, only the certainty.</li>
      *   <li>{@link #handleCreditPackChange} only READS the live plan and period to key an
      *       idempotent grant, so it degrades to the caller's instance: nothing is written
      *       through it, and aborting would drop a grant Stripe has already charged for.</li>
@@ -526,10 +959,11 @@ public class CreditAttributionService {
      * Grant plan-included credits for plans that have includedLlmTokens (e.g. FREE plan).
      * Used when no credit pack is attached (creditQuantity = 0).
      */
-    private void grantPlanCredits(Long userId, String sourceId, Plan plan) {
+    /** @return true when this call performed the grant, false when it was already made. */
+    private boolean grantPlanCredits(Long userId, String sourceId, Plan plan) {
         if (ledgerRepository.existsBySourceId(sourceId)) {
             log.info("Plan credits already granted for sourceId={}, skipping", sourceId);
-            return;
+            return false;
         }
 
         BigDecimal amount = BigDecimal.valueOf(plan.getIncludedLlmTokens());
@@ -543,20 +977,29 @@ public class CreditAttributionService {
                     userId, plan.getCode(), result.error());
             throw new IllegalStateException("Plan credit grant failed: " + result.error());
         }
+        return true;
     }
 
     /**
      * Grant credit pack credits (PURCHASE) based on the Stripe quantity (tier cost).
      * Uses CreditTierConstants to resolve tier index -> credit amount.
      */
-    private void grantPackCredits(Long userId, String sourceId, int creditQuantity, String planCode) {
+    /**
+     * @return true when this call performed the grant, false when it was already made OR
+     *         when there was nothing to grant. Callers that read this as "already
+     *         attributed this period" must rule out the nothing-to-grant case first -
+     *         {@code attributeOnRenewal} does, because treating a negative quantity as
+     *         "already attributed" would skip the allowance CLEAR on a plan that grants
+     *         none, which is the one case the clear exists for.
+     */
+    private boolean grantPackCredits(Long userId, String sourceId, int creditQuantity, String planCode) {
         if (creditQuantity < 0) {
-            return;
+            return false;
         }
 
         if (ledgerRepository.existsBySourceId(sourceId)) {
             log.info("Pack credits already granted for sourceId={}, skipping", sourceId);
-            return;
+            return false;
         }
 
         int tierIndex = CreditTierConstants.resolveTierIndex(creditQuantity, planCode);
@@ -581,6 +1024,7 @@ public class CreditAttributionService {
                     userId, tierIndex, result.error());
             throw new IllegalStateException("Credit pack grant failed: " + result.error());
         }
+        return true;
     }
 
     /**
@@ -595,12 +1039,83 @@ public class CreditAttributionService {
      * hypothetical: it happened in production on an account whose wallet had moved between
      * load and reset.
      */
-    private void resetBalance(Long userId, String sourceId, Subscription subscription) {
-        if (ledgerRepository.existsBySourceId(sourceId)) {
-            log.info("Balance already reset for sourceId={}, skipping", sourceId);
-            return;
-        }
+    /**
+     * Set the subscription's AI allowance to what its plan grants (V494).
+     *
+     * <p>Separate from {@link #resetBalance}, which early-returns when the sub bucket
+     * is already zero - hooking the refill there would have skipped it for exactly the
+     * accounts that had spent everything, i.e. the ones that need it.
+     *
+     * <p>No ledger row: this pot is an entitlement refresh, not a credit grant the
+     * user could spend anywhere. The debits that draw it are already itemised.
+     */
+    private void refillAiAllowance(Subscription subscription, Plan plan) {
+        if (subscription == null || plan == null) return;
+        Integer allowance = emailVerified(subscription) ? plan.getIncludedAiCredits() : null;
+        // A plan with NO allowance must end up with an EMPTY pot, not an untouched one.
+        // AdminPlanService changes the plan in place on the existing subscription row,
+        // so a FREE account with credits left that is moved to a paid or comp plan would
+        // otherwise keep them forever: never refilled (nothing to refill to) and never
+        // cleared, then spent on free-tier agent turns instead of the wallet the account
+        // now pays for. Returning early here is what stranded it permanently.
+        //
+        // Every in-place plan change goes through a renewal, so there is no window:
+        // AdminPlanService.assignPlan anchors the new cycle and then calls
+        // attributeOnRenewal on the same row, which reaches here in the same request.
+        BigDecimal refreshed = allowance == null
+                ? BigDecimal.ZERO
+                : BigDecimal.valueOf(Math.max(0, allowance));
+        if (refreshed.compareTo(subscription.getAiRemainingCredits()) == 0) return;
+        subscription.setAiRemainingCredits(refreshed);
+        subscriptionRepository.save(subscription);
+        log.info("Refilled AI allowance for subId={} to {} (plan={})",
+                subscription.getId(), refreshed, plan.getCode());
+    }
 
+    /**
+     * Whether this subscription's owner has verified their e-mail (V494).
+     *
+     * <p>The AI allowance buys real platform-key inference, so it is granted only to a
+     * verified account. The FIRST grant inherits that gate for free (it is only reached
+     * through {@code UserResolutionService.attributeCreditsIfEligible}, which returns
+     * early otherwise), but the MONTHLY RENEWAL does not: the scheduler selects rows on
+     * {@code provider='internal'} and an expired period alone, so without this check
+     * every unverified throwaway signup is handed a full pot thirty days later,
+     * unattended and hourly. That is the same giveaway the creation paths refuse, just
+     * delayed - a delay is not a gate.
+     *
+     * <p>Unresolvable reads as NOT verified. The pot is the one bucket where the safe
+     * direction is to withhold: a verified account that is wrongly skipped gets its pot
+     * on the next cycle, while a wrongly granted one is inference nobody can take back.
+     */
+    private boolean emailVerified(Subscription subscription) {
+        try {
+            com.apimarketplace.auth.domain.BillingCustomer customer = subscription.getBillingCustomer();
+            com.apimarketplace.auth.domain.User owner = customer != null ? customer.getUser() : null;
+            if (owner == null) {
+                log.warn("Cannot resolve the owner of subscription {} - withholding the AI allowance",
+                        subscription.getId());
+                return false;
+            }
+            return owner.isEmailVerified();
+        } catch (RuntimeException e) {
+            // A detached entity or a closed session: the same answer, for the same reason.
+            log.warn("Could not read the e-mail-verified flag for subscription {} ({}) - withholding the AI allowance",
+                    subscription.getId(), e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Zero the sub bucket and record a {@code PLAN_RESET} row for the audit trail.
+     *
+     * <p>The "has this period already been attributed?" check lives in the CALLER (V494):
+     * the allowance refill needs the same answer, and asking twice would double the
+     * queries on the hourly renewal sweep. Note that this method still returns early on
+     * an already-zero balance, which is NOT the same question - a FREE account that spent
+     * everything has a zero balance and must still be refilled.
+     */
+    private void resetBalance(Long userId, String sourceId, Subscription subscription) {
         BigDecimal currentBalance = subscription.getRemainingCredits() != null ? subscription.getRemainingCredits() : BigDecimal.ZERO;
         if (currentBalance.compareTo(BigDecimal.ZERO) == 0) {
             log.info("Balance already zero for userId={}, no reset needed", userId);

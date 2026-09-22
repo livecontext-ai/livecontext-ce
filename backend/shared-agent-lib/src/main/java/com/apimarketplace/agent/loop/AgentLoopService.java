@@ -9,6 +9,7 @@ import com.apimarketplace.agent.loop.PreIterationGuard;
 import com.apimarketplace.agent.factory.LLMProviderFactory;
 import com.apimarketplace.agent.logging.AgentLogger;
 import com.apimarketplace.agent.prompt.DefaultSystemPrompts;
+import com.apimarketplace.agent.provider.AbstractLLMProvider;
 import com.apimarketplace.agent.provider.LLMProvider;
 import com.apimarketplace.agent.provider.LLMProviderException;
 import com.apimarketplace.agent.retry.RetryPolicy;
@@ -49,6 +50,10 @@ public class AgentLoopService {
     private final RetryPolicy retryPolicy;
     private final RuntimeLlmProviderResolver providerResolver;
     private AgentLoopExecutor loopExecutor;
+
+    /** Renders a FileRef map into the note appended by {@link #appendFileRefNote}. */
+    private static final com.fasterxml.jackson.databind.ObjectMapper FILE_REF_JSON =
+        new com.fasterxml.jackson.databind.ObjectMapper();
 
     private final ExecutorService toolExecutor = Executors.newCachedThreadPool(
         r -> {
@@ -166,10 +171,11 @@ public class AgentLoopService {
 
             agentLogger.logExecutionStart(runId, context.userPrompt(), providerName, model);
 
-            if (!provider.isConfigured()) {
-                agentLogger.logError(runId, "Provider not configured: " + providerName, null);
-                return AgentLoopResult.failure("Provider " + providerName + " is not configured",
-                    System.currentTimeMillis() - startTime, providerName);
+            String configurationProblem = configurationProblemFor(provider, context);
+            if (configurationProblem != null) {
+                String message = notConfiguredMessage(providerName, configurationProblem);
+                agentLogger.logError(runId, message, null);
+                return AgentLoopResult.failure(message, System.currentTimeMillis() - startTime, providerName);
             }
 
             List<ToolDefinition> tools = discoverTools(context);
@@ -223,11 +229,12 @@ public class AgentLoopService {
 
             agentLogger.logExecutionStart(runId, context.userPrompt(), providerName, model);
 
-            if (!provider.isConfigured()) {
-                agentLogger.logError(runId, "Provider not configured: " + providerName, null);
-                callback.onError("Provider " + providerName + " is not configured");
-                return AgentLoopResult.failure("Provider " + providerName + " is not configured",
-                    System.currentTimeMillis() - startTime, providerName);
+            String configurationProblem = configurationProblemFor(provider, context);
+            if (configurationProblem != null) {
+                String message = notConfiguredMessage(providerName, configurationProblem);
+                agentLogger.logError(runId, message, null);
+                callback.onError(message);
+                return AgentLoopResult.failure(message, System.currentTimeMillis() - startTime, providerName);
             }
 
             List<ToolDefinition> tools = discoverTools(context);
@@ -756,7 +763,64 @@ public class AgentLoopService {
         return providerName;
     }
 
+    /**
+     * Resolves the provider for this loop, enforcing the CLI-bridge access policy on the way.
+     *
+     * <p>This is the gate {@code BridgeLoopDispatcher} already documents as living "inside
+     * LLMProviderFactory" for the non-bridge-transport path. It did not: this method called
+     * {@code getProvider}, the variant that checks nothing, and {@code getProviderForUser} - the
+     * one that checks - had no caller anywhere in the codebase. So every execution that ran the
+     * loop IN-PROCESS reached a bridge provider ungated.
+     *
+     * <p>That was not theoretical. In production a non-admin's sub-agent ran twice on
+     * {@code claude-code} (an {@code admin_only} bridge with an empty allowlist) and billed 2617
+     * credits against the admin's shared subscription, while the SAME agent was correctly denied
+     * on every scheduled fire - the schedule path goes through {@code ConversationAgentService},
+     * which does enforce.
+     *
+     * <p>Placed BEFORE the resolver branch on purpose: {@link RuntimeLlmProviderResolver#resolve}
+     * returns the local provider untouched for a bridge, so gating inside it would miss the CE
+     * cloud path. Non-bridge providers short-circuit inside the guard, so this is inert for them.
+     *
+     * <p>{@code incrementUsage} is deliberately {@code false}: this call decides ACCESS, and the
+     * daily quota is already counted where a dispatch happens ({@code BridgeLoopDispatcher}).
+     * Counting here too would double-charge the quota of an admin whose run passes both.
+     */
+    /**
+     * The loop's pre-flight gate, keyed on the context's tenant and pinned key route
+     * instead of on the calling thread, so a queued execution and a sync one answer the
+     * same, and a provider the platform holds no key for still runs for a tenant whose
+     * own key serves the call. Providers outside the direct-API base class (bridge
+     * stubs, test doubles) keep their own request-less check.
+     *
+     * @return null when the call can be served, else the user-facing reason
+     */
+    static String configurationProblemFor(LLMProvider provider, AgentLoopContext context) {
+        if (provider instanceof AbstractLLMProvider direct) {
+            return direct.configurationProblem(context.tenantId(), context.keyRoute());
+        }
+        return provider.isConfigured() ? null : AbstractLLMProvider.NOT_CONFIGURED_MESSAGE;
+    }
+
+    /**
+     * The failure text: the historical "Provider X is not configured" verbatim for the generic
+     * case (callers and the chat surface match on it), with the specific reason appended only
+     * when there is one (an own-key pin with no saved key).
+     */
+    static String notConfiguredMessage(String providerName, String configurationProblem) {
+        String base = "Provider " + providerName + " is not configured";
+        if (configurationProblem == null || AbstractLLMProvider.NOT_CONFIGURED_MESSAGE.equals(configurationProblem)) {
+            return base;
+        }
+        return base + ": " + configurationProblem;
+    }
+
     private LLMProvider resolveProvider(String providerName, AgentLoopContext context) {
+        providerFactory.enforceBridgeAccess(
+            providerName,
+            context != null ? context.tenantId() : null,
+            context != null ? context.userRoles() : null,
+            false);
         if (providerResolver != null) {
             return providerResolver.resolve(providerName, context);
         }
@@ -772,9 +836,49 @@ public class AgentLoopService {
         // Create user message with attachments if present
         if (context.hasCurrentMessageAttachments()) {
             log.info("Creating user message with {} attachments", context.currentMessageAttachments().size());
-            state.getMessages().add(Message.userWithAttachments(context.userPrompt(), context.currentMessageAttachments()));
+            String prompt = appendFileRefNote(context.userPrompt(), context.currentMessageAttachments());
+            state.getMessages().add(Message.userWithAttachments(prompt, context.currentMessageAttachments()));
         } else {
             state.getMessages().add(Message.user(context.userPrompt()));
+        }
+    }
+
+    /**
+     * Tells the model, in plain text, which of this turn's attachments it can pass VERBATIM
+     * as a tool's file-shaped argument (e.g. {@code generation}'s {@code input_image}).
+     *
+     * <p>An attachment reaches the model as a vision/text block either way (that part is
+     * unaffected), but a vision block alone gives the model nothing it can put IN a tool
+     * call - it can only describe what it sees. An attachment whose
+     * {@link MessageAttachment#fileRef()} is set (a durable, tenant-scoped S3 object -
+     * see that field's Javadoc for when it is null) also gets its FileRef JSON spelled out
+     * here, so the model can copy it into a tool argument instead of the only other options
+     * it has: inventing a path/URL (refused - the platform has to read real bytes) or trying
+     * to retype the image as text (impossible for binary content). No-op when no attachment
+     * carries one.
+     */
+    private static String appendFileRefNote(String userPrompt, List<MessageAttachment> attachments) {
+        StringBuilder note = new StringBuilder();
+        for (MessageAttachment att : attachments) {
+            if (att.fileRef() == null) continue;
+            note.append("\n\nAttached file \"").append(att.fileName())
+                .append("\" is also available as a file object you can pass VERBATIM to a tool "
+                        + "argument that expects one (e.g. generation's input_image/input_audio/"
+                        + "input_video), instead of a path or URL: ")
+                .append(toJson(att.fileRef()));
+        }
+        return note.isEmpty() ? userPrompt : userPrompt + note;
+    }
+
+    /** Renders the FileRef map as JSON, falling back to its plain toString on the
+     *  (unreachable in practice - the map is built server-side from primitives)
+     *  case Jackson cannot serialize it, so a rendering bug degrades the note
+     *  instead of failing the whole turn. */
+    private static String toJson(Map<String, Object> fileRef) {
+        try {
+            return FILE_REF_JSON.writeValueAsString(fileRef);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            return String.valueOf(fileRef);
         }
     }
 

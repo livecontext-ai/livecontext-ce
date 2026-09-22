@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AGENDA_EMPTY_KEYS, selectAgendaEmptyState, type AgendaEmptyInput } from '../agendaEmptyState';
+import { AGENDA_KIND_ORDER } from '../agendaLaunchKinds';
 
 /**
  * Which empty message the page is allowed to show.
@@ -76,6 +77,45 @@ describe('selectAgendaEmptyState', () => {
     // Most specific wins: with no kind selected, nothing can match whatever was typed.
     expect(selectAgendaEmptyState({ ...base, resourceTypes: [] })).toBe('no-kind');
     expect(selectAgendaEmptyState({ ...base, resourceTypes: [], search: 'zzz' })).toBe('no-kind');
+  });
+
+  describe('the launch-kind filter narrows too', () => {
+    it('never claims the workspace is empty because kinds were deselected', () => {
+      // The module's rule is that EVERY control narrows the view, and this one was
+      // missing from it. Turning Chat off is the natural reaction to a chatty month, and
+      // it used to produce "Nothing is scheduled here" - a claim about the workspace,
+      // made because of something the user did.
+      expect(selectAgendaEmptyState({ ...base, triggerTypes: ['SCHEDULE'] })).toBe('filters');
+    });
+
+    it('names the LAUNCH kinds when none is left, not the resource chips', () => {
+      // 'no-kind' reads "No resource kind selected / Turn a resource kind back on",
+      // which points a user who emptied the launch-kind list at a control they never
+      // touched. The two states being distinct was not enough: the MESSAGE has to be.
+      expect(selectAgendaEmptyState({ ...base, triggerTypes: [] })).toBe('no-launch-kind');
+      expect(selectAgendaEmptyState({ ...base, resourceTypes: [] })).toBe('no-kind');
+    });
+
+    it('sends each of the two to a message that names the control it is about', async () => {
+      // Asserting the KEYS differ is what the old test did and it passed while both
+      // resolved to the resource-kind sentence. This reads the strings.
+      const en = (await import('@/messages/en.json')).default as unknown as {
+        agenda: { empty: Record<string, string> };
+      };
+      const launch = AGENDA_EMPTY_KEYS['no-launch-kind'];
+      const resource = AGENDA_EMPTY_KEYS['no-kind'];
+
+      expect(en.agenda.empty[launch.title.split('.')[1]]).toMatch(/launch kind/i);
+      expect(en.agenda.empty[resource.title.split('.')[1]]).toMatch(/resource kind/i);
+    });
+
+    it('still says "workspace" when every kind is selected', () => {
+      expect(selectAgendaEmptyState({ ...base, triggerTypes: AGENDA_KIND_ORDER })).toBe('workspace');
+    });
+
+    it('treats an absent list as "all selected", so an un-updated caller keeps its verdict', () => {
+      expect(selectAgendaEmptyState(base)).toBe('workspace');
+    });
   });
 
   it('gives every state a distinct message pair', () => {

@@ -14,6 +14,7 @@ import { InspectorPanel } from './InspectorPanel';
 import { nodeRegistry } from '../registry/nodeRegistry';
 import { useOAuthCredentialCallback } from '../hooks/useOAuthCredentialCallback';
 import { getPaletteItemDataFromId } from './NodeCreatorPanel';
+import { isTriggerShortcutSelection } from '../data/triggerShortcuts';
 import { useApprovalReviewSelection } from '../hooks/useApprovalReviewSelection';
 import {
   NODE_CREATOR_VISIBILITY_EVENT,
@@ -57,6 +58,8 @@ import { StepByStepProvider } from '../contexts/StepByStepContext';
 import { ValidationProvider } from '../contexts/ValidationContext';
 import { withDerivedBackEdges } from '../utils/backEdgeDetection';
 import { setCanvasNodes, setCanvasEdges, clearCanvasNodes } from '../services/canvasNodesStore';
+import { useRunCameraFollow } from '../hooks/useRunCameraFollow';
+import { isRunStatusActive } from '@/components/workflow/run-panel/runFormatting';
 import { useWorkflowRunContext } from '@/contexts/WorkflowRunContext';
 import { calculateNodePosition } from '../utils/nodePositioning';
 import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
@@ -867,6 +870,27 @@ export function WorkflowBuilder({
       }));
   }, [runState?.batchSteps]);
 
+  // Camera follow during a run. It lives HERE, with the canvas, rather than in the
+  // run panel: that panel is one side-panel tab, so following would stop the moment
+  // the user opened Chat or collapsed the panel to see more of the graph, while the
+  // toolbar toggle still read as pressed.
+  useRunCameraFollow({
+    steps: streamedSteps,
+    workflowId,
+    // A parked node keeps reporting `running` in the stream, so the camera would
+    // otherwise sit on an approval that will never move.
+    awaitingSignalAliases: pauseResumeState.awaitingSignalSteps,
+    // The canvas paint is frozen on a past epoch; following the live run there
+    // would fling the camera at nodes that render as pending.
+    isViewingHistoricalEpoch: viewingEpoch != null,
+    // A shared application or marketplace preview mounts in RUN mode with steps
+    // streaming, and its toolbar deliberately has no control to stop following.
+    isPreviewOnly,
+    // Tells an ordinary gap between two steps apart from the end of the run: the
+    // step stream reports "nothing running" in both cases.
+    isRunActive: isRunStatusActive(runState?.runStatus),
+  });
+
   // Log runInfo + streamedSteps for debugging "all epochs" view
   React.useEffect(() => {
     if (!currentRunInfo && !streamedSteps) return;
@@ -1551,6 +1575,52 @@ export function WorkflowBuilder({
 
   // Handle node selection from the palette (side-panel "Add Node" tab)
   const handleNodeCreatorSelect = React.useCallback((nodeIdOrData: any) => {
+    if (isTriggerShortcutSelection(nodeIdOrData)) {
+      const currentPendingConnection = pendingHoverConnectionRef.current;
+      const basePosition = calculateNodePosition(
+        currentPendingConnection,
+        nodeCreationCounterRef.current,
+        layoutDirection,
+      );
+      const createdNodeIds = nodeIdOrData.nodes.map(({ item, offset }) => {
+        const position = layoutDirection === 'vertical'
+          ? { x: basePosition.x, y: basePosition.y + offset * 220 }
+          : { x: basePosition.x + offset * 300, y: basePosition.y };
+        return handleCreateNode(item, position);
+      });
+
+      nodeIdOrData.connections.forEach(({ sourceIndex, targetIndex }) => {
+        handleConnect({
+          source: createdNodeIds[sourceIndex],
+          target: createdNodeIds[targetIndex],
+          sourceHandle: 'source-right',
+          targetHandle: null,
+        });
+      });
+
+      if (!currentPendingConnection && createdNodeIds[0]) {
+        requestRevealNode(createdNodeIds[0]);
+      }
+
+      // A trigger cannot accept an incoming edge. When the shortcut was opened
+      // from a target-side hover button, connect the end of its generated chain
+      // to the existing node. A source-side hover simply places the new trigger
+      // composition nearby as an independent entry point.
+      if (currentPendingConnection?.handleType === 'target') {
+        handleConnect({
+          source: createdNodeIds[createdNodeIds.length - 1],
+          target: currentPendingConnection.nodeId,
+          sourceHandle: 'source-right',
+          targetHandle: resolveInsertedTargetHandle(currentPendingConnection.handleId),
+        });
+        window.dispatchEvent(new CustomEvent('hoverPlusNodeInserted'));
+      }
+
+      nodeCreationCounterRef.current += nodeIdOrData.nodes.length;
+      window.dispatchEvent(new CustomEvent('workflowNodeCreated'));
+      return;
+    }
+
     const itemData = typeof nodeIdOrData === 'object' && nodeIdOrData !== null
       ? nodeIdOrData
       : getPaletteItemDataFromId(nodeIdOrData as string);
@@ -1623,7 +1693,7 @@ export function WorkflowBuilder({
     }
 
     window.dispatchEvent(new CustomEvent('workflowNodeCreated'));
-  }, [handleCreateNode, handleConnect, nodesRef]);
+  }, [handleCreateNode, handleConnect, nodesRef, layoutDirection]);
 
   // The palette lives in another React tree (side panel), so a pick arrives as an
   // event. The hook owns the two guards: right canvas, and never a read-only one.

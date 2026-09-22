@@ -157,7 +157,7 @@ class ToolExecutionManagerCallersOwnKeyPinTest {
         price.setPricingVersionId(1L);
         price.setEffectiveMarkup(VIDEO_PRICE);
         lenient().when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(),
-                anyLong(), any(UUID.class), any(), any())).thenReturn(Optional.of(price));
+                anyLong(), any(UUID.class), any(), any(), any())).thenReturn(Optional.of(price));
 
         ObjectMapper objectMapper = new ObjectMapper();
         CatalogToolBillingService realBilling = new CatalogToolBillingService(
@@ -196,7 +196,7 @@ class ToolExecutionManagerCallersOwnKeyPinTest {
         tool.setId(TOOL_ID);
         tool.setApiId(API_ID);
         tool.setToolSlug("create-video-task");
-        // No generation descriptor: one of the 600+ ordinary catalog endpoints.
+        // No generation descriptor: one of the 1000+ ordinary catalog endpoints.
         when(apiToolRepository.findById(TOOL_ID)).thenReturn(Optional.of(tool));
         when(apiToolRepository.findByApiIdAndToolSlug(API_ID, "create-video-task"))
                 .thenReturn(Optional.of(tool));
@@ -349,7 +349,7 @@ class ToolExecutionManagerCallersOwnKeyPinTest {
 
         /**
          * The hole is not specific to generations - it is the same mechanism on
-         * every one of the 600+ endpoints that carry a published markup, just
+         * every one of the 1000+ endpoints that carry a published markup, just
          * cheaper per occurrence. Fixing only the expensive half would leave the
          * next report to be the same bug wearing a different hat.
          */

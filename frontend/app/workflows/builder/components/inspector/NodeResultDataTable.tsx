@@ -92,7 +92,12 @@ export function NodeResultDataTable({
           stepAlias={stepAlias || ''}
           jsonPath={jsonPath}
           onNavigate={handleNavigate}
-          showIdColumn={false}
+          // No showIdColumn override: this panel and the run-result Logs modal are
+          // the same component on the same data and must not disagree. Overriding it
+          // to false built no identity lane, so an `id` survived at root only because
+          // the backend sends that column, and drilling into `input` or `output` left
+          // the rows with no identity at all whenever the nested items carry none of
+          // their own - a step's input parameters, an agent's output.
         />
       </div>
     </div>

@@ -1,5 +1,6 @@
 package com.apimarketplace.conversation.service.ai;
 
+import com.apimarketplace.agent.config.ToolAccessControl;
 import com.apimarketplace.agent.domain.ToolCall;
 import com.apimarketplace.agent.domain.ToolDefinition;
 import com.apimarketplace.agent.domain.ToolResult;
@@ -8,6 +9,7 @@ import com.apimarketplace.agent.tools.credential.SelectableAccounts;
 import com.apimarketplace.conversation.service.ConversationHistoryService;
 import com.apimarketplace.conversation.service.ToolResultService;
 import com.apimarketplace.conversation.streaming.StreamPubSubService;
+import com.apimarketplace.common.scope.GrantedScopes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,11 +26,14 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -58,6 +63,12 @@ public class ConversationToolExecutionService implements ToolExecutionService {
 
     @Value("${orchestrator.service.url:http://localhost:8099}")
     private String orchestratorUrl;
+
+    /** Stable caller identity echoed in X-Provider-ID, mirroring CredentialClient's convention. */
+    private static final String INTERNAL_PROVIDER_ID = "internal-conversation-service";
+
+    @Value("${gateway.filter.secret-key:}")
+    private String gatewaySecretKey;
 
     @Value("${services.auth-service.url:http://localhost:8083}")
     private String authServiceUrl;
@@ -451,22 +462,99 @@ public class ConversationToolExecutionService implements ToolExecutionService {
         // serialize tool args differently.
         boolean isForced = parseBooleanArg(args != null ? args.get("force") : null);
 
+        // The scopes this call needs, when the caller knows them. They turn "the agent
+        // asserts a reconnect is needed", which is what `force` is and why `force` is
+        // rationed, into something the server can CHECK: a connected account either holds
+        // them or it does not. See the scope-gap branch below.
+        Object rawScopesArg = args != null ? args.get("scopes") : null;
+        List<String> requestedScopes = parseScopesArg(rawScopesArg);
+
+        // Sent, and unreadable. Said out loud rather than dropped: the call then falls through
+        // to the hard "credentials already exist, do NOT ask again" refusal, and the caller is
+        // left believing its scopes were checked and found present. One retry with a readable
+        // list is cheap; a wrong conclusion about the user's account is not. This is the same
+        // rule checkToolIdShape applies to a malformed tool_id a few services over.
+        if (requestedScopes.isEmpty() && looksLikeAnUnreadableScopeList(rawScopesArg)) {
+            long duration = System.currentTimeMillis() - startTime;
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(false)
+                .error("`scopes` could not be read, so nothing was checked and no card was shown. "
+                     + "Send it as a JSON array of strings, for example "
+                     + "scopes=[\"https://www.googleapis.com/auth/gmail.readonly\"], or leave it "
+                     + "out entirely. A scope is never split on spaces, so one string is one scope.")
+                .durationMs(duration)
+                .build();
+        }
+
+        // A flat scope list cannot describe two integrations at once. Applied to each of them
+        // it would report gmail's missing scope as slack's too, and raise a reconnect card for
+        // an account that is perfectly fine. Refused rather than guessed, because a refusal the
+        // caller can act on beats a card the user cannot make sense of.
+        if (!requestedScopes.isEmpty() && services.size() > 1) {
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(false)
+                .error("`scopes` describes ONE integration, so it cannot be sent with "
+                     + services.size() + " services: the same list would be checked against each "
+                     + "of them and report a gap on accounts that have none. Call require once per "
+                     + "service with its own scopes, or drop scopes and name the services alone.")
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
+        }
+
         // Check existence per service (always - we need it both to filter the normal
         // path and to drive needsAttention on the forced path).
         List<Map<String, Object>> servicesNeedingCredentials = new ArrayList<>();
         List<Map<String, Object>> servicesAlreadyConfigured = new ArrayList<>();
+        // Connected, and provably short of what this call needs. Kept apart from both
+        // lists above because it belongs to neither: the service IS configured, so the
+        // "already exists" refusal would fire, and it is NOT missing, so the connect flow
+        // would describe it wrongly.
+        List<Map<String, Object>> servicesMissingScopes = new ArrayList<>();
         boolean anyExistingForceBlocked = false;
-        for (Map<String, Object> service : services) {
-            String serviceType = (String) service.get("serviceType");
-            Map<String, Object> existing = serviceType != null ? findExistingCredential(serviceType, tenantId) : null;
-            if (existing != null) {
-                Map<String, Object> entry = new HashMap<>(service);
-                entry.put("lastUsedAt", existing.getOrDefault("last_used", existing.get("updated_at")));
-                entry.put("credentialId", existing.get("id"));
-                servicesAlreadyConfigured.add(entry);
-            } else {
-                servicesNeedingCredentials.add(service);
+        try {
+            for (Map<String, Object> service : services) {
+                String serviceType = (String) service.get("serviceType");
+                Map<String, Object> existing = serviceType != null ? findExistingCredential(serviceType, tenantId) : null;
+                if (existing != null) {
+                    Map<String, Object> entry = new HashMap<>(service);
+                    entry.put("lastUsedAt", existing.getOrDefault("last_used", existing.get("updated_at")));
+                    entry.put("credentialId", existing.get("id"));
+                    Set<String> missing = missingScopesOf(existing, requestedScopes);
+                    if (!missing.isEmpty()) {
+                        entry.put("missingScopes", List.copyOf(missing));
+                        entry.put("grantedScopes", grantedScopesOf(existing));
+                        // The full ask, not only the gap: the card recomputes the gap from
+                        // required-vs-granted with the same rule the workflow panel uses, so
+                        // the two surfaces cannot disagree about one credential.
+                        entry.put("requiredScopes", requestedScopes);
+                        entry.put("credentialType", existing.get("type"));
+                        // No per-service needsAttention here on purpose: nothing reads one.
+                        // The flag that keeps the card on screen is set ONCE on the result
+                        // metadata below, and the card reads it there. A second copy that no
+                        // reader consults is a field someone will later believe in.
+                        servicesMissingScopes.add(entry);
+                    } else {
+                        servicesAlreadyConfigured.add(entry);
+                    }
+                } else {
+                    servicesNeedingCredentials.add(service);
+                }
             }
+        } catch (CredentialLookupUnavailableException unavailable) {
+            // Fail the tool call LOUDLY instead of telling the user to connect a service they may
+            // already have connected. Everything below this point decides what to show based on
+            // "existing == null", so proceeding on an unanswered lookup would put a reconnect card
+            // in front of a correctly connected user, which is worse than an error.
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(false)
+                .error("Could not determine which services are already connected, so this request "
+                     + "was not made. Do not ask the user to reconnect anything on the strength of "
+                     + "this call; report that the credential service did not answer.")
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
         }
 
         if (isForced) {
@@ -483,8 +571,16 @@ public class ConversationToolExecutionService implements ToolExecutionService {
             if (loopScope == null) {
                 loopScope = tenantId;
             }
+            // Every CONNECTED service, not only the ones with no scope gap. A service short
+            // of a scope is connected too, and since it now lands in servicesMissingScopes
+            // instead, iterating only servicesAlreadyConfigured let `force` + `scopes` walk
+            // straight past this guard: no block, and no timestamp recorded either, so the
+            // next call walked past it again. The tool definition tells the agent in so many
+            // words that "the server blocks the second attempt", and that has to be true.
+            List<Map<String, Object>> forceGuarded = new ArrayList<>(servicesAlreadyConfigured);
+            forceGuarded.addAll(servicesMissingScopes);
             List<String> blocked = new ArrayList<>();
-            for (Map<String, Object> svc : servicesAlreadyConfigured) {
+            for (Map<String, Object> svc : forceGuarded) {
                 String serviceType = (String) svc.get("serviceType");
                 if (serviceType != null && isForceLoopBlocked(loopScope, serviceType)) {
                     blocked.add(serviceType);
@@ -514,8 +610,28 @@ public class ConversationToolExecutionService implements ToolExecutionService {
                 servicesAlreadyConfigured.stream().map(s -> s.get("serviceType")).toList());
             // On the forced path, services list keeps ALL requested services (existing + missing).
             // Existing ones drive the warning card; missing ones drive the normal connect flow.
-            // Record the force timestamp NOW so a subsequent forced call within the cooldown is blocked.
-            for (Map<String, Object> svc : servicesAlreadyConfigured) {
+            //
+            // EXCEPT the ones a scope check already answered for. `services` still holds the
+            // plain maps built from the request, while the loop above built ENRICHED entries
+            // for every connected account short of a named scope. Leaving the plain ones in
+            // place means the card renders as an ordinary amber reconnect with no mention of
+            // the scope that failed, on a call that told us exactly which scope it was. The
+            // guidance steers an agent away from sending force and scopes together, and an
+            // agent that ignores guidance is the reason this whole change exists.
+            if (!servicesMissingScopes.isEmpty()) {
+                List<Map<String, Object>> enriched = new ArrayList<>();
+                for (Map<String, Object> svc : services) {
+                    enriched.add(servicesMissingScopes.stream()
+                            .filter(gap -> Objects.equals(gap.get("serviceType"), svc.get("serviceType")))
+                            .findFirst()
+                            .orElse(svc));
+                }
+                services = enriched;
+            }
+            // Record the force timestamp NOW so a subsequent forced call within the cooldown is
+            // blocked. Same list as the check above: recording a narrower set than we check
+            // would block nothing, because the block reads what this loop wrote.
+            for (Map<String, Object> svc : forceGuarded) {
                 String serviceType = (String) svc.get("serviceType");
                 if (serviceType != null) {
                     recordForceRequest(loopScope, serviceType);
@@ -526,7 +642,7 @@ public class ConversationToolExecutionService implements ToolExecutionService {
             // error (no card) so the agent cannot keep showing the user an approval card -
             // it must deliberately re-call with force=true to surface a reconnect card.
             // The user sees nothing on this path.
-            if (servicesNeedingCredentials.isEmpty()) {
+            if (servicesNeedingCredentials.isEmpty() && servicesMissingScopes.isEmpty()) {
                 long duration = System.currentTimeMillis() - startTime;
                 List<String> names = servicesAlreadyConfigured.stream()
                     .map(s -> (String) s.get("serviceType")).toList();
@@ -576,7 +692,19 @@ public class ConversationToolExecutionService implements ToolExecutionService {
                     servicesAlreadyConfigured.stream().map(s -> s.get("serviceType")).toList(),
                     servicesNeedingCredentials.stream().map(s -> s.get("serviceType")).toList());
             }
-            services = servicesNeedingCredentials;
+            // A connected account that is provably short of the scopes this call named
+            // raises the card on the NORMAL path: no force, no error, no cooldown entry.
+            // The guard those three exist for is the agent nagging on a hunch, and the
+            // hunch is exactly what a checked scope list replaces. Leaving it on the
+            // forced path instead is what stranded the only case that matters: the
+            // "already exists" refusal steers a 403 away from reconnecting, so the one
+            // account that could never run the endpoint is the one never reconnected.
+            if (!servicesMissingScopes.isEmpty()) {
+                log.info("🔑 [SCOPE-GAP] Connected but short of the requested scopes, raising a card: {}",
+                    servicesMissingScopes.stream().map(s -> s.get("serviceType")).toList());
+            }
+            services = new ArrayList<>(servicesNeedingCredentials);
+            services.addAll(servicesMissingScopes);
         }
 
         try {
@@ -585,10 +713,19 @@ public class ConversationToolExecutionService implements ToolExecutionService {
             result.put("status", "credentials_required");
             result.put("services", services);
             result.put("reason", reason != null ? reason : "");
-            result.put("message", "A Connect card was shown to the user. Nothing is connected yet, and this "
-                    + "card does not resolve inside this call: do NOT call credential(action='require') again "
-                    + "for these services, and do not act as if they were connected. Continue with other work "
-                    + "or finish your turn; the user comes back once they have connected.");
+            // Branch-aware: "nothing is connected yet" is false on the scope-gap path, where the
+            // account IS connected and only its permissions fall short. An agent told otherwise
+            // reports the wrong thing to the user and may re-run a connect flow that exists.
+            boolean scopeGapOnly = !servicesMissingScopes.isEmpty()
+                    && servicesNeedingCredentials.isEmpty();
+            result.put("message", (scopeGapOnly
+                    ? "A Reconnect card was shown to the user. The account IS connected; it was not "
+                      + "granted the scopes this call needs, and only the user can grant them. "
+                    : "A Connect card was shown to the user. Nothing is connected yet. ")
+                    + "This card does not resolve inside this call: do NOT call "
+                    + "credential(action='require') again for these services, and do not act as if "
+                    + "they were usable. Continue with other work or finish your turn; the user "
+                    + "comes back once they have dealt with it.");
 
             long duration = System.currentTimeMillis() - startTime;
             log.info("✅ [TOOL] request_credential executed: {} services", services.size());
@@ -623,10 +760,21 @@ public class ConversationToolExecutionService implements ToolExecutionService {
             // already has a credential. This is the single, deterministic gate.
             // Also expose the per-service list so the frontend can paint a mixed batch
             // correctly (existing → amber reconnect, missing → normal connect).
-            if (isForced && !servicesAlreadyConfigured.isEmpty()) {
+            //
+            // A VERIFIED scope gap sets it too, and it has to. The card auto-approves and
+            // dismisses itself when every service it names already has a credential and
+            // needsAttention is false, which is exactly the shape of a scope gap: the
+            // account is connected, so the user would have seen a green "approved" box and
+            // no mention of the scope that just failed the call. The forced path and this
+            // one are the two ways a card can be about a credential that already exists.
+            List<Map<String, Object>> attention = new ArrayList<>(servicesMissingScopes);
+            if (isForced) {
+                attention.addAll(servicesAlreadyConfigured);
+            }
+            if (!attention.isEmpty()) {
                 metadata.put("needsAttention", true);
                 metadata.put("needsAttentionServices",
-                    servicesAlreadyConfigured.stream().map(s -> s.get("serviceType")).toList());
+                    attention.stream().map(s -> s.get("serviceType")).toList());
             }
 
             // Return success with metadata that triggers streaming event in AgentStreamingCallbackFactory
@@ -722,6 +870,13 @@ public class ConversationToolExecutionService implements ToolExecutionService {
                 if (account != null) {
                     entry.put("account", account);
                 }
+                // What this account was actually granted. Two accounts of one integration
+                // routinely differ, and that difference is the whole reason one of them
+                // cannot run an endpoint the other can. Omitted when empty rather than sent
+                // as [], so a key with no scope concept does not read as a revoked one.
+                if (row.get("scopes") instanceof List<?> scopes && !scopes.isEmpty()) {
+                    entry.put("scopes", scopes);
+                }
                 connected.add(entry);
             }
             long defaultCount = connected.stream()
@@ -739,7 +894,8 @@ public class ConversationToolExecutionService implements ToolExecutionService {
             String selectable = SelectableAccounts.offer(connected);
             result.put("hint", connected.isEmpty()
                 ? "No services connected yet. Use credential(action=\"require\") when a tool needs one."
-                : "Executing a tool directly always uses the isDefault=true credential. "
+                : "Executing a tool directly uses the isDefault=true credential unless the call "
+                    + "names another with credential_name. "
                     + "status=needs_reauth means only the user can Reconnect it. "
                     + "This is what YOUR workspace holds; a workflow runs under its owner's, so a "
                     + "name taken from here resolves only if the two are the same."
@@ -893,6 +1049,12 @@ public class ConversationToolExecutionService implements ToolExecutionService {
         if (organizationRole != null && !organizationRole.isBlank()) {
             headers.set("X-Organization-Role", organizationRole);
         }
+        // Sign LAST: the signature binds X-User-ID and X-Organization-ID, so it has to be
+        // computed once those are on the map. Without this, every call built here reached
+        // auth-service unsigned and only worked because /api/internal/** is exempt from the
+        // gateway filter - which is exactly the exemption being narrowed.
+        com.apimarketplace.common.web.InternalGatewaySigner.stamp(
+                headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
         return headers;
     }
 
@@ -952,17 +1114,48 @@ public class ConversationToolExecutionService implements ToolExecutionService {
             // route does not exist there - credentials live in auth-service.
             String url = authServiceUrl + "/api/internal/credentials/default?userId="
                 + tenantId + "&integration=" + serviceType.toLowerCase();
-            ResponseEntity<Map> response = restTemplate.getForEntity(url, Map.class);
+            // Was a bare getForEntity with no headers at all: no identity, no signature. It
+            // returns a DECRYPTED credential, so it is one of the endpoints the HMAC widening
+            // covers, and it has to carry the signature like every other internal call here.
+            ResponseEntity<Map> response = restTemplate.exchange(
+                url, HttpMethod.GET,
+                new HttpEntity<>(internalHeaders(tenantId, null, null)), Map.class);
             if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
                 return (Map<String, Object>) response.getBody();
             }
         } catch (org.springframework.web.client.HttpClientErrorException.NotFound nf) {
             // 404 = no credential for this integration - normal "missing" path
             return null;
+        } catch (org.springframework.web.client.HttpClientErrorException.Unauthorized
+                 | org.springframework.web.client.HttpClientErrorException.Forbidden authFailure) {
+            // A REFUSAL is not an ABSENCE, and conflating the two is what made this method
+            // dangerous. Returning null here reads as "the user has not connected this service",
+            // so the chat shows a "connect your Gmail" card to someone who connected it months
+            // ago, and the force-loop guard does not even damp it (it only inspects the
+            // already-configured set). The realistic cause is this call reaching an auth-service
+            // that gates /api/internal/credentials/ while this pod is not yet signing, i.e. the
+            // window of a rolling deploy that updated auth first. ERROR, not WARN: this is the
+            // one line that turns a silent product regression into something a log scan finds.
+            log.error("Credential lookup for '{}' was REFUSED ({}), not answered. Treating as "
+                    + "unknown rather than missing: the caller is probably not signing its "
+                    + "internal call. Check that this service and auth-service are on the same "
+                    + "build.", serviceType, authFailure.getStatusCode());
+            throw new CredentialLookupUnavailableException(serviceType, authFailure);
         } catch (Exception e) {
             log.warn("Failed to check credentials for service '{}': {}", serviceType, e.getMessage());
         }
         return null;
+    }
+
+    /**
+     * Thrown when the credential lookup could not be ANSWERED, as opposed to answering "absent".
+     * It exists so a refusal can never be mistaken for a missing credential by a caller that only
+     * checks for null.
+     */
+    static class CredentialLookupUnavailableException extends RuntimeException {
+        CredentialLookupUnavailableException(String serviceType, Throwable cause) {
+            super("Credential lookup unavailable for '" + serviceType + "'", cause);
+        }
     }
 
     // ── Anti-loop guard for forced credential reconnects ────────────────────────────
@@ -992,6 +1185,118 @@ public class ConversationToolExecutionService implements ToolExecutionService {
             return false;
         }
         return true;
+    }
+
+    /**
+     * The scopes a {@code require} call named, in whatever shape the model serialised
+     * them: a list, or a JSON array string. Empty when none were named, which is the
+     * ordinary case and must stay indistinguishable from "no scope concept here" - an
+     * empty list must never read as "nothing is granted".
+     *
+     * <p><b>A bare string is ONE scope, never several.</b> The granted side is re-split,
+     * because providers hand scopes back as one delimited blob; the required side never
+     * is, and that asymmetry is the rule {@code GrantedScopes} states and the capability
+     * layer follows. It matters because a scope may legitimately contain a space, which
+     * {@code GrantedScopes}' own javadoc names ({@code "Tenant Non-Configurable"}):
+     * splitting it would turn one real requirement into two invented ones, both of them
+     * "missing", and raise a reconnect card for a gap that does not exist.
+     */
+    /**
+     * A {@code scopes} argument that was sent, announced itself as a JSON array, and is not one.
+     *
+     * <p>Only that case. An absent argument, an empty list and a blank string are all "no ask"
+     * and stay silent; a bare string is ONE scope and is perfectly readable.
+     */
+    private boolean looksLikeAnUnreadableScopeList(Object value) {
+        if (value instanceof Collection<?> || value == null) {
+            return false;
+        }
+        String raw = String.valueOf(value).trim();
+        return raw.startsWith("[") && parseScopesArg(raw).isEmpty();
+    }
+
+    private List<String> parseScopesArg(Object value) {
+        if (value == null) {
+            return List.of();
+        }
+        if (value instanceof Collection<?> collection) {
+            List<String> out = new ArrayList<>();
+            for (Object item : collection) {
+                if (item != null && !String.valueOf(item).isBlank()) {
+                    out.add(String.valueOf(item).trim());
+                }
+            }
+            return List.copyOf(out);
+        }
+        String raw = String.valueOf(value).trim();
+        if (raw.isBlank()) {
+            return List.of();
+        }
+        if (raw.startsWith("[")) {
+            try {
+                return parseScopesArg(objectMapper.readValue(raw, List.class));
+            } catch (Exception e) {
+                // A value that announced itself as a JSON array and is not one tells us
+                // nothing about which scopes were meant. Keeping the whole broken text as ONE
+                // scope invents a requirement no account can ever hold, so the gap is always
+                // non-empty and the user is sent to reconnect for a scope that does not exist.
+                // Asking for nothing is the honest reading of an unreadable ask.
+                log.debug("scopes arg looked like JSON and was not: {}", e.getMessage());
+                return List.of();
+            }
+        }
+        return List.of(raw);
+    }
+
+    /**
+     * What this credential was granted, never null.
+     *
+     * <p>Both shapes go through {@link GrantedScopes}, including the list one. A row written
+     * before that rule existed can hold a whole comma or space joined blob inside a single list
+     * element, which {@code normalize} splits and a plain {@code map(String::valueOf)} would
+     * not. The gap CALCULATION survives either way, because {@code missingFrom} normalises
+     * again internally, but this list is also what the card SHOWS: unsplit, the user is told
+     * their account holds one run-on scope instead of the four it actually has.
+     */
+    private static List<String> grantedScopesOf(Map<String, Object> credential) {
+        Object scopes = credential == null ? null : credential.get("scopes");
+        if (scopes instanceof List<?> list) {
+            return List.copyOf(GrantedScopes.normalize(
+                    list.stream().filter(Objects::nonNull).map(String::valueOf).toList()));
+        }
+        if (scopes instanceof String s && !s.isBlank()) {
+            return GrantedScopes.parse(s);
+        }
+        return List.of();
+    }
+
+    /**
+     * Which of {@code required} this credential does NOT hold.
+     *
+     * <p>Empty whenever nothing was asked for, and empty whenever the credential
+     * declares no scopes at all. The second is the important one: an API key has no
+     * scope concept, so its empty list means "not applicable", not "granted nothing",
+     * and reading it the other way would raise a reconnect card on every key-based
+     * integration a caller happened to name scopes for.
+     */
+    private static Set<String> missingScopesOf(Map<String, Object> credential, List<String> required) {
+        if (required == null || required.isEmpty()) {
+            return Set.of();
+        }
+        // Only an OAuth2 credential has scopes to fall short of. The two surfaces that RENDER
+        // the gap already say so and say it exactly this way: MissingScopesBanner returns null
+        // unless the type is 'OAuth2', and catalog's Account.scopesApply exempts every other
+        // kind. Without the same test here, a non-OAuth row that happens to carry a scopes list
+        // produces a card the banner then refuses to explain: the user is shown a service, no
+        // reason, and a Reconnect button with nothing behind it.
+        if (!"OAuth2".equals(credential == null ? null : credential.get("type"))) {
+            return Set.of();
+        }
+        List<String> granted = grantedScopesOf(credential);
+        if (granted.isEmpty()) {
+            return Set.of();
+        }
+        return GrantedScopes.missingFrom(required, granted);
     }
 
     private static boolean parseBooleanArg(Object value) {
@@ -1121,9 +1426,7 @@ public class ConversationToolExecutionService implements ToolExecutionService {
             request.put("allowedFileIds", credentials.get("__allowedFileIds__"));
         }
         // Forward access modes (read/write per resource)
-        for (String key : List.of("__tableAccessMode__", "__workflowAccessMode__", "__interfaceAccessMode__",
-                "__agentAccessMode__", "__applicationAccessMode__", "__skillAccessMode__", "__fileAccessMode__",
-                "__memoryAccessMode__")) {
+        for (String key : ToolAccessControl.INTERNAL_ACCESS_MODE_KEYS) {
             if (credentials != null && credentials.get(key) != null) {
                 request.put(key.substring(2, key.length() - 2), credentials.get(key)); // strip __ prefix/suffix
             }

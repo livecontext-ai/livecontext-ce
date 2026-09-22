@@ -332,7 +332,8 @@ public class InternalAuthController {
                     body.get("promptTokens") instanceof Number n ? n.intValue() : null,
                     body.get("completionTokens") instanceof Number n ? n.intValue() : null,
                     (String) body.get("errorReason"),
-                    organizationId
+                    organizationId,
+                    (String) body.get("keyRoute")
             );
             return ResponseEntity.ok().build();
         } catch (Exception e) {
@@ -599,8 +600,16 @@ public class InternalAuthController {
     private static final java.util.Set<String> VALID_PROVIDER_KINDS =
             java.util.Set.of("byok", "bridge", "cloud");
 
+    /**
+     * @return the stored free-tier flag, echoed back (V493). The caller treats a missing
+     *         echo as "not mirrored": an auth-service pod that predates this column
+     *         ignores the {@code freeTier} key entirely and still answers 200, which
+     *         during a rolling deploy is exactly how the catalog ends up saying "open"
+     *         while the gate keeps refusing. An echo is the only thing that tells the
+     *         two apart.
+     */
     @PostMapping("/model-pricing/sync")
-    public ResponseEntity<Void> syncModelPricing(@RequestBody Map<String, Object> body) {
+    public ResponseEntity<Map<String, Object>> syncModelPricing(@RequestBody Map<String, Object> body) {
         String provider = (String) body.get("provider");
         String model = (String) body.get("model");
         BigDecimal inputRate = body.get("inputRate") instanceof Number n
@@ -608,6 +617,16 @@ public class InternalAuthController {
         BigDecimal outputRate = body.get("outputRate") instanceof Number n
                 ? new BigDecimal(n.toString()) : null;
         String providerKind = body.get("providerKind") instanceof String s && !s.isBlank() ? s : null;
+        // V491: the model's OWN cache prices. Absent = "the catalog does not know", which
+        // leaves any existing value alone and bills on the family multiplier; a
+        // non-positive value is treated the same way, because 0 would make cached input
+        // free rather than unknown.
+        BigDecimal cacheReadRate = positiveRate(body.get("cacheReadRate"));
+        BigDecimal cacheWriteRate = positiveRate(body.get("cacheWriteRate"));
+        // V493 free-tier mirror. Absent key = leave the stored flag alone (an older
+        // agent-service that does not send it must not close a model the admin opened);
+        // a present non-boolean is ignored the same way rather than read as false.
+        Boolean freeTier = body.get("freeTier") instanceof Boolean b ? b : null;
 
         if (provider == null || model == null || inputRate == null || outputRate == null) {
             return ResponseEntity.badRequest().build();
@@ -617,7 +636,19 @@ public class InternalAuthController {
             return ResponseEntity.badRequest().build();
         }
 
-        modelPricingService.upsertPricing(provider, model, inputRate, outputRate, providerKind);
-        return ResponseEntity.ok().build();
+        modelPricingService.upsertPricing(provider, model, inputRate, outputRate, providerKind,
+                cacheReadRate, cacheWriteRate, freeTier);
+        // Read back through the same method the gate uses, after upsertPricing cleared the
+        // cache: the echo states what the GATE will now answer, not what we were sent.
+        return ResponseEntity.ok(Map.of("freeTier", modelPricingService.isFreeTierModel(provider, model)));
+    }
+
+    /** A rate the mirror can store, or {@code null} when absent, unparseable or non-positive. */
+    private static BigDecimal positiveRate(Object raw) {
+        if (!(raw instanceof Number n)) {
+            return null;
+        }
+        BigDecimal value = new BigDecimal(n.toString());
+        return value.signum() > 0 ? value : null;
     }
 }

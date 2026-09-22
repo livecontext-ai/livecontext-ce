@@ -28,9 +28,13 @@ public class StreamApiClient {
                 logger.info("✅ [STREAM API] Created stream {} for conversation {}", streamId, conversationId);
                 return true;
             } else {
-                // null = the conversation no longer exists (deleted / never-persisted / out-of-scope);
-                // the stream row is skipped on purpose, not a server error. The chat is unaffected.
-                logger.debug("[STREAM API] Stream {} not registered: conversation {} no longer exists",
+                // null = no row was written on purpose, not a server error, and the chat is
+                // unaffected. Two causes share it: the conversation no longer exists (deleted /
+                // never-persisted / out-of-scope), or this streamId is already bound to a
+                // different conversation. Naming only the first would misreport the second -
+                // createStream logs the specific cause at its own level.
+                logger.debug("[STREAM API] Stream {} not registered for conversation {} "
+                        + "(conversation gone, or the streamId belongs to another conversation)",
                         streamId, conversationId);
                 return false;
             }

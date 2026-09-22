@@ -74,6 +74,25 @@ public class UserProfileEntity {
     @Column(name = "profile_visibility", length = 20, nullable = false)
     private String profileVisibility = VISIBILITY_UNLISTED;
 
+    /**
+     * Manually granted verified badge (the blue check next to the public name).
+     * The platform ADMIN role grants the same badge implicitly and is NOT
+     * mirrored here, so this column only ever carries the manual grants an
+     * admin makes for everyone else. Resolution of the two sources lives in
+     * {@code VerifiedAccountService} - never read this field directly to decide
+     * whether to show a badge.
+     */
+    @Column(name = "verified", nullable = false)
+    private boolean verified = false;
+
+    /** When the manual grant was last flipped ON. Null while never granted. */
+    @Column(name = "verified_at")
+    private LocalDateTime verifiedAt;
+
+    /** Admin user id that performed the last manual grant. Null while never granted. */
+    @Column(name = "verified_by")
+    private Long verifiedBy;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -162,6 +181,35 @@ public class UserProfileEntity {
 
     public void setProfileVisibility(String profileVisibility) {
         this.profileVisibility = profileVisibility;
+    }
+
+    /**
+     * The stored manual grant ONLY. Callers deciding whether to render a badge
+     * must go through {@code VerifiedAccountService}, which also honours the
+     * ADMIN role and the managed-cloud edition gate.
+     */
+    public boolean isVerified() {
+        return verified;
+    }
+
+    public void setVerified(boolean verified) {
+        this.verified = verified;
+    }
+
+    public LocalDateTime getVerifiedAt() {
+        return verifiedAt;
+    }
+
+    public void setVerifiedAt(LocalDateTime verifiedAt) {
+        this.verifiedAt = verifiedAt;
+    }
+
+    public Long getVerifiedBy() {
+        return verifiedBy;
+    }
+
+    public void setVerifiedBy(Long verifiedBy) {
+        this.verifiedBy = verifiedBy;
     }
 
     public LocalDateTime getCreatedAt() {

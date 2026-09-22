@@ -8,8 +8,13 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Which of the owner's non-default accounts a workflow step could actually run on,
- * and the sentence that offers them to an agent.
+ * Which of the owner's non-default accounts a call could actually run on, and the
+ * sentence that offers them to an agent.
+ *
+ * <p>Two callers can name one: a workflow step, through its {@code credential_selector},
+ * and a direct catalog execute, through its {@code credential_name} argument. Both resolve
+ * the name through the same matcher, so one offer serves both. The default account needs no
+ * naming on either, which is why it is not offered here; it is still in the listing.
  *
  * <p>Two tools list credentials and neither shows the other's output: workflow-building
  * agents call {@code get_connected_services}, chat agents call {@code credential(action='list')}.
@@ -101,8 +106,9 @@ public final class SelectableAccounts {
         String more = hidden == 0
             ? ""
             : String.format(Locale.ROOT, " and %d more in the connected list", hidden);
-        return String.format(Locale.ROOT, " Also held and selectable by a workflow step that names "
-            + "one in its credential_selector (active only): %s%s.", names, more);
+        return String.format(Locale.ROOT, " Also held and selectable BY NAME, either on a direct "
+            + "catalog execute call through its credential_name argument, or by a workflow step "
+            + "that names one in its credential_selector (active only): %s%s.", names, more);
     }
 
     private static boolean isActive(Map<String, Object> credential) {

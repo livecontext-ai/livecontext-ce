@@ -37,6 +37,9 @@ vi.mock('@/hooks/useAuthGuard', () => ({
 // The point of this file: the COMMUNITY edition.
 vi.mock('@/lib/edition', () => ({
   IS_CE: true,
+  // The verified badge on the publisher row reads this. A self-hosted install is
+  // never managed cloud, so the badge stays dark here.
+  IS_MANAGED_CLOUD: false,
 }));
 
 vi.mock('@/lib/format-cost', () => ({

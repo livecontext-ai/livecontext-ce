@@ -9,9 +9,14 @@
  * user FEWER parameters than they configured - no error, no gap, just a field
  * that quietly stopped existing.
  *
- * This module produces that comparison as data, so it can be both rendered in
- * the inspector and asserted in a test.
+ * This module produces that comparison as data for the alignment e2e spec, which
+ * fails when a node stops reporting something its plan configures. It is NOT
+ * rendered to the user: the inspector used to warn about a mismatch, but that is a
+ * statement about the product rather than about their workflow, and it also fired
+ * on runs recorded before a rename, whose rows legitimately carry the old keys.
  */
+
+import { CONFIGURED_SECRETS } from './configuredSecrets';
 
 /** How a configured parameter fared in the run. */
 export type ParamAlignmentStatus =
@@ -149,10 +154,9 @@ export function flattenPlannedParams(planEntry: Record<string, unknown>): Record
  * Configured keys a node deliberately does not report, keyed `<type>.<key>`,
  * each with the reason.
  *
- * Shared by the inspector and the alignment e2e on purpose: an exemption the
- * test knows about but the UI does not would warn the user about a parameter
- * the product decided not to echo, which is crying wolf. Every entry is a
- * decision; an unlisted mismatch is a real one.
+ * Read by the alignment e2e. Every entry is a decision - a parameter the product
+ * reports some other way, or one it must never report at all - and an unlisted
+ * mismatch is a real one.
  */
 export const NOT_ECHOED_BY_DESIGN: ReadonlySet<string> = new Set<string>([
   // A set node reports each assignment under ITS OWN name, with the resolved
@@ -166,6 +170,12 @@ export const NOT_ECHOED_BY_DESIGN: ReadonlySet<string> = new Set<string>([
   // resolved value (`if`, `elsif_2`, `else`). That is strictly more than the
   // structural condition list, and it is what a reader debugging a branch needs.
   'decision.decisionConditions',
+  // Same shape for a switch and a fork: each case is reported under its own
+  // label with the value it matches on, each branch under its own label with its
+  // target. They used to report a COUNT under the plan's list key, which told the
+  // reader how many existed and nothing about which.
+  'switch.switchCases',
+  'fork.forkOutputs',
   // A code node reports `codeLength`, not the source: it can be megabytes, is
   // unchanged from what the Edit view already shows, and would be copied into
   // every step row of every item.
@@ -178,6 +188,8 @@ export const NOT_ECHOED_BY_DESIGN: ReadonlySet<string> = new Set<string>([
   // file, and copying it into the Params column of every step row would make the
   // panel unusable for the one node whose content is guaranteed to be large.
   'sftp.localContent',
+  // SECRETS, from the one list both halves of the panel read: see CONFIGURED_SECRETS.
+  ...CONFIGURED_SECRETS,
 ]);
 
 /**
@@ -220,7 +232,7 @@ export function buildParamAlignment(
   return { mismatches, configuredKeys };
 }
 
-/** One-line rendering of a configured value for the mismatch panel. */
+/** One-line rendering of a configured value, for the e2e's failure report. */
 function describeConfiguredValue(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value === null || value === undefined) return '';

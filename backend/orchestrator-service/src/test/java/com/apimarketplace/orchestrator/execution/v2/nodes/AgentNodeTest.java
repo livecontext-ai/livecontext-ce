@@ -673,6 +673,156 @@ class AgentNodeTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Classify probabilities - the decision-model output
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Classify probabilities reach the node output")
+    class ClassifyProbabilitiesTests {
+
+        private ClassifyResponseDto response(java.util.Map<String, Double> probabilities) {
+            return new ClassifyResponseDto(
+                true, "category_a", 0.93, "category_a 0.93, category_b 0.07",
+                null, 410L, "typesafe", "jev-latest", 1150, 1150, 0, null, null, null,
+                null, probabilities);
+        }
+
+        @Test
+        @DisplayName("the probabilities a decision model reports are stored on the node output")
+        void probabilitiesReachTheOutput() {
+            // The transport carries them to the orchestrator; this is the end that persists
+            // them. Without this copy they arrive and stop, and no workflow can ever read
+            // the margin between the top two categories.
+            Agent agent = createClassifyAgent();
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            injectAgentClient(node);
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(response(java.util.Map.of("category_a", 0.93, "category_b", 0.07)));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertThat(result.output()).containsKey("probabilities");
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Double> stored =
+                (java.util.Map<String, Double>) result.output().get("probabilities");
+            assertThat(stored).containsEntry("category_a", 0.93).containsEntry("category_b", 0.07);
+        }
+
+        @Test
+        @DisplayName("a chat model, which reports none, leaves the key absent rather than empty")
+        void chatModelLeavesTheKeyAbsent() {
+            // Absent and empty are different to a template: an empty object resolves to
+            // something that looks like a real, unanimous result. The LLM path reports no
+            // probabilities at all, and the output must say so by omission.
+            Agent agent = createClassifyAgent();
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            injectAgentClient(node);
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(response(null));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertThat(result.output()).doesNotContainKey("probabilities");
+        }
+
+        @Test
+        @DisplayName("an empty map is treated as no probabilities, not as a result")
+        void emptyMapIsTreatedAsAbsent() {
+            Agent agent = createClassifyAgent();
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            injectAgentClient(node);
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(response(java.util.Map.of()));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertThat(result.output()).doesNotContainKey("probabilities");
+        }
+
+        @Test
+        @DisplayName("BILLING: the row is keyed on the pair the run reported, not on a plan that named none")
+        void billedPairComesFromTheRunWhenThePlanNamesNone() {
+            // provider is optional on this node, and a plan naming only a model resolves
+            // through a catalogue that does not contain it, leaving the field null. The
+            // ledger would then record unknown/unknown, find no pricing row, and bill the
+            // 1.0 / 4.0 default rates with the GLOBAL margin lever - the shape of the
+            // "unknown/unknown 793/150" incident the agent path already guards against.
+            Agent agent = createClassifyAgentWithoutProvider();
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            injectAgentClient(node);
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(response(java.util.Map.of("category_a", 0.93)));
+
+            node.execute(context);
+
+            ArgumentCaptor<AgentObservabilityRequest> captor =
+                ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+            verify(mockAgentClient).recordObservability(captor.capture());
+            assertThat(captor.getValue().getProvider()).isEqualTo("typesafe");
+            assertThat(captor.getValue().getModel()).isEqualTo("jev-latest");
+        }
+
+        @Test
+        @DisplayName("BILLING: a plan that DOES name a pair is still billed on what the run reported")
+        void theRunWinsOverThePlan() {
+            // Not merely a fallback. On a model execution link the service re-stamps the
+            // billed pair on purpose, so reading the plan over it would charge the run as
+            // its execution target - which is what the agent path does too.
+            Agent agent = createClassifyAgent();
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            injectAgentClient(node);
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(response(java.util.Map.of("category_a", 0.93)));
+
+            node.execute(context);
+
+            ArgumentCaptor<AgentObservabilityRequest> captor =
+                ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+            verify(mockAgentClient).recordObservability(captor.capture());
+            assertThat(captor.getValue().getProvider()).isEqualTo("typesafe");
+        }
+
+        @Test
+        @DisplayName("BILLING: with the run reporting nothing, the plan's pair is kept rather than blanked")
+        void thePlanIsKeptWhenTheRunReportsNothing() {
+            Agent agent = createClassifyAgent();
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            injectAgentClient(node);
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(new ClassifyResponseDto(
+                    true, "category_a", 0.9, null, null, 100L, null, null,
+                    10, 10, 0, null, null, null, null, null));
+
+            node.execute(context);
+
+            ArgumentCaptor<AgentObservabilityRequest> captor =
+                ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+            verify(mockAgentClient).recordObservability(captor.capture());
+            assertThat(captor.getValue().getProvider()).isEqualTo("openai");
+            assertThat(captor.getValue().getModel()).isEqualTo("gpt-4o");
+        }
+
+        @Test
+        @DisplayName("the classification still routes: the branch index is resolved as before")
+        void routingIsUnaffected() {
+            // Adding an output must not disturb the one field the DAG actually follows.
+            Agent agent = createClassifyAgent();
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            injectAgentClient(node);
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(response(java.util.Map.of("category_a", 0.93)));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertThat(result.output()).containsEntry("selected_category", "category_a");
+            // The VALUE, not merely the key: the index is what picks the port, so a wrong
+            // one routes to the wrong branch and containsKey would pass on -1, which
+            // follows no port at all and stops the DAG with nothing to read.
+            assertThat(result.output()).containsEntry("selected_category_index", 0);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Classify observability tests
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -706,6 +856,93 @@ class AgentNodeTest {
             assertThat(obs.getIterationCount()).isEqualTo(1);
             assertThat(obs.getAgentType()).isEqualTo("classify");
             assertThat(obs.getStatus()).isEqualTo("COMPLETED");
+        }
+
+
+        @Test
+        @DisplayName("BILLING: the DTO's cache counters reach the observability row, which is the only thing that charges them")
+        void cacheCountersReachTheBilledRow() {
+            // The transport was widened so a classify turn could carry its cache; this is
+            // the end that spends it. Without this copy the counters arrive at the
+            // orchestrator and stop there, which is exactly the shape of the original
+            // defect: over a model execution link the whole context was billed at full
+            // input rate (6.1x its cost, measured), and without one the cache was free.
+            Agent agent = createClassifyAgent();
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            injectAgentClient(node);
+
+            ClassifyResponseDto response = new ClassifyResponseDto(
+                true, "category_a", 0.95, "High confidence match",
+                null, 450L, "anthropic", "claude-fable-5", 1_921, 6, 1_915, null, null, null,
+                com.apimarketplace.agent.domain.UsageInfo.builder()
+                    .cacheCreationInputTokens(18_945)
+                    .cacheReadInputTokens(79_368)
+                    .build()
+            );
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(response);
+
+            node.execute(context);
+
+            ArgumentCaptor<AgentObservabilityRequest> captor =
+                ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+            verify(mockAgentClient).recordObservability(captor.capture());
+
+            AgentObservabilityRequest obs = captor.getValue();
+            assertThat(obs.getCacheCreationTokens()).isEqualTo(18_945L);
+            assertThat(obs.getCacheReadTokens()).isEqualTo(79_368L);
+            // And the prompt stays the PLAIN input the service converted it to: the cache
+            // is billed on its own line, not twice.
+            assertThat(obs.getPromptTokens()).isEqualTo(6L);
+        }
+
+        @Test
+        @DisplayName("BILLING: a turn whose provider reported no cache leaves the counters at zero rather than refusing the row")
+        void noCacheUsageLeavesCountersAtZero() {
+            Agent agent = createClassifyAgent();
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            injectAgentClient(node);
+
+            ClassifyResponseDto response = new ClassifyResponseDto(
+                true, "category_a", 0.95, "High confidence match",
+                null, 450L, "openai", "gpt-4o", 320, 200, 120, null, null, null
+            );
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(response);
+
+            node.execute(context);
+
+            ArgumentCaptor<AgentObservabilityRequest> captor =
+                ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+            verify(mockAgentClient).recordObservability(captor.capture());
+
+            AgentObservabilityRequest obs = captor.getValue();
+            assertThat(obs.getCacheCreationTokens()).isZero();
+            assertThat(obs.getCacheReadTokens()).isZero();
+            assertThat(obs.getStatus()).isEqualTo("COMPLETED");
+        }
+
+        @Test
+        @DisplayName("BILLING: the key route the service pinned reaches the observability row, so an own-key classify turn is billed its flat fee and not the token rate")
+        void keyRouteReachesTheBilledRow() {
+            Agent agent = createClassifyAgent();
+            AgentNode node = new AgentNode("agent:classifier", agent);
+            injectAgentClient(node);
+
+            ClassifyResponseDto response = new ClassifyResponseDto(
+                true, "category_a", 0.95, "match",
+                null, 450L, "anthropic", "claude-fable-5", 100, 60, 40, null, null, null,
+                null, null, "OWN_KEY"
+            );
+            when(mockAgentClient.executeClassify(any(ClassifyRequestDto.class)))
+                .thenReturn(response);
+
+            node.execute(context);
+
+            ArgumentCaptor<AgentObservabilityRequest> captor =
+                ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+            verify(mockAgentClient).recordObservability(captor.capture());
+            assertThat(captor.getValue().getKeyRoute()).isEqualTo("OWN_KEY");
         }
 
         @Test
@@ -795,6 +1032,91 @@ class AgentNodeTest {
             assertThat(obs.getIterationCount()).isEqualTo(1);
             assertThat(obs.getAgentType()).isEqualTo("guardrail");
             assertThat(obs.getStatus()).isEqualTo("COMPLETED");
+        }
+
+        @Test
+        @DisplayName("BILLING: the DTO's cache counters reach the observability row, which is the only thing that charges them")
+        void cacheCountersReachTheBilledRow() {
+            // Guardrail is a copy of the classify node shape and had the same defect, so it
+            // gets the same assertion: a fix tested on one twin only is a fix that
+            // half-survives. Over a model execution link the whole context was billed at
+            // full input rate (6.1x its cost, measured); without one the cache was free.
+            Agent agent = createGuardrailAgent();
+            AgentNode node = new AgentNode("agent:guardrail", agent);
+            injectAgentClient(node);
+
+            GuardrailResponseDto response = new GuardrailResponseDto(
+                true, true, List.of(), Map.of(), null,
+                null, 350L, "anthropic", "claude-fable-5", 1_921, 6, 1_915, null, null, null,
+                com.apimarketplace.agent.domain.UsageInfo.builder()
+                    .cacheCreationInputTokens(18_945)
+                    .cacheReadInputTokens(79_368)
+                    .build()
+            );
+            when(mockAgentClient.executeGuardrail(any(GuardrailRequestDto.class)))
+                .thenReturn(response);
+
+            node.execute(context);
+
+            ArgumentCaptor<AgentObservabilityRequest> captor =
+                ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+            verify(mockAgentClient).recordObservability(captor.capture());
+
+            AgentObservabilityRequest obs = captor.getValue();
+            assertThat(obs.getCacheCreationTokens()).isEqualTo(18_945L);
+            assertThat(obs.getCacheReadTokens()).isEqualTo(79_368L);
+            // And the prompt stays the PLAIN input the service converted it to: the cache
+            // is billed on its own line, not twice.
+            assertThat(obs.getPromptTokens()).isEqualTo(6L);
+        }
+
+        @Test
+        @DisplayName("BILLING: a turn whose provider reported no cache leaves the counters at zero rather than refusing the row")
+        void noCacheUsageLeavesCountersAtZero() {
+            Agent agent = createGuardrailAgent();
+            AgentNode node = new AgentNode("agent:guardrail", agent);
+            injectAgentClient(node);
+
+            GuardrailResponseDto response = new GuardrailResponseDto(
+                true, true, List.of(), Map.of(), null,
+                null, 350L, "openai", "gpt-4o", 275, 175, 100, null, null, null
+            );
+            when(mockAgentClient.executeGuardrail(any(GuardrailRequestDto.class)))
+                .thenReturn(response);
+
+            node.execute(context);
+
+            ArgumentCaptor<AgentObservabilityRequest> captor =
+                ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+            verify(mockAgentClient).recordObservability(captor.capture());
+
+            AgentObservabilityRequest obs = captor.getValue();
+            assertThat(obs.getCacheCreationTokens()).isZero();
+            assertThat(obs.getCacheReadTokens()).isZero();
+            assertThat(obs.getStatus()).isEqualTo("COMPLETED");
+        }
+
+        @Test
+        @DisplayName("BILLING: the key route the service pinned reaches the observability row, so an own-key guardrail turn is billed its flat fee and not the token rate")
+        void keyRouteReachesTheBilledRow() {
+            Agent agent = createGuardrailAgent();
+            AgentNode node = new AgentNode("agent:guardrail", agent);
+            injectAgentClient(node);
+
+            GuardrailResponseDto response = new GuardrailResponseDto(
+                true, true, List.of(), Map.of(), null,
+                null, 350L, "openai", "gpt-4o", 275, 175, 100, null, null, null,
+                null, "OWN_KEY"
+            );
+            when(mockAgentClient.executeGuardrail(any(GuardrailRequestDto.class)))
+                .thenReturn(response);
+
+            node.execute(context);
+
+            ArgumentCaptor<AgentObservabilityRequest> captor =
+                ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+            verify(mockAgentClient).recordObservability(captor.capture());
+            assertThat(captor.getValue().getKeyRoute()).isEqualTo("OWN_KEY");
         }
 
         @Test
@@ -1220,6 +1542,39 @@ class AgentNodeTest {
             null,
             "openai",
             "gpt-4o",
+            null,
+            "Classify this content",
+            0.7,
+            4096,
+            10,
+            5,
+            List.of(),
+            null,
+            Map.of("content", "Test content to classify"),
+            List.of(
+                Map.of("label", "category_a", "description", "Category A"),
+                Map.of("label", "category_b", "description", "Category B")
+            ),
+            null,
+            List.of(),
+            null
+        , null);
+    }
+
+    /**
+     * A classify node whose plan names a MODEL but no provider, which is legal: the
+     * parameter is optional, and an authored plan that omits it leaves the field null all
+     * the way to the ledger.
+     */
+    private Agent createClassifyAgentWithoutProvider() {
+        return new Agent(
+            "agent-classify-2",
+            "classify",
+            "Content Classifier",
+            null,
+            null,
+            null,
+            "jev-latest",
             null,
             "Classify this content",
             0.7,

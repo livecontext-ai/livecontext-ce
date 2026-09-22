@@ -11,6 +11,7 @@ import { canvasChromeCompactButtonClass, canvasNodeButtonClass } from '@/compone
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { orchestratorApi } from '@/lib/api';
 import { track } from '@/lib/analytics/analytics';
+import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { useRun } from '@/contexts/WorkflowRunContext';
 import { computeTriggerPinState, triggerPinTitle, TRIGGER_PIN_REQUEST_EVENT } from '../../hooks/useTriggerPin';
@@ -55,6 +56,8 @@ export const TriggerNodePinButton: React.FC<TriggerNodePinButtonProps> = ({ work
   } = useWorkflowMode();
   const [runState] = useRun(runId ?? undefined);
   const runPlanVersion: number | null = runState?.rawRunState?.planVersion ?? null;
+
+  const refreshAutomations = useRefreshHomeStatus();
 
   const [mounted, setMounted] = useState(false);
   const [pinning, setPinning] = useState(false);
@@ -149,6 +152,10 @@ export const TriggerNodePinButton: React.FC<TriggerNodePinButtonProps> = ({ work
   const callPin = async (versionToPin: number | null) => {
     const result = await orchestratorApi.pinVersion(workflowId, versionToPin);
     if (result.success) {
+      // Pinning is what puts a workflow in the bell's Triggers rows, and in the imminent-fire
+      // ring that shows WITHOUT the bell being opened. Nothing else invalidates that payload,
+      // so without this the user pins, looks, and reads state from before the action.
+      refreshAutomations();
       window.dispatchEvent(new CustomEvent('workflowPinnedVersionChange', {
         detail: { pinnedVersion: result.pinnedVersion, workflowId },
       }));

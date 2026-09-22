@@ -448,53 +448,91 @@ public class WebhookController {
         logger.info("Checkout completed: session={}, customer={}, subscription={}",
                     session.getId(), session.getCustomer(), session.getSubscription());
 
+        // V250/PR3 - PAYG one-time top-up dispatch. Stripe mode=PAYMENT checkouts
+        // (createPaygCheckoutSession) carry metadata.kind="payg_topup". Subscription
+        // checkouts (mode=SUBSCRIPTION) have no "kind" metadata and fall through to the
+        // standard customer.subscription.* provisioning path.
+        java.util.Map<String, String> metadata = session.getMetadata();
+        boolean paygTopup = metadata != null && "payg_topup".equals(metadata.get("kind"));
+
         // Decode the nonce from client_reference_id to retrieve the userId
         String nonce = session.getClientReferenceId();
+        Long userId = null;
         if (nonce != null && !nonce.isEmpty()) {
-            Long userId = nonceUtil.decodeNonce(nonce);
-            if (userId != null) {
-                logger.info("Checkout completed for user {} (decoded from nonce: {})", userId, nonce);
-
-                // Record the checkout event with the decoded userId
-                try {
-                    ObjectNode checkoutEventPayload = objectMapper.createObjectNode();
-                    checkoutEventPayload.put("sessionId", session.getId());
-                    checkoutEventPayload.put("customerId", session.getCustomer());
-                    checkoutEventPayload.put("subscriptionId", session.getSubscription());
-                    checkoutEventPayload.put("userId", userId);
-                    checkoutEventPayload.put("nonce", nonce);
-                    checkoutEventPayload.put("action", "checkout_session_completed");
-
-                    BillingEvent checkoutEvent = new BillingEvent(
-                        "stripe",
-                        "checkout_completed_" + session.getId(),
-                        "checkout.session.completed",
-                        checkoutEventPayload
-                    );
-                    billingEventRepository.save(checkoutEvent);
-                } catch (Exception e) {
-                    logger.warn("Failed to save checkout completed event: {}", e.getMessage());
-                }
-
-                // V250/PR3 - PAYG one-time top-up dispatch.
-                // Stripe mode=PAYMENT checkouts (createPaygCheckoutSession) carry
-                // metadata.kind="payg_topup". Subscription checkouts (mode=SUBSCRIPTION)
-                // have no "kind" metadata and fall through to the standard
-                // customer.subscription.* provisioning path.
-                java.util.Map<String, String> metadata = session.getMetadata();
-                if (metadata != null && "payg_topup".equals(metadata.get("kind"))) {
-                    parseAndGrantPaygTopup(userId, session.getId(),
-                            metadata.get("credit_amount"), metadata.get("tier"));
-                    return;  // do NOT wait for customer.subscription.* - none will fire for mode=PAYMENT
-                }
-            } else {
+            userId = nonceUtil.decodeNonce(nonce);
+            if (userId == null && !paygTopup) {
                 logger.warn("Failed to decode nonce from checkout session: {}", nonce);
             }
-        } else {
+        } else if (!paygTopup) {
             logger.warn("No nonce found in checkout session client_reference_id");
+        }
+        if (paygTopup && userId == null) {
+            // A PAYG top-up has NO later event to provision it: an unreadable nonce here used
+            // to mean a charged card and no credits. The Stripe customer is the durable link.
+            userId = resolvePaygTopupUserByCustomer(session.getCustomer(), session.getId(), nonce);
+            if (userId == null) {
+                return;
+            }
+        }
+
+        if (userId != null) {
+            logger.info("Checkout completed for user {} (decoded from nonce: {})", userId, nonce);
+
+            // Record the checkout event with the decoded userId
+            try {
+                ObjectNode checkoutEventPayload = objectMapper.createObjectNode();
+                checkoutEventPayload.put("sessionId", session.getId());
+                checkoutEventPayload.put("customerId", session.getCustomer());
+                checkoutEventPayload.put("subscriptionId", session.getSubscription());
+                checkoutEventPayload.put("userId", userId);
+                checkoutEventPayload.put("nonce", nonce);
+                checkoutEventPayload.put("action", "checkout_session_completed");
+
+                BillingEvent checkoutEvent = new BillingEvent(
+                    "stripe",
+                    "checkout_completed_" + session.getId(),
+                    "checkout.session.completed",
+                    checkoutEventPayload
+                );
+                billingEventRepository.save(checkoutEvent);
+            } catch (Exception e) {
+                logger.warn("Failed to save checkout completed event: {}", e.getMessage());
+            }
+
+            if (paygTopup) {
+                parseAndGrantPaygTopup(userId, session.getId(),
+                        metadata.get("credit_amount"), metadata.get("tier"));
+                return;  // do NOT wait for customer.subscription.* - none will fire for mode=PAYMENT
+            }
         }
 
         // We wait for customer.subscription.* to provision
+    }
+
+    /**
+     * PAYG top-up attribution fallback. The nonce is AES-encrypted with a per-deployment key:
+     * when that key is missing, rotated, or differs between replicas (the pod that created the
+     * checkout is not the one receiving the webhook) the nonce is unreadable, and until 2026-09
+     * the top-up was silently dropped after Stripe had charged the card. The Stripe customer id
+     * is the durable link ({@code billing_customer.provider_customer_id}), so resolve through it.
+     * Returns null (after an ERROR log) when the customer is unknown too; the stored event is
+     * then picked up by {@code PaygTopupReconciler}.
+     */
+    private Long resolvePaygTopupUserByCustomer(String customerId, String sessionId, String nonce) {
+        if (customerId != null && !customerId.isBlank()) {
+            Optional<Long> viaCustomer = billingCustomerRepository.findByProviderCustomerId(customerId)
+                    .map(bc -> bc.getUser().getId());
+            if (viaCustomer.isPresent()) {
+                logger.warn("PAYG top-up session {}: nonce {}, user {} resolved via Stripe customer {}",
+                        sessionId, nonce == null || nonce.isBlank() ? "absent" : "undecodable",
+                        viaCustomer.get(), customerId);
+                return viaCustomer.get();
+            }
+        }
+        logger.error("PAYG top-up session {} cannot be attributed: nonce unreadable and Stripe customer {} " +
+                "unknown locally. The PAYG top-up reconciler retries from the stored event.",
+                sessionId, customerId);
+        return null;
     }
 
     /**
@@ -563,6 +601,7 @@ public class WebhookController {
         try {
             String sessionId = null;
             String nonce = null;
+            String customerId = null;
             String kind = null;
             String tier = null;
             String creditAmountStr = null;
@@ -572,6 +611,7 @@ public class WebhookController {
                 if ("checkout.session".equals(json.path("object").asText())) {
                     sessionId = json.path("id").asText(null);
                     nonce = json.path("client_reference_id").asText(null);
+                    customerId = json.path("customer").asText(null);
                     var metadata = json.path("metadata");
                     if (metadata != null && metadata.isObject()) {
                         kind = metadata.path("kind").asText(null);
@@ -595,10 +635,13 @@ public class WebhookController {
             // webhook. The pre-helper version inlined the validation and was a
             // copy-paste drift vector (audit M4): fixing one path without the
             // other was one bad commit away from real money loss.
-            if ("payg_topup".equals(kind) && nonce != null && !nonce.isBlank()) {
-                Long userId = nonceUtil.decodeNonce(nonce);
+            if ("payg_topup".equals(kind)) {
+                Long userId = (nonce != null && !nonce.isBlank()) ? nonceUtil.decodeNonce(nonce) : null;
                 if (userId == null) {
-                    logger.warn("PAYG top-up RAW session {} has invalid nonce - skipping grant", sessionId);
+                    // Same fallback as the typed path: the Stripe customer, never a dropped grant.
+                    userId = resolvePaygTopupUserByCustomer(customerId, sessionId, nonce);
+                }
+                if (userId == null) {
                     return;
                 }
                 parseAndGrantPaygTopup(userId, sessionId, creditAmountStr, tier);

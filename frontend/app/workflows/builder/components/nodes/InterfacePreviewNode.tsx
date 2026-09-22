@@ -35,6 +35,7 @@ import { NodeBottomBar } from './NodeBottomBar';
 import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
 import { getSourceHandleGeometry, getTargetHandleGeometry, getSideAttachment } from './handleGeometry';
 import { NodeActivityShimmer } from './NodeActivityShimmer';
+import { InterfaceContinueButton } from './InterfaceContinueButton';
 interface InterfacePreviewNodeProps extends NodeProps<BuilderNodeData> {
   onOpenFullscreen?: () => void;
 }
@@ -58,7 +59,7 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
   const t = useTranslations('workflowBuilder.nodes');
   // "Item X / Y" semantic label for the spawn-item pager (run-mode context).
   const tRun = useTranslations('runMode');
-  const { isRunMode, isPreviewOnly, isApplicationMode, runId, viewingEpoch } = useWorkflowMode();
+  const { isRunMode, isPreviewOnly, isApplicationMode, runId, workflowId, viewingEpoch } = useWorkflowMode();
   const { targetRef: nodeRef, isVisible: showActions, show } = useHoverVisibility<HTMLDivElement>();
 
   // Step-by-step execution status - pass node data for accurate backend ID mapping
@@ -438,6 +439,82 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
   // Check if node is running (for shimmer animation) - show shimmer in all modes
   const isNodeRunning = effectiveStatus === 'running';
 
+  // ── Side-attachment band (below the node in horizontal, beside it in vertical) ──
+  // Two occupants share it, so they are built once here and rendered by BOTH the
+  // compact and the preview branch: the spawn-item pager, and the Continue button
+  // of an interface parked on its blocking `__continue`.
+  //
+  // One container, not two absolutes: `getSideAttachment` returns ONE slot, and
+  // before this the pager already took it alone. A second absolute at the same
+  // offset would simply sit on top of the first.
+  const showItemNavigator = isRunMode && viewingEpoch != null && totalPages > 1;
+  // The Continue button is the canvas counterpart of the approval node's
+  // Approve/Reject: an interface node only ever parks on INTERFACE_SIGNAL, so
+  // `awaiting_signal` IS "waiting for a human to continue".
+  //
+  // Refused on a read-only surface, which here means the MARKETPLACE PREVIEW: it
+  // renders a publisher's frozen showcase, so a visitor pressing Continue would
+  // be trying to advance someone else's run. The application's own Continue
+  // button is hidden there for the same reason.
+  //
+  // A SHARE-TOKEN visitor is a different case and needs no gate here: /s/[token]
+  // mounts this canvas inside a `hidden` container, so the control is not
+  // reachable, and if it were, the fire is one the backend DELIBERATELY allows
+  // for an APPLICATION share (`SHARE_APPLICATION_RUN_INTERACTION_PATH` matches
+  // `interface-actions/{node}/fire` precisely so a shared interactive app can be
+  // continued). So this is not the `canRerun` hole, and it must not be described
+  // as one.
+  const canContinueInterface = isRunMode
+    && !isPreviewOnly
+    // A historical epoch is read-only for everything that ADVANCES the run, and
+    // this one has to be: an interface fire carries no epoch, so the backend
+    // resolves the node's NEWEST parked signal. Offering the button while epoch
+    // 1 is on screen would continue epoch 3, report success, and leave the epoch
+    // the user was reading exactly as it was. (In the all-epochs view the same
+    // "newest wins" rule applies, and there the button SAYS which epoch it will
+    // move - see the tooltip - because that view never claimed to be about one.)
+    //
+    // Known false negative, and it fails CLOSED: `currentEpoch` is the MAX
+    // across the run's DAGs, so on a multi-trigger run a node sitting on its own
+    // DAG's live epoch can read as focused and lose the button. The user gets it
+    // back from the all-epochs view; the opposite error would advance a fire
+    // nobody was looking at.
+    && stepByStepStatus.isInteractive
+    && effectiveStatus === 'awaiting_signal'
+    && !!runId
+    && !!stepByStepStatus.stepId;
+  const sideAttachment = (showItemNavigator || canContinueInterface) ? (
+    <div
+      className={clsx(
+        'absolute nodrag nopan z-20 flex items-center gap-1.5',
+        layoutDirection === 'vertical' ? 'flex-col' : 'flex-row',
+      )}
+      style={getSideAttachment(layoutDirection, 8)}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Pagination controls (spawn items only, not epochs). Scoped to a focused
+          epoch on purpose: across all epochs the items of every fire are
+          aggregated, so "item 2 of 5" would name nothing. Runs open on all
+          epochs, so this appears once an epoch is picked. */}
+      {showItemNavigator && (
+        <ItemNavigator
+          currentIndex={currentPage}
+          totalItems={totalPages}
+          onIndexChange={setCurrentPage}
+          itemLabel={tRun('itemLabel')}
+        />
+      )}
+      <InterfaceContinueButton
+        stepId={stepByStepStatus.stepId}
+        runId={runId}
+        workflowId={workflowId}
+        signals={stepByStepStatus.interfaceSignals}
+        awaiting={canContinueInterface}
+      />
+    </div>
+  ) : null;
+
   // Compact view when not in preview mode (edit mode only)
   // Same structure as FlowNode for consistency
   if (!isPreviewMode) {
@@ -498,7 +575,7 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
             hover={{ isVisible: showActions, onHover: show }}
             borderColor={borderColor}
             isRunning={isNodeRunning}
-            extraOffset={viewingEpoch != null && totalPages > 1}
+            extraOffset={!!sideAttachment}
             buttons={[{
               key: 'interface',
               icon: <AppWindow className="h-3 w-3" strokeWidth={2} />,
@@ -515,25 +592,7 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
           />
         )}
 
-        {/* Pagination controls - below node (spawn items only, not epochs).
-          Scoped to a focused epoch on purpose: across all epochs the items of
-          every fire are aggregated, so "item 2 of 5" would name nothing. Runs
-          open on all epochs, so this appears once an epoch is picked. */}
-        {isRunMode && viewingEpoch != null && totalPages > 1 && (
-          <div
-            className="absolute nodrag nopan"
-            style={getSideAttachment(layoutDirection, 8)}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <ItemNavigator
-              currentIndex={currentPage}
-              totalItems={totalPages}
-              onIndexChange={setCurrentPage}
-              itemLabel={tRun('itemLabel')}
-            />
-          </div>
-        )}
+        {sideAttachment}
 
         {/* Target handle (left) */}
         <Handle
@@ -640,25 +699,7 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
 
       <NodeActivityShimmer status={effectiveStatus} className="rounded-xl" />
 
-      {/* Pagination controls - below node (spawn items only, not epochs).
-          Scoped to a focused epoch on purpose: across all epochs the items of
-          every fire are aggregated, so "item 2 of 5" would name nothing. Runs
-          open on all epochs, so this appears once an epoch is picked. */}
-      {isRunMode && viewingEpoch != null && totalPages > 1 && (
-        <div
-          className="absolute nodrag nopan z-20"
-          style={getSideAttachment(layoutDirection, 8)}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <ItemNavigator
-            currentIndex={currentPage}
-            totalItems={totalPages}
-            onIndexChange={setCurrentPage}
-            itemLabel={tRun('itemLabel')}
-          />
-        </div>
-      )}
+      {sideAttachment}
 
       {/* Status badge - render wrapper only when there are real counts to show,
           otherwise we get an empty rounded pill floating at the bottom-right. */}
@@ -698,6 +739,7 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
           hover={{ isVisible: showActions, onHover: show }}
           borderColor={borderColor}
           isRunning={isNodeRunning}
+          extraOffset={!!sideAttachment}
           buttons={[{
             key: 'interface',
             icon: <AppWindow className="h-3 w-3" strokeWidth={2} />,

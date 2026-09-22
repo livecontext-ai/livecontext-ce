@@ -54,6 +54,11 @@ public class ExecutionServiceInjector {
 
     private final V2TemplateAdapter templateAdapter;
 
+    // Bound by MailTimeoutsConfig, which is small enough to boot in a test: the property NAMES
+    // are asserted against the shipped application.yml there, not here, where nothing could.
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.mail.MailTimeouts mailTimeouts;
+
     @Value("${orchestrator.mock.enabled:true}")
     private boolean mockEnabled;
 
@@ -238,6 +243,7 @@ public class ExecutionServiceInjector {
      */
     private ServiceRegistry buildServiceRegistry() {
         return ServiceRegistry.builder()
+            .mailTimeouts(mailTimeouts)
             .toolsGateway(resolveActiveToolsGateway())
             .templateAdapter(templateAdapter)
             .fileStorageService(fileStorageService)

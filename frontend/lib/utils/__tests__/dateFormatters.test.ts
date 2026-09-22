@@ -20,6 +20,7 @@ import {
   parseUtcAware,
   formatUtcDateTime,
   formatUtcDate,
+  formatUtcDateOrNull,
   formatUtcTime,
   formatRelativeDate,
   formatDuration,
@@ -256,5 +257,46 @@ describe('cross-stack contract (regression for the 2026-05-12 bug)', () => {
     const paris = '2026-05-11T16:00:00+02:00';
     const utc   = '2026-05-11T14:00:00Z';
     expect(parseUtcAware(paris).getTime()).toBe(parseUtcAware(utc).getTime());
+  });
+});
+
+/**
+ * `formatUtcDateOrNull` exists for one reason `formatUtcDate` cannot serve: rendering NOTHING.
+ * Its sibling's `fallback` is read as `options?.fallback || '-'`, so an empty string is falsy
+ * and comes back as a literal "-". A caller that wants to omit a whole sentence rather than
+ * print a placeholder inside it therefore needs this, and "+10,000 credits on -" is the
+ * sentence it was written to prevent.
+ */
+describe('formatUtcDateOrNull', () => {
+  it('formats a readable date exactly as formatUtcDate does', () => {
+    expect(formatUtcDateOrNull('2026-10-14T23:53:09', { locale: 'en' }))
+      .toBe(formatUtcDate('2026-10-14T23:53:09', { locale: 'en' }));
+  });
+
+  it('returns null rather than the "-" its sibling cannot suppress', () => {
+    expect(formatUtcDate('not-a-date')).toBe('-');
+    expect(formatUtcDateOrNull('not-a-date')).toBeNull();
+  });
+
+  it('returns null on the absent cases instead of a placeholder', () => {
+    expect(formatUtcDateOrNull(null)).toBeNull();
+    expect(formatUtcDateOrNull(undefined)).toBeNull();
+    expect(formatUtcDateOrNull('')).toBeNull();
+  });
+
+  it('returns null instead of THROWING on a truthy non-date, which is the shape it defends against', () => {
+    // parseUtcAware hands back anything that is not a string unchanged, so an array - what a
+    // mis-configured Jackson mapper serves for a LocalDateTime - would reach .getTime() and
+    // take the whole render down. A helper promising "or null when the input cannot be read"
+    // must answer null here, not crash, because a caller who trusts that name adds no guard.
+    expect(formatUtcDateOrNull([2026, 10, 14] as unknown as string)).toBeNull();
+    expect(formatUtcDateOrNull(({ year: 2026 }) as unknown as string)).toBeNull();
+    expect(formatUtcDateOrNull((12345) as unknown as string)).toBeNull();
+  });
+
+  it('accepts a Date as readily as a string', () => {
+    expect(formatUtcDateOrNull(new Date('2026-10-14T23:53:09Z'), { locale: 'en' }))
+      .toBe(formatUtcDate('2026-10-14T23:53:09Z', { locale: 'en' }));
+    expect(formatUtcDateOrNull(new Date('nonsense'))).toBeNull();
   });
 });

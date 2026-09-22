@@ -1,5 +1,6 @@
 package com.apimarketplace.trigger.repository;
 
+
 import com.apimarketplace.trigger.domain.StandaloneFormEndpointEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -16,7 +17,8 @@ import java.util.UUID;
 @Repository
 public interface StandaloneFormEndpointRepository extends JpaRepository<StandaloneFormEndpointEntity, UUID> {
 
-    Optional<StandaloneFormEndpointEntity> findByToken(String token);
+    /** Lookup by HMAC of the plaintext token (TokenAtRest.hash); the token column is encrypted, no findByToken on purpose. */
+    Optional<StandaloneFormEndpointEntity> findByTokenHash(String tokenHash);
 
     // Strict-isolation finders - see StandaloneWebhookRepository javadoc.
     // Post-V261 the *OrganizationIdIsNull* personal-scope variants were
@@ -58,4 +60,13 @@ public interface StandaloneFormEndpointRepository extends JpaRepository<Standalo
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("DELETE FROM StandaloneFormEndpointEntity f WHERE f.workflowId IN :workflowIds")
     int deleteByWorkflowIdIn(@Param("workflowIds") Collection<UUID> workflowIds);
+
+    /**
+     * READ-ONLY plaintext match for a row written before 2026-09-17 (token in clear, no hash).
+     * Native on purpose: a JPQL comparison would convert the parameter through the encrypting
+     * converter. Rewrites nothing; the delayed startup backfill does. Gated by the service on
+     * {@code PlaintextTokenBackfill.mayHaveLegacyRows}.
+     */
+    @Query(value = "SELECT * FROM trigger.standalone_form_endpoints WHERE token = :plain AND token_hash IS NULL", nativeQuery = true)
+    Optional<StandaloneFormEndpointEntity> findLegacyPlaintext(@Param("plain") String plain);
 }

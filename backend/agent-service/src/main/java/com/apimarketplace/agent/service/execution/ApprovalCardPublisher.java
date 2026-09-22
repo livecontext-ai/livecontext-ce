@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.service.execution;
 
+import com.apimarketplace.agent.tools.authz.AuthorizationSubject;
 import com.apimarketplace.common.event.EventBus;
 import com.apimarketplace.conversation.client.StreamRedisKeys;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -69,7 +70,7 @@ public class ApprovalCardPublisher {
     /**
      * "Authorize this action" card. {@code metadata} is the gate metadata assembled by
      * {@code RemoteToolExecutionService} (rule / toolName / action / toolCallId /
-     * argsSummary / applicationId).
+     * argsSummary / applicationId / subject).
      */
     public String publishToolAuthorization(String streamId, String conversationId,
                                            Map<String, Object> metadata,
@@ -83,6 +84,19 @@ public class ApprovalCardPublisher {
         // Only present for application:acquire - lets the card open the marketplace install
         // modal on the publication the user is about to install.
         authorization.put("applicationId", metadata.get("applicationId"));
+        // What the card names (which workflow/version, which cron). Opaque here on purpose:
+        // this publisher relays subjects it has never heard of, so a new gated rule needs no
+        // change at this hop.
+        //
+        // OMITTED rather than written as null when a rule names nothing, so both routes put
+        // the same shape on the wire: the bridge builds its card from a JS object literal and
+        // an absent value simply disappears. The frontend type says `subject?:`, which means
+        // undefined - and tsconfig has strict:false, so a null slipping in would not be caught
+        // where it is read.
+        Object subject = metadata.get(AuthorizationSubject.METADATA_KEY);
+        if (subject != null) {
+            authorization.put(AuthorizationSubject.METADATA_KEY, subject);
+        }
         if (blocking) {
             authorization.put("blocking", true);
             authorization.put("gateKey", gateKey);

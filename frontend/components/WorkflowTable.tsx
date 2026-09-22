@@ -11,6 +11,8 @@ import { favoritesFirst, type ListSortKey, type VisibilityFilter } from '@/lib/u
 import { useResourceFavorites } from '@/hooks/useResourceFavorites';
 import { FavoriteStarButton } from '@/components/ui/FavoriteStarButton';
 import { WorkflowNodeIcons } from './WorkflowNodeIcons';
+import { NodeTypeFilter } from './NodeTypeFilter';
+import type { NodeTypeFacet } from '@/lib/api/orchestrator/types';
 import { useToast } from './Toast';
 import ToastContainer from './ToastContainer';
 import { orchestratorApi, Workflow } from '@/lib/api';
@@ -31,6 +33,8 @@ import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 import { createEmptyWorkflowPlan } from '@/lib/workflows/defaultWorkflowPlan';
 import { TemplateGallery } from '@/components/templates/TemplateGallery';
 import { WorkflowRelationsMenu } from '@/components/workflow/relations/WorkflowRelationsMenu';
+import { ResourceInfoPopover } from '@/components/resource-info/ResourceInfoPopover';
+import { loadWorkflowEditors } from '@/lib/api/orchestrator/version.service';
 import type { WorkflowRelations } from '@/lib/api/orchestrator/types';
 import { FolderPlus } from 'lucide-react';
 import { WorkflowFolderFace } from '@/components/folders/WorkflowFolderFace';
@@ -40,6 +44,7 @@ import { FolderDialogs } from '@/components/folders/FolderDialogs';
 import { FolderDragContext } from '@/components/folders/FolderDragContext';
 import { DraggableResourceCard } from '@/components/folders/DraggableResourceCard';
 import { useListFolders } from '@/hooks/useListFolders';
+import { useResourceRowsDeleted } from '@/lib/resources/resourceDeleted';
 
 
 
@@ -77,6 +82,13 @@ export default function WorkflowTable({
   // so the browser loads only the page it shows (no fetch-all).
   const [sortBy, setSortBy] = useState<ListSortKey>('lastModified');
   const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>('all');
+  /**
+   * Node-type filter (server-side, ANY-of) and the options offered for it. The
+   * facets arrive with each page rather than from a call of their own, so the
+   * counts can never describe a different set than the rows on screen.
+   */
+  const [nodeTypeFilter, setNodeTypeFilter] = useState<string[]>([]);
+  const [nodeTypeFacets, setNodeTypeFacets] = useState<NodeTypeFacet[]>([]);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
   const [totalCount, setTotalCount] = useState(0);
@@ -158,11 +170,14 @@ export default function WorkflowTable({
         // looks through every folder, so a name is always findable.
         folderId: folders.folderIdParam,
         includeFolders: true,
+        nodeTypes: nodeTypeFilter,
+        includeNodeTypeFacets: true,
       });
       // A newer request superseded this one - drop its (now stale) result.
       if (reqId !== requestIdRef.current) return;
       setWorkflows(result.workflows ?? []);
       setTotalCount(result.totalCount ?? 0);
+      setNodeTypeFacets(result.nodeTypeFacets ?? []);
       folders.applyListResponse(result);
       // Sub-workflow relations for the whole page in ONE request. Deliberately NOT awaited with
       // the list: a card reads perfectly without its relations indicator, so resolving them must
@@ -195,16 +210,21 @@ export default function WorkflowTable({
     // render under test mocks, and the load effect keys on this callback's identity - listing them
     // would refire the fetch on every render. Mirrors AgentTable.fetchAgents.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, debouncedSearch, sortBy, visibilityFilter, folders.folderIdParam]);
+  }, [page, pageSize, debouncedSearch, sortBy, visibilityFilter, nodeTypeFilter, folders.folderIdParam]);
 
-  // Reset to page 0 when the search term, sort, or visibility filter changes - the visible set
+  // Reset to page 0 when the search term, sort, or a filter changes - the visible set
   // differs so the current page index may be out of range.
   useEffect(() => {
     setPage(0);
-  }, [debouncedSearch, sortBy, visibilityFilter, folders.folderIdParam]);
+  }, [debouncedSearch, sortBy, visibilityFilter, nodeTypeFilter, folders.folderIdParam]);
 
   // The hook reloads through this ref, so it can be created before the fetch it triggers.
   reloadRef.current = fetchWorkflows;
+
+  // A workflow deleted anywhere else (its side-panel tab, the edit modal, a chat card)
+  // drops out of this list at once, then the page is refetched so the total and the
+  // page fill come from the server rather than from what was on screen.
+  useResourceRowsDeleted('workflow', workflows, setWorkflows, fetchWorkflows);
 
   /**
    * Save the bulk bar's Update. Same call the builder's breadcrumb makes, so a
@@ -499,9 +519,14 @@ export default function WorkflowTable({
         )}
       </div>
 
-      {/* Search + visibility filter + sort - visible whenever there is data or an active search.
+      {/* Search + node-type filter + visibility filter + sort - visible whenever there is data or
+          an active refinement. The node-type filter has to keep the bar open on its own: it can
+          legitimately return nothing, and hiding the bar would leave no way to undo it.
           Both selects use the standard Applications-page select shape. */}
-      {(totalCount > 0 || folders.tiles.length > 0 || debouncedSearch.trim().length > 0) && (
+      {(totalCount > 0
+        || folders.tiles.length > 0
+        || debouncedSearch.trim().length > 0
+        || nodeTypeFilter.length > 0) && (
         <div className="flex flex-col gap-4 md:flex-row md:items-center">
           <div className="relative flex-1 overflow-visible">
             <Search className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-theme-secondary" />
@@ -513,6 +538,11 @@ export default function WorkflowTable({
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <NodeTypeFilter
+              facets={nodeTypeFacets}
+              value={nodeTypeFilter}
+              onChange={setNodeTypeFilter}
+            />
             <Select value={visibilityFilter} onValueChange={(v) => setVisibilityFilter(v as VisibilityFilter)}>
               <SelectTrigger className="w-auto gap-1.5" aria-label={t('common.filterByVisibility')}>
                 <Eye className="h-3.5 w-3.5 opacity-70" />
@@ -597,10 +627,13 @@ export default function WorkflowTable({
             title={folders.currentFolderId ? t('folders.emptyFolderTitle') : t('workflow.noWorkflowsFound')}
             subtitle={folders.currentFolderId
               ? t('folders.emptyFolderSubtitle')
-              : (totalCount === 0 && debouncedSearch.trim().length === 0
+              // A node-type filter empties the list just as a search does, so it must
+              // read the same way: 'nothing matched', not 'you have no workflows' with a
+              // create button under it.
+              : (totalCount === 0 && debouncedSearch.trim().length === 0 && nodeTypeFilter.length === 0
                 ? t('workflow.createFirstWorkflow')
                 : t('workflow.noMatchingWorkflows'))}
-            actions={canMutate && !folders.currentFolderId && totalCount === 0 && debouncedSearch.trim().length === 0 ? (
+            actions={canMutate && !folders.currentFolderId && totalCount === 0 && debouncedSearch.trim().length === 0 && nodeTypeFilter.length === 0 ? (
               <Button
                 variant="default"
                 onClick={() => setShowCreateWorkflowModal(true)}
@@ -798,18 +831,38 @@ export default function WorkflowTable({
                           </>
                         )}
                         {/* Sub-workflow neighbourhood. Renders nothing unless this workflow calls
-                            another or is called by one, so its presence IS the mention. Pushed to
-                            the right edge: it is the one control in this row, not another marker. */}
-                        <WorkflowRelationsMenu
-                          relations={relationsByWorkflow[w.id]}
-                          // `shrink-0` with the rest of the row: without it this
-                          // 28px button shares the shrinking with the date and
-                          // is squashed out of square before the date has
-                          // finished truncating - and it is the row's ONLY
-                          // interactive control.
-                          className="ml-auto shrink-0"
-                          data-testid={`workflow-relations-${w.id}`}
-                        />
+                            another or is called by one, so its presence IS the mention. */}
+                        {/* The two controls of this row, pushed together to the right edge.
+                            `ml-auto` belongs to the GROUP, not to either button: on a card
+                            with no relations the info button would otherwise be the one
+                            carrying it on some cards and not others, and the row's right
+                            edge would jitter between cards in the same grid. */}
+                        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+                          <WorkflowRelationsMenu
+                            relations={relationsByWorkflow[w.id]}
+                            // `shrink-0` with the rest of the row: without it this
+                            // 28px button shares the shrinking with the date and
+                            // is squashed out of square before the date has
+                            // finished truncating.
+                            className="shrink-0"
+                            data-testid={`workflow-relations-${w.id}`}
+                          />
+                          <ResourceInfoPopover
+                            // The grid keys its cards by workflow id, so this instance is
+                            // never reused for another workflow. Passed anyway: the card's
+                            // correctness should not rest on a key set three components up.
+                            resourceKey={`workflow:${w.id}`}
+                            resourceName={w.name}
+                            ownerId={w.tenantId}
+                            createdAt={w.createdAt}
+                            updatedAt={w.updatedAt}
+                            // Resolved only when this card's popover is opened - a page of
+                            // 24 cards issues nothing until one is actually consulted.
+                            loadEditors={() => loadWorkflowEditors(w.id)}
+                            className="shrink-0"
+                            data-testid={`workflow-info-${w.id}`}
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>

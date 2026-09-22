@@ -28,10 +28,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>Consumers: {@link AgentRemoteExecutionService} (agent nodes, chat and every
  * standalone-agent surface), {@link ClassifyService} and {@link GuardrailService}
- * (workflow classify / guardrail nodes) and {@link SubAgentExecutionHandler}
- * (delegated sub-agents). Three more resolve their own direct-API-only variant, which
- * cannot accept a bridge target and so cannot use this router: the {@code json-completion}
- * path, avatar generation, and the browser agent (which reaches the store over HTTP).
+ * (workflow classify / guardrail nodes), {@link SubAgentExecutionHandler}
+ * (delegated sub-agents) and {@link JsonCompletionService} (the bare completion behind
+ * COLD-summary compaction). Two more resolve their own direct-API-only variant, which
+ * cannot accept a bridge target and so cannot use this router: avatar generation, and
+ * the browser agent (which reaches the store over HTTP).
  */
 @Slf4j
 @Component

@@ -62,7 +62,7 @@ public interface ApiToolRepository extends CrudRepository<ApiToolEntity, UUID> {
      * non-deprecated API.
      *
      * <p>This is the whole input to the generation registry. The set is small
-     * (a handful of endpoints against 600+ ordinary ones) and backed by the
+     * (a handful of endpoints against 1000+ ordinary ones) and backed by the
      * partial index added in V428, so it is cheap enough to read and cache in
      * one go rather than querying per model.
      */

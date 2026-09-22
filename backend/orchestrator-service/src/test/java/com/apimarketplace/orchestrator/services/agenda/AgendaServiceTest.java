@@ -1,5 +1,7 @@
 package com.apimarketplace.orchestrator.services.agenda;
 
+import com.apimarketplace.agent.client.AgentClient;
+import com.apimarketplace.agent.client.dto.AgentRunWindowDto;
 import com.apimarketplace.orchestrator.controllers.dto.ActiveAutomationDto;
 import com.apimarketplace.orchestrator.controllers.dto.ActiveAutomationDto.ResourceType;
 import com.apimarketplace.orchestrator.controllers.dto.ActiveAutomationDto.ScheduleInfo;
@@ -52,6 +54,7 @@ class AgendaServiceTest {
 
     @Mock private ActiveAutomationsService activeAutomationsService;
     @Mock private WorkflowEpochRepository epochRepository;
+    @Mock private AgentClient agentClient;
 
     private AgendaService service;
 
@@ -66,14 +69,20 @@ class AgendaServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new AgendaService(activeAutomationsService, epochRepository, new ObjectMapper());
+        service = new AgendaService(activeAutomationsService, epochRepository, agentClient, new ObjectMapper());
         ReflectionTestUtils.setField(service, "maxOccurrencesPerSchedule", 200);
         ReflectionTestUtils.setField(service, "maxPastFires", 2000);
+        ReflectionTestUtils.setField(service, "maxPastAgentRuns", 1000);
+        // This file is about the WORKFLOW side of the calendar. A bare mock answers null
+        // for a record, which the service reads as "could not ask" - correct in
+        // production, wrong here: it would mark every window in this file truncated.
+        when(agentClient.getWorkspaceAgentRuns(any(), any(), any(), any(), any(), anyInt()))
+                .thenReturn(AgentRunWindowDto.of(java.util.List.of(), false, null));
         ReflectionTestUtils.setField(service, "maxWindowDays", 120);
     }
 
     private void givenAutomations(ActiveAutomationDto... automations) {
-        when(activeAutomationsService.getActiveAutomations(eq(TENANT), eq(ORG), any(), anyBoolean()))
+        when(activeAutomationsService.getAgendaAutomations(eq(TENANT), eq(ORG), any()))
                 .thenReturn(List.of(automations));
     }
 
@@ -95,7 +104,8 @@ class AgendaServiceTest {
                 new ScheduleInfo(cron, timezone, nextFireAt, 3, SCHEDULE_ID, armed,
                         armed ? null : ActiveAutomationDto.PausedReason.USER,
                         budgetBlocked, budgetBlockedUntil),
-                null, null, true, "run-public-1", null, null);
+                null, null, true, false, "run-public-1", null, null,
+                "trigger:daily", "Daily schedule");
     }
 
     private AgendaDto agenda(Instant from, Instant to, boolean includePast) {
@@ -129,6 +139,36 @@ class AgendaServiceTest {
             assertThat(planned).isNotEmpty();
             assertThat(planned.stream().filter(o -> o.startAt().isBefore(resetsAt)))
                     .allMatch(o -> !o.armed());
+        }
+
+        @Test
+        @DisplayName("every projection carries the RESOURCE verdict, including the ones drawn armed")
+        void blockedNowTravelsOnEveryProjection() {
+            // armed is per-occurrence and answers "will THIS fire happen". budgetBlocked is
+            // per-resource and answers "is the cap refusing right now", which is the question
+            // running early depends on: it runs the schedule at the moment of the click, not
+            // the fire being looked at. An occurrence after the reset is armed AND blocked-now,
+            // and a menu that read only armed offered an action whose one outcome was a toast.
+            Instant nine = nextUtcTimeAfter(WINDOW_FROM, 9, 0);
+            Instant resetsAt = WINDOW_FROM.plusSeconds(3 * 24 * 3600);
+            givenAutomations(scheduleAutomation("0 9 * * *", "UTC", nine, true, true, resetsAt));
+
+            List<Occurrence> planned = plannedOf(agenda(WINDOW_FROM, WINDOW_TO, false));
+
+            assertThat(planned).isNotEmpty().allMatch(Occurrence::budgetBlocked);
+            assertThat(planned.stream().filter(o -> !o.startAt().isBefore(resetsAt)))
+                    .isNotEmpty()
+                    .allMatch(o -> o.armed() && o.budgetBlocked());
+        }
+
+        @Test
+        @DisplayName("an unblocked schedule carries a false verdict, not a missing one")
+        void anUnblockedScheduleIsNotMarked() {
+            Instant nine = nextUtcTimeAfter(WINDOW_FROM, 9, 0);
+            givenAutomations(scheduleAutomation("0 9 * * *", "UTC", nine, true, false, null));
+
+            assertThat(plannedOf(agenda(WINDOW_FROM, WINDOW_TO, false)))
+                    .isNotEmpty().allMatch(o -> !o.budgetBlocked());
         }
 
         @Test
@@ -406,6 +446,41 @@ class AgendaServiceTest {
     class Markers {
 
         @Test
+        @DisplayName("an active schedule remains searchable in the trigger catalogue")
+        void activeScheduleIsAlsoAMarker() {
+            givenAutomations(scheduleAutomation("0 9 * * *", "UTC",
+                    nextUtcTimeAfter(WINDOW_FROM, 9, 0), true));
+
+            AgendaDto result = agenda(WINDOW_FROM, WINDOW_TO, false);
+
+            assertThat(plannedOf(result)).isNotEmpty()
+                    .allMatch(o -> o.triggerType() == TriggerType.SCHEDULE);
+            assertThat(result.markers()).singleElement().satisfies(marker -> {
+                assertThat(marker.triggerType()).isEqualTo(TriggerType.SCHEDULE);
+                assertThat(marker.scheduleId()).isEqualTo(SCHEDULE_ID);
+                assertThat(marker.armed()).isTrue();
+            });
+        }
+
+        @Test
+        @DisplayName("planned occurrences retain the exact published schedule trigger identity")
+        void plannedOccurrencesCarryExactTriggerIdentity() {
+            givenAutomations(scheduleAutomation("0 9 * * *", "UTC",
+                    nextUtcTimeAfter(WINDOW_FROM, 9, 0), true));
+
+            AgendaDto result = agenda(WINDOW_FROM, WINDOW_TO, false);
+
+            assertThat(plannedOf(result)).isNotEmpty()
+                    .allSatisfy(occurrence -> assertThat(occurrence.triggerId())
+                            .isEqualTo("trigger:daily"));
+            assertThat(result.markers()).singleElement()
+                    .satisfies(marker -> {
+                        assertThat(marker.triggerId()).isEqualTo("trigger:daily");
+                        assertThat(marker.triggerLabel()).isEqualTo("Daily schedule");
+                    });
+        }
+
+        @Test
         @DisplayName("a paused schedule draws no occurrence at all, only a greyed marker")
         void pausedScheduleProducesNoOccurrences() {
             // Projecting a paused schedule would draw runs that are never going to happen -
@@ -446,10 +521,44 @@ class AgendaServiceTest {
 
         private WorkflowEpochRepository.WorkspaceFireRow fireRow(
                 Instant started, Instant closed, boolean active, String stateJson) {
+            return fireRow(started, closed, active, stateJson, null);
+        }
+
+        /**
+         * A fire of the SAME run at a different epoch. Two rows built by the helper
+         * below are one occurrence, not two: the identity is runId#triggerId#epoch and
+         * the service de-duplicates on it. A cap probe therefore has to be a distinct
+         * fire, or the test measures de-duplication and calls it trimming.
+         */
+        private WorkflowEpochRepository.WorkspaceFireRow fireRowAtEpoch(int epoch, Instant started) {
+            return new WorkflowEpochRepository.WorkspaceFireRow(
+                    new WorkflowEpochRepository.EpochFireRow(
+                            "run-public-1", "trigger:daily", epoch, started,
+                            started.plusSeconds(5), false, null),
+                    WORKFLOW_ID, "Daily report", "STANDARD", null, null);
+        }
+
+        private WorkflowEpochRepository.WorkspaceFireRow fireRow(
+                Instant started, Instant closed, boolean active, String stateJson, String triggersJson) {
             return new WorkflowEpochRepository.WorkspaceFireRow(
                     new WorkflowEpochRepository.EpochFireRow(
                             "run-public-1", "trigger:daily", 4, started, closed, active, stateJson),
-                    WORKFLOW_ID, "Daily report", "STANDARD", null);
+                    WORKFLOW_ID, "Daily report", "STANDARD", triggersJson, null);
+        }
+
+        @Test
+        @DisplayName("carries a manual trigger kind so the agenda can find its past uses")
+        void pastManualFireCarriesItsTriggerType() {
+            Instant ran = Instant.now().minusSeconds(3600);
+            givenAutomations();
+            givenFires(fireRow(ran, ran.plusSeconds(5), false, null,
+                    "[{\"id\":\"manual-1\",\"label\":\"Daily\",\"type\":\"manual\"}]"));
+
+            AgendaDto result = agenda(ran.minusSeconds(60), Instant.now(), true);
+
+            assertThat(result.occurrences()).singleElement()
+                    .extracting(Occurrence::triggerType)
+                    .isEqualTo(TriggerType.MANUAL);
         }
 
         @Test
@@ -598,14 +707,37 @@ class AgendaServiceTest {
         @Test
         @DisplayName("reports a truncated history rather than passing a partial day off as complete")
         void reportsPastTruncation() {
+            // The scan asks for one row past the cap, so it takes TWO rows on a cap of
+            // one to prove there is more. That extra row is a detector, never content.
             ReflectionTestUtils.setField(service, "maxPastFires", 1);
             Instant ran = Instant.now().minusSeconds(3600);
             givenAutomations();
-            givenFires(fireRow(ran, ran.plusSeconds(5), false, null));
+            givenFires(fireRowAtEpoch(4, ran), fireRowAtEpoch(3, ran.minusSeconds(60)));
 
             AgendaDto result = agenda(ran.minusSeconds(3600), Instant.now().plusSeconds(60), true);
 
             assertThat(result.pastTruncated()).isTrue();
+            // And the probe row is not drawn: one occurrence, not two.
+            assertThat(result.occurrences()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("a window holding EXACTLY the cap is complete, not truncated")
+        void exactlyTheCapIsNotTruncated() {
+            // `size() >= cap` called this truncated, and now that a truncated window also
+            // names where coverage starts, that reads as "history is complete from 09:12,
+            // some earlier runs are not shown" about a window that is whole. The agent
+            // source answers this the same way; the two must not disagree.
+            ReflectionTestUtils.setField(service, "maxPastFires", 2);
+            Instant ran = Instant.now().minusSeconds(3600);
+            givenAutomations();
+            givenFires(fireRowAtEpoch(4, ran), fireRowAtEpoch(3, ran.minusSeconds(60)));
+
+            AgendaDto result = agenda(ran.minusSeconds(3600), Instant.now().plusSeconds(60), true);
+
+            assertThat(result.pastTruncated()).isFalse();
+            assertThat(result.pastCoveredFrom()).isNull();
+            assertThat(result.occurrences()).hasSize(2);
         }
     }
 

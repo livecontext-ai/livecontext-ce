@@ -10,6 +10,8 @@ import type {
   WorkflowVersionsResponse,
   WorkflowVersionDetail,
   RestoreVersionResponse,
+  ResourceEditorsResponse,
+  ResourceEditor,
 } from './types';
 
 export class VersionService {
@@ -19,6 +21,18 @@ export class VersionService {
   async listVersions(workflowId: string): Promise<WorkflowVersionsResponse> {
     return apiClient.get<WorkflowVersionsResponse>(
       `/v2/workflows/dag/${workflowId}/versions`
+    );
+  }
+
+  /**
+   * The people who recently edited this workflow, most recent editor first.
+   *
+   * <p>Distinct from {@link listVersions}: this collapses the history per PERSON and carries
+   * no plan bodies, so it is cheap enough for a popover. Used by the resource-info card.
+   */
+  async listRecentEditors(workflowId: string): Promise<ResourceEditorsResponse> {
+    return apiClient.get<ResourceEditorsResponse>(
+      `/v2/workflows/dag/${workflowId}/editors`
     );
   }
 
@@ -84,3 +98,14 @@ export class VersionService {
 }
 
 export const versionService = new VersionService();
+
+/**
+ * The editor loader the resource-info control takes, ready to hand over.
+ *
+ * <p>Exists so the two surfaces that offer it (the workflow card, the workflow crumb) cannot
+ * drift into asking two different questions: the unwrapping of the response envelope is one
+ * decision, made here.
+ */
+export function loadWorkflowEditors(workflowId: string): Promise<ResourceEditor[]> {
+  return versionService.listRecentEditors(workflowId).then((response) => response.editors ?? []);
+}

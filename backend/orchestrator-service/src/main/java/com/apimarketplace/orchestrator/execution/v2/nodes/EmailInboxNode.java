@@ -20,6 +20,8 @@ import jakarta.mail.internet.MimeUtility;
 import jakarta.mail.search.*;
 import java.io.InputStream;
 import java.util.*;
+import com.apimarketplace.orchestrator.services.failure.UserActionableFailure;
+import com.apimarketplace.orchestrator.services.mail.MailTimeouts;
 
 /**
  * EmailInbox node - reads messages and performs mailbox actions over IMAP using
@@ -84,6 +86,7 @@ public class EmailInboxNode extends BaseNode {
     private final Core.EmailInboxConfig emailInboxConfig;
     private CredentialClient credentialClient;
     private FileStorageService fileStorageService;
+    private MailTimeouts mailTimeouts = MailTimeouts.defaults();
 
     public EmailInboxNode(String nodeId, Core.EmailInboxConfig emailInboxConfig) {
         super(nodeId, NodeType.EMAIL_INBOX);
@@ -95,6 +98,10 @@ public class EmailInboxNode extends BaseNode {
         super.acceptServices(registry);
         this.credentialClient = registry.getCredentialClient();
         this.fileStorageService = registry.getFileStorageService();
+        // A mocked registry answers null; keep the defaults rather than a null field, so
+        // "nobody configured this" and "a test did not stub it" behave identically.
+        MailTimeouts configured = registry.getMailTimeouts();
+        if (configured != null) this.mailTimeouts = configured;
     }
 
     @Override
@@ -128,8 +135,8 @@ public class EmailInboxNode extends BaseNode {
             if (credentialId != null) {
                 imapCred = credentialClient.getCredentialById(context.tenantId(), credentialId);
                 if (imapCred.isEmpty()) {
-                    logger.warn("Selected IMAP credential {} not found, falling back to default", credentialId);
-                    imapCred = credentialClient.getDefaultCredential(context.tenantId(), IMAP_INTEGRATION);
+                    throw new IllegalStateException("Selected IMAP credential is unavailable. "
+                            + "Reconnect or select that account before running; no other mailbox was used.");
                 }
             } else {
                 imapCred = credentialClient.getDefaultCredential(context.tenantId(), IMAP_INTEGRATION);
@@ -153,6 +160,21 @@ public class EmailInboxNode extends BaseNode {
 
             resolvedParams.put("folder", folderName);
             resolvedParams.put("action", action);
+            // The rest of the filter, reported BEFORE the connect. It used to live
+            // inside readMessages, which runs only for action="none" and only after
+            // folder.open succeeded - so on an auth or connect failure, the one moment
+            // the reader needs to see what was asked for, they saw folder and action
+            // alone. 0 means "no bound", so a zero window is omitted rather than shown
+            // as a setting nobody made.
+            if (emailInboxConfig != null) {
+                resolvedParams.put("markSeen", emailInboxConfig.markSeen());
+                resolvedParams.put("downloadAttachments", emailInboxConfig.downloadAttachments());
+                if (emailInboxConfig.sinceDays() > 0) resolvedParams.put("sinceDays", emailInboxConfig.sinceDays());
+                if (emailInboxConfig.beforeDays() > 0) resolvedParams.put("beforeDays", emailInboxConfig.beforeDays());
+                if (notBlank(emailInboxConfig.fromContains())) resolvedParams.put("fromContains", emailInboxConfig.fromContains());
+                if (notBlank(emailInboxConfig.subjectContains())) resolvedParams.put("subjectContains", emailInboxConfig.subjectContains());
+                if (notBlank(emailInboxConfig.bodyContains())) resolvedParams.put("bodyContains", emailInboxConfig.bodyContains());
+            }
             // Surfaced as soon as it is known, so a failure before the action still shows the
             // folder that was actually going to be addressed.
             if (notBlank(targetFolder)) resolvedParams.put("targetFolder", targetFolder);
@@ -203,7 +225,14 @@ public class EmailInboxNode extends BaseNode {
             return NodeExecutionResult.success(nodeId, result);
 
         } catch (Exception e) {
-            logger.error("EmailInbox execution failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
+            // A missing credential is the caller's to fix and is already reported on the node,
+            // so it is logged as a refusal rather than an error. Anything else keeps ERROR with
+            // its stack trace: that is the shape only the platform can act on.
+            if (UserActionableFailure.isUserActionable(e.getMessage())) {
+                logger.warn("EmailInbox refused: nodeId={}, reason={}", nodeId, e.getMessage());
+            } else {
+                logger.error("EmailInbox execution failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
+            }
             Map<String, Object> failOutput = new LinkedHashMap<>();
             failOutput.put("node_type", "EMAIL_INBOX");
             failOutput.put("item_index", context.itemIndex());
@@ -235,6 +264,7 @@ public class EmailInboxNode extends BaseNode {
         resolvedParams.put("unreadOnly", emailInboxConfig != null && emailInboxConfig.unreadOnly());
         resolvedParams.put("flaggedOnly", emailInboxConfig != null && emailInboxConfig.flaggedOnly());
         resolvedParams.put("limit", limit);
+
 
         folder.open(markSeen ? Folder.READ_WRITE : Folder.READ_ONLY);
         UIDFolder uidFolder = (UIDFolder) folder;
@@ -479,7 +509,7 @@ public class EmailInboxNode extends BaseNode {
 
     // IPv6-blackhole caveat: the k3s prod cluster has no IPv6 egress route. If {@code host}
     // resolves to an AAAA record (e.g. imap.hostinger.com behind Cloudflare), Jakarta Mail
-    // tries IPv6 first and blocks until the 10s connectiontimeout below, so the connect
+    // tries IPv6 first and blocks until the configured connect timeout, so the connect
     // "times out" against a perfectly reachable server. The fix lives at the JVM level, not
     // here: the orchestrator-service runs with -Djava.net.preferIPv4Stack=true (helm
     // values javaToolOptions -> JAVA_TOOL_OPTIONS) so name resolution/connect uses A
@@ -487,24 +517,40 @@ public class EmailInboxNode extends BaseNode {
     // hostname/SNI verification against the server certificate.
     private Store connect(String host, int port, String username, String password, boolean useSsl)
             throws MessagingException {
+        Properties props = buildMailProperties(host, port, useSsl, mailTimeouts);
+        String protocol = useSsl ? "imaps" : "imap";
+
+        Session session = Session.getInstance(props);
+        Store store = session.getStore(protocol);
+        store.connect(host, port, username, password);
+        return store;
+    }
+
+    /**
+     * The Jakarta Mail properties for one IMAP session. Extracted from {@link #connect} so the
+     * timeouts can be asserted: the defect this replaced was a pair of hardcoded {@code "10000"}
+     * literals that no test ever read, and the two are NOT interchangeable. Connect asks whether
+     * the host answers at all and must stay short; read asks how long a command may take, and a
+     * hundred-message FETCH on a slow provider legitimately exceeds ten seconds.
+     *
+     * <p>Package-private on purpose: it is an implementation detail with a test, not API.
+     */
+    static Properties buildMailProperties(String host, int port, boolean useSsl, MailTimeouts timeouts) {
+        MailTimeouts effective = timeouts != null ? timeouts : MailTimeouts.defaults();
         Properties props = new Properties();
         String protocol = useSsl ? "imaps" : "imap";
         props.put("mail.store.protocol", protocol);
         props.put("mail." + protocol + ".host", host);
         props.put("mail." + protocol + ".port", String.valueOf(port));
-        props.put("mail." + protocol + ".connectiontimeout", "10000");
-        props.put("mail." + protocol + ".timeout", "10000");
+        props.put("mail." + protocol + ".connectiontimeout", String.valueOf(effective.imapConnectMs()));
+        props.put("mail." + protocol + ".timeout", String.valueOf(effective.imapReadMs()));
         if (useSsl) {
             props.put("mail.imaps.ssl.enable", "true");
             props.put("mail.imaps.ssl.protocols", "TLSv1.2 TLSv1.3");
         } else {
             props.put("mail.imap.starttls.enable", "true");
         }
-
-        Session session = Session.getInstance(props);
-        Store store = session.getStore(protocol);
-        store.connect(host, port, username, password);
-        return store;
+        return props;
     }
 
     /**

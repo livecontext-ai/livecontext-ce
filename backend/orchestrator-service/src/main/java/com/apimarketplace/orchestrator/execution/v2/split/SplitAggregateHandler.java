@@ -9,6 +9,7 @@ import com.apimarketplace.orchestrator.domain.execution.NodeStatus;
 import com.apimarketplace.orchestrator.services.StepOutputService;
 import com.apimarketplace.orchestrator.services.TemplateEngine;
 import com.apimarketplace.orchestrator.services.persistence.OutputSchemaMapper;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.utils.EdgeRefParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -866,55 +867,24 @@ public class SplitAggregateHandler {
             0
         );
     }
-
     /**
-     * The aggregate's configured fields, reported under the plan's own key
-     * ({@code fields}) so the Params column shows what the node was set up to
-     * collect. The per-field VALUES are already in the output under their own
-     * labels; this is the configuration behind them.
+     * The aggregate's configured fields, reported under the plan's own key ({@code fields})
+     * so the Params column shows what the node was set up to collect. The per-field VALUES
+     * are already in the output under their own labels; this is the configuration behind
+     * them.
+     *
+     * <p>Delegates to {@link AggregateNode#buildReportedParams}, which is the whole point:
+     * this producer and the node itself write the same row for the same node, and while they
+     * were two copies of one shape they drifted - one of them went through the gate and the
+     * other did not, so a field labelled {@code token} read differently depending on whether
+     * the aggregate happened to sit downstream of a split.
      */
     private Map<String, Object> buildAggregateResolvedParams(String nodeId,
                                                              Map<String, ExecutionNode> nodeMap) {
-        Map<String, Object> resolvedParams = new LinkedHashMap<>();
         ExecutionNode node = nodeMap != null ? nodeMap.get(nodeId) : null;
         if (!(node instanceof AggregateNode aggregateNode)) {
-            return resolvedParams;
+            return new LinkedHashMap<>();
         }
-        List<AggregateNode.AggregateField> fields = aggregateNode.getFields();
-        if (fields == null || fields.isEmpty()) {
-            return resolvedParams;
-        }
-        List<Map<String, Object>> declared = new ArrayList<>();
-        for (AggregateNode.AggregateField field : fields) {
-            Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("label", field.label());
-            entry.put("expression", field.expression());
-            declared.add(entry);
-        }
-        resolvedParams.put("fields", declared);
-        // One key per author label as well, so this producer and AggregateNode
-        // describe the same node with the same VOCABULARY. Without it, whether
-        // {{core:<agg>.input.<label>}} resolves depended on whether the aggregate
-        // happened to sit downstream of a split, with no error either way - and
-        // the split path is how an aggregate is normally reached.
-        //
-        // The value is the configured EXPRESSION, not a resolved one: this row is
-        // built after the fan-in, from the collected results, and there is no
-        // per-item context left to resolve against. Same key, honest value for
-        // this moment - the same trade-off SplitNode/SplitNodeExecutor make for
-        // a split's `list`.
-        for (AggregateNode.AggregateField field : fields) {
-            if ("fields".equals(field.label())) {
-                // Same collision, same loss, same warning as AggregateNode: the
-                // declaration wins and this one field's expression is not reported.
-                // Logged on BOTH producers, because a diagnostic that depends on
-                // which path the aggregate was reached through is no diagnostic.
-                logger.warn("Aggregate field labelled 'fields' collides with the declaration "
-                    + "key; its expression is not reported: nodeId={}", nodeId);
-                continue;
-            }
-            resolvedParams.put(field.label(), field.expression());
-        }
-        return resolvedParams;
+        return AggregateNode.buildReportedParams(aggregateNode.getFields(), nodeId);
     }
 }

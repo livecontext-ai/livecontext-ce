@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -81,19 +82,51 @@ public class CeConversationStubController {
      * providers whose binary is actually installed. Centralised 2026-04-09:
      * before this, the stub bypassed the filter entirely and listed phantom
      * providers (codex/gemini-cli/mistral-vibe) even when not installed.
+     *
+     * @param category which catalogue slice to answer with, mirroring the cloud twin
+     *                 ({@code ChatControllerV3}). Absent means the chat slice, which is
+     *                 what this endpoint has always returned. A surface that runs a
+     *                 different KIND of model names its category: the classify node asks
+     *                 for {@code classification} to reach the decision models, which the
+     *                 chat slice deliberately excludes.
+     *
+     *                 <p>Without it the CE classify inspector could never offer the
+     *                 decision engine, while an authoring agent could still put one in a
+     *                 plan through the internal catalogue endpoint - a node its own owner
+     *                 could not see or change.
+     *
+     *                 <p>Restricted to a known set for the same reason as the cloud twin:
+     *                 the eligibility rule is permissive for a category it does not
+     *                 recognise, so an arbitrary value would answer with the whole
+     *                 catalogue. An unknown value is ignored and the chat slice answered.
      */
     @GetMapping("/api/v3/chat/models")
     public ResponseEntity<Map<String, Object>> getAvailableModels(
+            @RequestParam(value = "category", required = false) String category,
             @RequestHeader(value = "X-User-ID", required = false) String authenticatedUserId) {
         try {
+            // The null check is not redundant: Set.of(...) throws on contains(null), and
+            // null is the COMMON case here (every caller wanting the chat slice omits it).
+            String slice = category != null && PUBLIC_CATEGORIES.contains(category) ? category : null;
             Map<String, Object> models;
             if (modelCatalogService != null) {
                 models = authenticatedUserId == null || authenticatedUserId.isBlank()
-                        ? modelCatalogService.getPublicModelsForCategory(null)
-                        : modelCatalogService.getModelsForCategory(null, authenticatedUserId);
+                        ? modelCatalogService.getPublicModelsForCategory(slice)
+                        : modelCatalogService.getModelsForCategory(slice, authenticatedUserId);
+                // Deliberately NOT calling hideBridgeProvidersForPublicRead here. That filter trims a
+                // declared PUBLIC read on the hosted product; this controller only ever serves a
+                // self-hosted install, where the CLI providers it exists to advertise are the
+                // operator's own, under their own login. An inert call would put a hosted-shaped
+                // rule on the self-hosted path for symmetry's sake.
             } else {
+                // Fallback path: no catalogue service, so no category overlay and no mode
+                // filter either. That second absence matters now that a provider can be
+                // non-chat: getAllModelsInfo filters on isConfigured() alone, so a keyed
+                // decision provider would land in the CE CHAT picker here, which is the one
+                // place the mode rule does not reach on its own. Filter it explicitly.
                 models = llmProviderFactory.getAllModelsInfo();
                 bridgeAvailabilityFilter.filter(models);
+                retainModelsEligibleFor(models, slice);
             }
             return ResponseEntity.ok(models);
         } catch (Exception e) {
@@ -383,6 +416,13 @@ public class CeConversationStubController {
         forwardedCredentialKeys.forEach((bodyKey, credentialKey) ->
             putIfPresent(credentials, credentialKey, body.get(bodyKey)));
 
+        // Per-resource access modes travel PLAIN, mirroring the cloud twin
+        // (ConversationToolExecutionController). They were absent while every allowed*Ids list
+        // was forwarded, so this boundary carried the allow-lists but not the read/write axis.
+        for (String accessModeKey : com.apimarketplace.agent.config.ToolAccessControl.ACCESS_MODE_KEYS) {
+            putIfPresent(credentials, accessModeKey, body.get(accessModeKey));
+        }
+
         return credentials;
     }
 
@@ -399,6 +439,35 @@ public class CeConversationStubController {
     private static void putIfPresent(Map<String, Object> target, String key, Object value) {
         if (value != null) {
             target.put(key, value);
+        }
+    }
+
+    /** The categories this endpoint will answer for; chat is the default and is null. */
+    private static final java.util.Set<String> PUBLIC_CATEGORIES =
+            java.util.Set.of(com.apimarketplace.agent.domain.ModelCategory.CLASSIFICATION.key());
+
+    /**
+     * Drop the models a category does not accept, for the fallback path that has no
+     * catalogue service to do it.
+     *
+     * <p>Mirrors {@code ModelCatalogService.filterProvidersByCategoryMode}, including its
+     * resolution of a null category to the chat slice: a model with no mode is chat, which
+     * is what every provider written before decision models reports.
+     */
+    @SuppressWarnings("unchecked")
+    private static void retainModelsEligibleFor(Map<String, Object> catalog, String category) {
+        Object providersRaw = catalog.get("providers");
+        if (!(providersRaw instanceof List<?> providers)) return;
+        String slice = category != null
+                ? category
+                : com.apimarketplace.agent.domain.ModelCategory.CHAT.key();
+        for (Object entry : providers) {
+            if (!(entry instanceof Map<?, ?> provider)) continue;
+            Object modelsRaw = ((Map<String, Object>) provider).get("models");
+            if (!(modelsRaw instanceof List<?>)) continue;
+            ((List<Map<String, Object>>) modelsRaw).removeIf(m ->
+                    !com.apimarketplace.agent.domain.ModelCategory.acceptsMode(
+                            slice, (String) m.get("mode")));
         }
     }
 

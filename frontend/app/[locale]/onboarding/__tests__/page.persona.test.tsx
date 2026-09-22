@@ -4,35 +4,7 @@ import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import {
-  FIRST_BUILD_PROMPT_KEY,
-  consumeFirstBuildPrompt,
-  storeFirstBuildPrompt,
-} from '@/lib/onboarding/firstBuildPrompt';
-/**
- * The builder is SPIED, not stubbed: it delegates to the real implementation so
- * every other test here still exercises the real mapping, and only the "it
- * throws" case overrides it. The real function is captured inside the factory,
- * because importing it normally in this file would resolve to the spy and
- * recurse.
- */
-const real = vi.hoisted(() => ({
-  buildFirstBuildPrompt: null as
-    | typeof import('@/lib/onboarding/firstBuildPrompt')['buildFirstBuildPrompt']
-    | null,
-}));
-
-vi.mock('@/lib/onboarding/firstBuildPrompt', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/onboarding/firstBuildPrompt')>(
-    '@/lib/onboarding/firstBuildPrompt',
-  );
-  real.buildFirstBuildPrompt = actual.buildFirstBuildPrompt;
-  return {
-    ...actual,
-    buildFirstBuildPrompt: (...args: Parameters<typeof actual.buildFirstBuildPrompt>) =>
-      mocks.buildFirstBuildPrompt(...args),
-  };
-});
+import { WELCOME_GIFT_FLAG } from '@/lib/onboarding/welcomeGiftHandoff';
 
 /**
  * Persona questionnaire (steps 2 and 3) of the onboarding page.
@@ -46,21 +18,11 @@ const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   track: vi.fn(),
-  buildFirstBuildPrompt: vi.fn(),
 }));
 
 vi.mock('next-intl', () => ({
-  // Keys echo, so queries can find controls by their key text. `firstBuild.*`
-  // and `tools.*` are the exception and must resolve to something that is NOT
-  // their own key: `buildFirstBuildPrompt` reads a value equal to its key as a
-  // MISSING message (next-intl's fallback returns the key path). While tool
-  // labels echoed, the tools clause could never be built, and this file could
-  // not tell whether the page passes `toolsUsed` at all.
-  useTranslations: () => (key: string, values?: Record<string, string>) => {
-    if (key === 'firstBuild.toolsClause') return `tools clause: ${values?.tools}`;
-    if (key.startsWith('firstBuild.') || key.startsWith('tools.')) return `${key} (resolved)`;
-    return key;
-  },
+  // Keys echo, so queries can find controls by their key text.
+  useTranslations: () => (key: string) => key,
   useLocale: () => 'en',
 }));
 
@@ -130,17 +92,14 @@ describe('Onboarding persona questionnaire', () => {
     mocks.apiPost.mockReset();
     mocks.track.mockReset();
     mocks.apiPost.mockResolvedValue({});
-    // Default: delegate to the real builder, so only the throw case overrides it.
-    mocks.buildFirstBuildPrompt.mockReset();
-    mocks.buildFirstBuildPrompt.mockImplementation((...args: unknown[]) =>
-      real.buildFirstBuildPrompt!(
-        ...(args as Parameters<NonNullable<typeof real.buildFirstBuildPrompt>>),
-      ),
-    );
   });
 
   afterEach(() => {
     cleanup();
+    // Restored here rather than at the end of the test that installs it: a spy
+    // on sessionStorage survives a failing assertion, and every later test in
+    // this file reads that store.
+    vi.restoreAllMocks();
     sessionStorage.clear();
   });
 
@@ -167,11 +126,11 @@ describe('Onboarding persona questionnaire', () => {
     expect(next).toBeEnabled();
 
     // Tools are multi-choice and toggle.
-    fireEvent.click(screen.getByRole('button', { name: 'tools.gmail (resolved)' }));
-    fireEvent.click(screen.getByRole('button', { name: 'tools.slack (resolved)' }));
-    fireEvent.click(screen.getByRole('button', { name: 'tools.gmail (resolved)' }));
-    expect(pressed('tools.gmail (resolved)')).toBe('false');
-    expect(pressed('tools.slack (resolved)')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'tools.gmail' }));
+    fireEvent.click(screen.getByRole('button', { name: 'tools.slack' }));
+    fireEvent.click(screen.getByRole('button', { name: 'tools.gmail' }));
+    expect(pressed('tools.gmail')).toBe('false');
+    expect(pressed('tools.slack')).toBe('true');
 
     fireEvent.click(next);
 
@@ -225,31 +184,42 @@ describe('Onboarding persona questionnaire', () => {
     });
 
     await waitFor(() => expect(mocks.track).toHaveBeenCalledWith('onboarding_completed', {
-      first_build_prompt_proposed: true,
       profession: 'sales',
       primary_goal: 'reporting',
       tools_count: 2,
       previous_tool: 'zapier-make',
       referral_source: 'word-of-mouth',
     }));
+    // Both hand-offs, in the order the next screen plays them: what the plan
+    // grants (credits and the AI allowance), then the applications to start
+    // from. Asserting only the second would let the first be dropped silently,
+    // which is exactly how the composer proposal it replaced went unnoticed.
+    expect(sessionStorage.getItem(WELCOME_GIFT_FLAG)).toBe('1');
     expect(sessionStorage.getItem('lc_show_app_suggestions')).toBe('1');
-    // The chat home reads this on the next screen and fills the composer with it.
-    const proposal = consumeFirstBuildPrompt();
-    expect(proposal).toContain('firstBuild.goalPrompts.reporting');
-    // ...and the tools the user ticked reached it. Without this the page could
-    // stop passing `toolsUsed` and every other assertion here would stay green.
-    expect(proposal).toContain('tools.gmail (resolved)');
-    expect(proposal).toContain('tools.slack (resolved)');
   });
 
-  it('completes normally when building the proposal throws', async () => {
-    // The completion has ALREADY succeeded, server-side and on screen, by the
-    // time the prompt is built. So the cost of a throw is not an error the user
-    // sees: it is the three lines AFTER it being skipped in silence, losing the
-    // completion event and the suggested-apps hand-off on an account that
-    // finished correctly. That is what this pins.
-    mocks.buildFirstBuildPrompt.mockImplementationOnce(() => {
-      throw new Error('translator exploded');
+  it('one hand-off the tab refuses to store does not take the other with it', async () => {
+    // The two writes are independent niceties, and each is guarded on its own.
+    // Sharing one `try` would make them a package: a store that rejects the
+    // first key (a private window, a quota, an extension) would skip the second
+    // silently, and a reader who completed onboarding correctly would get
+    // neither the welcome gift nor the suggestions with nothing to show why.
+    //
+    // Spied on the PROTOTYPE, not on `window.sessionStorage`. A Storage object
+    // is an exotic named-property object: assigning `setItem` on the instance
+    // is swallowed as a stored ITEM called "setItem" and the real method keeps
+    // running, so an instance spy here silently does nothing. Scoping by key
+    // instead of by store keeps the blast radius to the one write under test,
+    // which is what matters: blocking every write would also break the
+    // analytics client and prove something wider than the guards.
+    const realSetItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string,
+    ) {
+      if (key === WELCOME_GIFT_FLAG) throw new Error('denied');
+      realSetItem.call(this, key, value);
     });
     mockStatus({ currentStep: 3, primaryGoal: 'reporting', toolsUsed: ['gmail'] });
     renderPage();
@@ -261,27 +231,19 @@ describe('Onboarding persona questionnaire', () => {
     await waitFor(() => expect(complete).toBeEnabled());
     fireEvent.click(complete);
 
-    // The flow still finishes: analytics fires and the hand-off flag is set.
-    await waitFor(() => expect(mocks.track).toHaveBeenCalledWith(
-      'onboarding_completed',
-      expect.objectContaining({ first_build_prompt_proposed: false }),
-    ));
-    // The hand-off that a throw would have swallowed.
-    expect(sessionStorage.getItem('lc_show_app_suggestions')).toBe('1');
-    // ...and the flow really did reach its end state: the questionnaire is
-    // gone, replaced by the completed spinner that redirects to chat.
-    expect(screen.queryByText('step3.title')).not.toBeInTheDocument();
-    expect(screen.getByTestId('spinner')).toBeInTheDocument();
-    // The spinner IS the redirect state: a separate effect navigates to chat on
-    // `pageState === 'completed'`, so reaching it means the user is not stranded
-    // (jsdom cannot follow the navigation itself).
+    // The one that could be written, was.
+    await waitFor(() => expect(sessionStorage.getItem('lc_show_app_suggestions')).toBe('1'));
+    expect(sessionStorage.getItem(WELCOME_GIFT_FLAG)).toBeNull();
+    // And the completion itself still reaches its end state.
+    await waitFor(() => expect(screen.getByTestId('spinner')).toBeInTheDocument());
   });
 
-  it('proposes no first message when the goal is "Something else", and clears any parked one', async () => {
-    // Parked first: without it this asserts nothing, because `beforeEach`
-    // already emptied the slot. Completing twice in a tab is possible, so a
-    // second pass that says nothing must overwrite the first pass's sentence.
-    storeFirstBuildPrompt('a proposal from an earlier pass');
+  it('reaches the completed state and hands off, whatever the answers were', async () => {
+    // The welcome gift does not depend on the questionnaire: it states what
+    // the account gets, which is the same whether the goal was specific or
+    // "Something else". The composer proposal this replaced DID depend on the
+    // answers and silently produced nothing for the generic ones, which is
+    // most of why it went.
     mockStatus({ currentStep: 3, primaryGoal: 'other', toolsUsed: ['gmail'] });
     renderPage();
 
@@ -292,13 +254,15 @@ describe('Onboarding persona questionnaire', () => {
     await waitFor(() => expect(complete).toBeEnabled());
     fireEvent.click(complete);
 
-    await waitFor(() => expect(mocks.track).toHaveBeenCalledWith(
-      'onboarding_completed',
-      expect.objectContaining({ first_build_prompt_proposed: false }),
-    ));
-    // "Something else" says nothing specific, so the composer is left alone
-    // rather than filled with a generic sentence.
-    expect(sessionStorage.getItem(FIRST_BUILD_PROMPT_KEY)).toBeNull();
+    await waitFor(() => expect(sessionStorage.getItem(WELCOME_GIFT_FLAG)).toBe('1'));
+    expect(sessionStorage.getItem('lc_show_app_suggestions')).toBe('1');
+    // ...and the flow really did reach its end state: the questionnaire is
+    // gone, replaced by the completed spinner that redirects to chat. The
+    // spinner IS the redirect state (a separate effect navigates to chat on
+    // `pageState === 'completed'`), so reaching it means the user is not
+    // stranded - jsdom cannot follow the navigation itself.
+    expect(screen.queryByText('step3.title')).not.toBeInTheDocument();
+    expect(screen.getByTestId('spinner')).toBeInTheDocument();
   });
 
   it('restores only answers that are options in this edition (CE goal and unknown tool are dropped)', async () => {
@@ -315,8 +279,8 @@ describe('Onboarding persona questionnaire', () => {
     expect(screen.queryByRole('button', { name: 'ce.useCases.internalAutomation' })).not.toBeInTheDocument();
     // No goal restored, so the step cannot advance yet.
     expect(screen.getByRole('button', { name: /^next$/ })).toBeDisabled();
-    expect(pressed('tools.gmail (resolved)')).toBe('true');
-    expect(pressed('tools.slack (resolved)')).toBe('false');
+    expect(pressed('tools.gmail')).toBe('true');
+    expect(pressed('tools.slack')).toBe('false');
 
     fireEvent.click(screen.getByRole('button', { name: 'primaryGoals.aiAssistant' }));
     fireEvent.click(screen.getByRole('button', { name: /^next$/ }));
@@ -350,24 +314,10 @@ describe('Onboarding persona questionnaire', () => {
       { displayName: 'Jane' },
     ));
     await waitFor(() => expect(mocks.track).toHaveBeenCalledWith('onboarding_skipped', { skipped_at_step: 2 }));
-    // Skipping tells us nothing beyond a display name, so there is nothing to propose.
-    expect(sessionStorage.getItem(FIRST_BUILD_PROMPT_KEY)).toBeNull();
-  });
-
-  it('skipping CLEARS a proposal parked by an earlier pass through onboarding', async () => {
-    // Reaching onboarding twice in one tab is possible (a completion whose
-    // status has not settled bounces back). Not writing a new proposal is not
-    // enough: the stale one would still be waiting in the composer, greeting a
-    // user who just declined to answer.
-    storeFirstBuildPrompt('a proposal from an earlier pass');
-    mockStatus({ currentStep: 2 });
-    renderPage();
-
-    expect(await screen.findByText('step2.title')).toBeInTheDocument();
-    const skip = screen.getByRole('button', { name: 'skipForNow' });
-    await waitFor(() => expect(skip).toBeEnabled());
-    fireEvent.click(skip);
-
-    await waitFor(() => expect(sessionStorage.getItem(FIRST_BUILD_PROMPT_KEY)).toBeNull());
+    // Armed on the skip path too: what the plan grants does not depend on how
+    // much the user chose to tell us, and someone who skipped the questions is
+    // if anything likelier not to know it yet.
+    expect(sessionStorage.getItem(WELCOME_GIFT_FLAG)).toBe('1');
+    expect(sessionStorage.getItem('lc_show_app_suggestions')).toBe('1');
   });
 });

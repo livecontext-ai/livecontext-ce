@@ -56,6 +56,16 @@ const ALLOWED = new Set([
   // conversation to the studio (see the effect in ChatPageV2), which is the fallback this rule
   // exists alongside rather than instead of.
   join('components', 'chat', 'NotificationBell.tsx'),
+
+  // An agenda occurrence for an AGENT run. It holds a conversationId and no kind, but it cannot
+  // get the kind wrong: the conversation of an agent run is always a CHAT one, and that is
+  // enforced by the SERVER, not by convention. ConversationCommandService refuses
+  // {agentId, kind != CHAT} outright ("A conversation cannot be both an agent conversation and a
+  // 'studio' one"), gated on the agent id alone so a sub-agent or a memory-off row cannot slip
+  // past it either. A studio thread therefore never carries an agentId, and an occurrence never
+  // carries a studio conversation. If that refusal is ever relaxed, this entry becomes wrong and
+  // the occurrence must start carrying the kind instead.
+  join('components', 'agenda', 'agendaVisuals.ts'),
 ]);
 
 /** Not production code: tests legitimately assert on the literal routes. */

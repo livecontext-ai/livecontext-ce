@@ -2,13 +2,21 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslations } from 'next-intl';
-import { PackagePlus, Play, CheckCircle, Ban } from 'lucide-react';
+import { PackagePlus, Play, CheckCircle, Ban, Rocket, PowerOff, CalendarClock } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { Button } from '@/components/ui/button';
 import { PublicationCard, PublicationCardSkeleton } from '@/components/marketplace/PublicationCard';
 import { publicationService } from '@/lib/api/orchestrator/publication.service';
+import { workflowService } from '@/lib/api/orchestrator/workflow.service';
+import { agentService } from '@/lib/api/orchestrator/agent.service';
 import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 import type { PendingToolAuthorization } from '@/contexts/StreamingContext';
+
+/**
+ * How long the card waits for a name before becoming answerable anyway. Short on purpose:
+ * the person is looking at a held call, and an unanswerable card is worse than an unnamed one.
+ */
+const NAME_FETCH_MAX_WAIT_MS = 4000;
 
 export interface ToolAuthorizationCardProps {
   /** Conversation ID */
@@ -53,18 +61,88 @@ export function ToolAuthorizationCard({
   const isInstall = rule === 'application:acquire';
   const applicationId = pendingAuthorization.applicationId;
 
+  // The subject of the card: what is about to go live, or which cron is being armed.
+  // Absent for every rule that names nothing, and for a backend older than this field.
+  const subject = pendingAuthorization.subject;
+
+  // The subject's name is the one thing the backend cannot always send: agent-service has
+  // no orchestrator client, and on an agent UPDATE the call carries an id rather than a
+  // name. Fetch it, exactly as the install card fetches its publication.
+  const [fetchedName, setFetchedName] = useState<string | null>(null);
+  // Stays true until the answer is in, success or failure. The card is not answerable
+  // while it is: approving a pin before its workflow has been named is precisely the
+  // outcome this card exists to prevent, and a slow orchestrator is enough to cause it.
+  const [nameLoading, setNameLoading] = useState(false);
+  const idToName = subject && !subject.name ? subject.id : undefined;
+  const kindToName = subject?.kind;
+  useEffect(() => {
+    if (!idToName || (kindToName !== 'workflow' && kindToName !== 'agent')) return;
+    let cancelled = false;
+    setNameLoading(true);
+    const settle = () => { if (!cancelled) setNameLoading(false); };
+    // Waiting for a name must never outlast the call that is being HELD. apiClient's own
+    // timeout is 30 s, and on the CLI-bridge route a park can be capped at 25, so a hanging
+    // orchestrator would leave the user unable to answer until the hold expired by itself.
+    // After this the card is answerable with the id shown; a name that arrives late still
+    // replaces it, so nothing is lost by giving up on the wait rather than on the fetch.
+    const deadline = setTimeout(settle, NAME_FETCH_MAX_WAIT_MS);
+    // The id comes from an LLM-written argument and becomes a path segment.
+    const encoded = encodeURIComponent(idToName);
+    const request = kindToName === 'workflow'
+      ? workflowService.getWorkflow(encoded)
+      : agentService.getAgent(encoded);
+    request
+      .then((resource) => { if (!cancelled) setFetchedName(resource?.name?.trim() || null); })
+      // Silent: the copy below simply names nothing, and the id is shown instead.
+      .catch(() => { if (!cancelled) setFetchedName(null); })
+      .finally(() => { clearTimeout(deadline); settle(); });
+    return () => { cancelled = true; clearTimeout(deadline); };
+  }, [idToName, kindToName]);
+
+  const subjectName = subject?.name?.trim() || fetchedName || null;
+  // When the name could not be resolved, show the id rather than nothing: "Take this
+  // workflow off the air?" with no identification at all is a question the user cannot
+  // answer, and unpin has no version to fall back on either.
+  const unresolvedId = !subjectName && !nameLoading ? subject?.id ?? null : null;
+
   // Per-action title/subtitle so the user sees a clear description of what the
   // agent is about to do (e.g. continue a paused interface / resolve an approval)
   // rather than the generic "run a sensitive action". Falls back to the generic
   // run copy for any other gated action.
+  //
+  // The three arming rules each have a NAMED and an unnamed variant instead of one
+  // message with an optional placeholder: an empty placeholder leaves a dangling
+  // quote or a double space in six languages, and "put "" live?" reads as a bug.
   const titleKey = isInstall ? 'installTitle'
     : rule === 'workflow:continue_interface' ? 'continueInterfaceTitle'
     : rule === 'workflow:resolve_approval' ? 'resolveApprovalTitle'
+    : rule === 'workflow:pin' ? (subjectName ? 'pinTitleNamed' : 'pinTitle')
+    : rule === 'workflow:unpin' ? (subjectName ? 'unpinTitleNamed' : 'unpinTitle')
+    : rule === 'agent:schedule' ? (subjectName ? 'agentScheduleTitleNamed' : 'agentScheduleTitle')
+    // Mail is the one approval on this card whose subject is a PERSON. On the generic copy it
+    // reads exactly like pinning a workflow, and the only thing telling the reader that an
+    // email is about to leave their own address is the raw params dump underneath.
+    : rule === 'mailbox:send' ? 'mailboxSendTitle'
+    : rule === 'mailbox:delete' ? 'mailboxDeleteTitle'
     : 'runTitle';
   const subtitleKey = isInstall ? 'installSubtitle'
     : rule === 'workflow:continue_interface' ? 'continueInterfaceSubtitle'
     : rule === 'workflow:resolve_approval' ? 'resolveApprovalSubtitle'
+    : rule === 'workflow:pin' ? (subject?.version != null ? 'pinSubtitleVersioned' : 'pinSubtitle')
+    : rule === 'workflow:unpin' ? 'unpinSubtitle'
+    : rule === 'agent:schedule' ? (subject?.cron ? 'agentScheduleSubtitle' : 'agentScheduleSubtitleBare')
+    : rule === 'mailbox:send' ? 'mailboxSendSubtitle'
+    : rule === 'mailbox:delete' ? 'mailboxDeleteSubtitle'
     : 'runSubtitle';
+
+  // Values the two keys above may reference. next-intl throws on a missing placeholder,
+  // so every one a selected key can name is always supplied.
+  const copyValues = {
+    name: subjectName ?? '',
+    version: subject?.version ?? 0,
+    cron: subject?.cron ?? '',
+    timezone: subject?.timezone ?? 'UTC',
+  };
 
   // Load the publication so we render its marketplace preview instead of raw args.
   // Public (marketplace-safe) fetch - the app may not be owned yet (we're acquiring it).
@@ -143,19 +221,36 @@ export function ToolAuthorizationCard({
         {/* Header */}
         <div className="flex items-center gap-3 mb-3">
           <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-theme-primary border border-theme shrink-0">
+            {/* The icon says which KIND of consequence this is: installing, putting
+                something live, taking it off the air, arming a schedule, or running
+                one thing once. */}
             {isInstall ? (
               <PackagePlus className="w-4 h-4 text-theme-primary" />
+            ) : rule === 'workflow:pin' ? (
+              <Rocket className="w-4 h-4 text-theme-primary" />
+            ) : rule === 'workflow:unpin' ? (
+              <PowerOff className="w-4 h-4 text-theme-primary" />
+            ) : rule === 'agent:schedule' ? (
+              <CalendarClock className="w-4 h-4 text-theme-primary" />
             ) : (
               <Play className="w-4 h-4 text-theme-primary" />
             )}
           </div>
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-theme-primary">
-              {t(titleKey)}
+              {t(titleKey, copyValues)}
             </h3>
             <p className="text-xs text-theme-secondary">
-              {t(subtitleKey)}
+              {t(subtitleKey, copyValues)}
             </p>
+            {/* Could not resolve a name: show the id, so the question stays answerable.
+                Nothing identifying at all is worse than a raw id. */}
+            {unresolvedId && (
+              <p className="text-xs text-theme-muted mt-0.5 font-mono truncate"
+                 data-testid="tool-authorization-subject-id">
+                {unresolvedId}
+              </p>
+            )}
             {/* The agent is holding this call: say so, otherwise the tool above just looks
                 stuck spinning and the user has no reason to connect the two. */}
             {pendingAuthorization.blocking && (
@@ -197,11 +292,13 @@ export function ToolAuthorizationCard({
             <Button variant="ghost" size="sm" onClick={deny} disabled={pending}>
               {t('deny')}
             </Button>
-            <Button variant="default" size="sm" onClick={approve} disabled={pending} className="gap-2">
-              {pending ? (
+            {/* Declining stays available while the name resolves - refusing needs no
+                identification. Approving does, so it waits. */}
+            <Button variant="default" size="sm" onClick={approve} disabled={pending || nameLoading} className="gap-2">
+              {pending || nameLoading ? (
                 <>
                   <LoadingSpinner size="xs" />
-                  {isInstall ? t('installing') : t('approving')}
+                  {nameLoading && !pending ? t('loadingSubject') : isInstall ? t('installing') : t('approving')}
                 </>
               ) : (
                 <>{isInstall ? t('install') : t('approve')}</>

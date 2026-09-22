@@ -424,7 +424,7 @@ function InlineConfigPanel({
                 disabled={isRunMode}
                 providerLabel={tf('provider')}
                 modelLabel={tf('model')}
-                costProfile="agentConversation"
+                costProfile="chatConversation"
             />
 
             {/* Prompt - Required */}

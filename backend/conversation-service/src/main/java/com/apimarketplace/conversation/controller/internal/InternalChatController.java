@@ -10,6 +10,7 @@ import com.apimarketplace.conversation.service.ai.ConversationAgentService;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import com.apimarketplace.common.credit.ChatCreditRefusal;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -59,10 +60,21 @@ public class InternalChatController {
         // PAYG bucket alone, so the check must not pass on monthly workflow-only
         // credits (pre-fix, an unscoped total-balance check let the LLM run and
         // pushed the PAYG bucket negative post-flight).
+        //
+        // The model here is the REQUEST's, which is not always the one the turn runs on:
+        // an agent row can pin its own, and that resolution happens downstream in
+        // ConversationAgentService. Since V494 the model decides whether the AI allowance
+        // counts, so the two can disagree - stricter when the request names none (the
+        // allowance is simply not counted, and a turn it would have paid for is refused),
+        // looser when the request names an open model and the agent pins a closed one.
+        // The DEBIT is authoritative either way; it re-resolves and draws the buckets the
+        // real model allows. Resolving the agent's model here would mean a second lookup
+        // on the gate path and a copy of a resolution that belongs downstream.
         if (!creditClient.checkCredits(userId,
-                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION)) {
+                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION,
+                request.getProvider(), request.getModel())) {
             return Mono.just(ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
-                    .body(Map.of("error", "Insufficient credits")));
+                    .body(Map.of("error", ChatCreditRefusal.MESSAGE)));
         }
 
         return streamInitializer.initializeStreamAsync(request, userId);
@@ -113,12 +125,13 @@ public class InternalChatController {
         // Source-type-scoped gate (see the async endpoint above): FREE monthly
         // workflow credits must not admit a scheduled/webhook chat turn.
         if (!creditClient.checkCredits(userId,
-                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION)) {
+                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION,
+                request.getProvider(), request.getModel())) {
             // Persist the attempt + a typed error message in the conversation so the
             // user actually sees the schedule was skipped, instead of an empty conv
             // that looks broken. Pre-fix: this branch returned 402 with zero side
             // effects - the user had no way to know their wallet was empty.
-            String errorContent = "[Error] Insufficient credits - this scheduled run was skipped. "
+            String errorContent = "[Error] " + ChatCreditRefusal.MESSAGE + " - this scheduled run was skipped. "
                     + "Top up your wallet to resume scheduled execution.";
             messageService.persistAttemptAndError(conversationId, request.getMessage(), errorContent);
             // Also record a FAILED execution row so the attempt shows up in Agent
@@ -130,7 +143,7 @@ public class InternalChatController {
             // why nothing ran.
             observabilityClient.recordFailureAsync(userId, organizationId,
                     request.getAgentId(), request.getSource(), conversationId,
-                    "BUDGET_EXHAUSTED", "Insufficient credits",
+                    "BUDGET_EXHAUSTED", ChatCreditRefusal.MESSAGE,
                     request.getMessage(), errorContent,
                     request.getProvider(), request.getModel());
             // Publish synthetic execution_started + completed(FAILED) so the
@@ -144,7 +157,7 @@ public class InternalChatController {
                     request.getSource(), request.getTaskId(),
                     "FAILED", 0L);
             return ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
-                    .body(Map.of("success", false, "error", "Insufficient credits", "conversationId", conversationId));
+                    .body(Map.of("success", false, "error", ChatCreditRefusal.MESSAGE, "conversationId", conversationId));
         }
 
         // Save user message to conversation (same as ChatStreamingService does for async)

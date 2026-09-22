@@ -40,6 +40,29 @@ public class OrganizationStorageQuota implements OrgScopedEntity {
     @Column(name = "hard_limit_bytes", nullable = false)
     private Long hardLimitBytes;
 
+    /**
+     * The account that owns this workspace ({@code auth.organization.owner_id}), denormalised so
+     * the storage schema can sum one account's workspaces without reading the auth schema.
+     *
+     * <p>NULL means unattributed, and the quota gate then falls back to per-workspace
+     * enforcement. That fallback is the safety property of the whole shared-pool change: a row
+     * that never gets an owner keeps behaving as it did before rather than failing closed and
+     * blocking uploads. Written by auth-service, the only writer of these rows and the only
+     * service that knows the owner.
+     */
+    @Column(name = "account_id")
+    private String accountId;
+
+    /**
+     * When this row's ALLOWANCE was last written, which is not {@code updatedAt}: that one is
+     * bumped by every usage write. The account's shared ceiling is read from whichever of its
+     * workspaces has the freshest allowance, so the two timestamps must stay separate. Ordering
+     * on {@code updatedAt} would mean "the workspace written to most recently", which says
+     * nothing about whose limit is current.
+     */
+    @Column(name = "limits_updated_at")
+    private Instant limitsUpdatedAt;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -56,10 +79,20 @@ public class OrganizationStorageQuota implements OrgScopedEntity {
         this.hardLimitBytes = maxBytes;
         this.createdAt = Instant.now();
         this.updatedAt = Instant.now();
+        // The limits are being set right here, so the allowance clock starts with them. Leaving
+        // it null would sort a brand-new row behind every older one when the account's ceiling
+        // is resolved by allowance freshness.
+        this.limitsUpdatedAt = this.createdAt;
     }
 
     public String getOrganizationId() { return organizationId; }
     public void setOrganizationId(String organizationId) { this.organizationId = organizationId; }
+
+    public String getAccountId() { return accountId; }
+    public void setAccountId(String accountId) { this.accountId = accountId; }
+
+    public Instant getLimitsUpdatedAt() { return limitsUpdatedAt; }
+    public void setLimitsUpdatedAt(Instant limitsUpdatedAt) { this.limitsUpdatedAt = limitsUpdatedAt; }
 
     public Long getMaxBytes() { return maxBytes; }
     public void setMaxBytes(Long maxBytes) { this.maxBytes = maxBytes; }

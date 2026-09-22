@@ -430,6 +430,42 @@ class CatalogBundleApplierTest {
     }
 
     @Test
+    @DisplayName("V491: a row whose ONLY change is its cache price still reaches the billing mirror")
+    void cachePriceMoveOnItsOwnIsABillingChange() throws Exception {
+        // The mirror is refreshed on a PRICE CHANGE, and that test used to look at the
+        // input and output prices alone. A cache price is now a billing input too, so a
+        // provider halving its cache-read rate on a mature model - whose input/output are
+        // stable for years - would otherwise never reach auth.model_pricing, and every
+        // call would keep being billed at the old rate with nothing to show for it.
+        ModelConfigOverrideEntity existing = new ModelConfigOverrideEntity();
+        existing.setProvider("anthropic");
+        existing.setModelId("claude-fable-5-1");
+        existing.setDisplayName("Fable 5.1");
+        existing.setPriceInput(new BigDecimal("10.00"));
+        existing.setPriceOutput(new BigDecimal("50.00"));
+        existing.setPriceCacheRead(new BigDecimal("1.00"));
+        existing.setId(7L);
+
+        Map<String, Object> incoming = bundleModel("anthropic", "claude-fable-5-1", "Fable 5.1", "10.00");
+        incoming.put("priceOutput", "50.00");
+        incoming.put("priceCacheRead", "0.25");
+
+        byte[] bytes = payloadBytes(List.of(incoming));
+        when(modelRepo.findByProviderAndModelId("anthropic", "claude-fable-5-1"))
+                .thenReturn(Optional.of(existing));
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of());
+        when(bundleRepo.findByVersion(42L)).thenReturn(Optional.empty());
+        when(syncStatusRepo.findById((short) 1)).thenReturn(Optional.empty());
+
+        applier.apply(sbV42(), bytes, null);
+
+        verify(authPricingSyncClient).sync(
+                eq("anthropic"), eq("claude-fable-5-1"),
+                eq(new BigDecimal("10.00")), eq(new BigDecimal("50.00")),
+                any(), eq(new BigDecimal("0.25")), any());
+    }
+
+    @Test
     @DisplayName("Bundle apply → authPricingSyncClient.sync called once per inserted priced row (after-commit behavior)")
     void bundleApplyMirrorsPricingToAuth() throws Exception {
         // Two priced rows + one with no pricing - only the priced ones must
@@ -458,14 +494,14 @@ class CatalogBundleApplierTest {
         verify(authPricingSyncClient).sync(
                 eq("openai"), eq("gpt-5"),
                 eq(new BigDecimal("1.25")), eq(new BigDecimal("10.00")),
-                eq("byok"));
+                eq("byok"), eq((BigDecimal) null), eq((BigDecimal) null));
         verify(authPricingSyncClient).sync(
                 eq("anthropic"), eq("sonnet"),
                 eq(new BigDecimal("3.00")), eq(new BigDecimal("15.00")),
-                eq("byok"));
+                eq("byok"), eq((BigDecimal) null), eq((BigDecimal) null));
         // No pricing → no sync call.
         verify(authPricingSyncClient, never()).sync(
-                eq("local"), eq("no-price"), any(), any(), any());
+                eq("local"), eq("no-price"), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -496,7 +532,7 @@ class CatalogBundleApplierTest {
         verify(authPricingSyncClient).sync(
                 eq("claude-code"), eq("claude-opus-4-10"),
                 eq(new BigDecimal("5.00")), eq(new BigDecimal("25.00")),
-                eq("bridge"));
+                eq("bridge"), eq((BigDecimal) null), eq((BigDecimal) null));
     }
 
     @Test
@@ -523,7 +559,7 @@ class CatalogBundleApplierTest {
 
         applier.apply(sbV42(), bytes, null);
 
-        verify(authPricingSyncClient, never()).sync(any(), any(), any(), any(), any());
+        verify(authPricingSyncClient, never()).sync(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

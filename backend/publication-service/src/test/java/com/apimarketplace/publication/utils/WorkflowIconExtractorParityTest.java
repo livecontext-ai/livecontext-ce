@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * sibling test (also named {@code WorkflowIconExtractorParityTest}) pinning
  * the same canonical mapping. Both tests live in their own modules so a drift
  * in either copy fails its own build. If you change one, you MUST change the
- * other AND the frontend mirror in {@code dashboard.service.ts}
+ * other AND the frontend mirror in {@code triggerNodeIcons.ts}
  * ({@code KIND_TO_NODE_ICON_KEY}).
  */
 @DisplayName("Publication-service WorkflowIconExtractor twin parity")
@@ -39,7 +39,7 @@ class WorkflowIconExtractorParityTest {
         assertThat(WorkflowIconExtractor.TRIGGER_TYPE_TO_NODE_ID)
                 .as("If this fails, the publication-service extractor drifted from the canonical 8-kind map. "
                   + "Update both extractor twins (orchestrator + publication) AND the frontend "
-                  + "KIND_TO_NODE_ICON_KEY in dashboard.service.ts together.")
+                  + "KIND_TO_NODE_ICON_KEY in triggerNodeIcons.ts together.")
                 .isEqualTo(CANONICAL_TRIGGER_TYPE_TO_NODE_ID);
     }
 

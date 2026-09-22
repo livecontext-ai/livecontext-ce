@@ -102,7 +102,7 @@ class SubAgentExecutionHandlerCoverageTest {
             .thenReturn(List.of());
         lenient().when(budgetResolver.resolveAndPersist(any(AgentEntity.class), any(Instant.class)))
             .thenReturn(BudgetState.disabled());
-        lenient().when(creditConsumptionClient.fetchBalance(anyString()))
+        lenient().when(creditConsumptionClient.fetchLlmSpendableBalance(anyString(), any(), any()))
             .thenReturn(new BigDecimal("999999"));
     }
 

@@ -1137,6 +1137,91 @@ class BackEdgeHandlerTest {
      * </ul>
      */
     @Nested
+    @DisplayName("termination row condition fields")
+    class TerminationRowConditionFields {
+
+        /**
+         * The row a terminated loop leaves behind is the LAST one for that node, so it is
+         * the one the inspector reads. It carried half the condition fields: the other
+         * half stayed blank, and `maxIterations` was written camelCase while the
+         * enrichment reads `max_iterations`, so Max was empty on exactly the row a reader
+         * opens to ask why the loop stopped.
+         */
+        @Test
+        @DisplayName("carries every key StepDataPersistenceService.enrichLoopFields reads")
+        void carriesEveryKeyTheEnrichmentReads() {
+            com.apimarketplace.orchestrator.execution.v2.nodes.LoopNode loop =
+                com.apimarketplace.orchestrator.execution.v2.nodes.LoopNode.builder()
+                    .nodeId("core:repeat")
+                    .loopCondition("{{value}} > 10")
+                    .maxIterations(5)
+                    .build();
+
+            Map<String, Object> output = new HashMap<>();
+            handler.addLoopConditionFields(
+                output, loop, null,
+                new BackEdgeHandler.BackEdgeConditionOutcome(false, "15 > 100"), false, false);
+
+            // Exactly the snake_case names enrichLoopFields looks up.
+            assertEquals("15 > 100", output.get("condition_resolved"));
+            assertEquals(false, output.get("condition_result"));
+            assertEquals("{{value}} > 10", output.get("loop_condition"));
+            assertEquals("{{value}} > 10", output.get("condition_expression"));
+            assertEquals(5, output.get("max_iterations"));
+            assertNotNull(output.get("evaluations"));
+        }
+
+        @Test
+        @DisplayName("a loop that ran out of iterations does not claim it took the exit port")
+        void overflowDoesNotClaimTheExitPort() {
+            // Hitting maxIterations while the condition still wants to iterate FAILS the
+            // run, and this same output deliberately sets selected_path="failed" so the
+            // exit is not re-armed. Naming "exit" in the evaluation would tell the reader,
+            // on the one row they open to ask why the loop stopped, that the run took a
+            // port it was refused.
+            com.apimarketplace.orchestrator.execution.v2.nodes.LoopNode loop =
+                com.apimarketplace.orchestrator.execution.v2.nodes.LoopNode.builder()
+                    .nodeId("core:repeat")
+                    .loopCondition("{{value}} > 0")
+                    .maxIterations(3)
+                    .build();
+
+            Map<String, Object> output = new HashMap<>();
+            handler.addLoopConditionFields(
+                output, loop, null,
+                new BackEdgeHandler.BackEdgeConditionOutcome(true, "15 > 0"), true, true);
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> evaluations = (List<Map<String, Object>>) output.get("evaluations");
+            assertEquals("failed", evaluations.get(0).get("branch"));
+            assertEquals(true, evaluations.get(0).get("result"),
+                "the condition was still true: that is exactly why the run failed");
+            assertEquals(true, output.get("condition_result"));
+        }
+
+        @Test
+        @DisplayName("a counted loop reports its exit as a fallback, with no invented result")
+        void countedLoopReportsFallback() {
+            com.apimarketplace.orchestrator.execution.v2.nodes.LoopNode loop =
+                com.apimarketplace.orchestrator.execution.v2.nodes.LoopNode.builder()
+                    .nodeId("core:repeat")
+                    .maxIterations(3)
+                    .build();
+
+            Map<String, Object> output = new HashMap<>();
+            handler.addLoopConditionFields(
+                output, loop, null,
+                BackEdgeHandler.BackEdgeConditionOutcome.notEvaluated("iteration cap reached"), false, false);
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> evaluations = (List<Map<String, Object>>) output.get("evaluations");
+            assertEquals("fallback", evaluations.get(0).get("outcome"));
+            assertNull(evaluations.get(0).get("result"));
+            assertEquals("(not evaluated: iteration cap reached)", output.get("condition_resolved"));
+        }
+    }
+
+    @Nested
     @DisplayName("updateLoopStepOutput() - override write-side (regression bite)")
     class UpdateLoopStepOutputOverrideWriteSide {
 

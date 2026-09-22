@@ -448,6 +448,20 @@ describe('AskUserQuestionCard', () => {
     ]);
   });
 
+  it.each(['false', 'reject'])('a failed Skip (%s) unlocks the real card for another attempt', async (failure) => {
+    const onDismiss = vi.fn();
+    if (failure === 'false') onDismiss.mockResolvedValueOnce(false);
+    else onDismiss.mockRejectedValueOnce(new Error('network'));
+    onDismiss.mockResolvedValueOnce(true);
+    render(<AskUserQuestionCard conversationId="conversation-1" pendingQuestion={pending} onDismiss={onDismiss} />);
+
+    fireEvent.click(screen.getByTestId('ask-user-skip'));
+
+    await waitFor(() => expect(screen.getByTestId('ask-user-skip')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('ask-user-skip'));
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+  });
+
   it('Skip dismisses with the toolCallId and locks the form while the caller removes the card', () => {
     const { onDismiss, onSubmit } = renderCard();
 

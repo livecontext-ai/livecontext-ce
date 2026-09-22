@@ -58,17 +58,26 @@ class AgentStorageUsageServiceTest {
         assertThat(result.get("AGENTS").itemCount()).isEqualTo(4);
     }
 
+    // Was "returns zero (not throws) - preserves admin-counter resilience". That
+    // rationale no longer has a consumer: StorageReconciliationService is the ONLY caller
+    // of every /api/internal/*/storage/usage endpoint repo-wide, and the admin counters
+    // read storage.tenant_storage_breakdown instead. Against that one caller the
+    // resilience was harmful, not defensive: the reconciler writes this answer through
+    // setUsage, an ABSOLUTE set, so a swallowed failure erased the tenant's stored figure
+    // rather than degrading it. Propagating lets the internal endpoint answer 5xx and the
+    // reconciler skip the category.
     @Test
-    @DisplayName("returns zero (not throws) when the underlying SQL fails - preserves admin-counter resilience")
+    @DisplayName("omits every category it could not measure, rather than reporting them as zero")
     @SuppressWarnings("unchecked")
-    void resilientToSqlFailure() {
+    void omitsUnmeasuredCategories() {
         when(jdbcTemplate.queryForObject(anyString(), any(RowMapper.class), any(Object[].class)))
             .thenThrow(new IncorrectResultSetColumnCountException(1, 2));
 
         Map<String, StorageUsageDto> result = service.getStorageUsage("tenant-1");
 
-        assertThat(result.get("AGENTS")).isEqualTo(StorageUsageDto.zero());
-        assertThat(result.get("SKILLS")).isEqualTo(StorageUsageDto.zero());
+        // Empty, not three zeros. Three zeros is what StorageReconciliationService would
+        // write absolutely over the tenant's real AGENTS and CONFIGURATION figures.
+        assertThat(result).isEmpty();
     }
 
     @Test
@@ -140,7 +149,12 @@ class AgentStorageUsageServiceTest {
 
         Map<String, StorageUsageDto> result = service.getStorageUsage("tenant-1");
 
-        assertThat(result.get("MEMORIES")).isEqualTo(StorageUsageDto.zero());
+        // ABSENT, not zero. The reader sums SKILLS and MEMORIES into CONFIGURATION through
+        // an absolute set, so a zero here would erase the tenant's memory bytes for the
+        // night; an absent key makes it skip the category and keep the stored figure.
+        assertThat(result).doesNotContainKey("MEMORIES");
+        // And the resilience this test was written for still holds: one failing query
+        // costs one line, not the whole report.
         assertThat(result.get("AGENTS").usedBytes()).isEqualTo(11L);
         assertThat(result.get("SKILLS").usedBytes()).isEqualTo(11L);
     }

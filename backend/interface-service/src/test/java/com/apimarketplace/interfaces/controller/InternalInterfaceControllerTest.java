@@ -643,6 +643,66 @@ class InternalInterfaceControllerTest {
         }
     }
 
+    /**
+     * Regression for the production 500 on {@code GET /api/internal/interfaces/recent-activity}
+     * (2026-09-18 20:33 and 20:37): the endpoint loaded 50 full {@link InterfaceEntity} rows to
+     * read four scalar fields, which materialised the three {@code @Lob} template columns and
+     * blew up with "Large Objects may not be used in auto-commit mode". The orchestrator's
+     * aggregator logged a 500 and dropped the interfaces branch of the feed entirely.
+     */
+    @Nested
+    @DisplayName("recent-activity - LOB-free projection")
+    class RecentActivityProjection {
+
+        /**
+         * The projection fixes the one endpoint that broke. This pins the underlying cause so
+         * the next non-transactional reader of these entities does not rediscover it: the
+         * columns are TEXT in V7, and {@code @Lob} on a String makes Hibernate read them as PG
+         * large objects. agent-service removed the same annotation for the same reason
+         * (AgentEntity#systemPrompt, audit 2026-06-14); these two entities were the leftovers.
+         */
+        @Test
+        @DisplayName("Template fields are plain text, never @Lob, on both interface entities")
+        void templateFieldsMustNotBeLob() throws Exception {
+            for (Class<?> entity : List.of(InterfaceEntity.class,
+                    com.apimarketplace.interfaces.domain.InterfaceRunSnapshotEntity.class)) {
+                for (String field : List.of("htmlTemplate", "cssTemplate", "jsTemplate")) {
+                    java.lang.reflect.Field f = entity.getDeclaredField(field);
+                    org.assertj.core.api.Assertions
+                            .assertThat(f.getAnnotation(jakarta.persistence.Lob.class))
+                            .as("%s#%s must not be @Lob - it makes every non-transactional read a 500",
+                                    entity.getSimpleName(), field)
+                            .isNull();
+                }
+            }
+        }
+
+        @Test
+        @DisplayName("Emits one activity item per row, with the owner as actor")
+        void mapsProjectionRowsToActivityItems() throws Exception {
+            UUID id = UUID.randomUUID();
+            Instant edited = Instant.parse("2026-09-18T20:30:00Z");
+            com.apimarketplace.interfaces.repository.InterfaceRecentActivityView row =
+                    mock(com.apimarketplace.interfaces.repository.InterfaceRecentActivityView.class);
+            when(row.getId()).thenReturn(id);
+            when(row.getName()).thenReturn("Dashboard");
+            when(row.getUpdatedAt()).thenReturn(edited);
+            when(row.getTenantId()).thenReturn(TENANT);
+
+            when(interfaceRepository.findRecentByOrganizationIdStrict(eq("org-x"), any()))
+                    .thenReturn(List.of(row));
+
+            mockMvc.perform(get(BASE + "/recent-activity")
+                            .header("X-User-ID", TENANT)
+                            .header("X-Organization-ID", "org-x"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.items", hasSize(1)))
+                    .andExpect(jsonPath("$.items[0].resourceId").value(id.toString()))
+                    .andExpect(jsonPath("$.items[0].name").value("Dashboard"))
+                    .andExpect(jsonPath("$.items[0].actorId").value(TENANT));
+        }
+    }
+
     private InterfaceEntity createEntity() {
         InterfaceEntity entity = new InterfaceEntity();
         entity.setId(UUID.randomUUID());

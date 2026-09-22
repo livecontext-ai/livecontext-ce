@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 import com.apimarketplace.orchestrator.domain.file.FileRef;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.services.file.FileDownloader;
 import com.apimarketplace.orchestrator.services.file.FileStorageService;
 import com.apimarketplace.common.web.UrlSafetyValidator;
@@ -84,7 +85,10 @@ public class DownloadFileNode extends BaseNode {
         // node exited, and the failure path's three had no label. The value is the
         // configured expression until it resolves, and the resolved one after.
         Map<String, Object> earlyInputData = new java.util.LinkedHashMap<>();
-        earlyInputData.put("url", urlExpression);
+        // Masked at both ends: the CONFIGURED url can be a signed link the author pasted
+        // whole, and the RESOLVED one a link a provider signed a moment ago. Both carry
+        // their credential in the query string, and both are reported.
+        earlyInputData.put("url", ReportedParams.maskUrlSecrets(urlExpression));
         earlyInputData.put("filename", filenameExpression);
         earlyInputData.put("mimeType", mimeTypeExpression);
 
@@ -107,10 +111,26 @@ public class DownloadFileNode extends BaseNode {
             }
 
             // Update earlyInputData with resolved URL for richer diagnostics
-            earlyInputData.put("url", url);
+            // Masked: a download url is routinely a SIGNED link - the provider puts the
+            // credential in the query string (?token=, ?X-Amz-Signature=), and this map is
+            // persisted and rendered. The url stays readable, its credential values do not.
+            earlyInputData.put("url", ReportedParams.maskUrlSecrets(url));
 
-            // SSRF protection: validate URL before downloading
-            UrlSafetyValidator.validateUrl(url);
+            // SSRF protection: validate URL before downloading. The downloader validates
+            // too, and on every redirect hop, but this check stays: a node can be wired
+            // with a FileDownloader that validates nothing (MockFileDownloader is exactly
+            // that), so refusing here is what makes the refusal independent of the wiring.
+            try {
+                UrlSafetyValidator.validateUrl(url);
+            } catch (IllegalArgumentException e) {
+                // Worded like the downloader's own refusal instead of falling into the
+                // generic "Download failed:" catch below. Nothing was downloaded and
+                // nothing will be, however many times this runs, and the message is what
+                // has to say so: this is the busiest door onto that rule.
+                return NodeExecutionResult.failureWithOutput(nodeId,
+                    "Refused to download " + url + ": " + e.getMessage(),
+                    buildFailureOutput(url, earlyInputData, context), System.currentTimeMillis() - startTime);
+            }
 
             logger.info("Downloading from URL: {}", url);
 
@@ -180,10 +200,10 @@ public class DownloadFileNode extends BaseNode {
 
             // Persist resolved input params for inspector visibility
             Map<String, Object> inputData = new java.util.LinkedHashMap<>();
-            inputData.put("url", url);
+            inputData.put("url", ReportedParams.maskUrlSecrets(url));
             if (filename != null) inputData.put("filename", filename);
             if (mimeType != null) inputData.put("mimeType", mimeType);
-            result.put("resolved_params", inputData);
+            result.put("resolved_params", ReportedParams.forReport(inputData));
 
             return NodeExecutionResult.success(nodeId, result);
 
@@ -212,7 +232,7 @@ public class DownloadFileNode extends BaseNode {
         Map<String, Object> failOutput = new java.util.HashMap<>();
         failOutput.put("file", null);
         failOutput.put("source_url", resolvedUrl);
-        failOutput.put("resolved_params", inputData);
+        failOutput.put("resolved_params", ReportedParams.forReport(inputData));
         return enrichWithMetadata(failOutput, context);
     }
 

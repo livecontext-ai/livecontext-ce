@@ -1,6 +1,7 @@
 package com.apimarketplace.agent.catalog.sync;
 
 import com.apimarketplace.agent.factory.LLMProviderFactory;
+import com.apimarketplace.agent.provider.LLMProvider;
 import com.apimarketplace.agent.provider.OpenAICompatibleProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -10,6 +11,7 @@ import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
+
 import static org.mockito.Mockito.*;
 
 /**
@@ -58,7 +60,7 @@ class NativeModelDiscoveryServiceTest {
         // What LiteLLM's zai block actually carried that day.
         List<Map<String, Object>> feed = List.of(feedRow("zai", "glm-5.1"));
 
-        var result = service.discover(feed, Set.of(), List.of());
+        var result = service.discover(feed, Set.of(), List.of(), Set.of());
 
         assertThat(ids(result.models())).containsExactlyInAnyOrder(
                 "glm-5.2", "glm-5.3", "glm-5v-turbo");
@@ -76,7 +78,7 @@ class NativeModelDiscoveryServiceTest {
         List<Map<String, Object>> openRouter = List.of(openRouterRow(
                 "z-ai/glm-5.3", "1.4000", "4.4000"));
 
-        var result = service.discover(List.of(), Set.of(), openRouter);
+        var result = service.discover(List.of(), Set.of(), openRouter, Set.of());
 
         Map<String, Object> row = result.models().get(0);
         assertThat(row.get("priceInput")).isEqualTo("1.4000");
@@ -92,7 +94,7 @@ class NativeModelDiscoveryServiceTest {
         providerServing("zai", "glm-5.3");
 
         var result = service.discover(List.of(), Set.of(),
-                List.of(openRouterRow("z-ai/glm-5.3", "1.4000", "4.4000")));
+                List.of(openRouterRow("z-ai/glm-5.3", "1.4000", "4.4000")), Set.of());
 
         @SuppressWarnings("unchecked")
         Map<String, Object> meta = (Map<String, Object>) result.models().get(0).get("feedMetadata");
@@ -112,7 +114,7 @@ class NativeModelDiscoveryServiceTest {
         donor.put("supportsPromptCaching", true);
         donor.put("tier", "mid");
 
-        var result = service.discover(List.of(), Set.of(), List.of(donor));
+        var result = service.discover(List.of(), Set.of(), List.of(donor), Set.of());
 
         Map<String, Object> row = result.models().get(0);
         assertThat(row.get("priceCacheRead")).isEqualTo("0.1100");
@@ -130,7 +132,7 @@ class NativeModelDiscoveryServiceTest {
         // otherwise bill it at the platform default rate.
         providerServing("minimax", "MiniMax-M4");
 
-        var result = service.discover(List.of(), Set.of(), List.of());
+        var result = service.discover(List.of(), Set.of(), List.of(), Set.of());
 
         Map<String, Object> row = result.models().get(0);
         assertThat(row.get("modelId")).isEqualTo("MiniMax-M4");
@@ -152,7 +154,7 @@ class NativeModelDiscoveryServiceTest {
         donor.put("supportsVision", true);
         donor.put("supportsReasoning", true);
 
-        var result = service.discover(List.of(), Set.of(), List.of(donor));
+        var result = service.discover(List.of(), Set.of(), List.of(donor), Set.of());
 
         Map<String, Object> row = result.models().get(0);
         assertThat(row.get("modelId")).isEqualTo("kimi-k3");
@@ -175,7 +177,7 @@ class NativeModelDiscoveryServiceTest {
 
         var result = service.discover(
                 List.of(feedRow("zai", "glm-4.7"), feedRow("zai", "glm-5.1")),
-                Set.of(), List.of());
+                Set.of(), List.of(), Set.of());
 
         assertThat(result.models()).isEmpty();
         assertThat(result.discoveredByProvider()).isEmpty();
@@ -189,7 +191,7 @@ class NativeModelDiscoveryServiceTest {
         // An admin already added and priced it by hand - discovery must not
         // re-emit it, or the merge would overwrite that curated row with a
         // price-free one.
-        var result = service.discover(List.of(), Set.of(NativeModelDiscoveryService.key("zai", "glm-5.2")), List.of());
+        var result = service.discover(List.of(), Set.of(NativeModelDiscoveryService.key("zai", "glm-5.2")), List.of(), Set.of());
 
         assertThat(result.models()).isEmpty();
     }
@@ -201,10 +203,10 @@ class NativeModelDiscoveryServiceTest {
         when(unkeyed.listRemoteModelIds()).thenReturn(Optional.empty());
         when(providerFactory.findProvider("qwen")).thenReturn(Optional.of(unkeyed));
 
-        var result = service.discover(List.of(), Set.of(), List.of());
+        var result = service.discover(List.of(), Set.of(), List.of(), Set.of());
 
         assertThat(result.models()).isEmpty();
-        assertThat(result.skippedProviders()).containsExactly("qwen");
+        assertThat(result.skippedProviders()).contains("qwen");
     }
 
     @Test
@@ -215,22 +217,261 @@ class NativeModelDiscoveryServiceTest {
         when(providerFactory.findProvider("zai")).thenReturn(Optional.of(broken));
         providerServing("moonshot", "kimi-k3");
 
-        var result = service.discover(List.of(), Set.of(), List.of());
+        var result = service.discover(List.of(), Set.of(), List.of(), Set.of());
 
         assertThat(ids(result.models())).containsExactly("kimi-k3");
-        assertThat(result.skippedProviders()).containsExactly("zai");
+        assertThat(result.skippedProviders()).contains("zai");
+        assertThat(result.skippedProviders()).doesNotContain("moonshot");
     }
 
     @Test
-    @DisplayName("Native-SDK providers and bridges are never probed - they have no such endpoint")
-    void ignoresNonOpenAiCompatibleProviders() {
-        // findProvider returns empty for everything by default, which is what a
-        // bridge / native-SDK provider looks like to this service.
-        var result = service.discover(List.of(), Set.of(), List.of());
+    @DisplayName("A vendor with its own provider class is discovered - the deepseek-flash gap")
+    void discoversAVendorThatHasItsOwnProviderClass() {
+        // DeepSeek speaks the OpenAI dialect but has a dedicated provider class
+        // rather than being an OpenAICompatibleProvider. Discovery used to gate
+        // on that class, so this vendor was never asked and deepseek-flash
+        // could not reach the catalog through any refresh. Mocking the
+        // INTERFACE is the point of this test: a provider qualifies by being
+        // able to answer, not by its type.
+        LLMProvider deepseek = mock(LLMProvider.class);
+        when(deepseek.listRemoteModelIds()).thenReturn(Optional.of(List.of("deepseek-flash")));
+        when(providerFactory.findProvider("deepseek")).thenReturn(Optional.of(deepseek));
+
+        var result = service.discover(List.of(), Set.of(), List.of(), Set.of());
+
+        assertThat(ids(result.models())).containsExactly("deepseek-flash");
+        assertThat(result.discoveredByProvider()).containsEntry("deepseek", 1);
+    }
+
+    @Test
+    @DisplayName("A provider that cannot be asked is REPORTED, so 'never asked' stops looking like 'found nothing'")
+    void reportsProvidersItCouldNotAsk() {
+        // findProvider returns empty for everything by default. Previously a
+        // provider that could not be probed was dropped with a bare `continue`,
+        // which is exactly what hid the deepseek gap: the result was
+        // indistinguishable from a vendor that genuinely serves nothing new.
+        var result = service.discover(List.of(), Set.of(), List.of(), Set.of());
 
         assertThat(result.models()).isEmpty();
+        assertThat(result.skippedProviders()).contains("deepseek", "anthropic", "openai", "google");
+    }
+
+    @Test
+    @DisplayName("The aggregator is never probed - its listing IS the feed we already parse")
+    void neverProbesTheAggregator() {
+        // openrouter IS relay-executable and WOULD be probed by the plain loop.
+        // Its /models listing is the OpenRouter feed, which the sync already
+        // fetches through a parser that drops :free / :nitro duplicates and
+        // unpriced rows. Probing it here would re-import the same catalogue
+        // with none of those filters.
+        service.discover(List.of(), Set.of(), List.of(), Set.of());
+
+        verify(providerFactory, never()).findProvider("openrouter");
+        // Every OTHER relay provider IS asked, so this is a real exclusion
+        // rather than a loop that happens to be empty.
+        verify(providerFactory).findProvider("deepseek");
+    }
+
+    @Test
+    @DisplayName("An id the feed hid as a dated twin is not re-emitted under its dated form")
+    void doesNotReadmitDatedAliases() {
+        // Anthropic's own listing returns dated ids, and the feed keeps only
+        // the canonical twin. Without the feed's record of what it hid, every
+        // sync with an Anthropic key would add a duplicate row per model.
+        LLMProvider anthropic = mock(LLMProvider.class);
+        when(anthropic.listRemoteModelIds()).thenReturn(Optional.of(List.of(
+                "claude-sonnet-4-5", "claude-sonnet-4-5-20250929")));
+        when(providerFactory.findProvider("anthropic")).thenReturn(Optional.of(anthropic));
+
+        var result = service.discover(
+                List.of(feedRow("anthropic", "claude-sonnet-4-5")),
+                Set.of(), List.of(),
+                Set.of(NativeModelDiscoveryService.key("anthropic", "claude-sonnet-4-5-20250929")));
+
+        assertThat(ids(result.models())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Budget exhausted: the remaining vendors are 'not asked', never reported as having failed")
+    void budgetExhaustionIsReportedApartFromFailures() {
+        providerServing("zai", "glm-6");
+        // -1, not 0: the guard is strictly-greater, so a zero budget only
+        // trips because building the probe order burns more than clock
+        // granularity. Negative makes it unconditional.
+        service.discoveryBudgetNanos = -1;
+
+        var result = service.discover(List.of(), Set.of(), List.of(), Set.of());
+
+        assertThat(result.models()).isEmpty();
+        assertThat(result.notAskedProviders()).contains("zai", "deepseek", "anthropic");
+        // The distinction that matters: nobody called these, so none of them
+        // failed. Collapsing the two rebuilds the ambiguity this class exists
+        // to remove, and tells an operator to go debug a healthy vendor.
         assertThat(result.skippedProviders()).isEmpty();
-        verify(providerFactory, never()).findProvider("claude-code");
+        verify(providerFactory, never()).findProvider("zai");
+    }
+
+    @Test
+    @DisplayName("A vendor starved by the budget is asked FIRST on the next pass")
+    void aStarvedVendorGoesFirstNextTime() {
+        // Order is alphabetical, so exhaustion always drops the same tail:
+        // perplexity, qwen, xai, zai. Those are exactly the vendors whose
+        // models the mirrors lag on, so a tail that stays starved would aim
+        // the budget at the feature's own purpose.
+        assertThat(service.probeOrder()).startsWith("anthropic");
+
+        service.owedFromLastPass = List.of("zai", "qwen");
+
+        assertThat(service.probeOrder()).startsWith("zai", "qwen", "anthropic");
+        // Owing a turn re-orders the pass, it never shortens it.
+        assertThat(service.probeOrder())
+                .containsExactlyInAnyOrderElementsOf(NativeModelDiscoveryService.sortedRelayProviders());
+    }
+
+    @Test
+    @DisplayName("A pass that finishes owes nothing, so the next one is plain alphabetical again")
+    void aCompletedPassClearsTheDebt() {
+        service.owedFromLastPass = List.of("zai");
+
+        service.discover(List.of(), Set.of(), List.of(), Set.of());
+
+        assertThat(service.owedFromLastPass).isEmpty();
+        assertThat(service.probeOrder()).startsWith("anthropic");
+    }
+
+    @Test
+    @DisplayName("A provider that left the relay set is not resurrected by an old debt")
+    void staleDebtDoesNotResurrectAnUnknownProvider() {
+        service.owedFromLastPass = List.of("some-retired-vendor");
+
+        assertThat(service.probeOrder())
+                .doesNotContain("some-retired-vendor")
+                .containsExactlyInAnyOrderElementsOf(NativeModelDiscoveryService.sortedRelayProviders());
+    }
+
+    @Test
+    @DisplayName("What the feed declined does not walk back in through the discovery door")
+    void doesNotReadmitWhatTheFeedDeclined() {
+        // A vendor listing states neither a mode nor a tool-calling capability
+        // nor a price: OpenAI's /models returns embeddings and image endpoints
+        // next to chat models, and gpt-5-chat next to gpt-5.4. Each exclusion
+        // below is a decision the feed already took, so the filter rests on a
+        // stated fact rather than on pattern-matching the id.
+        LLMProvider openai = mock(LLMProvider.class);
+        when(openai.listRemoteModelIds()).thenReturn(Optional.of(List.of(
+                "gpt-9-preview",      // unknown to every source: the point of discovery
+                "text-embedding-4",   // declined: wrong mode
+                "gpt-5-chat",         // declined: no tool-calling
+                "gpt-9-free")));      // declined: no real price
+        when(providerFactory.findProvider("openai")).thenReturn(Optional.of(openai));
+
+        var result = service.discover(List.of(), Set.of(), List.of(),
+                Set.of(NativeModelDiscoveryService.key("openai", "text-embedding-4"),
+                       NativeModelDiscoveryService.key("openai", "gpt-5-chat"),
+                       NativeModelDiscoveryService.key("openai", "gpt-9-free")));
+
+        assertThat(ids(result.models())).containsExactly("gpt-9-preview");
+        assertThat(result.discoveredByProvider()).containsEntry("openai", 1);
+    }
+
+    @Test
+    @DisplayName("A tenant's own fine-tune is never published into the shared catalog")
+    void skipsFineTuneIds() {
+        // OpenAI's listing returns the CALLING organisation's fine-tunes next
+        // to the base models. They are real and callable - for that one tenant.
+        // Publishing one advertises a model every other tenant would 404 on,
+        // and no feed can warn us because no feed has ever seen it.
+        LLMProvider openai = mock(LLMProvider.class);
+        when(openai.listRemoteModelIds()).thenReturn(Optional.of(List.of(
+                "gpt-9-preview", "ft:gpt-4o-mini:acme::a1b2c3")));
+        when(providerFactory.findProvider("openai")).thenReturn(Optional.of(openai));
+
+        var result = service.discover(List.of(), Set.of(), List.of(), Set.of());
+
+        assertThat(ids(result.models())).containsExactly("gpt-9-preview");
+    }
+
+    @Test
+    @DisplayName("A namespaced id is never emitted as a native row - it would break row identity")
+    void skipsNamespacedIds() {
+        LLMProvider provider = mock(LLMProvider.class);
+        when(provider.listRemoteModelIds()).thenReturn(Optional.of(List.of(
+                "glm-6", "some-vendor/glm-6")));
+        when(providerFactory.findProvider("zai")).thenReturn(Optional.of(provider));
+
+        var result = service.discover(List.of(), Set.of(), List.of(), Set.of());
+
+        assertThat(ids(result.models())).containsExactly("glm-6");
+    }
+
+    @Test
+    @DisplayName("The donor namespaces added with the widened provider set actually match")
+    void findsDonorsForTheNewlyProbedVendors() {
+        // These five namespaces were added when discovery stopped being gated
+        // on the provider class. An entry that does not match leaves the row
+        // unpriced, which is safe but silent - so pin that they resolve.
+        LLMProvider openai = mock(LLMProvider.class);
+        when(openai.listRemoteModelIds()).thenReturn(Optional.of(List.of("gpt-9-preview")));
+        when(providerFactory.findProvider("openai")).thenReturn(Optional.of(openai));
+        LLMProvider perplexity = mock(LLMProvider.class);
+        when(perplexity.listRemoteModelIds()).thenReturn(Optional.of(List.of("sonar-5")));
+        when(providerFactory.findProvider("perplexity")).thenReturn(Optional.of(perplexity));
+
+        var result = service.discover(List.of(), Set.of(), List.of(
+                openRouterRow("openai/gpt-9-preview", "3.0000", "12.0000"),
+                openRouterRow("perplexity/sonar-5", "1.0000", "3.0000")), Set.of());
+
+        Map<String, Object> gpt = result.models().stream()
+                .filter(m -> "gpt-9-preview".equals(m.get("modelId"))).findFirst().orElseThrow();
+        Map<String, Object> sonar = result.models().stream()
+                .filter(m -> "sonar-5".equals(m.get("modelId"))).findFirst().orElseThrow();
+        assertThat(gpt.get("priceInput")).isEqualTo("3.0000");
+        assertThat(sonar.get("priceOutput")).isEqualTo("3.0000");
+    }
+
+    @Test
+    @DisplayName("The remaining new namespaces resolve too - anthropic, google, cohere")
+    void findsDonorsForTheRemainingNewVendors() {
+        LLMProvider anthropic = mock(LLMProvider.class);
+        when(anthropic.listRemoteModelIds()).thenReturn(Optional.of(List.of("claude-opus-9")));
+        when(providerFactory.findProvider("anthropic")).thenReturn(Optional.of(anthropic));
+        LLMProvider google = mock(LLMProvider.class);
+        when(google.listRemoteModelIds()).thenReturn(Optional.of(List.of("gemini-4-pro")));
+        when(providerFactory.findProvider("google")).thenReturn(Optional.of(google));
+        LLMProvider cohere = mock(LLMProvider.class);
+        when(cohere.listRemoteModelIds()).thenReturn(Optional.of(List.of("command-a-2")));
+        when(providerFactory.findProvider("cohere")).thenReturn(Optional.of(cohere));
+
+        var result = service.discover(List.of(), Set.of(), List.of(
+                openRouterRow("anthropic/claude-opus-9", "5.0000", "25.0000"),
+                openRouterRow("google/gemini-4-pro", "2.0000", "8.0000"),
+                openRouterRow("cohere/command-a-2", "0.5000", "1.5000")), Set.of());
+
+        Map<String, String> pricedInputs = new LinkedHashMap<>();
+        for (Map<String, Object> row : result.models()) {
+            pricedInputs.put((String) row.get("modelId"), (String) row.get("priceInput"));
+        }
+        assertThat(pricedInputs)
+                .containsEntry("claude-opus-9", "5.0000")
+                .containsEntry("gemini-4-pro", "2.0000")
+                .containsEntry("command-a-2", "0.5000");
+    }
+
+    @Test
+    @DisplayName("The non-chat filter is scoped per provider, never across vendors")
+    void nonChatFilterDoesNotLeakAcrossProviders() {
+        // Two vendors can ship the same id under different modes. Excluding
+        // "embed-v1" for one must not silence the other's chat model.
+        LLMProvider openai = mock(LLMProvider.class);
+        when(openai.listRemoteModelIds()).thenReturn(Optional.of(List.of("embed-v1")));
+        when(providerFactory.findProvider("openai")).thenReturn(Optional.of(openai));
+        providerServing("zai", "embed-v1");
+
+        var result = service.discover(List.of(), Set.of(), List.of(),
+                Set.of(NativeModelDiscoveryService.key("openai", "embed-v1")));
+
+        assertThat(result.discoveredByProvider()).containsEntry("zai", 1);
+        assertThat(result.discoveredByProvider()).doesNotContainKey("openai");
     }
 
     @Test
@@ -238,7 +479,7 @@ class NativeModelDiscoveryServiceTest {
     void deduplicatesWithinAProviderListing() {
         providerServing("zai", "glm-5.3", "glm-5.3");
 
-        var result = service.discover(List.of(), Set.of(), List.of());
+        var result = service.discover(List.of(), Set.of(), List.of(), Set.of());
 
         assertThat(result.models()).hasSize(1);
         assertThat(result.discoveredByProvider()).containsEntry("zai", 1);
@@ -252,7 +493,7 @@ class NativeModelDiscoveryServiceTest {
                 .thenReturn(Optional.of(Arrays.asList("glm-5.3", "", "   ")));
         when(providerFactory.findProvider("zai")).thenReturn(Optional.of(provider));
 
-        var result = service.discover(List.of(), Set.of(), List.of());
+        var result = service.discover(List.of(), Set.of(), List.of(), Set.of());
 
         assertThat(ids(result.models())).containsExactly("glm-5.3");
     }
@@ -266,7 +507,7 @@ class NativeModelDiscoveryServiceTest {
         Map<String, Object> donor = openRouterRow("z-ai/glm-5.3", "1.4", "4.4");
         donor.put("contextWindow", 999999);
 
-        var result = service.discover(List.of(), Set.of(), List.of(donor));
+        var result = service.discover(List.of(), Set.of(), List.of(donor), Set.of());
 
         assertThat(result.models().get(0)).doesNotContainKey("contextWindow");
     }

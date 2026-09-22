@@ -21,10 +21,12 @@ class ModelCategoryTest {
         assertThat(ModelCategory.IMAGE_GENERATION.key()).isEqualTo("image_generation");
         assertThat(ModelCategory.VIDEO_GENERATION.key()).isEqualTo("video_generation");
 
+        assertThat(ModelCategory.CLASSIFICATION.key()).isEqualTo("classification");
+
         assertThat(ModelCategory.defaultKeys())
-                .containsExactlyInAnyOrder("chat", "browser_agent", "image_generation",
-                        "video_generation", "audio_generation", "voice_generation",
-                        "music_generation");
+                .containsExactlyInAnyOrder("chat", "browser_agent", "classification",
+                        "image_generation", "video_generation", "audio_generation",
+                        "voice_generation", "music_generation");
     }
 
     @Test
@@ -106,6 +108,40 @@ class ModelCategoryTest {
         assertThat(ModelCategory.acceptsMode("video_generation", "chat")).isFalse();
         assertThat(ModelCategory.acceptsMode("video_generation", null)).isFalse();
         assertThat(ModelCategory.acceptsMode("music_generation", "audio")).isFalse();
+    }
+
+    @Test
+    @DisplayName("acceptsMode - a decision model is barred from every conversational surface")
+    void decisionModelIsBarredFromConversationalSurfaces() {
+        // The cloisonnement that matters: a model that cannot emit prose must never be
+        // offered where a conversation is expected. chat / browser_agent admit only
+        // mode null or 'chat', and ModelCatalogService resolves the category-less global
+        // path (chat picker, flat model list, default-model pick) as 'chat' - so this one
+        // assertion is what keeps Jev out of all of them.
+        assertThat(ModelCategory.acceptsMode("chat", ModelCategory.DECISION_MODE)).isFalse();
+        assertThat(ModelCategory.acceptsMode("browser_agent", ModelCategory.DECISION_MODE)).isFalse();
+    }
+
+    @Test
+    @DisplayName("acceptsMode - classification admits ONLY decision models, never a chat model")
+    void modeEligibilityClassification() {
+        assertThat(ModelCategory.acceptsMode("classification", ModelCategory.DECISION_MODE)).isTrue();
+
+        // Without the explicit branch, the permissive tail below would admit every one of
+        // these: the classification tab would list gpt-5 beside jev-latest and rank them
+        // against each other. A new category that forgets its branch fails exactly here.
+        assertThat(ModelCategory.acceptsMode("classification", "chat")).isFalse();
+        assertThat(ModelCategory.acceptsMode("classification", null)).isFalse();
+        assertThat(ModelCategory.acceptsMode("classification", "image")).isFalse();
+        assertThat(ModelCategory.acceptsMode("classification", "embedding")).isFalse();
+    }
+
+    @Test
+    @DisplayName("the decision mode is not a generation format, so it never picks up that convention")
+    void decisionModeIsNotAGenerationFormat() {
+        assertThat(ModelCategory.isGeneration("classification")).isFalse();
+        assertThat(ModelCategory.modeForGenerationCategory("classification")).isNull();
+        assertThat(ModelCategory.DECISION_MODE).isEqualTo("decision");
     }
 
     @Test

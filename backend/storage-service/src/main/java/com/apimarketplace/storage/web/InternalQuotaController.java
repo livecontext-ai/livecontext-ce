@@ -69,17 +69,24 @@ public class InternalQuotaController {
      * Set an organization's storage limit. Runs in storage-service's own transaction (commits)
      * and evicts the org-quota cache in this JVM.
      */
+    /**
+     * @param accountId the workspace owner, carried so the quota gate can enforce ONE allowance
+     *                  across every workspace an account owns. Optional: omitted leaves any
+     *                  existing attribution untouched rather than clearing it, so an older
+     *                  caller cannot demote a workspace back to its own private allowance.
+     */
     @PostMapping("/org/{organizationId}/limits")
     public ResponseEntity<Map<String, Object>> setOrganizationLimits(
             @PathVariable String organizationId,
             @RequestParam long maxBytes,
-            @RequestParam(defaultValue = "0.8") double softRatio) {
+            @RequestParam(defaultValue = "0.8") double softRatio,
+            @RequestParam(required = false) String accountId) {
         if (maxBytes <= 0) {
             return ResponseEntity.badRequest().body(Map.of("error", "maxBytes must be positive", "maxBytes", maxBytes));
         }
-        quotaService.updateOrganizationLimits(organizationId, maxBytes, softRatio);
-        logger.info("Internal: org {} storage limit set to {} bytes (soft {}%)",
-                organizationId, maxBytes, softRatio * 100);
+        quotaService.updateOrganizationLimits(organizationId, maxBytes, softRatio, accountId);
+        logger.info("Internal: org {} storage limit set to {} bytes (soft {}%), account={}",
+                organizationId, maxBytes, softRatio * 100, accountId);
         return ResponseEntity.ok(Map.of("organizationId", organizationId, "maxBytes", maxBytes));
     }
 }

@@ -44,6 +44,8 @@ export interface RunInfoChangeData {
 export interface WorkflowRunCanvasProps {
   workflowId: string;
   runId?: string;
+  /** Pair this canvas with one keep-alive side-panel surface. Omitted on the page. */
+  surfaceId?: string;
   /** Hide the edit/run mode toggle (application mode: always in run) */
   hideToggle?: boolean;
   /** Publication snapshot plan to use instead of fetching */
@@ -80,6 +82,7 @@ export interface WorkflowRunCanvasProps {
 export function WorkflowRunCanvas({
   workflowId,
   runId,
+  surfaceId,
   hideToggle = false,
   planOverride,
   onDirtyChange,
@@ -262,6 +265,7 @@ export function WorkflowRunCanvas({
     if (!workflowId) return;
     publishRunPanelData({
       workflowId,
+      surfaceId,
       runId: activeRunId,
       runInfo: currentRunInfo,
       isStepByStep,
@@ -271,7 +275,7 @@ export function WorkflowRunCanvas({
       pinnedVersion,
       isPreviewOnly,
     });
-  }, [workflowId, activeRunId, currentRunInfo, isStepByStep, currentEpoch, epochTimestamps, streamedSteps, pinnedVersion, isPreviewOnly]);
+  }, [workflowId, surfaceId, activeRunId, currentRunInfo, isStepByStep, currentEpoch, epochTimestamps, streamedSteps, pinnedVersion, isPreviewOnly]);
 
   // Drop the cached snapshot when this canvas goes away. The cache exists so a
   // panel mounting LATER is not empty; kept past the canvas's life it answers the
@@ -280,8 +284,8 @@ export function WorkflowRunCanvas({
   // publishes.
   useEffect(() => {
     if (!workflowId) return;
-    return () => { publishRunPanelData(makeEmptyRunPanelData(workflowId)); };
-  }, [workflowId]);
+    return () => { publishRunPanelData(makeEmptyRunPanelData(workflowId, surfaceId)); };
+  }, [workflowId, surfaceId]);
 
   // ── Run actions requested from the panel (it cannot call these handlers) ──
   useEffect(() => {
@@ -293,6 +297,7 @@ export function WorkflowRunCanvas({
       // because CLAIMING is now a promise to act: a canvas that answered for a
       // workflow it does not own would suppress the caller's fallback.
       if (!workflowId || (detail.workflowId && detail.workflowId !== workflowId)) return;
+      if ((detail.surfaceId ?? null) !== (surfaceId ?? null)) return;
       // Already taken by another canvas of the same workflow (a self-referencing
       // sub-workflow mounts two): one action, not two identical REST calls.
       if (detail.handled) return;
@@ -315,7 +320,7 @@ export function WorkflowRunCanvas({
     };
     window.addEventListener(RUN_PANEL_ACTION_EVENT, handler);
     return () => window.removeEventListener(RUN_PANEL_ACTION_EVENT, handler);
-  }, [workflowId, isPreviewOnly, canRunAction, runAction]);
+  }, [workflowId, surfaceId, isPreviewOnly, canRunAction, runAction]);
 
   // ── Entering run mode shows ALL epochs ──
   //

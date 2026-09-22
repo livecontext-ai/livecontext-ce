@@ -53,14 +53,25 @@ public class MultipartBodyEncoder {
     /**
      * Build the multipart body for a tool execution.
      *
-     * @param multipartFieldsJson  the {@code execution.request.multipartFields} array, as JSON
+     * @param requestSpec  the whole {@code execution.request} node. A bare
+     *                     {@code multipartFields} ARRAY is still accepted, so every
+     *                     caller written before byte ranges keeps working.
+     * @throws ByteRangeException when the endpoint declares a byte range and this call
+     *                            cannot satisfy it - the call fails rather than sending
+     *                            the whole file, or an empty part, where a slice was asked for
      * @param parameters           the user-supplied parameters map
      * @param tenantId             tenant id (used to download fileRef bytes from MinIO)
      * @return a {@link MultiValueMap} ready to be passed as a {@link org.springframework.http.HttpEntity} body
      */
-    public MultiValueMap<String, Object> encode(JsonNode multipartFieldsJson,
+    public MultiValueMap<String, Object> encode(JsonNode requestSpec,
                                                 Map<String, Object> parameters,
                                                 String tenantId) {
+        // The whole `request` node, not just its multipartFields: a file part may declare a
+        // BYTE RANGE, and that lives beside the field list rather than inside it. A bare
+        // fields ARRAY is still accepted, so every caller and test that passed one keeps
+        // working, and a null spec stays the empty body it has always been.
+        JsonNode multipartFieldsJson = requestSpec != null && requestSpec.has("multipartFields")
+                ? requestSpec.path("multipartFields") : requestSpec;
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
         if (multipartFieldsJson == null || !multipartFieldsJson.isArray()) {
             log.warn("MultipartBodyEncoder: multipartFields is missing or not an array, returning empty body");
@@ -87,10 +98,10 @@ public class MultipartBodyEncoder {
                     body.add(partName, String.valueOf(paramValue));
                     break;
                 case "fileRef":
-                    addFileRefPart(body, partName, paramValue, tenantId);
+                    addFileRefPart(body, partName, paramValue, tenantId, requestSpec, parameters);
                     break;
                 case "auto":
-                    addAutoPart(body, partName, paramValue, tenantId);
+                    addAutoPart(body, partName, paramValue, tenantId, requestSpec, parameters);
                     break;
                 default:
                     log.warn("MultipartBodyEncoder: unknown source '{}' for part '{}'", source, partName);
@@ -106,7 +117,9 @@ public class MultipartBodyEncoder {
     private void addFileRefPart(MultiValueMap<String, Object> body,
                                 String partName,
                                 Object paramValue,
-                                String tenantId) {
+                                String tenantId,
+                                JsonNode requestSpec,
+                                Map<String, Object> parameters) {
         if (storageClient == null) {
             log.error("MultipartBodyEncoder: storageClient unavailable, cannot download fileRef for part '{}'", partName);
             return;
@@ -132,11 +145,32 @@ public class MultipartBodyEncoder {
         }
 
         String tenant = tenantId == null || tenantId.isBlank() ? "anonymous" : tenantId;
-        byte[] bytes = storageClient.download(tenant, storageKey);
-        if (bytes == null || bytes.length == 0) {
+        byte[] whole = storageClient.download(tenant, storageKey);
+        if (whole == null || whole.length == 0) {
             log.error("MultipartBodyEncoder: empty download for storageKey={}", storageKey);
             return;
         }
+
+        // The whole file is buffered in heap. A declared range makes that worse rather
+        // than better: StorageClient has no ranged read, so an N-part upload buffers the
+        // whole file N times over.
+        if (whole.length > ByteRangeSlicer.LARGE_FILE_WARN_BYTES) {
+            boolean ranged = !requestSpec.path("rangeFirstByteParam").asText("").isBlank();
+            log.warn("MultipartBodyEncoder: part '{}' buffers {} MB in memory{}",
+                partName, whole.length / (1024 * 1024),
+                ranged ? ", once for every part of this ranged upload" : "");
+        }
+
+        // Send one declared slice when the endpoint uploads a large file in parts. X's
+        // /2/media/upload/{id}/append is the reason this exists on the multipart path: it
+        // keeps ONE url and names the part with a `segment_index` field alongside the bytes,
+        // so it cannot be raw binary the way LinkedIn's per-chunk pre-signed urls can.
+        // Throws ByteRangeException when a declared range cannot be honoured, which fails
+        // the whole call. That is deliberate: `required: true` on the bounds is read only by
+        // the node creator and the workflow validators, never by this path, so a step SAVED
+        // before the endpoint gained its range would otherwise upload a zero-byte part for
+        // ever, answering 2xx each time.
+        final byte[] bytes = ByteRangeSlicer.slice(whole, requestSpec, parameters, "MultipartBodyEncoder");
 
         body.add(partName, new ByteArrayResource(bytes) {
             @Override
@@ -166,14 +200,16 @@ public class MultipartBodyEncoder {
     private void addAutoPart(MultiValueMap<String, Object> body,
                              String partName,
                              Object paramValue,
-                             String tenantId) {
+                             String tenantId,
+                             JsonNode requestSpec,
+                             Map<String, Object> parameters) {
         // FileRef detection runs first so a FileRef Map never falls into the Map->JSON branch.
         // Note: coerceToFileRef also treats any Map carrying both `path` and `name` as a FileRef
         // (not only `_type:"file"`). No Telegram object param collides with that shape; reusing
         // `auto` on an API whose object param happens to carry path+name would upload it instead
         // of JSON-encoding it. Declare such a field `source:"param"` rather than `auto`.
         if (coerceToFileRef(paramValue) != null) {
-            addFileRefPart(body, partName, paramValue, tenantId);
+            addFileRefPart(body, partName, paramValue, tenantId, requestSpec, parameters);
             return;
         }
         if (paramValue instanceof Map || paramValue instanceof java.util.Collection) {

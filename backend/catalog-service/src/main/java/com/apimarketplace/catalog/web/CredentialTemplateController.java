@@ -12,6 +12,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
+import com.apimarketplace.catalog.service.credential.NativeCoreCredentials;
+
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -39,17 +41,30 @@ public class CredentialTemplateController {
 
     /**
      * Native credential templates consumed by <b>core workflow nodes</b> and therefore NOT
-     * backed by any {@code catalog.apis} row: {@code smtp} (send_email) and {@code imap}
-     * (email_inbox). The user-facing list ({@link #getCredentialTemplates} with
-     * {@code includeInactive=false}) only shows templates backed by an active catalog API, so
-     * without this allow-list these native templates - which ARE configurable and used by core
-     * nodes - would be hidden from "Available integrations". Mirrors the core nodes that read a
-     * native credential; extend this set when a new core node introduces one.
+     * backed by any {@code catalog.apis} row: {@code smtp} (send_email), {@code imap}
+     * (email_inbox), {@code ssh} (ssh), {@code sftp} (sftp) and {@code database} (database).
+     * The user-facing list ({@link #getCredentialTemplates} with {@code includeInactive=false})
+     * only shows templates backed by an active catalog API, so without this allow-list these
+     * native templates - which ARE configurable and used by core nodes - would be hidden from
+     * "Available integrations". Mirrors the core nodes that read a native credential; extend
+     * this set when a new core node introduces one.
+     *
+     * <p>The last three were missing for as long as their nodes have shipped, and the omission
+     * was invisible from either side. {@code SshNode}, {@code SftpNode} and {@code DatabaseNode}
+     * each resolve a credential by these exact names, and
+     * {@code frontend/lib/credentials/missingCredentials.ts} already offers to create one under
+     * them, so both ends looked finished; only the middle was absent, and it is the half nothing
+     * reads on its own. What it cost is measurable: across every tenant in production there were
+     * 2 imap credentials, 1 smtp, and zero ssh, sftp or database, because the only way left to
+     * run those nodes was to type the host and the password into the node itself, which puts
+     * them in the workflow plan.
      *
      * <p>LLM provider keys ({@code llm_*}) are intentionally absent: they are configured on the
      * dedicated AI Providers settings page, so surfacing them here would duplicate that flow.
+     *
+     * @see NativeCoreCredentials the one list, shared with the catalog-bundle reader
      */
-    private static final List<String> NATIVE_CORE_CREDENTIAL_NAMES = List.of("smtp", "imap");
+    private static final List<String> NATIVE_CORE_CREDENTIAL_NAMES = NativeCoreCredentials.names();
 
     /**
      * Ensures the {@code variants} column returned by {@link #getCredentialTemplates} and
@@ -103,6 +118,33 @@ public class CredentialTemplateController {
      * row-absence "default available" semantics above. Prod incident May 2026: 81 such
      * phantom rows silently hid OAuth2 integrations from end users.
      *
+     * <p><b>A row holding an OAuth client is never hidden</b> ({@link
+     * PlatformCredentialStatusDto#holdsOAuthClient()}), because disabling it does not make the
+     * integration unusable: the user registers their own client and connects BYOK.
+     * {@code CredentialWizard} already implements precisely that, and its fallback names this
+     * case ("Catalog APIs whose auth.platform_credentials row is admin-disabled") among the
+     * three it covers, switching to advanced mode and pre-filling the authorize/token URLs
+     * from catalog metadata. Hiding the variant here made that branch unreachable for any
+     * configured row, so an admin who turned off the shared client also silently took BYOK
+     * away, and a single-variant OAuth2 integration vanished from the list and answered 404
+     * by name. Turning the shared client off now means what it says: the platform stops
+     * offering ITS app, users keep theirs.
+     *
+     * <p>Every consumer of this set changes with it, which is intended: the list, the
+     * by-name and by-id lookups, {@code /resolve}, and {@code /{name}/variants}. The last
+     * one is read by the admin dialog as well, so a disabled OAuth tab is now visible there
+     * too, and {@code OAuth2Service.fetchCredentialTemplate} calls the by-id lookup without
+     * {@code includeInactive}, so connect and template-based refresh stop failing with
+     * "Credential template not found" for these templates.
+     *
+     * <p>Deliberately NOT generalised to the other variants. They keep today's behaviour
+     * (hide, asserted by {@code hidesAdminDisabledVariantFromList}), and the admin toggle's
+     * own copy promises only that a disabled credential "will not be used for
+     * authentication". Whether hiding is still the right answer for an api_key or
+     * bearer_token variant the user could also supply themselves is a separate question
+     * with a far wider blast radius, and settling it here would silently resurrect auth
+     * methods admins took offline on purpose.
+     *
      * <p>Cross-service call: catalog-service cannot read {@code auth.*} directly, so we
      * route through {@link CredentialClient#listPlatformCredentials}. A failure returns
      * an empty set - we fail-open (show everything) rather than hiding the whole catalog
@@ -116,7 +158,8 @@ public class CredentialTemplateController {
                 if (Boolean.FALSE.equals(dto.getEnabled())
                         && dto.getName() != null
                         && dto.getVariant() != null
-                        && dto.isConfigured()) {
+                        && dto.isConfigured()
+                        && !dto.holdsOAuthClient()) {
                     keys.add(dto.getName() + "::" + dto.getVariant());
                 }
             }
@@ -133,7 +176,10 @@ public class CredentialTemplateController {
      * pair is in {@code disabledKeys}. Called after {@link #unwrapVariants}. Mutates the
      * row in place. Returns the number of variants left - callers use this to decide
      * whether to drop the row entirely (if every variant has been admin-disabled, there
-     * is nothing for the user to pick).
+     * is nothing for the user to pick). Reaching zero now means every variant was a
+     * user-supplied-secret one: {@link #fetchDisabledVariantKeys()} never puts a row
+     * holding an OAuth client into {@code disabledKeys}, precisely so an OAuth-only
+     * integration cannot be emptied here and disappear while BYOK would still work.
      */
     @SuppressWarnings("unchecked")
     private int filterDisabledVariants(Map<String, Object> row, Set<String> disabledKeys) {
@@ -238,7 +284,7 @@ public class CredentialTemplateController {
             // core-node credential (see NATIVE_CORE_CREDENTIAL_NAMES). The names are
             // compile-time constants - inlining them as SQL string literals carries no
             // injection risk and keeps the search filter's positional '?' ordering intact.
-            String nativeInList = "'" + String.join("','", NATIVE_CORE_CREDENTIAL_NAMES) + "'";
+            String nativeInList = NativeCoreCredentials.sqlInList();
             // Regular users never see bundle-deprecated rows (V331): neither a
             // deprecated template itself, nor a template whose only backing API
             // was soft-deleted by an API-catalog bundle apply. Admins

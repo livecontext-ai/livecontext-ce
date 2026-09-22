@@ -3,20 +3,21 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getClientLocale } from "@/lib/utils/locale";
+import { generationQuoteKey } from "@/lib/generation/quoteKey";
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { StudioDialogContent } from "@/components/studio/StudioDialogContent";
+import { StudioSelectContent } from "@/components/studio/StudioSelectContent";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
-  SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -38,6 +39,7 @@ import {
   OAuth2InitiateRequest,
   orchestratorApi,
 } from '@/lib/api/orchestrator';
+import { credentialService } from '@/lib/api/orchestrator/credential.service';
 import { normalizeIconSlug } from "@/lib/credentials/iconSlug";
 import { invalidateCredentialCaches } from "@/lib/credentials/invalidateCredentialCaches";
 import { IS_CE } from "@/lib/edition";
@@ -648,10 +650,11 @@ export function CredentialWizard({
   // rather than against a promise. Same endpoint the workflow inspector and the
   // generation modal quote from, so all three state one price.
   const { data: platformKeyInfo } = useQuery({
-    // Trailing `false`: this screen asks about a credential, not about one
-    // endpoint, so it is never quoting a generation. Kept in the key so the
-    // shape matches the inspector's and the two cannot collide.
-    queryKey: ['platform-credential-public-info', platformIntegrationName.toLowerCase(), null, null, null, false],
+    // Through the shared builder, like every other caller of this endpoint. This screen asks about
+    // a CREDENTIAL rather than one endpoint, so it names no tool, no model, no size and no
+    // generation - and the shape still has to be the inspector's, or two askers of one question
+    // hold two answers.
+    queryKey: generationQuoteKey({ integrationName: platformIntegrationName }),
     queryFn: () => orchestratorApi.getPlatformCredentialPublicInfo(platformIntegrationName),
     enabled: open && platformKeyOffered && !!platformIntegrationName,
     staleTime: 5 * 60_000,
@@ -1243,6 +1246,9 @@ export function CredentialWizard({
 
       markCurrentAsCompleted();
       track('credential_saved', { auth_type: credType, integration: template.icon_slug ?? null, result: 'success' });
+      // An LLM key (llm_<provider>) changes whose key the user's next agent execution runs on:
+      // drop their cached slot right away so the switch is not delayed by the resolver TTL.
+      await credentialService.invalidateMyLlmCacheIfLlmKey(template.credential_name);
     } catch (err) {
       console.error("Failed to save credential:", err);
       setError(err instanceof Error ? err.message : t("errors.saveFailed"));
@@ -1506,13 +1512,16 @@ export function CredentialWizard({
             <SelectTrigger className="rounded-xl border border-theme bg-transparent mt-2">
               <SelectValue placeholder={prop.placeholder || prop.displayName || prop.name} />
             </SelectTrigger>
-            <SelectContent>
+            {/* PORTALLED like the dialog around it, and out of a DIFFERENT portal, so the
+                dialog being themed does not theme this. On the darkroom ground it came back
+                bright, inside a correctly dark dialog, inside a correctly dark menu. */}
+            <StudioSelectContent>
               {prop.options!.map((opt) => (
                 <SelectItem key={opt.value} value={opt.value}>
                   {opt.name}
                 </SelectItem>
               ))}
-            </SelectContent>
+            </StudioSelectContent>
           </Select>
         ) : (
           <div className="relative">
@@ -1716,7 +1725,10 @@ export function CredentialWizard({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md border border-theme bg-theme-primary text-theme-primary rounded-3xl">
+      {/* PORTALLED, so on a studio surface it lands outside the element carrying the studio's
+          colour tokens and came back in the application's theme: a bright panel over a dark
+          page, opened from a menu that was correctly dark. Inert everywhere else. */}
+      <StudioDialogContent className="max-w-md border border-theme bg-theme-primary text-theme-primary rounded-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
             {/* Use one canonical key for the URL, the imageErrors lookup, and
@@ -2391,7 +2403,7 @@ export function CredentialWizard({
             </DialogFooter>
           </div>
         )}
-      </DialogContent>
+      </StudioDialogContent>
     </Dialog>
   );
 }

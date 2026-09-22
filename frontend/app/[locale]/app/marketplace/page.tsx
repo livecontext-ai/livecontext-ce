@@ -589,11 +589,16 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
               : undefined,
           }));
     }
-    setJustInstalledIds((prev) => {
-      const next = new Set(prev);
-      next.add(pubId);
-      return next;
-    });
+    // A demo install acquired nothing, so it must not enter the optimistic
+    // "just installed" set: the set survives the demo mode being switched off,
+    // and the card would then claim an installation that never happened.
+    if (!activeInstall.demo) {
+      setJustInstalledIds((prev) => {
+        const next = new Set(prev);
+        next.add(pubId);
+        return next;
+      });
+    }
     void fetchAcquiredIds().finally(() => consumeInstallSuccess(pubId));
     // `resources` is READ here but deliberately NOT a dependency: it is an object the
     // store writes in the same transition that sets status='success', so the status +
@@ -869,6 +874,7 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
           show terminal error screens. */}
       {(acquireTarget || installErrorPublication) && (
         <AcquirePublicationModal
+          demoEligible
           isOpen
           inlineProgress
           onClose={() => setAcquireTarget(null)}
@@ -1236,6 +1242,7 @@ export function MyPurchasesTab({ remote = false }: { remote?: boolean }) {
       })}
       {(reinstallTarget || installErrorPublication) && (
         <AcquirePublicationModal
+          demoEligible
           isOpen
           inlineProgress
           onClose={() => setReinstallTarget(null)}

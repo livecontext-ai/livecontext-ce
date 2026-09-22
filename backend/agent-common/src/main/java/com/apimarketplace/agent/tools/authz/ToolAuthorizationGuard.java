@@ -29,7 +29,14 @@ import java.util.Set;
  * actions is invoked without a resolvable action (null/blank/unparseable args),
  * the guard requires authorization with a wildcard rule {@code "tool:*"} rather
  * than letting the call slip through. Tools with no sensitive actions are never
- * gated. The <em>scope</em> decision (chat vs workflow/task/sub-agent) is made
+ * gated.
+ *
+ * <p><b>Two registries, read in order.</b> {@code SENSITIVE_ACTIONS} keys on the
+ * {@code (tool, action)} pair; {@code CONDITIONAL_RULES} keys on the arguments as
+ * well, for an action that is only sometimes sensitive (today: an {@code agent}
+ * create/update carrying a cron, which arms a recurring agent). The unconditional
+ * match is tried first, so a pair listed in both keeps its own rule key rather than
+ * the conditional one. The <em>scope</em> decision (chat vs workflow/task/sub-agent) is made
  * separately and BEFORE this guard - see
  * {@code ToolAuthorizationScopeResolver}.
  *
@@ -55,7 +62,8 @@ public final class ToolAuthorizationGuard {
         }
         String tool = toolName.toLowerCase(Locale.ROOT);
         Set<String> sensitive = ToolAuthorizationPolicy.SENSITIVE_ACTIONS.get(tool);
-        if (sensitive == null) {
+        boolean conditional = ToolAuthorizationPolicy.hasConditionalRules(tool);
+        if (sensitive == null && !conditional) {
             return null; // tool exposes no sensitive actions - never gate
         }
         String action = extractAction(arguments);
@@ -66,7 +74,13 @@ public final class ToolAuthorizationGuard {
             return tool + ":" + WILDCARD_ACTION;
         }
         String normalized = action.toLowerCase(Locale.ROOT);
-        return sensitive.contains(normalized) ? tool + ":" + normalized : null;
+        if (sensitive != null && sensitive.contains(normalized)) {
+            return tool + ":" + normalized;
+        }
+        // The action is not sensitive by itself. It can still be sensitive because of what
+        // the call CARRIES - an agent:create with a cron arms something that runs forever.
+        // Checked second so an unconditional rule always wins and keeps its own key.
+        return ToolAuthorizationPolicy.conditionalRuleKey(tool, normalized, arguments);
     }
 
     /** Convenience: does this call require authorization? */

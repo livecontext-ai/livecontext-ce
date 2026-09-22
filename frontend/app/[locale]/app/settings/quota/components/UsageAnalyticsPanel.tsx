@@ -19,6 +19,8 @@ import {
   Legend,
 } from 'recharts';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
+import { CREDIT_SOURCE_LABEL_KEYS } from '@/lib/billing/creditSourceTypes';
+import { modelLabelFor, providerOptionLabels, useModelNameIndex } from './modelLabels';
 
 // Ledger amounts are stored in credits; CE displays spend in dollars (1 credit = $0.001),
 // Cloud keeps raw credits. Applied at the aggregation source so the chart, axis, tooltip and
@@ -47,6 +49,15 @@ const SOURCE_TYPE_COLORS: Record<string, string> = {
   // search and fetch read as a related but separate cost group.
   WEB_SEARCH: '#14b8a6',
   WEB_FETCH: '#06b6d4',
+  // Third-party API calls on the platform key (generations included). Orange, outside both the
+  // agent (warm yellow/pink) and web-tool (cyan) families, because it is the one series that is not
+  // an LLM cost at all: it is what the platform resold. Without an entry it drew in the fallback
+  // grey, which reads as "other" for what is often the largest slice of the chart.
+  PLATFORM_MARKUP: '#f97316',
+  // Every relayed LLM call on a cloud-linked self-hosted install, collapsed into one type: on the
+  // installs that have these rows they are most of the chart, and the fallback grey reads as
+  // "other". Violet, adjacent to the agent family it is made of, and distinct from it.
+  CE_LLM_RELAY: '#7c3aed',
 };
 
 const DEFAULT_COLOR = '#94a3b8';
@@ -80,6 +91,13 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: Us
   const [filterSourceType, setFilterSourceType] = useState('');
   const [filterProvider, setFilterProvider] = useState('');
   const [filterModel, setFilterModel] = useState('');
+  // The filters list the ids the ledger stored; this names them the way the
+  // rest of the app does. See ./modelLabels.
+  const modelNames = useModelNameIndex();
+  const providerLabels = useMemo(
+    () => providerOptionLabels(analytics?.providers ?? []),
+    [analytics?.providers],
+  );
   const requestSeqRef = useRef(0);
 
   // 2026-05-21 fix - subscribe to the active workspace so a topbar workspace
@@ -211,19 +229,16 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: Us
     }
   };
 
+  /**
+   * The name of a kind of spend, from the SAME map the history table under this chart reads.
+   *
+   * <p>It used to be a copy of that map, minus four entries, and the gap was exactly the spend a
+   * reader comes to this page to understand: a catalogue call on the platform key appeared in the
+   * table as "Platform API call" and in the chart legend and filter above it as the raw
+   * {@code PLATFORM_MARKUP}. Two names, one row, one screen.
+   */
   const formatSourceType = (type: string) => {
-    const keyMap: Record<string, string> = {
-      WORKFLOW_NODE: 'types.workflowNode',
-      AGENT_EXECUTION: 'types.agent',
-      CHAT_CONVERSATION: 'types.chat',
-      CLASSIFY_EXECUTION: 'types.classify',
-      GUARDRAIL_EXECUTION: 'types.guardrail',
-      BROWSER_AGENT_EXECUTION: 'types.browserAgent',
-      COMPACTION_SUMMARY: 'types.compactionSummary',
-      WEB_SEARCH: 'types.webSearch',
-      WEB_FETCH: 'types.webFetch',
-    };
-    const key = keyMap[type];
+    const key = CREDIT_SOURCE_LABEL_KEYS[type];
     return key ? t(key) : type;
   };
 
@@ -270,8 +285,11 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: Us
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="ALL">{t('analytics.allProviders')}</SelectItem>
+            {/* The VALUE stays the stored id (it is what the API filters on);
+                only the label is the name the rest of the app uses, and it falls
+                back to the raw key where two stored keys would read alike. */}
             {analytics?.providers?.map((p) => (
-              <SelectItem key={p} value={p}>{p}</SelectItem>
+              <SelectItem key={p} value={p}>{providerLabels.get(p) ?? p}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -282,8 +300,12 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false }: Us
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="ALL">{t('analytics.allModels')}</SelectItem>
+            {/* No provider: this list is a flat set of model ids with no provider
+                beside them, and the SELECTED provider filter is not model `m`'s.
+                A name is shown only where the id is unambiguous, which is the
+                honest answer here. */}
             {analytics?.models?.map((m) => (
-              <SelectItem key={m} value={m}>{m}</SelectItem>
+              <SelectItem key={m} value={m}>{modelLabelFor(null, m, modelNames)}</SelectItem>
             ))}
           </SelectContent>
         </Select>

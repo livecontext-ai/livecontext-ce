@@ -331,6 +331,19 @@ public class WorkflowControllerHelper {
     public Map<String, Object> buildWorkflowResponse(WorkflowEntity workflow) {
         Map<String, Object> response = new HashMap<>();
         response.put("id", workflow.getId().toString());
+        // The owning user, under the same name the list DTO uses (WorkflowSummary.tenantId).
+        // It is what attributes the workflow to a person in the UI; without it the detail
+        // payload was the ONLY workflow shape that could not say who a workflow belongs to,
+        // and the caller silently rendered no owner rather than failing.
+        //
+        // WITHHELD in a share context, like the webhook tokens and the plan's inline secrets
+        // below. This endpoint is allow-listed for the anonymous /s/{token} application
+        // viewer, and that viewer has no attribution UI to feed - so the id would reach a
+        // stranger for no purpose. A user id is not a secret, but "shipped to anonymous
+        // visitors because nobody thought about it" is not a decision either.
+        if (!isShareContext()) {
+            response.put("tenantId", workflow.getTenantId());
+        }
         response.put("name", workflow.getName());
         response.put("description", workflow.getDescription());
         response.put("status", workflow.getStatus().toString());

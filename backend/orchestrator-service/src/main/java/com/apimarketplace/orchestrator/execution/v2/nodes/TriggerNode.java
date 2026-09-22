@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 import com.apimarketplace.orchestrator.domain.workflow.Trigger;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.services.triggers.TriggerUserResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +32,25 @@ import java.util.Map;
 public class TriggerNode extends BaseNode {
 
     private static final Logger logger = LoggerFactory.getLogger(TriggerNode.class);
+
+    /**
+     * The three keys a secured webhook keeps its inbound credential under.
+     *
+     * <p>They are NOT part of the trigger's output contract. `TriggerCreator` writes them
+     * into the trigger's params for `PinAwareTriggerSyncService` to sync to trigger-service,
+     * which is the only thing that reads them (`StandaloneWebhookService` holds this exact
+     * list to encrypt and decrypt them). Nothing in a DAG resolves
+     * {@code {{trigger:x.output.basicPassword}}}, so copying them to the top level of the
+     * output published the credential to `output_data`, to the inspector's Output column and
+     * to every downstream template, on every epoch of every secured webhook.
+     *
+     * <p>Excluded by NAME rather than by {@link ReportedParams#isCredentialKey}, because this
+     * map is the output CONTRACT: an author who maps a value of their own onto a key called
+     * {@code api_key} is feeding it to a downstream node on purpose, and masking that would
+     * not hide a row, it would break the run.
+     */
+    private static final java.util.Set<String> WEBHOOK_AUTH_SECRET_KEYS =
+        java.util.Set.of("basicPassword", "authHeaderValue", "jwtSecretKey");
 
     private final String triggerId;
     private final Trigger trigger;
@@ -92,12 +112,26 @@ public class TriggerNode extends BaseNode {
         // Works for all trigger types: form fields, webhook body, chat messages, datasource rows
         Map<String, Object> output = new HashMap<>();
 
-        // Build resolved_params snapshot for inspector visibility
+        // Build resolved_params snapshot for inspector visibility.
+        //
+        // Two things this must not do, and did both. It copied `trigger.params()` - the RAW
+        // plan map - while the node itself runs on `resolvedParams` above: one trigger, two
+        // answers, and the panel showed the one that decided nothing. And a webhook secured
+        // with basic auth or a JWT keeps `basicPassword` / `authHeaderValue` /
+        // `jwtSecretKey` in exactly that map (see TriggerCreator), so every epoch of every
+        // secured webhook published its credential into workflow_step_data.input_data and
+        // into the Params column. `ReportedParams.forReport` masks by key name; the names
+        // themselves stay, so the row still says which scheme ran and which parameter was
+        // masked.
         Map<String, Object> resolvedParamsSnapshot = new java.util.LinkedHashMap<>();
         resolvedParamsSnapshot.put("triggerId", triggerId);
-        if (trigger != null && trigger.params() != null) {
-            resolvedParamsSnapshot.putAll(trigger.params());
-        }
+        // The resolution the node ran on, and the configured map only when there was no
+        // resolution to speak of (no template adapter wired): reporting nothing at all is
+        // the defect this column exists to remove, and the redaction applies either way.
+        Map<String, Object> reportable = !resolvedParams.isEmpty()
+            ? resolvedParams
+            : (trigger != null && trigger.params() != null ? trigger.params() : Map.of());
+        resolvedParamsSnapshot.putAll(ReportedParams.forReport(reportable));
         output.put("resolved_params", resolvedParamsSnapshot);
 
         // Copy ALL trigger payload fields to output (form fields, webhook body, datasource data, etc.)
@@ -113,9 +147,19 @@ public class TriggerNode extends BaseNode {
 
         // Add resolved inputs at top level (highest priority - explicit mappings override raw data)
         // This makes mapped variables directly accessible: {{trigger:e.output.user_id}}
+        //
+        // Minus the webhook's own inbound credential. Masking `resolved_params` closed one
+        // of three sinks: the same value was still copied here into `output_data` (the
+        // Output column, and every downstream template) and printed whole at INFO into the
+        // service log, on every epoch. A row that masks a secret in one column and prints
+        // it in the next has protected nothing.
         if (resolvedParams != null && !resolvedParams.isEmpty()) {
-            output.putAll(resolvedParams);
-            logger.info("TriggerNode resolved params: {}", resolvedParams);
+            for (Map.Entry<String, Object> entry : resolvedParams.entrySet()) {
+                if (!WEBHOOK_AUTH_SECRET_KEYS.contains(entry.getKey())) {
+                    output.put(entry.getKey(), entry.getValue());
+                }
+            }
+            logger.info("TriggerNode resolved params: {}", ReportedParams.forReport(resolvedParams));
         }
 
         // Uniform trigger context: every trigger type exposes triggered_at + triggered_by
@@ -173,7 +217,8 @@ public class TriggerNode extends BaseNode {
             // So we can directly use resolveTemplates()
             Map<String, Object> resolved = templateAdapter.resolveTemplates(trigger.params(), context);
 
-            logger.debug("🎯 TriggerNode params resolution: raw={}, resolved={}", trigger.params(), resolved);
+            logger.debug("🎯 TriggerNode params resolution: raw={}, resolved={}",
+                ReportedParams.forReport(trigger.params()), ReportedParams.forReport(resolved));
             return resolved;
         } catch (Exception e) {
             logger.error("❌ TriggerNode params resolution failed: {}", e.getMessage(), e);

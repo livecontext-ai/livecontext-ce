@@ -1,5 +1,12 @@
 package com.apimarketplace.auth.domain;
 
+import com.apimarketplace.common.security.token.EncryptedTokenConverter;
+import com.apimarketplace.common.security.token.HashedTokenEntity;
+import com.apimarketplace.common.security.token.HashedTokenListener;
+import com.apimarketplace.common.security.token.TokenSlot;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import java.util.List;
+
 import jakarta.persistence.*;
 
 import java.time.LocalDateTime;
@@ -10,9 +17,10 @@ import java.util.UUID;
  * Invitations expire after 7 days by default.
  */
 @Entity
+@EntityListeners(HashedTokenListener.class)
 @Table(name = "organization_invitation",
         uniqueConstraints = @UniqueConstraint(columnNames = {"organization_id", "email", "status"}))
-public class OrganizationInvitation {
+public class OrganizationInvitation implements HashedTokenEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -29,8 +37,18 @@ public class OrganizationInvitation {
     @Column(nullable = false, length = 20)
     private OrganizationRole role = OrganizationRole.MEMBER;
 
+    /**
+     * The invitation token carried in the accept link.
+     * Stored encrypted (ENC:...) through {@link EncryptedTokenConverter}; the entity always holds
+     * the plaintext. Lookups go through {@link #getTokenHash()}, never through this column.
+     */
+    @Convert(converter = EncryptedTokenConverter.class)
     @Column(nullable = false, unique = true, length = 255)
     private String token;
+
+    /** HMAC-SHA256 of the plaintext, filled by {@link HashedTokenListener}; the only lookup key. */
+    @Column(name = "token_hash", length = 64)
+    private String tokenHash;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
@@ -147,5 +165,20 @@ public class OrganizationInvitation {
 
     public boolean isExpired() {
         return LocalDateTime.now().isAfter(expiresAt);
+    }
+
+    @JsonIgnore
+    public String getTokenHash() {
+        return tokenHash;
+    }
+
+    public void setTokenHash(String tokenHash) {
+        this.tokenHash = tokenHash;
+    }
+
+    @Override
+    @JsonIgnore
+    public List<TokenSlot> tokenSlots() {
+        return List.of(new TokenSlot(this::getToken, this::setTokenHash));
     }
 }

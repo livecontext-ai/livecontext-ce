@@ -8,13 +8,15 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Slider } from '@/components/ui/slider';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { useRouter } from 'next/navigation';
-import { CREDIT_TIERS, STARTER_MAX_CREDITS, calcPrice as calcPriceBase, formatTierLabel } from '@/lib/billing/pricing-constants';
+import { CREDIT_TIERS, STARTER_MAX_CREDITS, calcPrice as calcPriceBase, creditFactsFor, formatTierLabel } from '@/lib/billing/pricing-constants';
 import { useSubscription, usePaygTiers } from '@/lib/hooks/smart-hooks-complete';
+import { useFreeAiCredits } from '@/lib/hooks/useFreeAiCredits';
 import { isCeMode } from '@/lib/format-cost';
 import DeploymentBadge from '@/components/pricing/DeploymentBadge';
 import FeatureLabel from '@/components/pricing/FeatureLabel';
+import { freeCreditsTooltip } from '@/lib/billing/planFeatureLabels';
 import FoundingPriceNote from '@/components/pricing/FoundingPriceNote';
 import ReferencePrice from '@/components/pricing/ReferencePrice';
 import { usePricingEvent } from '@/hooks/usePricingEvent';
@@ -46,6 +48,18 @@ export default function InsufficientCreditsModal() {
   const t = useTranslations('modals.insufficientCredits');
   const tPayg = useTranslations('billing.payg');
   const tBilling = useTranslations('pricing.billing');
+  // The SAME message and the SAME facts the plan-comparison table quotes. A reader who
+  // has just run out of credits is asking exactly the question that table answers, and
+  // restating it here in different words is how two surfaces start disagreeing about
+  // what a credit buys - which is a pricing claim, not copy.
+  const tCompare = useTranslations('pricing.compare');
+  // Same reasoning for the free plan's AI allowance: the plan cards answer
+  // "what does that allowance buy" with a measured figure, and this modal used
+  // to answer it with a figure-free paraphrase of its own. One message.
+  const tCards = useTranslations('pricing.planCards');
+  const locale = useLocale();
+  const creditFacts = React.useMemo(() => creditFactsFor(locale), [locale]);
+  const creditsTooltip = tCompare('dimensions.creditsTooltip', creditFacts);
   const router = useRouter();
   const { createSubscription, subscription } = useSubscription();
   // V250 - surface a "Top up instead" CTA when at least one PAYG tier is
@@ -120,6 +134,13 @@ export default function InsufficientCreditsModal() {
   // Declared with the other hooks, ABOVE the CE early return: a hook after a
   // conditional return breaks the Rules of Hooks.
   const { event: pricingEvent } = usePricingEvent();
+  // The Free column states BOTH pots, like every other pricing surface: the
+  // monthly credits that fund workflows and the separate AI allowance that
+  // funds chat and agent turns. A reader who has just been refused for lack of
+  // credits is precisely the one who needs to know the second pot exists, and
+  // a column that named only the first read as "chat costs you credits too".
+  // Live value, not the seeded constant - the allowance is admin-configurable.
+  const freeAiCredits = useFreeAiCredits();
 
   // Defense-in-depth: never render the Stripe-pricing modal in CE.
   if (isCeMode) return null;
@@ -133,9 +154,24 @@ export default function InsufficientCreditsModal() {
       monthlyPrice: 0,
       credits: '1,000',
       features: [
-        // Info "i" tooltip: Free credits run workflows only (chat/agents are paid),
-        // rendered by FeatureLabel via the "label||tooltip" convention.
-        `${t('features.freeCredits')}||${t('features.freeCreditsTooltip')}`,
+        // The PLAN CARD's free-credits tooltip, not this dialog's own note plus the paid
+        // sentence. That concatenation said both things about one pot two sentences
+        // apart: "chat and agents draw the separate allowance instead", then "about N
+        // credits for a short exchange with a configured agent". On the FREE plan the
+        // monthly bucket funds only WORKFLOW_NODE (CreditService), so the second half
+        // priced this pot with a debit it refuses, in front of the one reader who has
+        // just been refused and is deciding what to top up. One message, maintained in
+        // one place, answering both questions: what the grant may be spent on, and what
+        // a credit buys. Rendered by FeatureLabel via the "label||tooltip" convention.
+        `${t('features.freeCredits')}||${freeCreditsTooltip(tCards, creditFacts)}`,
+        // Dropped when an admin has closed the free tier (allowance 0), same
+        // rule the plan cards apply: a "0 AI credits" bullet looks like a
+        // feature while advertising nothing.
+        ...(freeAiCredits > 0
+          ? [`${t('features.freeAiCredits', {
+              credits: freeAiCredits.toLocaleString(getClientLocale()),
+            })}||${tCards('features.aiCreditsFreeTooltip', creditFacts)}`]
+          : []),
         t('features.freeConcurrent'),
         t('features.freeStorage'),
       ],
@@ -146,7 +182,7 @@ export default function InsufficientCreditsModal() {
       monthlyPrice: calcPrice('starter'),
       credits: creditAmount.toLocaleString(getClientLocale()),
       features: [
-        `${isCeMode ? `$${creditAmount.toLocaleString(getClientLocale())}` : `${creditAmount.toLocaleString(getClientLocale())} ${t('features.creditsPerMonth')}`}`,
+        `${isCeMode ? `$${creditAmount.toLocaleString(getClientLocale())}` : `${creditAmount.toLocaleString(getClientLocale())} ${t('features.creditsPerMonth')}`}||${creditsTooltip}`,
         t('features.starterConcurrent'),
         t('features.starterStorage'),
       ],
@@ -158,7 +194,7 @@ export default function InsufficientCreditsModal() {
       monthlyPrice: calcPrice('pro'),
       credits: creditAmount.toLocaleString(getClientLocale()),
       features: [
-        `${isCeMode ? `$${creditAmount.toLocaleString(getClientLocale())}` : `${creditAmount.toLocaleString(getClientLocale())} ${t('features.creditsPerMonth')}`}`,
+        `${isCeMode ? `$${creditAmount.toLocaleString(getClientLocale())}` : `${creditAmount.toLocaleString(getClientLocale())} ${t('features.creditsPerMonth')}`}||${creditsTooltip}`,
         t('features.proConcurrent'),
         t('features.proStorage'),
       ],
@@ -170,7 +206,7 @@ export default function InsufficientCreditsModal() {
       monthlyPrice: calcPrice('team'),
       credits: creditAmount.toLocaleString(getClientLocale()),
       features: [
-        `${isCeMode ? `$${creditAmount.toLocaleString(getClientLocale())}` : `${creditAmount.toLocaleString(getClientLocale())} ${t('features.creditsPerMonth')}`}`,
+        `${isCeMode ? `$${creditAmount.toLocaleString(getClientLocale())}` : `${creditAmount.toLocaleString(getClientLocale())} ${t('features.creditsPerMonth')}`}||${creditsTooltip}`,
         t('features.teamConcurrent'),
         t('features.teamStorage'),
       ],
@@ -337,6 +373,8 @@ export default function InsufficientCreditsModal() {
                     {plan.features.map((feature, i) => (
                       <li key={i} className="flex items-start gap-1.5 text-xs text-theme-secondary">
                         <Check className="w-3 h-3 text-green-500 flex-shrink-0 mt-0.5" />
+                        {/* FeatureLabel is the flex item here, and its own
+                            `flex-1` is what lets it push its "i" to the edge. */}
                         <FeatureLabel feature={feature} />
                       </li>
                     ))}

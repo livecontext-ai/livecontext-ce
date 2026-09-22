@@ -87,7 +87,73 @@ class CloudCatalogRelayClientTest {
         expectedBody.put("expand", List.of("payload.body"));
         expectedBody.put("maxItems", 5);
         expectedBody.put("inlineBinaries", Boolean.TRUE);
+        // Present-and-null, which is what "the node said nothing about the provider retry" is on
+        // the wire: the cloud then applies its own budget. An absent key would mean the same thing,
+        // but this test pins the body EXACTLY, so the key is named rather than left to chance.
+        expectedBody.put("providerRetryMaxWaitSeconds", null);
         assertThat(entity.getBody()).isEqualTo(expectedBody);
+    }
+
+    @Test
+    @DisplayName("the node's provider-retry budget rides the relay body under the name the cloud reads")
+    @SuppressWarnings("unchecked")
+    void providerRetryBudgetIsInTheBody() {
+        // Without this the field stops at the CE install: the cloud applies its own budget and keeps
+        // re-sending underneath a node that asked it not to, in the one edition where nobody would
+        // think to look. 0 is the value that matters and the one an absent field is read as.
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity<>(Map.of("success", true), HttpStatus.OK));
+
+        client.execute(CREDENTIALS, "telegram", "send-message", Map.of("chat_id", "1"),
+                null, null, null, 0);
+
+        ArgumentCaptor<HttpEntity<Map<String, Object>>> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(any(String.class), eq(HttpMethod.POST), captor.capture(), eq(Map.class));
+        assertThat(captor.getValue().getBody()).containsEntry("providerRetryMaxWaitSeconds", 0);
+    }
+
+    @Test
+    @DisplayName("the cloud's relay DTO binds that same body key, so the two ends cannot drift apart")
+    void theRelayRequestBindsFromTheWireName() throws Exception {
+        // The other half of this hop. The client writes the key and the cloud's
+        // CeCatalogRelayRequest reads it; both are plain strings, and a rename that touched one
+        // would leave the field silently absent on the relayed path only - the edition where
+        // nobody would think to look.
+        com.apimarketplace.catalog.domain.dto.CeCatalogRelayRequest parsed =
+                new com.fasterxml.jackson.databind.ObjectMapper().readValue(
+                        "{\"parameters\":{\"city\":\"Paris\"},\"providerRetryMaxWaitSeconds\":0}",
+                        com.apimarketplace.catalog.domain.dto.CeCatalogRelayRequest.class);
+
+        assertThat(parsed.getProviderRetryMaxWaitSeconds())
+                .as("0 is the value that matters and the one a null-ish binding would lose")
+                .isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("an absent budget on the relay body stays null, not 0")
+    void anAbsentRelayBudgetStaysNull() throws Exception {
+        com.apimarketplace.catalog.domain.dto.CeCatalogRelayRequest parsed =
+                new com.fasterxml.jackson.databind.ObjectMapper().readValue(
+                        "{\"parameters\":{\"city\":\"Paris\"}}",
+                        com.apimarketplace.catalog.domain.dto.CeCatalogRelayRequest.class);
+
+        assertThat(parsed.getProviderRetryMaxWaitSeconds()).isNull();
+    }
+
+    @Test
+    @DisplayName("the back-compat 7-arg call means 'the node said nothing', not 'never retry'")
+    @SuppressWarnings("unchecked")
+    void theBackCompatShapeSendsNoBudget() {
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity<>(Map.of("success", true), HttpStatus.OK));
+
+        client.execute(CREDENTIALS, "telegram", "send-message", Map.of(), null, null, null);
+
+        ArgumentCaptor<HttpEntity<Map<String, Object>>> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(any(String.class), eq(HttpMethod.POST), captor.capture(), eq(Map.class));
+        assertThat(captor.getValue().getBody().get("providerRetryMaxWaitSeconds"))
+                .as("a 0 here would disable the cloud's retry for every pre-existing relayed call")
+                .isNull();
     }
 
     @Test

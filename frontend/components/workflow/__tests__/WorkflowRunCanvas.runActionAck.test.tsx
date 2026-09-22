@@ -247,6 +247,24 @@ describe('WorkflowRunCanvas - run action acknowledgement', () => {
     expect(runActions.cancelRun).not.toHaveBeenCalled();
   });
 
+  it('only claims actions addressed to its own side-panel surface', () => {
+    render(<WorkflowRunCanvas workflowId="wf-1" runId="run-1" surfaceId="surface-a" />);
+
+    expect(requestRunAction({
+      action: 'stop',
+      workflowId: 'wf-1',
+      runId: 'run-1',
+      surfaceId: 'surface-b',
+    }).handled).toBe(false);
+    expect(requestRunAction({
+      action: 'stop',
+      workflowId: 'wf-1',
+      runId: 'run-1',
+      surfaceId: 'surface-a',
+    }).handled).toBe(true);
+    expect(runActions.cancelRun).toHaveBeenCalledTimes(1);
+  });
+
   it('hands its promise back, so the caller can wait for the work and see it fail', async () => {
     runActions.cancelRun.mockRejectedValueOnce(new Error('backend refused'));
     render(<WorkflowRunCanvas workflowId="wf-1" runId="run-1" />);

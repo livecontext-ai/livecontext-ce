@@ -91,7 +91,7 @@ class GenerationFailClosedTest {
         dto.setEffectiveMarkup(credits);
         dto.setPricedByPublishedRow(true);
         when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(), anyLong(),
-                any(UUID.class), any(), any())).thenReturn(Optional.of(dto));
+                any(UUID.class), any(), any(), any())).thenReturn(Optional.of(dto));
     }
 
     /**
@@ -115,7 +115,7 @@ class GenerationFailClosedTest {
         dto.setEffectiveMarkup(perUnit.multiply(billedUnits));
         dto.setPricedByPublishedRow(true);
         when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(), anyLong(),
-                any(UUID.class), any(), any())).thenReturn(Optional.of(dto));
+                any(UUID.class), any(), any(), any())).thenReturn(Optional.of(dto));
     }
 
     /** A run-scoped call on the platform key, sized or not, with no model named. */
@@ -245,7 +245,7 @@ class GenerationFailClosedTest {
             // the caller can do nothing about.
             givenEndpoint(true);
             when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(), anyLong(),
-                    any(UUID.class), any(), any())).thenReturn(Optional.empty());
+                    any(UUID.class), any(), any(), any())).thenReturn(Optional.empty());
 
             var decision = service.preflightReserve(CatalogToolBillingService.BillingScope.of(
                     7L, "PLATFORM", 42L, "cloud", "seedance", null,
@@ -264,7 +264,7 @@ class GenerationFailClosedTest {
         void refusedWhenNoPricingPublished() {
             givenEndpoint(true);
             when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(), anyLong(),
-                    any(UUID.class), any(), any())).thenReturn(Optional.empty());
+                    any(UUID.class), any(), any(), any())).thenReturn(Optional.empty());
 
             var decision = service.preflightReserve(scope("seedance-2.0"));
 
@@ -334,7 +334,7 @@ class GenerationFailClosedTest {
             dto.setEffectiveMarkup(new BigDecimal("30").multiply(new BigDecimal(quantity)));
             dto.setPricedByPublishedRow(true);
             when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(), anyLong(),
-                    any(UUID.class), any(), any())).thenReturn(Optional.of(dto));
+                    any(UUID.class), any(), any(), any())).thenReturn(Optional.of(dto));
             return CatalogToolBillingService.BillingScope.of(
                     7L, "PLATFORM", 42L, "cloud", "seedance", null,
                     "seedance/create-video-task", "run-1", null, "step-1",
@@ -447,7 +447,7 @@ class GenerationFailClosedTest {
             dto.setEffectiveMarkup(credits);
             dto.setPricedByPublishedRow(false);
             when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(), anyLong(),
-                    any(UUID.class), any(), any())).thenReturn(Optional.of(dto));
+                    any(UUID.class), any(), any(), any())).thenReturn(Optional.of(dto));
         }
 
         @Test
@@ -488,7 +488,7 @@ class GenerationFailClosedTest {
         @Test
         @DisplayName("leaves an ORDINARY endpoint on the default alone, which is what a default is for")
         void ordinaryToolOnTheDefaultStillProceeds() {
-            // The 600+ ordinary catalog endpoints are the reason the default
+            // The 1000+ ordinary catalog endpoints are the reason the default
             // exists. Refusing them here would break every relayed API call
             // that has ever relied on it.
             givenEndpoint(false);
@@ -519,7 +519,7 @@ class GenerationFailClosedTest {
             silent.setEffectiveMarkup(new BigDecimal("600"));
             silent.setPricedByPublishedRow(null);
             when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(), anyLong(),
-                    any(UUID.class), any(), any())).thenReturn(Optional.of(silent));
+                    any(UUID.class), any(), any(), any())).thenReturn(Optional.of(silent));
             when(creditClient.scopeReserve(any(), any(), any(), any(), any(), any(),
                     anyInt(), any(), any(), anyBoolean()))
                     .thenReturn(new CreditConsumptionClient.ScopeReserveResult(true, null, false, null));
@@ -549,7 +549,7 @@ class GenerationFailClosedTest {
         @Test
         @DisplayName("still proceeds free at zero, because that IS a deliberate admin choice")
         void zeroPriceStillProceeds() {
-            // The fail-closed rule must not leak onto the 600+ ordinary catalog
+            // The fail-closed rule must not leak onto the 1000+ ordinary catalog
             // endpoints, where publishing a zero price is how an admin says
             // "included".
             givenEndpoint(false);
@@ -566,7 +566,7 @@ class GenerationFailClosedTest {
         void noPricingStillProceeds() {
             givenEndpoint(false);
             when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(), anyLong(),
-                    any(UUID.class), any(), any())).thenReturn(Optional.empty());
+                    any(UUID.class), any(), any(), any())).thenReturn(Optional.empty());
 
             assertThat(service.preflightReserve(scope(null)).allowed()).isTrue();
         }
@@ -590,7 +590,7 @@ class GenerationFailClosedTest {
             // there is nothing to reserve against, which is exactly why the
             // call has to be refused rather than quoted.
             verify(credentialClient, never()).resolveScopeMarkupRate(any(), any(), any(), any(),
-                    any(UUID.class), any(), any());
+                    any(UUID.class), any(), any(), any());
             verify(creditClient, never()).scopeReserve(any(), any(), any(), any(), any(), any(),
                     anyInt(), any(), any(), anyBoolean());
         }
@@ -731,7 +731,7 @@ class GenerationFailClosedTest {
 
             assertThat(decision.sourceId()).isNull();
             verify(credentialClient, never()).resolveScopeMarkupRate(any(), any(), any(), any(),
-                    any(UUID.class), any(), any());
+                    any(UUID.class), any(), any(), any());
             verify(creditClient, never()).scopeReserve(any(), any(), any(), any(), any(), any(),
                     anyInt(), any(), any(), anyBoolean());
         }
@@ -841,7 +841,7 @@ class GenerationFailClosedTest {
         @Test
         @DisplayName("an unresolvable endpoint still lets an ORDINARY call through, blip or not")
         void unresolvableEndpointStillPassesOrdinaryTraffic() {
-            // The 600+ catalog endpoints must survive a database blip. The rule
+            // The 1000+ catalog endpoints must survive a database blip. The rule
             // separates them by what the call NAMED, not by what could be read.
             when(apiRepository.findByApiSlug("seedance")).thenReturn(Optional.empty());
 

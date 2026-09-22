@@ -134,6 +134,7 @@ public class SftpNode extends BaseNode {
         if (localContent != null) resolvedParams.put("localContentSize", localContent.length());
         resolvedParams.put("timeout", timeout);
 
+
         logger.info("SFTP node executing: nodeId={}, host={}, port={}, operation={}, remotePath={}, itemId={}",
             nodeId, host, port, operation, remotePath, context.itemId());
 

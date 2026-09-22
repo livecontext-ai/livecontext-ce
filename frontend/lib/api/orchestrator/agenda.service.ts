@@ -14,11 +14,37 @@ export type { ResourceType, TriggerType };
 export type OccurrenceKind = 'PLANNED' | 'PAST';
 
 /**
- * `PLANNED` for anything still to come. A past fire carries its real outcome:
- * `RUNNING` while its epoch is open, then `COMPLETED` / `FAILED`, or `FIRED` when the
- * trigger fired but nothing downstream executed.
+ * `PLANNED` for anything still to come. A past entry carries its real outcome:
+ * `RUNNING` while it is open, then `COMPLETED` / `FAILED`, or `FIRED` when the trigger
+ * fired but nothing downstream executed.
+ *
+ * `CANCELLED` reaches this type from AGENT runs only - an agent execution records that
+ * a user stopped it, where a workflow epoch has no such verdict to report.
  */
-export type OccurrenceStatus = 'PLANNED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'FIRED';
+export type OccurrenceStatus =
+  | 'PLANNED'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'FIRED';
+
+/**
+ * How an AGENT run was launched.
+ *
+ * A separate vocabulary from `TriggerType`, which is the eight trigger NODE kinds a
+ * workflow plan can declare: an agent has no trigger nodes. Four names coincide and mean
+ * the same thing, which is why one filter control covers both (see `agendaLaunchKinds`),
+ * but `SUB_AGENT` / `TASK` / `WIDGET` exist only here.
+ */
+export type AgentLaunchSource =
+  | 'CHAT'
+  | 'SCHEDULE'
+  | 'WEBHOOK'
+  | 'WORKFLOW'
+  | 'SUB_AGENT'
+  | 'TASK'
+  | 'WIDGET';
 
 export interface AgendaOccurrence {
   /** Stable across refetches, so a drag is not interrupted by a background reload. */
@@ -36,6 +62,22 @@ export interface AgendaOccurrence {
   scheduleId?: string;
   /** Plan-level trigger label, e.g. `trigger:daily`. Present on past fires. */
   triggerId?: string;
+  /**
+   * Trigger kind that produced this occurrence. Workflow and application entries only:
+   * an agent run says how it started with `launchSource` instead, and the two are never
+   * both present.
+   */
+  triggerType?: TriggerType;
+  /**
+   * How an AGENT run was launched. Absent when the backend does not recognise the launch
+   * kind, which is deliberate: the page then draws no kind rather than the nearest one.
+   */
+  launchSource?: AgentLaunchSource;
+  /**
+   * The conversation an agent run happened in, when it had one. It is the click target:
+   * a run is read in its conversation, whereas the agent page only says the agent exists.
+   */
+  conversationId?: string;
   cronExpression?: string;
   timezone?: string;
   /**
@@ -53,6 +95,16 @@ export interface AgendaOccurrence {
    */
   armed: boolean;
   /**
+   * Whether a spending cap is refusing this resource's fires RIGHT NOW.
+   *
+   * Not the same question as `armed`, and the difference decides what the menu offers. A
+   * monthly cap that lifts on the 1st leaves the occurrence dated the 5th armed, because
+   * that fire will happen. "Run early" does not run that fire: it runs the schedule at the
+   * moment of the click, and the cap still holds then. Keyed on `armed`, the menu would
+   * offer an action whose only outcome is a failure toast.
+   */
+  budgetBlocked?: boolean;
+  /**
    * True for the ONE occurrence the schedule is currently pointing at. Only this one can
    * be moved on its own: the schedule holds a single pending fire, so writing a later
    * occurrence's time into it would skip every run in between.
@@ -67,6 +119,21 @@ export interface AgendaOccurrence {
   moveAllSupported: boolean;
   status: OccurrenceStatus;
   runIdPublic?: string;
+  /**
+   * Which fire of the run a PAST occurrence was. Absent on a projection, and on an agent
+   * run, which is not a workflow run and has no epochs.
+   *
+   * A run is a sequence of fires and its surfaces open on the cumulative view of all of
+   * them, which is right when you open a run and wrong when you clicked one dot on a
+   * calendar: the user pointed at Tuesday 09:00 and got every Tuesday at once.
+   *
+   * It was declared on `AgendaMarker` until a `Pick<AgendaOccurrence, ...>` made the
+   * compiler say so. The backend puts it on the OCCURRENCE record and nowhere near the
+   * marker one, so `marker.epoch` was permanently undefined and the page's epoch
+   * hand-off typechecked only because the callback took an inline shape of its own.
+   */
+  epoch?: number;
+  resourcePaused?: boolean;
   publicationId?: string;
 }
 
@@ -81,6 +148,10 @@ export interface AgendaMarker {
   name: string;
   avatarUrl?: string;
   triggerType: TriggerType;
+  /** Exact normalized key from the published plan. */
+  triggerId?: string;
+  /** Human-readable label authored on this trigger. */
+  triggerLabel?: string;
   scheduleId?: string;
   cronExpression?: string;
   timezone?: string;
@@ -88,6 +159,7 @@ export interface AgendaMarker {
   nextFireAt?: string;
   lastRunAt?: string;
   armed: boolean;
+  resourcePaused?: boolean;
   /**
    * Why a schedule is paused, absent when it is armed or has no schedule.
    *
@@ -98,14 +170,6 @@ export interface AgendaMarker {
    */
   pausedReason?: PausedReason;
   runIdPublic?: string;
-  /**
-   * Which fire of the run a PAST occurrence was. Absent on a projection.
-   *
-   * A run is a sequence of fires and its surfaces open on the cumulative view of all of
-   * them, which is right when you open a run and wrong when you clicked one dot on a
-   * calendar: the user pointed at Tuesday 09:00 and got every Tuesday at once.
-   */
-  epoch?: number;
   publicationId?: string;
 }
 
@@ -124,6 +188,25 @@ export interface Agenda {
   truncatedScheduleIds: string[];
   /** True when older fires inside the window were cut from the history lookup. */
   pastTruncated: boolean;
+  /**
+   * The earliest instant the history in this window is COMPLETE from, absent when nothing
+   * was truncated.
+   *
+   * Say it, do not just flag it. A capped scan keeps the NEWEST rows, which points at the
+   * days being read only while the window ends at "now". Page back to a past month and
+   * the kept rows are the END of it, so the first weeks are drawn empty while the banner
+   * says only "some older runs are not shown" - and a user reads the grid, not the banner.
+   */
+  pastCoveredFrom?: string;
+  /**
+   * True when the AGENT half of the history could not be read at all.
+   *
+   * A different sentence from truncation, which is why it is a different field:
+   * truncation means older runs are missing, this means EVERY agent run in the window
+   * is missing, including today's. Told apart because "could not ask" and "nothing ran"
+   * are both zero rows, and a calendar must not draw them the same way.
+   */
+  agentHistoryUnavailable?: boolean;
 }
 
 /** `NEXT` moves one fire; `ALL` rewrites the schedule's cron. */

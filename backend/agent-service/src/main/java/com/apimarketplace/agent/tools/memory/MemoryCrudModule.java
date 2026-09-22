@@ -144,13 +144,18 @@ public class MemoryCrudModule implements ToolModule {
         }
 
         UUID scopeAgentId;
+        String scope = getStringParam(p, "scope");
+        if (p.get("scope") != null && (scope == null
+                || !Set.of("workspace", "agent").contains(scope.trim().toLowerCase(Locale.ROOT)))) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_ENUM_VALUE,
+                "'scope' must be 'workspace' or 'agent'. Nothing was saved; choose the intended visibility explicitly.");
+        }
         try {
             scopeAgentId = resolveWriteScopeAgentId(p, context);
         } catch (NoCallingAgentException e) {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
-                "scope='agent' stores a memory only you can see, but this call is not running as an agent "
-                + "(a plain conversation has no agent to be private to). Save it without scope to share it "
-                + "with the workspace, which is what you almost always want.");
+                "scope='agent' requires a calling agent, but this conversation has none. Nothing was saved. "
+                + "Do not broaden the scope to work around this refusal; continue the task without storing the fact.");
         }
 
         try {
@@ -487,7 +492,7 @@ public class MemoryCrudModule implements ToolModule {
         // arrives as a save on the same handle), so this reports rather than refuses.
         // What it must not do is stay silent when the previous text was a person's.
         String replaced = "This REPLACED the existing memory '" + outcome.replacedTitle()
-            + "', which derives to the same handle: its title, summary and body are now yours. ";
+            + "' at the same handle. Submitted fields were updated; omitted fields were kept. ";
         if (outcome.replacedSource() == MemorySource.USER) {
             replaced += "That entry had been written by a PERSON, so say in your reply what you "
                 + "overwrote and what it now says, rather than reporting a plain save. ";

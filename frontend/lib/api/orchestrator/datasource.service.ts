@@ -9,6 +9,7 @@ import { apiClient, ApiError } from '../api-client';
 import type { ResourceFolder, ResourceFolderTile } from './resource-folder.service';
 import { getActiveOrgHeaderForRequest } from '@/lib/stores/current-org-store';
 import type { DataSource, DataSourceColumn, DataSourceItem, PaginatedResponse } from './types';
+import { notifyResourceDeleted } from '@/lib/resources/resourceDeleted';
 
 export class DataSourceService {
   // ========================================
@@ -110,7 +111,8 @@ export class DataSourceService {
    * Delete a data source
    */
   async deleteDataSource(id: string): Promise<void> {
-    return apiClient.delete<void>(`/data-sources/${id}`);
+    await apiClient.delete<void>(`/data-sources/${id}`);
+    notifyResourceDeleted('datasource', id);
   }
 
   /**

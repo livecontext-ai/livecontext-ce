@@ -29,17 +29,31 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AgentLoopExecutor {
 
-    // Loop detection - tracked tools that can cause infinite loops
+    // Loop detection - tracked tools that can cause infinite loops.
+    //
+    // mailbox belongs here for the reason the others do: an agent that reads a folder,
+    // finds nothing it can act on, and reads it again has no state to tell it so. The
+    // sends and deletes are already gated behind an approval card, but a read loop costs
+    // an IMAP connection per turn and burns the execution budget with nothing to show.
     private static final Set<String> LOOP_TRACKED_TOOLS = Set.of(
-        "catalog", "interface", "table", "workflow"
+        "catalog", "interface", "table", "workflow", "mailbox"
     );
 
     // Tools that must execute sequentially (stateful, order-dependent)
     private static final Set<String> SEQUENTIAL_ONLY_TOOLS = Set.of("workflow", "application");
 
-    // Context monitoring thresholds
-    private static final int CONTEXT_WARNING_TOKENS = 20000;
-    private static final int CONTEXT_MAX_TOKENS = 50000;
+    // Context monitoring, expressed as a PERCENTAGE of the model's own context window.
+    // Absolute token thresholds cannot work here: the same number is 90% of one model's
+    // window and 7% of another's, so a fixed ceiling either screams on healthy runs or
+    // stays silent on doomed ones.
+    private static final int CONTEXT_WARNING_PERCENT = 75;
+    private static final int CONTEXT_CRITICAL_PERCENT = 90;
+    /**
+     * Below this many tokens, a run whose context window is unknown is not worth mentioning.
+     * A "worth reporting" floor, NOT a severity threshold: it claims nothing about any
+     * model's capacity, only that a run this size going unwatched deserves a line.
+     */
+    private static final int CONTEXT_UNKNOWN_WINDOW_REPORT_FLOOR_TOKENS = 20000;
     private static final int CHARS_PER_TOKEN = 4;
 
     // Tool result truncation
@@ -296,7 +310,7 @@ public class AgentLoopExecutor {
 
         long duration = System.currentTimeMillis() - iterationStart;
         state.recordIterationDuration(duration);
-        monitorContextSize(state.getMessages(), state.getIterations());
+        monitorContextSize(state, context, state.getIterations());
 
         return IterationResult.continueLoop();
     }
@@ -351,6 +365,9 @@ public class AgentLoopExecutor {
             // Bridge providers get it via their own dispatch DTO; other direct
             // providers ignore the field.
             .reasoningEffort(context.reasoningEffort())
+            // The key route is pinned once per execution; every LLM call carries it so
+            // the provider never re-decides whose key to use from the calling thread.
+            .keyRoute(context.keyRoute())
             .build();
     }
 
@@ -965,12 +982,67 @@ public class AgentLoopExecutor {
             "\n... [truncated " + (content.length() - TRUNCATED_RESULT_LENGTH) + " chars]";
     }
 
-    private void monitorContextSize(List<Message> messages, int iteration) {
-        int tokens = estimateTokens(messages);
-        if (tokens >= CONTEXT_MAX_TOKENS) {
-            log.error("🚨 [CONTEXT CRITICAL] {} tokens at iteration {}", tokens, iteration);
-        } else if (tokens >= CONTEXT_WARNING_TOKENS) {
-            log.warn("⚠️ [CONTEXT WARNING] {} tokens at iteration {}", tokens, iteration);
+    /**
+     * Reports how full the model's context window is, as a FRACTION of that window.
+     *
+     * <p>Severity is only claimed when {@link AgentLoopContext#contextWindow()} is known,
+     * because occupancy is meaningless without it: the previous version compared a chars/4
+     * estimate against a hard-coded 50 000 and logged {@code ERROR [CONTEXT CRITICAL]} for a
+     * 69k-token conversation on a 1M-token model - 6.9% of capacity, reported as critical,
+     * 18 times in a 3h production window. Nothing reads the result, so a false ERROR bought
+     * nothing and polluted the service's error rate.
+     *
+     * <p>The count is the LARGER of two numbers, because neither alone is safe. The provider's
+     * own figure ({@link LoopExecutionState#getLastIterationContextTokens()}) is exact but
+     * describes the request already SENT: usage is recorded before this iteration's tool calls
+     * and tool results are appended, and a large tool result is the main way agent context
+     * explodes, so on its own it always lags by one turn. The chars/4 estimate covers those
+     * appended messages but is crude and misses the system prompt and tool schemas. Taking the
+     * max keeps the exactness of the first and the freshness of the second.
+     *
+     * <p>This method only reports. Context is genuinely MANAGED by per-conversation compaction.
+     * The budget guards also consult a context window, but a DIFFERENT copy of it: they read
+     * {@code auth.model_pricing} through the pricing snapshot, whose column is null for most
+     * rows, and they are built to fall back to growth-only projection when it is. This monitor
+     * reads the agent catalog instead, which is populated. Two sources for one fact is not
+     * ideal; consolidating them is a budget-guard change, not an observability one, so it is
+     * called out here rather than done silently.
+     */
+    private void monitorContextSize(LoopExecutionState state, AgentLoopContext context, int iteration) {
+        long reported = state.getLastIterationContextTokens();
+        long estimated = estimateTokens(state.getMessages());
+        long tokens = Math.max(reported, estimated);
+        String source = reported > 0 && reported >= estimated ? "provider-reported" : "estimated";
+
+        Integer window = context != null ? context.contextWindow() : null;
+        if (window == null || window <= 0) {
+            // No window => no basis for a severity. Still worth a line for support.
+            // INFO, not DEBUG, once the run is big enough to care about: a missing window
+            // means this run is UNWATCHED, and burying that at DEBUG is exactly how a monitor
+            // ends up looking healthy because it went quiet. Short runs stay silent - there
+            // would be nothing to warn about even if the window were known.
+            if (tokens >= CONTEXT_UNKNOWN_WINDOW_REPORT_FLOOR_TOKENS) {
+                log.info("[CONTEXT] {} {} tokens at iteration {}, but this model declares no usable "
+                        + "context window in the catalog ({}), so occupancy cannot be judged",
+                    source, tokens, iteration, window == null ? "absent" : window);
+            } else {
+                log.debug("[CONTEXT] {} {} tokens at iteration {} (model context window unknown)",
+                    source, tokens, iteration);
+            }
+            return;
+        }
+
+        // Clamped so the message stays sane; the cost is that a run at 150% of the window
+        // reports 100%. The ERROR still fires, which is what acts on it.
+        int percentUsed = (int) Math.min(100, (tokens * 100) / window);
+        if (percentUsed >= CONTEXT_CRITICAL_PERCENT) {
+            log.error("🚨 [CONTEXT CRITICAL] {}% of the {}-token context window used "
+                    + "({} {} tokens) at iteration {}",
+                percentUsed, window, source, tokens, iteration);
+        } else if (percentUsed >= CONTEXT_WARNING_PERCENT) {
+            log.warn("⚠️ [CONTEXT WARNING] {}% of the {}-token context window used "
+                    + "({} {} tokens) at iteration {}",
+                percentUsed, window, source, tokens, iteration);
         }
     }
 

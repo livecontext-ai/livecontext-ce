@@ -48,6 +48,7 @@ class AgentControllerBudgetTest {
 
     private static final UUID AGENT_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final String TENANT = "tenant-1";
+    private static final String ORG = "org-1";
 
     @BeforeEach
     void setUp() {
@@ -69,6 +70,16 @@ class AgentControllerBudgetTest {
     class PutValidation {
 
         @Test
+        @DisplayName("403 when a VIEWER tries to pause an agent")
+        void viewerCannotPauseAgent() {
+            ResponseEntity<?> response = controller.updateAgent(
+                    AGENT_ID, request, ORG, "VIEWER", Map.of("isActive", false));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            verifyNoInteractions(agentService, tenantResolver);
+        }
+
+        @Test
         @DisplayName("400 when body contains creditsReserved")
         void rejectsCreditsReserved() {
             Map<String, Object> body = new HashMap<>();
@@ -81,6 +92,39 @@ class AgentControllerBudgetTest {
             Map<String, Object> errorBody = (Map<String, Object>) response.getBody();
             assertThat(errorBody).containsEntry("error", "read_only_field");
             assertThat(errorBody).containsEntry("field", "creditsReserved");
+            verifyNoInteractions(agentService);
+        }
+
+        @Test
+        @DisplayName("400 when body contains the derived budgetBlocked verdict")
+        void rejectsBudgetBlocked() {
+            // It is serialized onto every agent payload, so a client that reads an agent and
+            // PUTs it back sends it. Ignoring it silently would teach the caller that a cap
+            // can be lifted by setting a flag; it cannot, the way back is creditBudget.
+            Map<String, Object> body = new HashMap<>();
+            body.put("budgetBlocked", false);
+
+            ResponseEntity<?> response = controller.updateAgent(AGENT_ID, request, null, body);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> errorBody = (Map<String, Object>) response.getBody();
+            assertThat(errorBody).containsEntry("field", "budgetBlocked");
+            verifyNoInteractions(agentService);
+        }
+
+        @Test
+        @DisplayName("400 when body contains budgetBlockedUntil")
+        void rejectsBudgetBlockedUntil() {
+            Map<String, Object> body = new HashMap<>();
+            body.put("budgetBlockedUntil", "2026-10-01T00:00:00Z");
+
+            ResponseEntity<?> response = controller.updateAgent(AGENT_ID, request, null, body);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> errorBody = (Map<String, Object>) response.getBody();
+            assertThat(errorBody).containsEntry("field", "budgetBlockedUntil");
             verifyNoInteractions(agentService);
         }
 

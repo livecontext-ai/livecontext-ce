@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { ChoiceCard } from '@/components/agenda/ChoiceCard';
 import type { AgendaOccurrence, MoveScope } from '@/lib/api/orchestrator/agenda.service';
 import { formatFullDate, zonedParts, zonedTimeToInstant } from '@/lib/utils/agendaTime';
 
@@ -104,7 +105,7 @@ export function MoveOccurrenceDialog({
           </label>
 
           <div className="space-y-2">
-            <ScopeOption
+            <ChoiceCard
               active={scope === 'NEXT'}
               icon={CalendarClock}
               disabled={!canMoveNext}
@@ -114,7 +115,7 @@ export function MoveOccurrenceDialog({
               }
               onSelect={() => setScope('NEXT')}
             />
-            <ScopeOption
+            <ChoiceCard
               active={scope === 'ALL'}
               icon={Repeat}
               disabled={!canMoveAll}
@@ -158,41 +159,5 @@ export function MoveOccurrenceDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function ScopeOption({
-  active,
-  disabled,
-  icon: Icon,
-  title,
-  description,
-  onSelect,
-}: {
-  active: boolean;
-  disabled?: boolean;
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  description: string;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      disabled={disabled}
-      aria-pressed={active}
-      className={`flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors
-                  ${active && !disabled
-                    ? 'border-[var(--accent-primary)] bg-theme-secondary'
-                    : 'border-theme hover:bg-theme-secondary'}
-                  ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
-    >
-      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-theme-secondary" />
-      <span className="min-w-0">
-        <span className="block text-sm text-theme-primary">{title}</span>
-        <span className="block text-xs text-theme-muted">{description}</span>
-      </span>
-    </button>
   );
 }

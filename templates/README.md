@@ -16,22 +16,23 @@ LiveContext CE then appears under **App Templates**, with the ports, database pa
 and optional LLM keys exposed as form fields. Deploying it pulls this repository and
 brings the stack up.
 
-## Any other platform (Coolify, Dokploy, CapRover, Komodo, plain Docker)
+## Other platforms
 
-They all consume a Compose file directly, so there is no separate template to install:
-point them at this repository's root `docker-compose.yml`.
+For a platform that supports Docker Compose, point it at this repository's root
+`docker-compose.yml`. Check the platform's Compose support and persistent-volume settings first.
 
-Two things to get right, whatever the platform:
+Also read [server setup and backups](../docker/README-CE.md#server-and-reverse-proxy-setup). Keep persistent volumes when updating.
+
+Three things to get right, whatever the platform:
 
 1. **Publish both ports.** The web UI is on `FRONTEND_PORT` (3000) and the browser talks
    to the backend on `BACKEND_PORT` (8080). Both must be reachable from the machine you
    browse from.
-2. **Only if the backend is not at `<the address you open the app with>:BACKEND_PORT`** -
-   typically a reverse proxy putting everything on one origin - set `GATEWAY_PUBLIC_URL`
-   on the `frontend` service to the browser-facing backend URL, for example
-   `https://livecontext.example.com`. Otherwise leave it empty: the app derives the
-   backend origin from the address you opened it with, so LAN and domain installs work
-   with no rebuild and no extra configuration.
+2. **Route both services.** Without a proxy the app derives the backend origin from
+   the address you opened and `BACKEND_PORT`. Behind a proxy, route the app and API
+   to their respective services and forward WebSocket upgrades. A single-origin
+   setup needs explicit API and WebSocket routes.
 
-Everything else (database, Redis, object storage) is self-contained in the Compose file
-and persists in Docker volumes across updates.
+3. **Set public links and SMTP.** Set `PUBLIC_BASE_URL` to the frontend URL and `GATEWAY_PUBLIC_URL` to the backend URL, without trailing slashes, for OAuth callbacks and email links. For internet access use HTTPS and forward WebSocket upgrades. Configure SMTP before relying on password resets or invitations.
+
+The database, Redis and object storage persist in Docker volumes across updates.

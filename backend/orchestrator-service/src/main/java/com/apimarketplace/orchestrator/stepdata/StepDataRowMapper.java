@@ -34,6 +34,9 @@ public class StepDataRowMapper {
             switch (nodeType) {
                 case TRIGGER -> addTriggerFields(row, entity, outputData);
                 case DECISION -> addDecisionFields(row, entity, outputData);
+                // OPTION used to fall through to addGenericFields, so an option node's
+                // branch evaluations never reached its row and its table stayed empty.
+                case OPTION -> addOptionFields(row, entity, outputData);
                 case SWITCH -> addSwitchFields(row, entity, outputData);
                 case LOOP_CONTROLLER -> addLoopFields(row, entity, outputData);
                 case SPLIT_CONTROLLER -> addSplitFields(row, entity, outputData);
@@ -184,6 +187,21 @@ public class StepDataRowMapper {
         }
     }
 
+    private void addOptionFields(Map<String, Object> row, WorkflowStepDataEntity entity, Map<String, Object> outputData) {
+        putIfNotNull(row, "selectedBranch", entity.getSelectedBranch());
+
+        Map<String, Object> metadata = entity.getMetadata();
+        if (metadata != null) {
+            putIfNotNull(row, "evaluations", metadata.get("evaluations"));
+            putIfNotNull(row, "skippedBranches", metadata.get("skipped_branches"));
+        }
+
+        Map<String, Object> cleanOutput = extractCleanOutput(outputData);
+        if (cleanOutput != null) {
+            row.put("output", cleanOutput);
+        }
+    }
+
     private void addSwitchFields(Map<String, Object> row, WorkflowStepDataEntity entity, Map<String, Object> outputData) {
         putIfNotNull(row, "selectedBranch", entity.getSelectedBranch());
 
@@ -192,7 +210,12 @@ public class StepDataRowMapper {
             putIfNotNull(row, "switchExpression", metadata.get("switch_expression"));
             putIfNotNull(row, "switchValue", metadata.get("switch_value"));
             putIfNotNull(row, "selectedCase", metadata.get("selected_case"));
-            putIfNotNull(row, "cases", metadata.get("cases"));
+            // `evaluations` is the key SwitchNode emits. There is deliberately NO legacy
+            // fallback on `cases`: the pre-fix code copied output.get("cases") into
+            // metadata, and SwitchNode has never emitted that key, so no row in any
+            // database carries metadata.cases either. A fallback here would be
+            // unreachable code justified by a back-compat property that never held.
+            putIfNotNull(row, "cases", metadata.get("evaluations"));
             putIfNotNull(row, "skippedBranches", metadata.get("skipped_branches"));
         }
 
@@ -213,6 +236,10 @@ public class StepDataRowMapper {
         if (metadata != null) {
             putIfNotNull(row, "maxIterations", metadata.get("max_iterations"));
             putIfNotNull(row, "loopCondition", metadata.get("loop_condition"));
+            // Without these two the loop's condition reached metadata and stopped there:
+            // no column read them, so "what did the condition say" stayed unanswerable.
+            putIfNotNull(row, "conditionResolved", metadata.get("condition_resolved"));
+            putIfNotNull(row, "evaluations", metadata.get("evaluations"));
             putIfNotNull(row, "carryValue", metadata.get("carry"));
 
             Integer currentIteration = entity.getLoopIteration();

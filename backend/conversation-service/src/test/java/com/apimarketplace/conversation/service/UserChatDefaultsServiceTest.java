@@ -152,6 +152,30 @@ class UserChatDefaultsServiceTest {
         assertThat(saved).containsEntry("generation", Map.of("enabled", true));
     }
 
+    /**
+     * The same gap, for the mailbox. {@code sanitize()} keeps only ALLOWED_KEYS, so a key
+     * missing from that list is a switch that saves, reverts on reload, and fails nothing.
+     *
+     * <p>The mode is asserted beside the grant because an absent mode reads as FULL access
+     * everywhere: keeping the grant while dropping the mode would quietly turn a read-only
+     * default into a sending one, which is worse than losing both.
+     */
+    @Test
+    @DisplayName("save keeps BOTH mailbox keys, or a read-only default becomes a sending one")
+    void saveKeepsTheMailboxGrantAndItsMode() {
+        when(repository.findByUserIdAndOrganizationId("u1", "orgA")).thenReturn(Optional.empty());
+        when(repository.save(any(UserChatDefaults.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> incoming = new LinkedHashMap<>();
+        incoming.put("mailbox", Map.of("enabled", true));
+        incoming.put("mailboxAccessMode", "read");
+
+        Map<String, Object> saved = service.save("u1", "orgA", incoming);
+
+        assertThat(saved).containsEntry("mailbox", Map.of("enabled", true));
+        assertThat(saved).containsEntry("mailboxAccessMode", "read");
+    }
+
     @Test
     @DisplayName("save keeps generation disabled:false verbatim (turning the grant OFF must persist)")
     void saveKeepsDisabledGenerationGrant() {

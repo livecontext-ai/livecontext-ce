@@ -3,7 +3,7 @@
  */
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { WELL_KNOWN_INTEGRATIONS } from '@/lib/integrations/wellKnownIntegrations';
+import { FOOTER_INTEGRATION_COUNT, WELL_KNOWN_INTEGRATIONS } from '@/lib/integrations/wellKnownIntegrations';
 import FooterIntegrations from '../FooterIntegrations';
 
 function renderColumn(props: { siteBaseUrl?: string } = {}) {
@@ -13,6 +13,26 @@ function renderColumn(props: { siteBaseUrl?: string } = {}) {
 function hrefOf(name: RegExp | string) {
   return screen.getByRole('link', { name }).getAttribute('href');
 }
+
+describe('the labels it is handed', () => {
+  // Pinned at the receiving end, not only at the call site: the column could accept
+  // `heading`/`allLabel` and keep rendering English, which is the state it shipped in and
+  // which every source-level check passed.
+  it('uses them for the heading and the catalogue link', () => {
+    render(<FooterIntegrations heading="INTEGRATIONS-FR" allLabel="TOUTES" />);
+    expect(screen.getByText('INTEGRATIONS-FR').textContent).toBe('INTEGRATIONS-FR');
+    expect(screen.getByRole('link', { name: 'TOUTES' }).getAttribute('href')).toBe('/integrations');
+    expect(screen.queryByText('All integrations')).toBeNull();
+    // The connector NAMES are product names and must NOT move with the labels.
+    expect(screen.getByRole('link', { name: 'Instagram' }).getAttribute('href')).toBe('/integrations/instagram');
+  });
+
+  it('still says its English when nobody hands it anything', () => {
+    render(<FooterIntegrations />);
+    expect(screen.getByText('Integrations').textContent).toBe('Integrations');
+    expect(screen.getByRole('link', { name: 'All integrations' }).getAttribute('href')).toBe('/integrations');
+  });
+});
 
 describe('footer Integrations column', () => {
   it('lists the chosen integrations, each linking to its own page', () => {
@@ -24,13 +44,24 @@ describe('footer Integrations column', () => {
     expect(hrefOf('All integrations')).toBe('/integrations');
   });
 
-  it('shows all eight and the directory, and nothing else', () => {
+  it('shows the sliced-off front of the list, the directory, and nothing else', () => {
     renderColumn();
 
-    for (const { name } of WELL_KNOWN_INTEGRATIONS) {
+    // WELL_KNOWN_INTEGRATIONS is longer than this column: it also feeds the landing's
+    // integrations strip, which renders every entry. The column takes the first
+    // FOOTER_INTEGRATION_COUNT, so asserting against the whole list would demand links
+    // the footer is designed not to render.
+    const column = WELL_KNOWN_INTEGRATIONS.slice(0, FOOTER_INTEGRATION_COUNT);
+    for (const { name } of column) {
       expect(screen.getByRole('link', { name })).toBeTruthy();
     }
-    expect(screen.getAllByRole('link')).toHaveLength(WELL_KNOWN_INTEGRATIONS.length + 1);
+    expect(screen.getAllByRole('link')).toHaveLength(column.length + 1);
+
+    // And nothing from the tail leaks in, which is what would happen if the slice were
+    // dropped: a footer column of two dozen entries beside three short ones.
+    for (const { name } of WELL_KNOWN_INTEGRATIONS.slice(FOOTER_INTEGRATION_COUNT)) {
+      expect(screen.queryByRole('link', { name })).toBeNull();
+    }
   });
 
   it('leads with Instagram and then the professional set, in that order', () => {

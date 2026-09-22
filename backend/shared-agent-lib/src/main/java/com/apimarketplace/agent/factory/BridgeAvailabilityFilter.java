@@ -142,6 +142,22 @@ public class BridgeAvailabilityFilter {
         return Collections.unmodifiableMap(getInstalledMap());
     }
 
+    /**
+     * Return the current "runnable" map (keyed by CLI id): the CLI is installed AND
+     * reported authenticated, i.e. what {@link #filter} keeps in strict mode. Use this
+     * over {@link #installedMap()} wherever the answer drives a DECISION rather than a
+     * badge: an installed-but-not-authenticated CLI runs nothing (every dispatch comes
+     * back "please log in"), so telling an admin it is available would be wrong in
+     * exactly the case they are about to route traffic into. Empty map means "can't
+     * tell" - the bridge is unreachable, its URL is unset, or its status was malformed -
+     * with the same TTL and fallback as {@link #filter}. On a bridge
+     * too old to report {@code authenticated} at all this degrades to the installed flag
+     * (the same lenience {@link #filter} applies), so the two maps then agree.
+     */
+    public Map<String, Boolean> runnableMap() {
+        return Collections.unmodifiableMap(getAvailableMap());
+    }
+
     private Map<String, Boolean> getInstalledMap() {
         refreshIfStale();
         return cachedInstalled;

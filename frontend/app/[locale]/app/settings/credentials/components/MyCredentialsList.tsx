@@ -26,6 +26,7 @@ import {
   Pencil,
   Star,
 } from "lucide-react";
+import { credentialService } from "@/lib/api/orchestrator/credential.service";
 import { ServiceIcon } from "@/components/ui/service-icon";
 import LoadingSpinner from '@/components/LoadingSpinner';
 import {
@@ -331,6 +332,9 @@ export function MyCredentialsList({
     try {
       await orchestratorApi.deleteCredential(deleteCredential.id);
       track('credential_deleted', { count: 1, integration: slugOrNull(deleteCredential.integration) });
+      // Removing an LLM key (llm_<provider>) changes whose key the next execution runs on:
+      // drop the caller's cached slot so the switch back to the platform key is immediate.
+      await credentialService.invalidateMyLlmCacheIfLlmKey(deleteCredential.integration);
       setDeleteCredential(null);
       // Refresh the list
       fetchCredentials(currentPage);
@@ -459,6 +463,9 @@ export function MyCredentialsList({
       } else {
         await orchestratorApi.setDefaultCredential(credential.id);
       }
+      // The DEFAULT llm_<provider> credential is the one that serves the user's executions:
+      // switching or clearing it is a key switch, so drop the caller's cached slot.
+      await credentialService.invalidateMyLlmCacheIfLlmKey(credential.integration);
       // Refresh the list
       fetchCredentials(currentPage);
     } catch (err: unknown) {

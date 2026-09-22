@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,6 +46,10 @@ public class RemoveDuplicatesNode extends BaseNode {
 
         // Build resolved_params early so it's available in all result paths
         Map<String, Object> earlyInputData = new LinkedHashMap<>();
+        // `input` keeps the plan's name and the shape V167 documents for the `config`
+        // output field, which shares this map. A FAILED row needs no companion key saying the
+        // expression was never evaluated: the row is already FAILED and carries its error, so
+        // the key would be a constant string on every failure of five node types.
         earlyInputData.put("input", inputExpression);
         earlyInputData.put("fields", fields);
         earlyInputData.put("keep", keep);
@@ -56,7 +61,7 @@ public class RemoveDuplicatesNode extends BaseNode {
             failureOutput.put("item_index", context.itemIndex());
             failureOutput.put("itemIndex", context.itemIndex());
             failureOutput.put("item_id", context.itemId());
-            failureOutput.put("resolved_params", earlyInputData);
+            failureOutput.put("resolved_params", ReportedParams.forReport(earlyInputData));
             return NodeExecutionResult.failureWithOutput(nodeId,
                 "Input expression is required. Configure the 'input' field with a reference like {{core:step.output.items}}",
                 failureOutput, System.currentTimeMillis() - startTime);
@@ -71,7 +76,7 @@ public class RemoveDuplicatesNode extends BaseNode {
                 failureOutput.put("item_index", context.itemIndex());
                 failureOutput.put("itemIndex", context.itemIndex());
                 failureOutput.put("item_id", context.itemId());
-                failureOutput.put("resolved_params", earlyInputData);
+                failureOutput.put("resolved_params", ReportedParams.forReport(earlyInputData));
                 return NodeExecutionResult.failureWithOutput(nodeId, "Template adapter not available",
                     failureOutput, System.currentTimeMillis() - startTime);
             }
@@ -82,7 +87,7 @@ public class RemoveDuplicatesNode extends BaseNode {
             failureOutput.put("item_index", context.itemIndex());
             failureOutput.put("itemIndex", context.itemIndex());
             failureOutput.put("item_id", context.itemId());
-            failureOutput.put("resolved_params", earlyInputData);
+            failureOutput.put("resolved_params", ReportedParams.forReport(earlyInputData));
             return NodeExecutionResult.failureWithOutput(nodeId, "Failed to resolve input: " + e.getMessage(),
                 failureOutput, System.currentTimeMillis() - startTime);
         }
@@ -190,7 +195,7 @@ public class RemoveDuplicatesNode extends BaseNode {
         result.put("itemIndex", context.itemIndex());
         result.put("item_id", context.itemId());
         Map<String, Object> inputData = new LinkedHashMap<>();
-        inputData.put("input", resolvedItems != null ? resolvedItems : List.of());
+        inputData.put("input", ReportedParams.reportValue(resolvedItems != null ? resolvedItems : List.of()));
         inputData.put("input_count", resolvedItems != null ? resolvedItems.size() : 0);
         inputData.put("fields", fields);
         inputData.put("keep", keep);

@@ -42,6 +42,8 @@ import static org.mockito.Mockito.when;
 @DisplayName("ApiCatalogBundleController - admin gating + public download split")
 class ApiCatalogBundleControllerTest {
 
+    private static final byte[] PAYLOAD_BYTES = {1, 2, 3};
+
     @Mock private ApiCatalogBundleService service;
     @Mock private ApiCatalogBundleSigner signer;
     @Mock private ApiCatalogBundleSyncStatusRepository syncStatusRepo;
@@ -334,7 +336,7 @@ class ApiCatalogBundleControllerTest {
 
     private static ApiCatalogBundleService.RawBundle rawBundle(String checksum) {
         return new ApiCatalogBundleService.RawBundle(1L, 1, checksum, "sig", "k1", "cloud",
-                600, 2400, 5_000_000L, new byte[]{1, 2, 3});
+                600, 2400, 5_000_000L, PAYLOAD_BYTES.length, () -> new java.io.ByteArrayInputStream(PAYLOAD_BYTES));
     }
 
     private static ApiCatalogBundleRepository.ActiveBundleMeta meta(String checksum, Integer servable) {

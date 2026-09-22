@@ -183,7 +183,21 @@ describe('integration detail metadata', () => {
     const metadata = await generateMetadata({ params: Promise.resolve({ slug: 'slack' }) });
 
     expect(metadata.alternates?.canonical).toBe('https://livecontext.ai/integrations/slack');
-    expect(metadata.title).toBe('Slack integration - LiveContext');
+  });
+
+  it('names the brand once, not twice', async () => {
+    // Regression: the title was a plain string, so the root layout's
+    // `title.template` ("%s - LiveContext") appended the brand to a title that
+    // already ended in it, and all ~980 integration pages rendered
+    // "Slack integration - LiveContext - LiveContext". `absolute` opts out of
+    // the template; the share blocks never had one, so they keep the string.
+    fetchIntegration.mockResolvedValue(detail());
+
+    const metadata = await generateMetadata({ params: Promise.resolve({ slug: 'slack' }) });
+
+    expect(metadata.title).toEqual({ absolute: 'Slack integration - LiveContext' });
+    expect(metadata.openGraph?.title).toBe('Slack integration - LiveContext');
+    expect(metadata.twitter?.title).toBe('Slack integration - LiveContext');
   });
 
   it('indexes a page with real content', async () => {

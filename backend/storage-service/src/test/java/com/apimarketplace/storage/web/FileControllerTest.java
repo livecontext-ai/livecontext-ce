@@ -368,4 +368,59 @@ class FileControllerTest {
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
+
+    @Nested
+    @DisplayName("DELETE /api/files - org VIEWER read-only rule")
+    class DeleteViewerGate {
+
+        @Test
+        @DisplayName("an org VIEWER is refused 403 and the object is never deleted")
+        void viewerCannotDelete() {
+            // Regression: this endpoint's ONLY check was the key prefix, so a VIEWER could
+            // delete any file they had uploaded themselves. The platform-wide rule is that a
+            // VIEWER is read-only, and the bulk-delete sibling in StorageExplorerController
+            // has always enforced it. Pre-fix this returned 204 and called delete().
+            when(tenantResolver.resolveOrgId(request)).thenReturn("org-1");
+            when(tenantResolver.resolveOrgRole(request)).thenReturn("VIEWER");
+
+            ResponseEntity<Void> response = controller.deleteFile(OWN_TENANT + "/general/a.png", request);
+
+            assertThat(response.getStatusCode().value()).isEqualTo(403);
+            verify(fileStorageService, never()).delete(anyString());
+        }
+
+        @Test
+        @DisplayName("a padded ' VIEWER ' is refused too - the guard trims")
+        void paddedViewerCannotDelete() {
+            when(tenantResolver.resolveOrgId(request)).thenReturn("org-1");
+            when(tenantResolver.resolveOrgRole(request)).thenReturn("  VIEWER  ");
+
+            ResponseEntity<Void> response = controller.deleteFile(OWN_TENANT + "/general/a.png", request);
+
+            assertThat(response.getStatusCode().value()).isEqualTo(403);
+            verify(fileStorageService, never()).delete(anyString());
+        }
+
+        @Test
+        @DisplayName("a MEMBER still deletes their own file - the gate blocks VIEWERs, not everyone")
+        void memberCanStillDelete() {
+            when(tenantResolver.resolveOrgId(request)).thenReturn("org-1");
+            when(tenantResolver.resolveOrgRole(request)).thenReturn("MEMBER");
+            when(fileStorageService.delete(anyString())).thenReturn(true);
+
+            ResponseEntity<Void> response = controller.deleteFile(OWN_TENANT + "/general/a.png", request);
+
+            assertThat(response.getStatusCode().value()).isEqualTo(204);
+        }
+
+        @Test
+        @DisplayName("the key-prefix check still refuses another tenant's file")
+        void foreignKeyStillRefused() {
+            ResponseEntity<Void> response = controller.deleteFile(OTHER_TENANT + "/general/a.png", request);
+
+            assertThat(response.getStatusCode().value()).isEqualTo(403);
+            verify(fileStorageService, never()).delete(anyString());
+        }
+    }
+
 }

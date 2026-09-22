@@ -1,10 +1,10 @@
 package com.apimarketplace.agent.controller;
 
 import com.apimarketplace.agent.client.dto.execution.*;
-import com.apimarketplace.agent.completion.ProviderLlmJsonInvoker;
 import com.apimarketplace.agent.service.execution.AgentRemoteExecutionService;
 import com.apimarketplace.agent.service.execution.ClassifyService;
 import com.apimarketplace.agent.service.execution.GuardrailService;
+import com.apimarketplace.agent.service.execution.JsonCompletionService;
 import com.apimarketplace.common.web.TenantResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -35,16 +35,7 @@ public class AgentExecutionController {
     private final AgentRemoteExecutionService executionService;
     private final ClassifyService classifyService;
     private final GuardrailService guardrailService;
-    private final ProviderLlmJsonInvoker jsonInvoker;
-
-    /**
-     * Model execution links (CLOUD only): a billed {@code (provider, model)} pair may
-     * EXECUTE on a different API target. Field-injected and optional - null in CE /
-     * when the feature flag is off, in which case json-completion runs the requested
-     * pair verbatim (pre-link behavior).
-     */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.apimarketplace.agent.service.ModelExecutionLinkService executionLinkService;
+    private final JsonCompletionService jsonCompletionService;
 
     /**
      * Execute a full agent with tool calls and streaming.
@@ -103,13 +94,12 @@ public class AgentExecutionController {
     }
 
     /**
-     * One-shot JSON completion (Stage 2 follow-up #51). Routes the
-     * {@code (provider, model, system, user)} prompt through the live
-     * {@link ProviderLlmJsonInvoker} and returns the raw model content,
-     * with any outer Markdown fence already stripped. Intended for
-     * callers that don't need the agent-loop scaffolding - COLD-summary
-     * generation, single-turn JSON extraction, schema-constrained
-     * prompts.
+     * One-shot JSON completion (Stage 2 follow-up #51): a {@code (provider, model, system,
+     * user)} prompt answered with the raw model content, reduced to its JSON object.
+     * Intended for callers that don't need the agent-loop scaffolding - COLD-summary
+     * generation, single-turn JSON extraction, schema-constrained prompts. Where it runs
+     * (the pair's own API, a linked API target, or a linked CLI bridge in restricted
+     * mode) is {@link JsonCompletionService}'s decision.
      */
     @PostMapping("/json-completion")
     public ResponseEntity<JsonCompletionResponseDto> executeJsonCompletion(
@@ -118,39 +108,11 @@ public class AgentExecutionController {
         log.debug("Received json-completion request: provider={}, model={}, tenantId={}",
             request.provider(), request.model(), request.tenantId());
 
-        // Model execution link (CLOUD only, third consumer after agent execution + CE
-        // relay): the requested pair may be linked to an API execution target - honor
-        // it, so an admin routing a billed model away from its direct platform key also
-        // covers single completions (COLD-summary compaction was the reported gap). A
-        // bridge-target link throws IllegalArgumentException -> 400 (a CLI bridge
-        // cannot serve a bare completion). Bean absent in CE -> requested pair verbatim.
-        final String execProvider;
-        final String execModel;
-        boolean resolvable = request.provider() != null && !request.provider().isBlank()
-            && request.model() != null && !request.model().isBlank();
-        if (executionLinkService != null && resolvable) {
-            var target = executionLinkService.resolveSingleCompletionTarget(request.provider(), request.model());
-            execProvider = target.provider();
-            execModel = target.model();
-            if (!java.util.Objects.equals(execProvider, request.provider())
-                    || !java.util.Objects.equals(execModel, request.model())) {
-                log.info("json-completion link route: billed={}/{} -> exec={}/{}",
-                    request.provider(), request.model(), execProvider, execModel);
-            }
-        } else {
-            // No link service (CE / feature off) or a blank pair: run the requested pair
-            // verbatim - the invoker rejects blanks with its own explicit error.
-            execProvider = request.provider();
-            execModel = request.model();
-        }
-
-        String content = executeWithOrgScope(headerOrgId(httpRequest), () -> jsonInvoker.invoke(
-                execProvider,
-                execModel,
-                request.system(),
-                request.user(),
-                request.tenantId()
-        ));
+        // Roles travel for the same reason as on /classify: a bridge the caller NAMED is
+        // judged on them. Usually absent here (compaction runs off-request).
+        String userRoles = headerUserRoles(httpRequest);
+        String content = executeWithOrgScope(headerOrgId(httpRequest),
+            () -> jsonCompletionService.complete(request, userRoles));
         return ResponseEntity.ok(new JsonCompletionResponseDto(content));
     }
 

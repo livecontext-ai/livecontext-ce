@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -176,26 +178,63 @@ public record GenerationSpec(
      *
      *        <p>These are written only for the files actually present, and their last index shifts
      *        exactly as {@code path}'s does, so element 2's type lands beside element 2's url.
+     *
+     * @param requires other unified parameters this one only works ALONGSIDE.
+     *
+     *        <p>Seedance is why: its first-and-last-frame mode takes two images and
+     *        refuses a call carrying only the closing one. Nothing else could say
+     *        so, so a reader who attached one frame paid a provider to tell them.
+     *        Checked before the reservation, like every other thing that can be
+     *        known for free.
+     *
+     * @param excludes other unified parameters this one cannot be sent WITH.
+     *
+     *        <p>Seedance again, one paragraph further down the same page: pinning a
+     *        frame and lending a reference are "mutually exclusive scenarios and
+     *        cannot be mixed". A model handed both picks one reading of the request,
+     *        so the failure is not always an error: it can be a finished clip that
+     *        ignored half the files, which is the most expensive way to find out.
+     *
+     *        <p>Read SYMMETRICALLY: declaring it on one side forbids the pair in both
+     *        directions. A rule that had to be written twice is a rule that gets
+     *        written once.
+     *
+     *        <p><b>Both rules are about FILE slots, and both belong to the ENDPOINT.</b>
+     *        They are refused on a parameter carrying a value, because only a file slot
+     *        is drawn as something a reader picks, so a rule about a value would be
+     *        enforced here and invisible everywhere else. And a binding is shared by
+     *        every model of the endpoint, so a restriction that holds for SOME of them
+     *        cannot be written here at all: Seedance 2.5 forbids an aspect ratio beside
+     *        a pinned frame while the 2.0 series does not, and the only way to say that
+     *        today is to leave the slot off the models it does not hold for.
      */
     public record ParamBinding(String path, BigDecimal scale, AssetEncoding encoding, String mimePath,
-                                AssetRole role, int maxItems, Map<String, Object> itemConstants) {
+                                AssetRole role, int maxItems, Map<String, Object> itemConstants,
+                                Set<String> requires, Set<String> excludes) {
 
         public ParamBinding {
             itemConstants = itemConstants == null ? Map.of() : Map.copyOf(itemConstants);
+            requires = requires == null ? Set.of() : Set.copyOf(requires);
+            excludes = excludes == null ? Set.of() : Set.copyOf(excludes);
         }
 
         /** A binding that only moves a value, which is every non-asset parameter. */
         public ParamBinding(String path, BigDecimal scale) {
-            this(path, scale, null, null, null, 1, Map.of());
+            this(path, scale, null, null, null, 1, Map.of(), Set.of(), Set.of());
         }
 
         public ParamBinding(String path, BigDecimal scale, AssetEncoding encoding, String mimePath) {
-            this(path, scale, encoding, mimePath, null, 1, Map.of());
+            this(path, scale, encoding, mimePath, null, 1, Map.of(), Set.of(), Set.of());
         }
 
         public ParamBinding(String path, BigDecimal scale, AssetEncoding encoding, String mimePath,
                              AssetRole role, int maxItems) {
-            this(path, scale, encoding, mimePath, role, maxItems, Map.of());
+            this(path, scale, encoding, mimePath, role, maxItems, Map.of(), Set.of(), Set.of());
+        }
+
+        public ParamBinding(String path, BigDecimal scale, AssetEncoding encoding, String mimePath,
+                             AssetRole role, int maxItems, Map<String, Object> itemConstants) {
+            this(path, scale, encoding, mimePath, role, maxItems, itemConstants, Set.of(), Set.of());
         }
 
         /** True when this endpoint takes more than one file in this slot. */
@@ -286,6 +325,8 @@ public record GenerationSpec(
         SOURCE,
         /** The file becomes the opening frame of the produced clip. */
         FIRST_FRAME,
+        /** The file becomes the closing frame: the clip is generated to land on it. */
+        LAST_FRAME,
         /** The file guides the result without appearing in it: style, subject, remix. */
         REFERENCE,
         /** Marks WHERE another file may be changed, rather than what to draw. */
@@ -304,8 +345,43 @@ public record GenerationSpec(
         }
     }
 
-    /** Unified parameters that carry a file rather than a value. */
-    public static final Set<String> ASSET_PARAMS = Set.of("input_image", "input_audio", "input_video");
+    /**
+     * Unified parameters that carry a file rather than a value.
+     *
+     * <p>Three of them name the file by what it IS rather than by its kind,
+     * because one model can take SEVERAL images that mean different things in
+     * the same call: xAI's video 1.5 pins a first frame, pins a last frame and
+     * takes up to three reference images at once. With one image slot per
+     * endpoint, two of those three were unreachable whatever the provider
+     * accepted, and a surface offering a single "attach" could not tell the
+     * reader which of them they were filling.
+     *
+     * <p>{@code input_image} stays the slot for a model that takes ONE image,
+     * whatever that image means to it: its {@code role} says which. Renaming it
+     * would have changed the parameter every saved workflow and every agent
+     * already writes.
+     */
+    public static final Set<String> ASSET_PARAMS = Set.of(
+            "input_image", "input_audio", "input_video",
+            "first_frame_image", "last_frame_image", "reference_image");
+
+    /**
+     * The role a role-named slot MUST declare.
+     *
+     * <p>Without this the name and the role are two independent claims about the
+     * same file, and they are read by different people: the seed author writes
+     * the name, every surface labels the field from the role. A
+     * {@code last_frame_image} declared {@code role: reference} would be shown
+     * as "Reference image" on every screen and sent to the provider as the
+     * closing frame, and the reader finds out after paying.
+     *
+     * <p>{@code input_image} is deliberately absent: it is the generic slot, and
+     * what it means is exactly what its role says.
+     */
+    private static final Map<String, AssetRole> ROLE_BY_PARAM = Map.of(
+            "first_frame_image", AssetRole.FIRST_FRAME,
+            "last_frame_image", AssetRole.LAST_FRAME,
+            "reference_image", AssetRole.REFERENCE);
 
     /**
      * Ceiling on how many files one slot may take.
@@ -315,6 +391,19 @@ public record GenerationSpec(
      * into the request, so the count multiplies the request body.
      */
     static final int MAX_ASSET_ITEMS = 8;
+
+    /**
+     * Every key a paramMap binding may carry.
+     *
+     * <p>Same reason the constraint keys are enumerated: an unknown key used to be
+     * dropped in silence, so a seed saying {@code require} instead of
+     * {@code requires} read as if a pair were enforced while nothing enforced it,
+     * and the provider refusal it exists to prevent came back with nothing to
+     * point at. A misspelling is a red import.
+     */
+    static final Set<String> BINDING_KEYS = Set.of(
+            "path", "scale", "encoding", "mimePath", "role", "maxItems", "itemConstants",
+            "requires", "excludes");
 
     /** An indexed segment, which is what a multi-file slot walks forward from. */
     static final Pattern INDEXED_SEGMENT = Pattern.compile("\\[(\\d+)\\]");
@@ -338,9 +427,12 @@ public record GenerationSpec(
             "negative_prompt",   // what to avoid
             "n",                 // how many assets to produce
             "seed",              // deterministic generation
-            "input_image",       // a FileRef used as reference / first frame
+            "input_image",       // a FileRef, the one image this model takes
             "input_audio",       // a FileRef used as reference voice / track
             "input_video",       // a FileRef used as reference / continuation
+            "first_frame_image", // a FileRef the produced clip opens on
+            "last_frame_image",  // a FileRef the produced clip lands on
+            "reference_image",   // FileRefs that guide the result without appearing in it
             "duration_seconds",  // video, music, speech length
             "aspect_ratio",      // video, image framing
             "resolution",        // video, image size
@@ -588,14 +680,250 @@ public record GenerationSpec(
      * @param perUnit credits charged per unit
      * @param min     optional floor, null when unbounded
      * @param max     optional ceiling, null when unbounded
+     * @param modifiers what makes THIS call cost more than the model's base
+     *                rate, see {@link PriceModifier}. Empty for a model whose
+     *                price depends on nothing but its size, which is most of
+     *                them.
      */
-    public record Price(String unit, BigDecimal base, BigDecimal perUnit, BigDecimal min, BigDecimal max) {
+    public record Price(String unit, BigDecimal base, BigDecimal perUnit, BigDecimal min, BigDecimal max,
+                        List<PriceModifier> modifiers) {
 
         static final Set<String> UNITS = Set.of("call", "second", "minute", "image", "character");
+
+        public Price {
+            modifiers = modifiers == null ? List.of() : List.copyOf(modifiers);
+        }
+
+        /**
+         * The shape every reader and every test spoke before modifiers existed:
+         * a price that depends on nothing but the size of the call.
+         */
+        public Price(String unit, BigDecimal base, BigDecimal perUnit, BigDecimal min, BigDecimal max) {
+            this(unit, base, perUnit, min, max, List.of());
+        }
 
         /** A price that charges nothing, used when a seed omits the block. */
         public static Price free() {
             return new Price("call", BigDecimal.ZERO, BigDecimal.ZERO, null, null);
+        }
+
+        /**
+         * How much more (or less) THIS call costs than the model's base rate,
+         * from the unified parameters the caller actually supplied.
+         *
+         * <p>Every modifier contributes a factor and the factors MULTIPLY, so a
+         * 1080p clip carrying one reference image costs the 1080p factor times
+         * the reference factor. Adding them instead would make two modifiers of
+         * 2 mean 3, which is not what either of them says on its own.
+         *
+         * <p>Always 1 when nothing is declared, which is the state of every
+         * model that shipped before this existed: the arithmetic downstream is
+         * then byte-for-byte what it was.
+         *
+         * @param supplied caller-supplied unified parameters. A value the model
+         *                 REFUSED must never reach a price, and the guarantee
+         *                 is the CALLER's: {@code GenerationModule.create}
+         *                 abandons the call on {@code !built.ok()} before this
+         *                 number is used. Stated here because the guarantee is
+         *                 not enforceable from inside - this method is handed a
+         *                 map, not a verdict - and a second caller that forgot
+         *                 it would price a call that is about to be refused.
+         */
+        public BigDecimal factorFor(Map<String, Object> supplied) {
+            if (modifiers.isEmpty()) return BigDecimal.ONE;
+            BigDecimal factor = BigDecimal.ONE;
+            for (PriceModifier m : modifiers) {
+                factor = factor.multiply(m.factorFor(supplied == null ? null : supplied.get(m.param())));
+            }
+            return plain(factor);
+        }
+
+        /**
+         * Trailing zeros dropped, but never into scientific notation.
+         *
+         * <p>{@code stripTrailingZeros} renders 100 as {@code 1E+2}, and this
+         * number is serialised into a tool result an agent reads and into a
+         * query string. A factor that arrives as {@code 1E+2} is a factor
+         * somebody has to guess at.
+         */
+        private static BigDecimal plain(BigDecimal value) {
+            BigDecimal stripped = value.stripTrailingZeros();
+            return stripped.scale() < 0 ? stripped.setScale(0) : stripped;
+        }
+
+        /**
+         * One line per modifier that actually moved the price, for a surface
+         * that has to SAY why a call costs what it costs.
+         *
+         * <p>A factor of exactly 1 is left out: it is the reference tier, and
+         * listing it would fill the explanation with the reasons the price did
+         * NOT change.
+         */
+        public List<String> explainFactor(Map<String, Object> supplied) {
+            if (modifiers.isEmpty()) return List.of();
+            List<String> out = new ArrayList<>();
+            for (PriceModifier m : modifiers) {
+                BigDecimal f = m.factorFor(supplied == null ? null : supplied.get(m.param()));
+                if (f.compareTo(BigDecimal.ONE) == 0) continue;
+                out.add(m.param() + " x" + f.stripTrailingZeros().toPlainString());
+            }
+            return Collections.unmodifiableList(out);
+        }
+    }
+
+    /**
+     * One reason a call on a model costs more than that model's published rate.
+     *
+     * <p><b>The gap this closes.</b> A published price scales on exactly ONE
+     * dimension: the size of the call (seconds of video, characters of speech).
+     * Everything else a caller chooses is invisible to it. That is fine while
+     * the other choices are free, and it is a silent loss the moment they are
+     * not: a provider charges more for a clip rendered at 1080p than at 720p,
+     * and more again for every reference image inlined into the request, and
+     * the platform charged one amount for all of them.
+     *
+     * <p>The existing answer to that was to make the expensive choice a model of
+     * its own (see {@code Model.constants}), and for a tier the caller must not
+     * move that is still the right answer: a price pinned to a model cannot be
+     * changed by the request. This is for the other half, the choices that stay
+     * the CALLER's - how many frames they pin, what resolution they ask for -
+     * where one model id per combination is a product of every option with every
+     * other and nobody can publish a price for each cell of it.
+     *
+     * <p><b>Two shapes, exactly one per modifier.</b>
+     * <ul>
+     *   <li>{@code multiply}: value to factor, for a parameter chosen from a
+     *       list ({@code resolution}, {@code quality}). One of the factors must
+     *       be exactly 1 and it is the tier the model's own rate is quoted for,
+     *       which is also what an absent value bills at.</li>
+     *   <li>{@code perAsset}: a factor per FILE attached in this slot, for the
+     *       input assets a provider charges to read. A slot that takes four
+     *       reference images at 0.1 each bills 1.4x when all four are sent, and
+     *       exactly 1x when none is, so attaching nothing costs nothing.</li>
+     * </ul>
+     *
+     * @param param    unified parameter this reads, always one of the model's
+     *                 own capabilities: a factor keyed on a parameter the model
+     *                 does not accept could never apply, and a seed that
+     *                 declares one has made a mistake worth failing the import
+     *                 for.
+     * @param multiply factor per value, null for an asset-counting modifier
+     * @param perAsset factor added per file attached, null for a value modifier
+     */
+    public record PriceModifier(String param, Map<String, BigDecimal> multiply, BigDecimal perAsset) {
+
+        /**
+         * Ceiling on any single factor, on the per-file rate, and on what a
+         * model's modifiers can reach TOGETHER.
+         *
+         * <p>Not a business rule, a typo guard: a missing decimal point turns a
+         * 1.5x surcharge into 15x on a call that has already been quoted at the
+         * lower figure. The clamps on the published price row are the business
+         * ceiling and stay the only one that binds a real price.
+         *
+         * <p>The product matters as much as the parts, and it is the same
+         * number on purpose: the price quote drops a factor above this rather
+         * than showing it, so a descriptor able to exceed it would have readers
+         * quoted the base rate and charged the product.
+         */
+        public static final BigDecimal MAX_FACTOR =
+                com.apimarketplace.common.web.BillingContextHeaders.MAX_GENERATION_MULTIPLIER;
+
+        public PriceModifier {
+            multiply = multiply == null ? null : Map.copyOf(multiply);
+        }
+
+        /** True when this modifier counts FILES rather than reading a value. */
+        public boolean countsAssets() {
+            return perAsset != null;
+        }
+
+        /**
+         * This modifier's contribution for one supplied value.
+         *
+         * <p>An absent value bills at 1: for a value modifier that is the
+         * reference tier the model's rate is quoted for, and for an asset
+         * modifier it is a slot nobody filled. Neither is a reason to charge
+         * more, and guessing in the other direction would bill a surcharge for
+         * a file that was never sent.
+         */
+        public BigDecimal factorFor(Object supplied) {
+            if (countsAssets()) {
+                int count = assetCount(supplied);
+                if (count <= 0) return BigDecimal.ONE;
+                return BigDecimal.ONE.add(perAsset.multiply(BigDecimal.valueOf(count)));
+            }
+            String key = normalizeKey(supplied);
+            if (key == null || multiply == null) return BigDecimal.ONE;
+            BigDecimal factor = multiply.get(key);
+            // A value with no entry bills at the reference tier rather than
+            // failing: parsing already refuses a map that does not cover every
+            // value the model allows, so the only way here is a descriptor
+            // edited past that gate, and refusing a call at billing time for a
+            // seed authoring mistake helps nobody.
+            return factor == null ? BigDecimal.ONE : factor;
+        }
+
+        /**
+         * The most this modifier can ever contribute, for the ceiling check and
+         * for anything that has to state a model's worst case.
+         *
+         * <p>For a value modifier that is its dearest factor. For a per-file one
+         * it is every slot full, which the binding's own {@code maxItems} bounds
+         * (and {@code GenerationInputResolver} enforces, so a call cannot exceed
+         * it).
+         *
+         * @param binding the slot this modifier reads, for its file ceiling.
+         *        A null binding is read as a single file: it cannot happen for a
+         *        parsed descriptor, and assuming MORE than one would under-state
+         *        nothing while assuming fewer could.
+         */
+        public BigDecimal maxFactor(ParamBinding binding) {
+            if (countsAssets()) {
+                int slots = binding == null ? 1 : Math.max(1, binding.maxItems());
+                return BigDecimal.ONE.add(perAsset.multiply(BigDecimal.valueOf(slots)));
+            }
+            BigDecimal dearest = BigDecimal.ONE;
+            if (multiply != null) {
+                for (BigDecimal factor : multiply.values()) {
+                    if (factor.compareTo(dearest) > 0) dearest = factor;
+                }
+            }
+            return dearest;
+        }
+
+        /** How many files this slot was given. A single file is one, nothing is none. */
+        private static int assetCount(Object supplied) {
+            if (supplied == null) return 0;
+            if (supplied instanceof Collection<?> c) {
+                int n = 0;
+                for (Object item : c) {
+                    if (item != null && !String.valueOf(item).isBlank()) n++;
+                }
+                return n;
+            }
+            return String.valueOf(supplied).isBlank() ? 0 : 1;
+        }
+
+        /**
+         * The form a value is looked up under, so the seed's key and the
+         * caller's value agree however each was written.
+         *
+         * <p>Numbers are compared as numbers: a seed keyed {@code "5"} and a
+         * caller sending {@code 5.0} are the same choice, and a map miss here
+         * would silently bill the reference tier for a call that asked for the
+         * expensive one. Text is trimmed and lower-cased for the same reason
+         * ({@code "1080P"}).
+         */
+        static String normalizeKey(Object value) {
+            if (value == null) return null;
+            String raw = String.valueOf(value).trim();
+            if (raw.isEmpty()) return null;
+            try {
+                return new BigDecimal(raw).stripTrailingZeros().toPlainString();
+            } catch (NumberFormatException notANumber) {
+                return raw.toLowerCase(Locale.ROOT);
+            }
         }
     }
 
@@ -694,6 +1022,51 @@ public record GenerationSpec(
             });
         }
 
+        // Two file slots that mean the same thing cannot be told apart by anyone
+        // who reads them: the composer's menu would offer "Reference image" twice
+        // and the picker behind each entry would be a coin toss. One meaning, one
+        // slot - which is also what keeps `input_image` and a role-named slot from
+        // being two ways to say the same thing on one endpoint.
+        Map<AssetRole, String> slotByRole = new EnumMap<>(AssetRole.class);
+        for (Map.Entry<String, ParamBinding> e : paramMap.entrySet()) {
+            AssetRole role = e.getValue().role();
+            if (role == null) continue;
+            String already = slotByRole.putIfAbsent(role, e.getKey());
+            if (already != null) {
+                throw new IllegalArgumentException(err(context, "generation.paramMap declares two "
+                        + "file slots with the same role '" + role.wire() + "' ('" + already + "' and '"
+                        + e.getKey() + "'). Nothing downstream can tell them apart: both are labelled "
+                        + "the same on every surface."));
+            }
+        }
+
+        // A companion has to be reachable on this endpoint, or the refusal it
+        // exists to produce would name a parameter no caller could ever supply.
+        for (Map.Entry<String, ParamBinding> e : paramMap.entrySet()) {
+            for (String companion : e.getValue().requires()) {
+                if (!paramMap.containsKey(companion)) {
+                    throw new IllegalArgumentException(err(context, "generation.paramMap['" + e.getKey()
+                            + "'].requires names '" + companion + "', which this endpoint does not map. "
+                            + "A companion nobody can send makes the slot permanently unusable."));
+                }
+            }
+            for (String forbidden : e.getValue().excludes()) {
+                if (!paramMap.containsKey(forbidden)) {
+                    throw new IllegalArgumentException(err(context, "generation.paramMap['" + e.getKey()
+                            + "'].excludes names '" + forbidden + "', which this endpoint does not map. "
+                            + "A pair that cannot occur is a rule about nothing."));
+                }
+                // Symmetric at run time, so the reverse declaration would be a second
+                // place to change and a second place to forget.
+                Set<String> otherWay = paramMap.get(forbidden).requires();
+                if (otherWay.contains(e.getKey())) {
+                    throw new IllegalArgumentException(err(context, "generation.paramMap['" + forbidden
+                            + "'] requires '" + e.getKey() + "' while '" + e.getKey() + "' excludes it. "
+                            + "No caller can satisfy both."));
+                }
+            }
+        }
+
         if (modelParam != null) {
             validatePath(modelParam, context, "generation.modelParam");
         }
@@ -724,7 +1097,7 @@ public record GenerationSpec(
         List<Model> models = new ArrayList<>();
         Set<String> seenIds = new LinkedHashSet<>();
         for (JsonNode m : modelsNode) {
-            Model parsed = parseModel(m, context, paramMap.keySet(), modelParam != null);
+            Model parsed = parseModel(m, context, paramMap, modelParam != null);
             if (!seenIds.add(parsed.id())) {
                 throw new IllegalArgumentException(err(context,
                         "duplicate generation model id '" + parsed.id() + "'"));
@@ -739,6 +1112,24 @@ public record GenerationSpec(
         // model's capability is no hazard, and refusing it would forbid the
         // ordinary shape where most models expose a parameter and one pins it.
         for (Model model : models) {
+            // A slot that only works ALONGSIDE another one can only be offered on
+            // a model that takes both. Declared on one and not the other, the pair
+            // could never be assembled, so the slot would refuse every call that
+            // used it - an offer that exists only to be turned down.
+            for (String capability : model.capabilities()) {
+                ParamBinding companionBinding = paramMap.get(capability);
+                if (companionBinding == null) continue;
+                for (String companion : companionBinding.requires()) {
+                    if (!model.accepts(companion)) {
+                        throw new IllegalArgumentException(err(context, "generation.models['"
+                                + model.id() + "'] accepts '" + capability + "', which only works "
+                                + "together with '" + companion + "', and does not accept that one. "
+                                + "Add it to this model's capabilities, or drop '" + capability
+                                + "' from them."));
+                    }
+                }
+            }
+
             // Two pins of the same model landing on the same place: one silently
             // replaces the other, or lands a scalar where the other needs an
             // object. Same rule the endpoint's own constants already live under.
@@ -999,6 +1390,16 @@ public record GenerationSpec(
             return new ParamBinding(path, null);
         }
         if (value.isObject()) {
+            // Before anything is read OUT of it, what is in it. A key nobody reads is
+            // a rule the author believes they wrote, and the misspelling that disarms
+            // it is invisible: the import passes, CI is green, and the guarantee is
+            // gone. Same treatment the constraint keys already get.
+            value.fieldNames().forEachRemaining(key -> {
+                if (!BINDING_KEYS.contains(key)) {
+                    throw new IllegalArgumentException(err(context, what + " has unknown key '"
+                            + key + "'. Accepted: " + sorted(BINDING_KEYS)));
+                }
+            });
             String path = text(value, "path");
             if (path == null) {
                 throw new IllegalArgumentException(err(context,
@@ -1039,6 +1440,14 @@ public record GenerationSpec(
                     throw new IllegalArgumentException(err(context, what + ".role describes what a "
                             + "FILE means to this endpoint, and '" + unified + "' does not carry one."));
                 }
+            }
+            AssetRole named = ROLE_BY_PARAM.get(unified);
+            if (named != null && role != null && role != named) {
+                throw new IllegalArgumentException(err(context, what + " is the '" + named.wire()
+                        + "' slot, so its role can only be '" + named.wire() + "' (got '" + role.wire()
+                        + "'). The name is what the seed author reads and the role is what every "
+                        + "surface labels the field from; letting them disagree shows one thing and "
+                        + "sends another."));
             }
             if (carriesAFile && role == null) {
                 // The slot alone says "an image goes here"; it does not say
@@ -1122,12 +1531,82 @@ public record GenerationSpec(
                 }
                 itemConstants = collected;
             }
-            return new ParamBinding(path, scale, encoding, mimePath, role, maxItems, itemConstants);
+            Set<String> requires = companions(value, "requires", unified, context, what, carriesAFile);
+            Set<String> excludes = companions(value, "excludes", unified, context, what, carriesAFile);
+            for (String both : requires) {
+                if (excludes.contains(both)) {
+                    throw new IllegalArgumentException(err(context, what + " both requires and "
+                            + "excludes '" + both + "', which no caller can satisfy."));
+                }
+            }
+            return new ParamBinding(path, scale, encoding, mimePath, role, maxItems, itemConstants,
+                    requires, excludes);
         }
 
         throw new IllegalArgumentException(err(context, what + " must be an upstream path string, "
                 + "or an object {path, scale} when the value needs converting"
                 + (carriesAFile ? ", and a parameter carrying a file needs {path, encoding}" : "")));
+    }
+
+    /**
+     * The other parameters a binding names, for {@code requires} or {@code excludes}.
+     *
+     * <p>Both lists are the same shape and the same mistakes are possible in each, so
+     * they are read by the same code: a rule enforced on one and not the other is the
+     * drift this whole area keeps producing.
+     */
+    private static Set<String> companions(JsonNode value, String key, String unified,
+                                           String context, String what, boolean carriesAFile) {
+        Set<String> named = new LinkedHashSet<>();
+        if (!value.hasNonNull(key)) return named;
+        if (!carriesAFile) {
+            // Every surface draws these beside a file the reader chooses: the menu that
+            // closes a slot, the line under a field. A rule on a parameter carrying a
+            // value would be enforced here and drawn nowhere, which is the half-support
+            // that reads as a guarantee.
+            throw new IllegalArgumentException(err(context, what + "." + key + " is a rule about "
+                    + "FILE slots (" + sorted(ASSET_PARAMS) + "), and '" + unified + "' carries a "
+                    + "value. A restriction on a value has no form here at all: a binding is shared "
+                    + "by every model of this endpoint, so leave the slot off the models that cannot "
+                    + "take the combination."));
+        }
+        JsonNode list = value.get(key);
+        if (!list.isArray() || list.isEmpty()) {
+            throw new IllegalArgumentException(err(context, what + "." + key + " must be a "
+                    + "non-empty array of unified parameter names."));
+        }
+        for (JsonNode entry : list) {
+            String companion = entry.isTextual() ? entry.asText().trim() : "";
+            if (companion.isEmpty()) {
+                throw new IllegalArgumentException(err(context,
+                        what + "." + key + " entries must be non-blank parameter names."));
+            }
+            if (companion.equals(unified)) {
+                throw new IllegalArgumentException(err(context,
+                        what + "." + key + " cannot name '" + unified + "' itself."));
+            }
+            if (!UNIFIED_PARAMS.contains(companion)) {
+                throw new IllegalArgumentException(err(context, what + "." + key + "['"
+                        + companion + "'] is not a unified parameter. Accepted: "
+                        + sorted(UNIFIED_PARAMS)));
+            }
+            if (!ASSET_PARAMS.contains(companion)) {
+                // BOTH ends, not only the side that declares the rule. A file slot naming a
+                // VALUE is published in the listing and printed under the field, and can
+                // block nothing: the composer closes a slot by looking at the files
+                // attached, and a value has none. Refusing one spelling and allowing the
+                // other is the "depends who wrote it" property the symmetric read exists to
+                // remove.
+                throw new IllegalArgumentException(err(context, what + "." + key + "['"
+                        + companion + "'] is not a file slot. These rules are drawn between the "
+                        + "files a reader picks (" + sorted(ASSET_PARAMS) + "). A restriction "
+                        + "between a file and a VALUE has no form here at all: a binding is shared "
+                        + "by every model of this endpoint, so leave the slot off the models that "
+                        + "cannot take the combination."));
+            }
+            named.add(companion);
+        }
+        return named;
     }
 
     /**
@@ -1183,8 +1662,9 @@ public record GenerationSpec(
         return v.asText();
     }
 
-    private static Model parseModel(JsonNode m, String context, Set<String> mappedParams,
+    private static Model parseModel(JsonNode m, String context, Map<String, ParamBinding> paramMap,
                                      boolean endpointSelectsModel) {
+        Set<String> mappedParams = paramMap.keySet();
         if (!m.isObject()) {
             throw new IllegalArgumentException(err(context, "each generation.models entry must be an object"));
         }
@@ -1297,7 +1777,7 @@ public record GenerationSpec(
                 Collections.unmodifiableSet(required),
                 Collections.unmodifiableMap(constraints),
                 Collections.unmodifiableMap(modelConstants),
-                parsePrice(m.path("price"), context, id));
+                parsePrice(m.path("price"), context, id, capabilities, required, constraints, paramMap));
 
         // A model sold by a dimension has to be able to state that dimension on
         // every call, or the price multiplies a number nobody supplied. Here we
@@ -1375,12 +1855,23 @@ public record GenerationSpec(
      * onboarded before its price is decided, and the platform's fail-closed
      * gate at call time is what prevents it being given away.
      */
-    private static Price parsePrice(JsonNode p, String context, String modelId) {
+    private static Price parsePrice(JsonNode p, String context, String modelId,
+                                     Set<String> capabilities, Set<String> required,
+                                     Map<String, Constraint> constraints,
+                                     Map<String, ParamBinding> paramMap) {
         if (p == null || p.isMissingNode() || p.isNull()) return Price.free();
         if (!p.isObject()) {
             throw new IllegalArgumentException(err(context, "generation.models['" + modelId
                     + "'].price must be an object"));
         }
+        // Same posture as the constraint keys: a key nobody reads is a price
+        // the author believes they wrote and the platform never charges.
+        p.fieldNames().forEachRemaining(key -> {
+            if (!PRICE_KEYS.contains(key)) {
+                throw new IllegalArgumentException(err(context, "generation.models['" + modelId
+                        + "'].price has unknown key '" + key + "'. Accepted: " + sorted(PRICE_KEYS)));
+            }
+        });
         String unit = text(p, "unit");
         if (unit == null) unit = "call";
         unit = unit.toLowerCase(Locale.ROOT);
@@ -1406,7 +1897,397 @@ public record GenerationSpec(
                     + "'].price declares unit '" + unit + "' but unitCredits is 0, so the unit has no effect. "
                     + "Set unitCredits, or use unit 'call' for a flat price."));
         }
-        return new Price(unit, base, per, min, max);
+        return new Price(unit, base, per, min, max,
+                parseModifiers(p.path("modifiers"), context, modelId, capabilities, required, constraints,
+                        paramMap, measuringParamFor(unit)));
+    }
+
+    /**
+     * The parameter a price of this unit multiplies, so a modifier can be
+     * refused on it.
+     *
+     * <p>Derived from the unit rather than read off {@link Model}, because the
+     * model does not exist yet while its own price is being parsed. The two
+     * agree by construction: {@code Model.measuringParam()} is the same switch
+     * over the same unit.
+     */
+    private static String measuringParamFor(String unit) {
+        return switch (unit) {
+            case "second", "minute" -> "duration_seconds";
+            case "image" -> "n";
+            case "character" -> "prompt";
+            default -> null;
+        };
+    }
+
+    /** Every key a price block may carry. Anything else is a seed mistake. */
+    private static final Set<String> PRICE_KEYS =
+            Set.of("unit", "baseCredits", "unitCredits", "minCredits", "maxCredits", "modifiers");
+
+    /** Every key one modifier may carry. */
+    private static final Set<String> MODIFIER_KEYS = Set.of("param", "multiply", "perAsset");
+
+    /**
+     * Parse {@code price.modifiers}, refusing at IMPORT every shape that would
+     * otherwise mis-charge silently at run time.
+     *
+     * <p>Each rule here exists because its absence has exactly one symptom: a
+     * price that is quoted and charged at the reference tier for a call that
+     * asked for the expensive one. None of them is visible in a response, so
+     * none of them can be caught later.
+     */
+    private static List<PriceModifier> parseModifiers(JsonNode node, String context, String modelId,
+                                                       Set<String> capabilities,
+                                                       Set<String> required,
+                                                       Map<String, Constraint> constraints,
+                                                       Map<String, ParamBinding> paramMap,
+                                                       String measuringParam) {
+        if (node == null || node.isMissingNode() || node.isNull()) return List.of();
+        if (!node.isArray()) {
+            throw new IllegalArgumentException(err(context, "generation.models['" + modelId
+                    + "'].price.modifiers must be an array"));
+        }
+        List<PriceModifier> out = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (JsonNode entry : node) {
+            String where = "generation.models['" + modelId + "'].price.modifiers";
+            if (!entry.isObject()) {
+                throw new IllegalArgumentException(err(context, where + " entries must be objects"));
+            }
+            entry.fieldNames().forEachRemaining(key -> {
+                if (!MODIFIER_KEYS.contains(key)) {
+                    throw new IllegalArgumentException(err(context, where + " has unknown key '"
+                            + key + "'. Accepted: " + sorted(MODIFIER_KEYS)));
+                }
+            });
+            String param = text(entry, "param");
+            if (param == null) {
+                throw new IllegalArgumentException(err(context, where + "[].param is required"));
+            }
+            if (!capabilities.contains(param)) {
+                throw new IllegalArgumentException(err(context, where + " prices '" + param
+                        + "', which is not one of this model's capabilities, so the factor could "
+                        + "never apply"));
+            }
+            if (!seen.add(param)) {
+                throw new IllegalArgumentException(err(context, where + " declares '" + param
+                        + "' twice. One parameter, one factor: two entries would multiply together "
+                        + "and neither would say the price they produce."));
+            }
+            // A binding that SCALES its value is read differently by the two
+            // sides. The direct path reads the unified value the caller sent;
+            // the relay reads the upstream one, which the writer multiplied by
+            // the scale, and nothing undoes it there the way the quantity's
+            // reader does. A numeric factor on such a slot would apply on one
+            // install and miss the map entirely on another, for the same
+            // request. Refused rather than made to work, because no shipped
+            // descriptor wants one and a conversion nobody exercises rots.
+            ParamBinding scaled = paramMap.get(param);
+            if (scaled != null && scaled.scale() != null) {
+                throw new IllegalArgumentException(err(context, where + " prices '" + param
+                        + "', whose binding declares a scale. The value the provider is sent is not "
+                        + "the value the caller wrote, so the same call would take the factor on one "
+                        + "path and miss it on the other."));
+            }
+            if (param.equals(measuringParam)) {
+                // The price ALREADY scales on this parameter: it is the quantity
+                // the published rate multiplies. A factor on top of it charges
+                // the same dimension twice, so a ten second clip at a x2 factor
+                // bills twenty seconds and the run reports ten.
+                throw new IllegalArgumentException(err(context, where + " prices '" + param
+                        + "', which is what this model is already sold BY. The price multiplies it "
+                        + "once as the quantity; a factor on top of that charges it twice."));
+            }
+            boolean hasMultiply = !entry.path("multiply").isMissingNode();
+            boolean hasPerAsset = !entry.path("perAsset").isMissingNode();
+            if (hasMultiply == hasPerAsset) {
+                throw new IllegalArgumentException(err(context, where + "['" + param
+                        + "'] needs exactly one of 'multiply' (a factor per value) or 'perAsset' "
+                        + "(a factor per file attached)"));
+            }
+            // A priced VALUE the caller may omit is billed at the reference tier while the provider
+            // renders whatever it defaults to. Nothing can close that from the inside: the factor
+            // for an absent value has to be 1, because 1 is the rate the model is published at. So
+            // the parameter has to be stated on every call, which is what `required` means.
+            //
+            // A FILE slot is the opposite case and is deliberately exempt: attaching nothing
+            // genuinely costs nothing, so an absent file at 1x is the true price.
+            if (hasMultiply && !required.contains(param)) {
+                throw new IllegalArgumentException(err(context, where + " prices '" + param
+                        + "', which this model does not require. A call that omits it would be "
+                        + "billed the reference tier while the provider renders whatever it "
+                        + "defaults to. Add '" + param + "' to this model's required list."));
+            }
+            // An INDEXED value binding is read differently by the two sides for the same reason
+            // a scaled one is, and it was refused for neither.
+            //
+            // The relay resolves a value binding's path literally, index included, while the
+            // dispatcher prunes empty elements and closes the gap: a `quality` bound to
+            // `content[2].quality` behind an optional file at `content[1]` arrives at
+            // `content[1].quality` on a call that attaches no file. The relay then reads nothing,
+            // the factor collapses to 1, and the relayed 4K render bills at the reference tier
+            // while the identical direct call bills 2x.
+            //
+            // The FILE slots survive this because their count is measured by marker rather than by
+            // index (see RelayedGenerationMeasurement), which is exactly the machinery a value
+            // binding does not have. Refused rather than made to work: no shipped descriptor wants
+            // one, and a conversion nobody exercises rots.
+            if (hasMultiply && scaled != null && scaled.path() != null
+                    && arrayPrefixOf(scaled.path()) != null) {
+                throw new IllegalArgumentException(err(context, where + " prices '" + param
+                        + "', whose binding walks an array element. The dispatcher prunes empty "
+                        + "elements and closes the gap, so the index the relay would read is not "
+                        + "the index the value was written at: the same call would take the factor "
+                        + "on the direct path and miss it on the relayed one. Bind it outside the "
+                        + "array, or price a file slot with 'perAsset' instead."));
+            }
+            out.add(hasPerAsset
+                    ? parsePerAssetModifier(entry, context, where, param, paramMap, required)
+                    : parseMultiplyModifier(entry, context, where, param, constraints));
+        }
+        // The ceiling binds the PRODUCT, not each factor on its own, because the
+        // product is what multiplies the price and what a quote is clamped to.
+        // Checking only the parts would let two legal modifiers reach an amount
+        // no surface will quote: the reader would be shown the base rate and
+        // charged the product, which is the one disagreement this feature must
+        // never produce.
+        //
+        // The bound is an OVER-estimate: it assumes every slot full and every
+        // dearest value chosen at once, which the exclusion rules often make
+        // unreachable. An over-estimate can only refuse a descriptor that would
+        // have been fine, never accept one that would not.
+        BigDecimal ceiling = BigDecimal.ONE;
+        for (PriceModifier m : out) {
+            ceiling = ceiling.multiply(m.maxFactor(paramMap.get(m.param())));
+        }
+        if (ceiling.compareTo(PriceModifier.MAX_FACTOR) > 0) {
+            throw new IllegalArgumentException(err(context, "generation.models['" + modelId
+                    + "'].price.modifiers can reach " + ceiling.stripTrailingZeros().toPlainString()
+                    + "x together, above the " + PriceModifier.MAX_FACTOR + " ceiling a price quote "
+                    + "will show. A reader would be quoted the base rate and charged the product."));
+        }
+        return Collections.unmodifiableList(out);
+    }
+
+    private static PriceModifier parsePerAssetModifier(JsonNode entry, String context, String where,
+                                                        String param, Map<String, ParamBinding> paramMap,
+                                                        Set<String> required) {
+        // Counting files only means something on a slot that CARRIES files. On
+        // a value parameter the count is always one, so the surcharge would
+        // apply to every call that states the value - a flat increase written
+        // as though it were per-file.
+        ParamBinding binding = paramMap.get(param);
+        if (!ASSET_PARAMS.contains(param) || binding == null || binding.encoding() == null) {
+            throw new IllegalArgumentException(err(context, where + "['" + param
+                    + "'] uses 'perAsset' but that parameter does not carry a file on this endpoint. "
+                    + "Price a value with 'multiply' instead."));
+        }
+        // A file the model cannot be called WITHOUT is a file its published rate
+        // is already quoted for: an image-to-video model sells image-to-video.
+        // Surcharging it adds a fixed amount to every single call, written as
+        // though it were a per-file rule, and the rate it belongs in is the one
+        // the administrator can see and change.
+        if (required.contains(param)) {
+            throw new IllegalArgumentException(err(context, where + "['" + param
+                    + "'] uses 'perAsset' on a REQUIRED file, so every call would carry the surcharge "
+                    + "and it is part of this model's rate, not an extra. Put it in unitCredits or "
+                    + "baseCredits instead."));
+        }
+        // A per-file price has to be COUNTABLE from the request the provider is sent, and the only
+        // thing that tells two slots of one array apart there is the marker each writes beside its
+        // own file. Without one, a slot sharing an array with another cannot be counted at all:
+        // position does not survive (the dispatcher prunes the empties and closes the gap), so the
+        // relay would attribute one slot's files to another and charge a relayed call differently
+        // from the identical direct one.
+        String sharedArrayProblem = sharedArrayProblemFor(param, paramMap);
+        if (sharedArrayProblem != null) {
+            throw new IllegalArgumentException(err(context, where + "['" + param
+                    + "'] uses 'perAsset' on a slot that shares an array with another file slot, "
+                    + "and " + sharedArrayProblem + " - so its files cannot be told from the other "
+                    + "slot's once the request is built."));
+        }
+        JsonNode raw = entry.path("perAsset");
+        if (!raw.isNumber()) {
+            throw new IllegalArgumentException(err(context, where + "['" + param
+                    + "'].perAsset must be a number"));
+        }
+        BigDecimal rate = raw.decimalValue();
+        if (rate.signum() <= 0) {
+            throw new IllegalArgumentException(err(context, where + "['" + param
+                    + "'].perAsset must be > 0: a rate of zero is a modifier that changes nothing, "
+                    + "which reads as a surcharge nobody is charged. Remove the entry instead."));
+        }
+        if (rate.compareTo(PriceModifier.MAX_FACTOR) > 0) {
+            throw new IllegalArgumentException(err(context, where + "['" + param
+                    + "'].perAsset is " + rate.toPlainString() + ", above the " + PriceModifier.MAX_FACTOR
+                    + " ceiling. That is a misplaced decimal point far more often than it is a price."));
+        }
+        return new PriceModifier(param, null, rate);
+    }
+
+    /**
+     * True when this file slot's own files can be told from every other slot's
+     * in the request that is actually sent.
+     *
+     * <p>A slot with an array to itself needs nothing: everything in it is its.
+     * A slot SHARING one needs a marker, because the only alternative, its
+     * index, does not survive the build (empties are pruned and the gap closes).
+     *
+     * <p><b>The marker has to DISCRIMINATE, not merely exist.</b> This returned
+     * {@code !itemConstants().isEmpty()} once, which two slots satisfy by both
+     * writing the same field and the same value: the shipped Seedance markers
+     * happen to differ, so nothing showed it. With equal markers the relay's
+     * {@code matchesMarker} matches every element for BOTH slots, so one opening
+     * frame plus one reference bills {@code (1+r)} on the direct path and
+     * {@code (1+2r)} squared on the relayed one, and the relayed customer is
+     * overcharged for the identical call with no error anywhere.
+     *
+     * <p>It is built exactly the way the relay builds it, index prefix stripped,
+     * so the two cannot disagree about what a marker IS. The empty case it
+     * guards is not reachable from a parsed descriptor today, because
+     * {@code parseBinding} already refuses an {@code itemConstants} key that does
+     * not sit in the same element as the file it marks; the check stays because
+     * this method's contract is "what the measurer will see", and inferring that
+     * from another gate's invariant is how the two drift apart.
+     */
+    private static String sharedArrayProblemFor(String param, Map<String, ParamBinding> paramMap) {
+        ParamBinding binding = paramMap.get(param);
+        if (binding == null || binding.path() == null) return null;
+        String array = arrayPrefixOf(binding.path());
+        if (array == null) return null;
+        Map<String, Object> marker = relayMarkerOf(binding);
+        for (Map.Entry<String, ParamBinding> other : paramMap.entrySet()) {
+            if (other.getKey().equals(param)) continue;
+            ParamBinding otherBinding = other.getValue();
+            if (otherBinding.encoding() == null || otherBinding.path() == null) continue;
+            if (!array.equals(arrayPrefixOf(otherBinding.path()))) continue;
+            // The two failures are different mistakes and need different remedies. One message for
+            // both told an author whose slots each carry {"type":"image_url"} to "give it an
+            // itemConstants marker", which they had already done.
+            if (marker.isEmpty()) {
+                return "declares no itemConstants of its own (add a marker beside its file, the "
+                        + "way '" + other.getKey() + "' does)";
+            }
+            if (marker.equals(relayMarkerOf(otherBinding))) {
+                return "writes the same itemConstants as '" + other.getKey() + "' (" + marker
+                        + "), which marks both slots identically; give this one a value the other "
+                        + "does not write";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The marker the RELAY will build for this slot: the item constants keyed
+     * under this binding's own {@code array[index].} prefix, that prefix removed.
+     *
+     * <p>Mirrors {@code RelayedGenerationMeasurement.ArraySlot#markerOf}. Kept
+     * here rather than shared because the two modules read opposite directions
+     * (this one validates a descriptor, that one measures a built body), but they
+     * MUST agree: a gate that accepts a marker the measurer cannot reconstruct
+     * passes the descriptor and then mis-attributes its files.
+     */
+    private static Map<String, Object> relayMarkerOf(ParamBinding binding) {
+        String array = arrayPrefixOf(binding.path());
+        if (array == null) return Map.of();
+        Matcher m = INDEXED_SEGMENT.matcher(binding.path());
+        String indexed = null;
+        while (m.find()) indexed = binding.path().substring(0, m.end());
+        if (indexed == null) return Map.of();
+        String prefix = indexed + ".";
+        Map<String, Object> marker = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> constant : binding.itemConstants().entrySet()) {
+            if (constant.getKey().startsWith(prefix)) {
+                marker.put(constant.getKey().substring(prefix.length()), constant.getValue());
+            }
+        }
+        return marker;
+    }
+
+    /** The array an indexed path walks ({@code content} for {@code content[3].image_url.url}). */
+    private static String arrayPrefixOf(String path) {
+        Matcher m = INDEXED_SEGMENT.matcher(path);
+        int start = -1;
+        while (m.find()) start = m.start();
+        return start < 0 ? null : path.substring(0, start);
+    }
+
+    private static PriceModifier parseMultiplyModifier(JsonNode entry, String context, String where,
+                                                        String param, Map<String, Constraint> constraints) {
+        JsonNode raw = entry.path("multiply");
+        if (!raw.isObject() || raw.isEmpty()) {
+            throw new IllegalArgumentException(err(context, where + "['" + param
+                    + "'].multiply must be a non-empty object of value to factor"));
+        }
+        Map<String, BigDecimal> byValue = new LinkedHashMap<>();
+        boolean hasReference = false;
+        Iterator<Map.Entry<String, JsonNode>> fields = raw.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> f = fields.next();
+            if (!f.getValue().isNumber()) {
+                throw new IllegalArgumentException(err(context, where + "['" + param + "'].multiply['"
+                        + f.getKey() + "'] must be a number"));
+            }
+            BigDecimal factor = f.getValue().decimalValue();
+            if (factor.signum() <= 0) {
+                throw new IllegalArgumentException(err(context, where + "['" + param + "'].multiply['"
+                        + f.getKey() + "'] must be > 0"));
+            }
+            if (factor.compareTo(PriceModifier.MAX_FACTOR) > 0) {
+                throw new IllegalArgumentException(err(context, where + "['" + param + "'].multiply['"
+                        + f.getKey() + "'] is " + factor.toPlainString() + ", above the "
+                        + PriceModifier.MAX_FACTOR + " ceiling. That is a misplaced decimal point far "
+                        + "more often than it is a price."));
+            }
+            if (factor.compareTo(BigDecimal.ONE) == 0) hasReference = true;
+            String key = PriceModifier.normalizeKey(f.getKey());
+            if (key == null) {
+                throw new IllegalArgumentException(err(context, where + "['" + param
+                        + "'].multiply has a blank value key"));
+            }
+            if (byValue.put(key, factor) != null) {
+                // "5" and "5.0" normalise to one key, and the second silently
+                // replaced the first. Two factors for one choice is never what
+                // the author meant, and which of them won depended on field order.
+                throw new IllegalArgumentException(err(context, where + "['" + param
+                        + "'].multiply names the value '" + key + "' twice"));
+            }
+        }
+        if (!hasReference) {
+            // Without a 1 the model's own rate is not the price of anything: a
+            // call that omits the parameter bills at 1 anyway, so the seed would
+            // charge one amount for the unstated value and another for the value
+            // the provider substitutes for it.
+            throw new IllegalArgumentException(err(context, where + "['" + param
+                    + "'].multiply must give at least one value a factor of 1: that value is the tier "
+                    + "this model's own rate is quoted for, and it is what a call that omits '"
+                    + param + "' is billed at."));
+        }
+        // The map has to be EXHAUSTIVE, and the only way to know what it must
+        // cover is a closed list of values. Without one, any value the author
+        // did not think of falls through to the reference tier - the silent
+        // undercharge this whole block exists to remove, reintroduced by an
+        // omission nothing can see. A min/max range is not a list: the values
+        // between the bounds are unbounded in number.
+        Constraint constraint = constraints.get(param);
+        List<Object> allowedValues = constraint == null ? null : constraint.allowed();
+        if (allowedValues == null || allowedValues.isEmpty()) {
+            throw new IllegalArgumentException(err(context, where + "['" + param
+                    + "'].multiply needs this model to constrain '" + param + "' with an 'allowed' "
+                    + "list, so every value it can be given has a factor. Without one, a value the "
+                    + "map does not name is billed at the reference tier while the provider charges "
+                    + "for another."));
+        }
+        for (Object allowed : allowedValues) {
+            String key = PriceModifier.normalizeKey(allowed);
+            if (key != null && !byValue.containsKey(key)) {
+                throw new IllegalArgumentException(err(context, where + "['" + param
+                        + "'].multiply has no factor for '" + key + "', which this model allows. "
+                        + "Every allowed value needs one, or that call is billed at the reference "
+                        + "tier while the provider charges for another."));
+            }
+        }
+        return new PriceModifier(param, byValue, null);
     }
 
     private static String text(JsonNode node, String field) {

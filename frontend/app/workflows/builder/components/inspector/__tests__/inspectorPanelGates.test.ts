@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   shouldConstrainPanelToContainer,
+  shouldForceCompactPanel,
   shouldRenderMinimizedPill,
   shouldUseTabbedLayout,
 } from '../useInspectorLayout';
@@ -112,5 +113,69 @@ describe('InspectorPanel gate call sites', () => {
         `${name} must NOT be given isMobile: that is shouldUseTabbedLayout, which knows about the panel width`,
       ).toBe(false);
     }
+  });
+});
+
+/**
+ * The compact-panel gate, pinned at its CALL SITE for the same reason the two
+ * above are: the pure function cannot see what it is given, and this particular
+ * bug was entirely in what it was given.
+ *
+ * The gate means "this node still has to be pointed at something, and the picker
+ * that does the pointing owns the panel". Every family whose picker has since
+ * been deleted was still listed, and the listing matched on `data.id` prefixes,
+ * which a plan round-trip does not preserve. Re-adding any of those terms here -
+ * or any id test at all - restores the bug while every unit test of the pure
+ * function still passes.
+ */
+describe('the compact-panel gate call site', () => {
+  const source = readFileSync(join(__dirname, '..', '..', 'InspectorPanel.tsx'), 'utf8');
+  const callStart = source.indexOf('shouldForceCompactPanel({');
+  const call = callStart < 0 ? '' : source.slice(callStart, source.indexOf('})', callStart) + 2);
+
+  it('computes shouldForceSmallMode through the gate, not inline', () => {
+    expect(call, 'InspectorPanel must call shouldForceCompactPanel').toBeTruthy();
+    expect(source).toContain('const shouldForceSmallMode = shouldForceCompactPanel(');
+  });
+
+  it('passes it only the MCP-picker signals', () => {
+    for (const flag of ['isApiNode', 'isMcpGenericNode', 'isToolNode']) {
+      expect(call, `the gate needs ${flag}`).toContain(flag);
+    }
+  });
+
+  it.each(['isCoreNode', 'isAiGenericNode', 'isTriggerNode', 'hasNavigation', 'hasTriggerNavigation'])(
+    'is not handed %s again: that family has no picker left, and the term only took the panel away',
+    (term) => {
+      expect(call).not.toContain(term);
+    },
+  );
+
+  it('keeps the gate free of any id test', () => {
+    // `data.id` is the graph node id a plan re-imported, i.e. whatever created the
+    // canvas node - a template literal, a plan key, a uuid. It is not an identity.
+    expect(call).not.toContain('startsWith');
+    expect(call).not.toContain('data.id');
+    expect(call).not.toContain('nodeId');
+  });
+
+  it('is the only thing deciding the panel is compact', () => {
+    const assignments = source.match(/const shouldForceSmallMode = [^;]+;/g) ?? [];
+    expect(assignments).toHaveLength(1);
+  });
+});
+
+describe('shouldForceCompactPanel', () => {
+  it('pins an MCP node that has not chosen its tool', () => {
+    expect(shouldForceCompactPanel({ isApiNode: true, isMcpGenericNode: false, isToolNode: false })).toBe(true);
+    expect(shouldForceCompactPanel({ isApiNode: false, isMcpGenericNode: true, isToolNode: false })).toBe(true);
+  });
+
+  it('releases it once it is a tool, which has parameters and columns', () => {
+    expect(shouldForceCompactPanel({ isApiNode: true, isMcpGenericNode: true, isToolNode: true })).toBe(false);
+  });
+
+  it('pins nothing else', () => {
+    expect(shouldForceCompactPanel({ isApiNode: false, isMcpGenericNode: false, isToolNode: false })).toBe(false);
   });
 });

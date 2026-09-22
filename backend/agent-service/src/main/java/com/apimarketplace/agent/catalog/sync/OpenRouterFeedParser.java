@@ -41,7 +41,7 @@ import static com.apimarketplace.agent.catalog.sync.FeedParsingUtils.*;
  * <p>Filters (must match {@code scripts/models/sync_openrouter.py} so parity
  * is verifiable):
  * <ol>
- *   <li>Drop ids whose suffix matches {@code :free|:beta|:extended|:thinking|:nitro|:floor}
+ *   <li>Drop ids whose suffix matches {@code :free|:beta|:extended|:thinking|:nitro|:floor|:batch}
  *       (duplicate variants of the canonical paid version).</li>
  *   <li>Drop rows missing {@code pricing.prompt} or {@code pricing.completion}.</li>
  *   <li>Drop rows whose {@code supported_parameters} does NOT include "tools".</li>
@@ -52,9 +52,41 @@ import static com.apimarketplace.agent.catalog.sync.FeedParsingUtils.*;
 @RequiredArgsConstructor
 public class OpenRouterFeedParser {
 
-    /** Suffixes on OpenRouter ids that duplicate the canonical paid model. */
+    /**
+     * Named because it is read twice, and the two readers must not drift: the
+     * suffix filter that drops the row, and {@link #collectBatchRates} that
+     * harvests its rate first. Declared BEFORE the list that uses it - a static
+     * field referenced by simple name above its own declaration is an illegal
+     * forward reference, not a style question.
+     */
+    static final String BATCH_SUFFIX = ":batch";
+
+    /**
+     * Suffixes on OpenRouter ids that duplicate the canonical paid model.
+     *
+     * <p>{@code :batch} is the highest-volume entry and the one that was
+     * missing longest: OpenRouter publishes a batch-tier twin of a model as a
+     * SEPARATE id at roughly half price ({@code anthropic/claude-opus-5:batch},
+     * {@code z-ai/glm-5.2:batch}). Measured against the live feed on
+     * 2026-09-15, 76 of the 356 ids this parser accepted were {@code :batch}
+     * twins, so more than a fifth of the OpenRouter catalog was duplicate rows
+     * a picker cannot tell apart from the real model.
+     *
+     * <p>Exposing them as models mis-sells them: a batch endpoint has different
+     * latency semantics and is not interchangeable with the interactive one at
+     * the point of a picker click, and being cheaper it sorts ABOVE the model
+     * it duplicates in any cost-ordered list.
+     *
+     * <p>{@code :batch} is also the one suffix here whose row carries
+     * information worth keeping, so it alone is not simply discarded: its rate
+     * is copied onto the canonical row's {@code priceInputBatch} /
+     * {@code priceOutputBatch} columns by {@link #collectBatchRates}. Those
+     * columns exist and the LiteLLM feed already fills them; before that
+     * carry-over this parser left them null and the batch rate was lost
+     * outright, which is a silent downgrade dressed up as a cleanup.
+     */
     static final List<String> DUPLICATE_SUFFIXES = List.of(
-            ":free", ":beta", ":extended", ":thinking", ":nitro", ":floor");
+            ":free", ":beta", ":extended", ":thinking", ":nitro", ":floor", BATCH_SUFFIX);
 
     private static final TypeReference<Map<String, Object>> ENVELOPE =
             new TypeReference<>() {};
@@ -78,6 +110,12 @@ public class OpenRouterFeedParser {
 
         List<Map<String, Object>> accepted = new ArrayList<>();
         int rejectedSuffix = 0, rejectedNoPricing = 0, rejectedNoTools = 0, rejectedSchema = 0;
+
+        // First pass over the SAME list: harvest the batch-tier rates before
+        // the suffix filter throws those rows away, so the canonical row can
+        // carry them. Reading the list twice is cheap (a few hundred entries)
+        // and keeps the accept path a single straight-line filter.
+        Map<String, BigDecimal[]> batchRates = collectBatchRates(rawList);
 
         for (Object entry : rawList) {
             if (!(entry instanceof Map<?, ?> mapRaw)) { rejectedSchema++; continue; }
@@ -109,14 +147,74 @@ public class OpenRouterFeedParser {
                 rejectedNoTools++; continue;
             }
 
-            accepted.add(normalise(id, m, pricing, supportedParams, priceInput, priceOutput,
-                    sourceUrl, fetchedAtIso));
+            Map<String, Object> row = normalise(id, m, pricing, supportedParams,
+                    priceInput, priceOutput, sourceUrl, fetchedAtIso);
+            BigDecimal[] batch = batchRates.get(id);
+            if (batch != null) {
+                row.put("priceInputBatch", batch[0]);
+                row.put("priceOutputBatch", batch[1]);
+            }
+            accepted.add(row);
         }
 
-        log.info("OpenRouter parse: total={}, accepted={}, rejected=[suffix:{} noPricing:{} noTools:{} schema:{}]",
-                rawList.size(), accepted.size(), rejectedSuffix, rejectedNoPricing, rejectedNoTools, rejectedSchema);
+        // Collected, not carried: a rate whose base row is later rejected for
+        // no-tools or no-pricing is counted here and attached to nothing.
+        log.info("OpenRouter parse: total={}, accepted={}, batchRatesCollected={}, rejected=[suffix:{} noPricing:{} noTools:{} schema:{}]",
+                rawList.size(), accepted.size(), batchRates.size(),
+                rejectedSuffix, rejectedNoPricing, rejectedNoTools, rejectedSchema);
 
         return ParseResult.success(accepted, rejectedSuffix, rejectedNoPricing, rejectedNoTools, rejectedSchema);
+    }
+
+    /**
+     * Index the {@code :batch} rows by the id they are a twin of, so the
+     * canonical row can adopt their rate on the way past.
+     *
+     * <p>Keyed by the BASE id ({@code anthropic/claude-opus-5}), which is what
+     * the accept pass holds. A {@code :batch} row whose base the feed does not
+     * carry indexes nothing and is simply dropped: there is no row to put the
+     * rate on, and inventing one would publish a model that exists only as a
+     * batch endpoint.
+     *
+     * <p>Deliberately tolerant. A malformed or unpriced batch row contributes
+     * nothing rather than failing the parse: a missing batch rate leaves one
+     * optional column null, which is where it already was, whereas an
+     * exception here would cost the whole feed.
+     */
+    private static Map<String, BigDecimal[]> collectBatchRates(List<?> rawList) {
+        Map<String, BigDecimal[]> out = new LinkedHashMap<>();
+        for (Object entry : rawList) {
+            if (!(entry instanceof Map<?, ?> mapRaw)) continue;
+            @SuppressWarnings("unchecked")
+            Map<String, Object> m = (Map<String, Object>) mapRaw;
+            String id = strOf(m.get("id"));
+            if (id == null || !id.endsWith(BATCH_SUFFIX)) continue;
+
+            Map<String, Object> pricing = asMap(m.get("pricing"));
+            if (pricing == null) continue;
+            BigDecimal in  = costPerTokenToPricePerMillion(pricing.get("prompt"));
+            BigDecimal outRate = costPerTokenToPricePerMillion(pricing.get("completion"));
+            if (in == null || outRate == null) continue;
+            // Two rejections, and the second is STRICTER than the accept path
+            // on purpose, so they are not one condition.
+            //
+            // Both non-positive: an unpriced row, not a free batch tier.
+            // Stamping 0/0 onto a paid model would advertise a rate the
+            // provider never offered, and a caller reading priceInputBatch
+            // cannot tell an advertised zero from a missing one.
+            if (in.signum() <= 0 && outRate.signum() <= 0) continue;
+            // EITHER side negative: the accept path tolerates a mixed sign on
+            // the interactive rate because a "-1" there is OpenRouter's
+            // variable-pricing sentinel on a row that still has a real price
+            // on the other side. A batch column has no such reading: a
+            // negative rate copied onto a canonical row would flow into the
+            // billing mirror as a negative NUMERIC.
+            if (in.signum() < 0 || outRate.signum() < 0) continue;
+
+            out.put(id.substring(0, id.length() - BATCH_SUFFIX.length()),
+                    new BigDecimal[]{in, outRate});
+        }
+        return out;
     }
 
     static boolean hasDuplicateSuffix(String id) {
@@ -182,7 +280,18 @@ public class OpenRouterFeedParser {
         out.put("priceCacheWrite", cacheWrite);
         out.put("supportsPromptCaching", cacheRead != null || cacheWrite != null);
 
-        // Floor = standard for OpenRouter (no batch/flex tier exposed).
+        // Floor = standard, and this is where the two feeds diverge on what
+        // price_floor_* means. LiteLlmFeedParser folds priceInputBatch into
+        // the floor because there batch is a tier of the SAME id, so a caller
+        // holding that id can obtain it. Here batch is a separate id that this
+        // parser drops, so no caller can reach the rate through the published
+        // model and the floor stays at the interactive price.
+        //
+        // In other words: the cheapest a caller can be charged for a normal
+        // request is that interactive rate, NOT the batch rate collectBatchRates
+        // may have put on priceInputBatch/priceOutputBatch. A batch endpoint is
+        // a different request with different latency, so letting it set the
+        // floor would quote a price no interactive call can obtain.
         out.put("priceFloorInput",  priceInput);
         out.put("priceFloorOutput", priceOutput);
 

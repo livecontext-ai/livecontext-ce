@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,6 +50,12 @@ public class XmlNode extends BaseNode {
         logger.info("XML node executing: nodeId={}, operation={}, itemId={}",
             nodeId, operation, context.itemId());
 
+        // What the node WORKED on, once it has resolved it. Held as a local (never a field:
+        // the engine runs one node instance for every item of a split, in parallel) and
+        // passed to the report, so `value` means the same here as on ConvertToFileNode and
+        // CompressionNode - the data, not a second resolution of the expression.
+        Object[] resolvedValue = new Object[1];
+
         try {
             Map<String, Object> result = new HashMap<>();
 
@@ -56,10 +63,18 @@ public class XmlNode extends BaseNode {
 
             Object operationResult = switch (operation) {
                 // xmlToJson needs the value as a STRING (the XML to parse).
-                case "xmlToJson" -> executeXmlToJson(resolveExpression(value, context));
+                case "xmlToJson" -> {
+                    String xml = resolveExpression(value, context);
+                    resolvedValue[0] = xml;
+                    yield executeXmlToJson(xml);
+                }
                 // jsonToXml needs the RAW resolved value (Map/List/JSON-string), not the
                 // stringified form, so a configured value is honored instead of dumping context.
-                case "jsonToXml" -> executeJsonToXml(resolveExpressionRaw(value, context), context);
+                case "jsonToXml" -> {
+                    Object raw = resolveExpressionRaw(value, context);
+                    resolvedValue[0] = raw;
+                    yield executeJsonToXml(raw, context);
+                }
                 default -> throw new IllegalArgumentException("Unknown XML operation: " + operation);
             };
 
@@ -72,7 +87,7 @@ public class XmlNode extends BaseNode {
             result.put("item_index", context.itemIndex());
             result.put("itemIndex", context.itemIndex());
             result.put("item_id", context.itemId());
-            result.put("resolved_params", buildInputDataMap(operation, context));
+            result.put("resolved_params", buildInputDataMap(operation, resolvedValue[0]));
 
             logger.info("XML completed: nodeId={}, operation={}", nodeId, operation);
             return NodeExecutionResult.success(nodeId, result);
@@ -85,7 +100,7 @@ public class XmlNode extends BaseNode {
             failOutput.put("item_index", context.itemIndex());
             failOutput.put("itemIndex", context.itemIndex());
             failOutput.put("item_id", context.itemId());
-            failOutput.put("resolved_params", buildInputDataMap(operation, context));
+            failOutput.put("resolved_params", buildInputDataMap(operation, resolvedValue[0]));
             failOutput.put("error", e.getMessage());
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failOutput, 0L);
         }
@@ -405,15 +420,27 @@ public class XmlNode extends BaseNode {
         return expression;
     }
 
-    private Map<String, Object> buildInputDataMap(String operation, ExecutionContext context) {
+    /**
+     * The node's configuration, as the node itself reads it.
+     *
+     * <p>Both of these were re-resolved for display only. {@code rootElement} is used
+     * CONFIGURED by the conversion, so a resolved one named an element the document does
+     * not have; {@code value} is the whole document, and re-resolving it both ran the
+     * expression a second time and coerced it to a String on the way onto the step row of
+     * every item.
+     */
+    private Map<String, Object> buildInputDataMap(String operation, Object resolvedValue) {
         Map<String, Object> inputData = new LinkedHashMap<>();
         inputData.put("operation", operation);
         if (xmlConfig != null) {
-            if (xmlConfig.value() != null) inputData.put("value", resolveTemplateString(xmlConfig.value(), context));
-            if (xmlConfig.rootElement() != null) inputData.put("rootElement", resolveTemplateString(xmlConfig.rootElement(), context));
+            Object reportedValue = resolvedValue != null ? resolvedValue : xmlConfig.value();
+            if (reportedValue != null) {
+                inputData.put("value", ReportedParams.valueFrom(xmlConfig.value(), reportedValue));
+            }
+            if (xmlConfig.rootElement() != null) inputData.put("rootElement", xmlConfig.rootElement());
             inputData.put("preserveAttributes", xmlConfig.preserveAttributes());
         }
-        return inputData;
+        return ReportedParams.forReport(inputData);
     }
 
     // Getters

@@ -284,4 +284,195 @@ class MultipartBodyEncoderTest {
         assertEquals(preSerialized, body.getFirst("reply_markup"));
         verifyNoInteractions(storageClient);
     }
+
+    // ---------------------------------------------------------------------
+    // Byte ranges. X's /2/media/upload/{id}/append keeps ONE url and names the
+    // part with a `segment_index` field sent beside the bytes, so it cannot be
+    // raw binary the way LinkedIn's per-chunk pre-signed urls can. Without a
+    // range here a 13 MB video went out as one 13 MB segment and X answered 503.
+    // ---------------------------------------------------------------------
+
+    /** The whole `request` node, the shape the encoder now receives. */
+    private JsonNode requestWithRange(String first, String last) throws Exception {
+        return objectMapper.readTree("{"
+            + "\"bodyType\":\"multipart\","
+            + "\"rangeFirstByteParam\":\"" + first + "\","
+            + "\"rangeLastByteParam\":\"" + last + "\","
+            + "\"multipartFields\":[{\"name\":\"media\",\"source\":\"fileRef\",\"paramName\":\"media\"}]"
+            + "}");
+    }
+
+    private Map<String, Object> mediaParams(Object first, Object last) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("media", Map.of("_type", "file", "path", "t/v.mp4", "name", "v.mp4"));
+        if (first != null) params.put("first_byte", first);
+        if (last != null) params.put("last_byte", last);
+        return params;
+    }
+
+    @Test
+    @DisplayName("a declared byte range sends only that slice of the file")
+    void multipartSendsOnlyTheDeclaredSlice() throws Exception {
+        when(storageClient.download(any(), any()))
+            .thenReturn(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        MultiValueMap<String, Object> body = encoder.encode(
+            requestWithRange("first_byte", "last_byte"), mediaParams(4, 6), "tenant");
+
+        ByteArrayResource part = (ByteArrayResource) body.getFirst("media");
+        assertArrayEquals(new byte[]{4, 5, 6}, part.getByteArray());
+        assertEquals(3, part.contentLength());
+    }
+
+    @Test
+    @DisplayName("a last byte past the end is clamped to the real tail, so the final part works")
+    void multipartClampsTheFinalPart() throws Exception {
+        when(storageClient.download(any(), any()))
+            .thenReturn(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        MultiValueMap<String, Object> body = encoder.encode(
+            requestWithRange("first_byte", "last_byte"), mediaParams(8, 99), "tenant");
+
+        assertArrayEquals(new byte[]{8, 9},
+            ((ByteArrayResource) body.getFirst("media")).getByteArray());
+    }
+
+    @Test
+    @DisplayName("THE LEGACY SHAPE: a saved node with no bounds fails the CALL, naming both params")
+    void multipartRefusesToSendEverythingForAPart() throws Exception {
+        // This is the regression that matters on the day the seed is imported. `required: true`
+        // on the bounds is read by the node creator and the workflow validators, never by the
+        // execution path, so a step SAVED before this endpoint gained its range still runs and
+        // still passes only media + segment_index. Sending the whole file corrupts the upload
+        // silently; sending an empty part leaves X to decide what a zero-byte segment means.
+        when(storageClient.download(any(), any()))
+            .thenReturn(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        Map<String, Object> legacy = new LinkedHashMap<>();
+        legacy.put("media", Map.of("_type", "file", "path", "t/v.mp4", "name", "v.mp4"));
+        legacy.put("segment_index", 0);
+
+        ByteRangeException thrown = assertThrows(ByteRangeException.class, () -> encoder.encode(
+            requestWithRange("first_byte", "last_byte"), legacy, "tenant"));
+        assertTrue(thrown.getMessage().contains("first_byte"), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("last_byte"), thrown.getMessage());
+    }
+
+    @Test
+    @DisplayName("an endpoint declaring no range still sends the whole file")
+    void multipartWithoutARangeIsUntouched() throws Exception {
+        when(storageClient.download(any(), any()))
+            .thenReturn(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        JsonNode request = objectMapper.readTree("{\"bodyType\":\"multipart\","
+            + "\"multipartFields\":[{\"name\":\"media\",\"source\":\"fileRef\",\"paramName\":\"media\"}]}");
+
+        MultiValueMap<String, Object> body = encoder.encode(request, mediaParams(null, null), "tenant");
+        assertEquals(10, ((ByteArrayResource) body.getFirst("media")).contentLength());
+    }
+
+    @Test
+    @DisplayName("a bare multipartFields array still works, so every existing endpoint is untouched")
+    void bareFieldsArrayStillWorks() throws Exception {
+        when(storageClient.download(any(), any())).thenReturn(new byte[]{7, 7, 7});
+        JsonNode fields = objectMapper.readTree(
+            "[{\"name\":\"media\",\"source\":\"fileRef\",\"paramName\":\"media\"}]");
+
+        MultiValueMap<String, Object> body = encoder.encode(fields, mediaParams(null, null), "tenant");
+        assertEquals(3, ((ByteArrayResource) body.getFirst("media")).contentLength());
+    }
+
+    @Test
+    @DisplayName("THE X SHAPE: the file part is sliced while segment_index goes out untouched")
+    void multipartSlicesTheFileAndLeavesEveryOtherFieldAlone() throws Exception {
+        // The whole premise of putting a range on the multipart path: X's append carries the
+        // bytes AND the part number in one form. If slicing disturbed the other fields, or the
+        // range bounds leaked into the form, the call would be wrong in a way no size check
+        // would catch.
+        when(storageClient.download(any(), any()))
+            .thenReturn(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        JsonNode request = objectMapper.readTree("{"
+            + "\"bodyType\":\"multipart\","
+            + "\"rangeFirstByteParam\":\"first_byte\",\"rangeLastByteParam\":\"last_byte\","
+            + "\"multipartFields\":["
+            + "{\"name\":\"media\",\"source\":\"fileRef\",\"paramName\":\"media\"},"
+            + "{\"name\":\"segment_index\",\"source\":\"param\",\"paramName\":\"segment_index\"}]}");
+
+        Map<String, Object> params = new LinkedHashMap<>(mediaParams(4, 7));
+        params.put("segment_index", 1);
+
+        MultiValueMap<String, Object> body = encoder.encode(request, params, "tenant");
+
+        assertEquals(2, body.size(), "only the two declared fields are sent");
+        assertArrayEquals(new byte[]{4, 5, 6, 7},
+            ((ByteArrayResource) body.getFirst("media")).getByteArray());
+        assertEquals("1", body.getFirst("segment_index"));
+        assertNull(body.getFirst("first_byte"), "a range bound is not a form field");
+        assertNull(body.getFirst("last_byte"), "a range bound is not a form field");
+    }
+
+    @Test
+    @DisplayName("an 'auto' part holding a file is sliced like a declared fileRef part")
+    void autoPartCarryingAFileIsSlicedToo() throws Exception {
+        // `auto` picks its encoding from the runtime value, so the same declaration can carry a
+        // file or a string. If the range applied to one spelling and not the other, the bytes
+        // sent would depend on how the seed happened to be written.
+        when(storageClient.download(any(), any()))
+            .thenReturn(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        JsonNode request = objectMapper.readTree("{"
+            + "\"bodyType\":\"multipart\","
+            + "\"rangeFirstByteParam\":\"first_byte\",\"rangeLastByteParam\":\"last_byte\","
+            + "\"multipartFields\":[{\"name\":\"media\",\"source\":\"auto\",\"paramName\":\"media\"}]}");
+
+        MultiValueMap<String, Object> body = encoder.encode(request, mediaParams(2, 3), "tenant");
+        assertArrayEquals(new byte[]{2, 3},
+            ((ByteArrayResource) body.getFirst("media")).getByteArray());
+    }
+
+    @Test
+    @DisplayName("bounds that arrive as STRINGS are honoured, because a template resolves to text")
+    void multipartAcceptsStringBounds() throws Exception {
+        when(storageClient.download(any(), any()))
+            .thenReturn(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        MultiValueMap<String, Object> body = encoder.encode(
+            requestWithRange("first_byte", "last_byte"), mediaParams("4", "6"), "tenant");
+
+        assertArrayEquals(new byte[]{4, 5, 6},
+            ((ByteArrayResource) body.getFirst("media")).getByteArray());
+    }
+
+    @Test
+    @DisplayName("an unparseable bound fails the call, never sends the whole file")
+    void multipartRefusesAnUnparseableBound() throws Exception {
+        when(storageClient.download(any(), any()))
+            .thenReturn(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        assertThrows(ByteRangeException.class, () -> encoder.encode(
+            requestWithRange("first_byte", "last_byte"), mediaParams("nope", 6), "tenant"));
+    }
+
+    @Test
+    @DisplayName("an inverted, negative or past-the-end range fails the call on the multipart path too")
+    void multipartRefusesAnInvalidRange() throws Exception {
+        when(storageClient.download(any(), any()))
+            .thenReturn(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        JsonNode spec = requestWithRange("first_byte", "last_byte");
+        assertThrows(ByteRangeException.class,
+            () -> encoder.encode(spec, mediaParams(7, 2), "tenant"), "last before first");
+        assertThrows(ByteRangeException.class,
+            () -> encoder.encode(spec, mediaParams(-1, 4), "tenant"), "negative first");
+        assertThrows(ByteRangeException.class,
+            () -> encoder.encode(spec, mediaParams(40, 44), "tenant"), "starts past the end");
+    }
+
+    @Test
+    @DisplayName("a null request spec is still the empty body it always was")
+    void nullRequestSpecStaysEmpty() throws Exception {
+        assertTrue(encoder.encode(null, Map.of("a", "x"), "tenant").isEmpty());
+        verifyNoInteractions(storageClient);
+    }
 }

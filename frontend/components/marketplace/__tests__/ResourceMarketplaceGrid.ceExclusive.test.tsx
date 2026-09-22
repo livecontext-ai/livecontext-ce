@@ -14,7 +14,11 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 
 vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
-vi.mock('@/lib/providers/smart-providers', () => ({ useAuth: () => ({ numericUserId: 5 }) }));
+vi.mock('@/lib/providers/smart-providers', () => ({
+  useAuth: () => ({ numericUserId: 5 }),
+  // The card reads the demo-install mode, which asks for the ADMIN role.
+  useOptionalAuth: () => ({ hasRole: () => false }),
+}));
 vi.mock('@/components/marketplace/InterfacePreview', () => ({ InterfacePreview: () => null }));
 vi.mock('@/components/marketplace/PublisherAvatar', () => ({ PublisherAvatar: () => null }));
 vi.mock('@/components/marketplace/AcquirePublicationModal', () => ({ default: () => null }));

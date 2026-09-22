@@ -2,10 +2,12 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -58,18 +60,31 @@ public class DataInputNode extends BaseNode {
         result.put("itemIndex", context.itemIndex());
         result.put("item_id", context.itemId());
 
-        // Persist resolved values as resolved_params for inspector visibility
-        Map<String, Object> resolvedParams = new HashMap<>();
+        // Persist resolved values as resolved_params for inspector visibility.
+        //
+        // Read back from `result`, which is what the node PRODUCED, rather than resolved a
+        // second time. The two resolvers disagree precisely where it matters: for an item
+        // whose expression points at nothing, the output carries "" and
+        // resolveTemplateString fell back to the raw template - so one item, in one
+        // execution, read as an empty string in the Output column and as `{{core:x.output.y}}`
+        // in the Params column, and neither told the reader which was true.
+        // LinkedHashMap, not HashMap: forReport keeps entries in the map's own iteration
+        // order until the budget is spent, so a HashMap here would make the cut hash-ordered
+        // and the reader would lose an arbitrary half of a large data-input node.
+        Map<String, Object> resolvedParams = new LinkedHashMap<>();
         for (Core.DataInputItem item : items) {
             if (item.label() != null) {
                 if ("file".equals(item.type())) {
                     resolvedParams.put(item.label(), item.file());
                 } else {
-                    resolvedParams.put(item.label(), resolveTemplateString(item.text(), context));
+                    resolvedParams.put(item.label(),
+                        ReportedParams.valueFrom(item.text(), result.get(item.label())));
                 }
             }
         }
-        result.put("resolved_params", resolvedParams);
+        // Through the key-name rule: an item's label is the AUTHOR'S name, and one called
+        // `api_key` holds a credential whatever the item was fed from.
+        result.put("resolved_params", ReportedParams.forReport(resolvedParams));
 
         return NodeExecutionResult.success(nodeId, result);
     }

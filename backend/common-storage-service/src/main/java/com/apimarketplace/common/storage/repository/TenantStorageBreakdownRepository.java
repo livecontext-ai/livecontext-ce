@@ -64,4 +64,14 @@ public interface TenantStorageBreakdownRepository extends JpaRepository<TenantSt
     @Query(value = "SELECT COALESCE(SUM(used_bytes), 0) FROM storage.tenant_storage_breakdown WHERE tenant_id = :tenantId",
            nativeQuery = true)
     long sumTotalUsage(@Param("tenantId") String tenantId);
+
+    /**
+     * Every tenant that has breakdown rows, which is what the daily history snapshot copies.
+     *
+     * <p>The snapshot used to enumerate the HISTORY table instead, so a tenant with no history row
+     * was never snapshotted and therefore never got one: the same self-limiting enumeration that
+     * kept the nightly reconciliation from ever visiting a scope it had not already visited.
+     */
+    @Query(value = "SELECT DISTINCT tenant_id FROM storage.tenant_storage_breakdown", nativeQuery = true)
+    List<String> findDistinctTenantIds();
 }

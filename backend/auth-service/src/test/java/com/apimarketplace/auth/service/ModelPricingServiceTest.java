@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -793,6 +794,87 @@ class ModelPricingServiceTest {
         }
 
         @Test
+        @DisplayName("V491 insert: the model's cache prices are persisted as given, including a null that means 'unknown'")
+        void insertPersistsCacheRates() {
+            when(pricingRepository.findCurrentPricing("anthropic", "claude-fable-5-1"))
+                    .thenReturn(Optional.empty());
+
+            pricingService.upsertPricing("anthropic", "claude-fable-5-1",
+                    new BigDecimal("10.00"), new BigDecimal("50.00"), "byok",
+                    new BigDecimal("0.25"), null);
+
+            org.mockito.ArgumentCaptor<ModelPricing> captor =
+                    org.mockito.ArgumentCaptor.forClass(ModelPricing.class);
+            verify(pricingRepository).save(captor.capture());
+            assertThat(captor.getValue().getCacheReadRate()).isEqualByComparingTo("0.25");
+            // Null must stay null, never 0: ModelPricingService reads a non-positive rate
+            // as "unknown, use the family multiplier", and a 0 would make cached input free.
+            assertThat(captor.getValue().getCacheWriteRate()).isNull();
+        }
+
+        @Test
+        @DisplayName("V491 update: a null cache rate PRESERVES what the mirror already had, it does not clear it")
+        void updateNullCacheRatePreservesExisting() {
+            // The sync fires from several paths and not all of them know the cache price.
+            // A caller with nothing to say about it must not silently demote the row back
+            // to the family multiplier.
+            ModelPricing existing = createPricing("anthropic", "claude-fable-5-1",
+                    "10.00", "50.00", "0");
+            existing.setCacheReadRate(new BigDecimal("0.25"));
+            existing.setCacheWriteRate(new BigDecimal("12.50"));
+            when(pricingRepository.findCurrentPricing("anthropic", "claude-fable-5-1"))
+                    .thenReturn(Optional.of(existing));
+
+            pricingService.upsertPricing("anthropic", "claude-fable-5-1",
+                    new BigDecimal("11.00"), new BigDecimal("55.00"), null, null, null);
+
+            org.mockito.ArgumentCaptor<ModelPricing> captor =
+                    org.mockito.ArgumentCaptor.forClass(ModelPricing.class);
+            verify(pricingRepository).save(captor.capture());
+            assertThat(captor.getValue().getCacheReadRate()).isEqualByComparingTo("0.25");
+            assertThat(captor.getValue().getCacheWriteRate()).isEqualByComparingTo("12.50");
+            assertThat(captor.getValue().getInputRate()).isEqualByComparingTo("11.00");
+        }
+
+        @Test
+        @DisplayName("V491 update: a supplied cache rate overwrites the stored one, so a re-priced model follows")
+        void updateNonNullCacheRateOverwrites() {
+            ModelPricing existing = createPricing("anthropic", "claude-fable-5-1",
+                    "10.00", "50.00", "0");
+            existing.setCacheReadRate(new BigDecimal("1.00"));
+            when(pricingRepository.findCurrentPricing("anthropic", "claude-fable-5-1"))
+                    .thenReturn(Optional.of(existing));
+
+            pricingService.upsertPricing("anthropic", "claude-fable-5-1",
+                    new BigDecimal("10.00"), new BigDecimal("50.00"), null,
+                    new BigDecimal("0.25"), new BigDecimal("12.50"));
+
+            org.mockito.ArgumentCaptor<ModelPricing> captor =
+                    org.mockito.ArgumentCaptor.forClass(ModelPricing.class);
+            verify(pricingRepository).save(captor.capture());
+            assertThat(captor.getValue().getCacheReadRate()).isEqualByComparingTo("0.25");
+            assertThat(captor.getValue().getCacheWriteRate()).isEqualByComparingTo("12.50");
+        }
+
+        @Test
+        @DisplayName("V491: the 5-arg overload leaves the cache rates alone, so every pre-existing caller is a no-op for them")
+        void fiveArgOverloadDoesNotTouchCacheRates() {
+            ModelPricing existing = createPricing("anthropic", "claude-fable-5-1",
+                    "10.00", "50.00", "0");
+            existing.setCacheReadRate(new BigDecimal("0.25"));
+            when(pricingRepository.findCurrentPricing("anthropic", "claude-fable-5-1"))
+                    .thenReturn(Optional.of(existing));
+
+            pricingService.upsertPricing("anthropic", "claude-fable-5-1",
+                    new BigDecimal("10.00"), new BigDecimal("50.00"), "byok");
+
+            org.mockito.ArgumentCaptor<ModelPricing> captor =
+                    org.mockito.ArgumentCaptor.forClass(ModelPricing.class);
+            verify(pricingRepository).save(captor.capture());
+            assertThat(captor.getValue().getCacheReadRate()).isEqualByComparingTo("0.25");
+        }
+
+        @Test
         @DisplayName("4-arg upsertPricing overload delegates with providerKind=null (insert path uses 'byok' default)")
         void fourArgOverloadDelegatesWithNullKind() {
             when(pricingRepository.findCurrentPricing("openai", "gpt-7"))
@@ -805,6 +887,83 @@ class ModelPricingServiceTest {
                     org.mockito.ArgumentCaptor.forClass(ModelPricing.class);
             verify(pricingRepository).save(captor.capture());
             assertThat(captor.getValue().getProviderKind()).isEqualTo("byok");
+        }
+    }
+    @Nested
+    @DisplayName("OpenAI-compatible vendors: cached input is billed at the OpenAI rate")
+    class OpenAICompatibleCacheBilling {
+
+        /** A turn that re-reads most of its prompt from the cache, in the OpenAI shape. */
+        private LlmTokenBreakdown cachedTurn() {
+            return new LlmTokenBreakdown(10_000, 500, 0, 0, 8_000, 0);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"qwen", "moonshot", "minimax"})
+        @DisplayName("bills the cached subset at half the input rate, not at the full one")
+        void billsCachedInputAtTheOpenAiRate(String provider) {
+            // These three report prompt_tokens_details.cached_tokens exactly like OpenAI,
+            // but were classified after the first four OpenAI-compatible vendors and
+            // inherited OTHER by omission. OTHER has no discount to guess with, so their
+            // cached input was charged at FULL input rate: a user paid twice what the
+            // vendor charges for every token served from the cache.
+            mockPricing(provider, "some-model", "2.0", "10.0", "0");
+
+            BigDecimal billed = pricingService.calculateCost(provider, "some-model", cachedTurn());
+
+            // (10,000 - 8,000) plain at 2.0 + 8,000 cached at 0.5 x 2.0, + 500 out at 10.0
+            BigDecimal expected = new BigDecimal("4.0")
+                    .add(new BigDecimal("8.0"))
+                    .add(new BigDecimal("5.0"));
+            assertThat(billed).isEqualByComparingTo(expected);
+
+            // Pre-fix this was the whole prompt at full rate: 20.0 + 5.0 = 25.0.
+            assertThat(billed).isLessThan(new BigDecimal("25.0"));
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"qwen", "moonshot", "minimax"})
+        @DisplayName("leaves a model that publishes its own cache price exactly where it was")
+        void aPublishedCachePriceStillWins(String provider) {
+            // 31 of these vendors' 59 seed rows carry a cache price, and V491 made that
+            // price the tariff. The family weight never reaches them, so this change is a
+            // no-op for the majority of the rows it touches - which is what makes it safe
+            // to ship without re-pricing anything.
+            ModelPricing pricing = createPricing(provider, "priced-model", "2.0", "10.0", "0");
+            pricing.setCacheReadRate(new BigDecimal("0.3"));
+            when(pricingRepository.findCurrentPricing(provider, "priced-model"))
+                    .thenReturn(Optional.of(pricing));
+
+            BigDecimal billed = pricingService.calculateCost(provider, "priced-model", cachedTurn());
+
+            // 2,000 plain at 2.0 + 8,000 cached at its own 0.3, + 500 out at 10.0
+            assertThat(billed).isEqualByComparingTo(new BigDecimal("4.0")
+                    .add(new BigDecimal("2.4"))
+                    .add(new BigDecimal("5.0")));
+        }
+
+        @Test
+        @DisplayName("mistral is deliberately NOT one of them, because it never reports a cached subset")
+        void mistralKeepsTheUnknownFamily() {
+            // It has its own provider rather than the OpenAI-compatible factory and never
+            // populates cachedTokens, so there is nothing to weight and classifying it
+            // would assert a discount on tokens no one counts. Pinned so a future sweep
+            // that adds "every vendor that looks OpenAI-ish" has to justify itself.
+            mockPricing("mistral", "mistral-large", "2.0", "10.0", "0");
+
+            BigDecimal billed = pricingService.calculateCost("mistral", "mistral-large", cachedTurn());
+
+            assertThat(billed).isEqualByComparingTo(new BigDecimal("25.0"));
+        }
+
+        @Test
+        @DisplayName("an unknown vendor still gets no discount, so the default did not move with them")
+        void anUnknownVendorKeepsFullRate() {
+            mockPricing("some-new-vendor", "m", "2.0", "10.0", "0");
+
+            BigDecimal billed = pricingService.calculateCost("some-new-vendor", "m", cachedTurn());
+
+            assertThat(billed).isEqualByComparingTo(new BigDecimal("25.0"));
         }
     }
 }

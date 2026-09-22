@@ -29,6 +29,15 @@ public class Plan {
     @Column(name = "included_llm_tokens")
     private Long includedLlmTokens;
 
+    /**
+     * Monthly AI allowance (V494): the separate pot that funds agent/chat turns on
+     * models opened to the free tier. {@code null} = this plan has no AI pot, which
+     * is the case for every paid plan (their normal wallet already funds agents).
+     * Tunable live on {@code auth.plan}.
+     */
+    @Column(name = "included_ai_credits")
+    private Integer includedAiCredits;
+
     @Column(name = "included_storage_bytes")
     private Long includedStorageBytes;
 
@@ -133,6 +142,14 @@ public class Plan {
 
     public void setIncludedLlmTokens(Long includedLlmTokens) {
         this.includedLlmTokens = includedLlmTokens;
+    }
+
+    public Integer getIncludedAiCredits() {
+        return includedAiCredits;
+    }
+
+    public void setIncludedAiCredits(Integer includedAiCredits) {
+        this.includedAiCredits = includedAiCredits;
     }
 
     public Long getIncludedStorageBytes() {

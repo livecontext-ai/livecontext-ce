@@ -19,7 +19,17 @@ public record StorageQuotaDto(
     long availableBytes,
     double usagePercentage,
     QuotaStatus status,
-    boolean unlimited
+    boolean unlimited,
+    /**
+     * What the whole ACCOUNT stores, across every workspace it owns, or null when this row is
+     * not attributed to one (and enforcement is then per-workspace).
+     *
+     * <p>{@code maxBytes} is the pool's ceiling, not this workspace's private grant: the plan
+     * grants its allowance once and every workspace draws from it, so a workspace holding 3 MB
+     * can still be refused because its siblings filled the pot. Without this figure the page
+     * could only show "3 MB of 100 GB" and imply room the account may not have.
+     */
+    Long accountUsedBytes
 ) {
 
     /**
@@ -31,7 +41,15 @@ public record StorageQuotaDto(
                            long hardLimitBytes, long availableBytes, double usagePercentage,
                            QuotaStatus status) {
         this(tenantId, usedBytes, maxBytes, softLimitBytes, hardLimitBytes, availableBytes,
-             usagePercentage, status, false);
+             usagePercentage, status, false, null);
+    }
+
+    /** Edition-aware form without an account total (tenant scope has no pool). */
+    public StorageQuotaDto(String tenantId, long usedBytes, long maxBytes, long softLimitBytes,
+                           long hardLimitBytes, long availableBytes, double usagePercentage,
+                           QuotaStatus status, boolean unlimited) {
+        this(tenantId, usedBytes, maxBytes, softLimitBytes, hardLimitBytes, availableBytes,
+             usagePercentage, status, unlimited, null);
     }
 
     /**

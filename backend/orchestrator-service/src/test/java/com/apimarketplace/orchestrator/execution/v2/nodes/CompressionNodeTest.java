@@ -69,6 +69,94 @@ class CompressionNodeTest {
         private FileStorageService fileStorageService;
 
         @Test
+        @DisplayName("reports the configuration the node USES, and never the payload it compressed")
+        @SuppressWarnings("unchecked")
+        void reportsWhatTheNodeActuallyRanWith() {
+            // Both of these were re-resolved for display only. `filename` is used CONFIGURED
+            // by the zip entry and the upload, so a resolved one named a file that does not
+            // exist; `value` is the payload, which resolveTemplateString coerced to a String
+            // and copied - in full - onto the step row of every item.
+            String payload = "z".repeat(50_000);
+            Core.CompressionConfig config =
+                new Core.CompressionConfig("compress", "gzip", payload, "{{trigger:start.name}}");
+            CompressionNode node = CompressionNode.builder()
+                .nodeId("core:compress")
+                .compressionConfig(config)
+                .build();
+
+            NodeExecutionResult result = node.execute(context);
+
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("{{trigger:start.name}}", params.get("filename"),
+                "the name the zip entry and the upload actually use");
+            assertEquals("gzip", params.get("format"));
+            String reportedValue = String.valueOf(params.get("value"));
+            assertTrue(reportedValue.length() < 300,
+                "a 50 000-char payload must not be copied onto the row: " + reportedValue.length() + " chars");
+            assertTrue(reportedValue.contains("50000 chars"),
+                "and the reader is told what was cut: " + reportedValue);
+        }
+
+        @Test
+        @DisplayName("`value` is what the node COMPRESSED, from its own evaluation - the same meaning its sibling nodes give that key")
+        @SuppressWarnings("unchecked")
+        void reportsTheDataItCompressed() {
+            // The previous version of this fix reported the configured TEMPLATE here while
+            // ConvertToFileNode reported the resolved DATA: one key, two meanings across
+            // sibling nodes, which is the defect the whole alignment exists to remove. A
+            // literal payload (the test above) cannot tell the two apart - this one can.
+            Core.CompressionConfig config =
+                new Core.CompressionConfig("compress", "gzip", "{{trigger:start.payload}}", "out");
+            CompressionNode node = CompressionNode.builder()
+                .nodeId("core:compress")
+                .compressionConfig(config)
+                .build();
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                org.mockito.Mockito.mock(
+                    com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            org.mockito.Mockito.when(adapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.anyMap(),
+                    org.mockito.ArgumentMatchers.any(ExecutionContext.class)))
+                .thenReturn(Map.of("__expr__", "the resolved payload"));
+            node.setTemplateAdapter(adapter);
+
+            NodeExecutionResult result = node.execute(context);
+
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("the resolved payload", params.get("value"));
+        }
+
+        @Test
+        @DisplayName("a FAILURE reports the same `value` a success does: the normal failure here is well after the resolution")
+        @SuppressWarnings("unchecked")
+        void reportsTheSameValueOnFailure() {
+            // A bad archive or an unsupported format fails in compress()/decompress(), long
+            // after `value` resolved. Reporting the configured template on that path gave
+            // one key two meanings on ONE node, depending only on how the run ended.
+            Core.CompressionConfig config =
+                new Core.CompressionConfig("decompress", "gzip", "{{trigger:start.payload}}", "out");
+            CompressionNode node = CompressionNode.builder()
+                .nodeId("core:compress")
+                .compressionConfig(config)
+                .build();
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter adapter =
+                org.mockito.Mockito.mock(
+                    com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter.class);
+            org.mockito.Mockito.when(adapter.resolveTemplates(
+                    org.mockito.ArgumentMatchers.anyMap(),
+                    org.mockito.ArgumentMatchers.any(ExecutionContext.class)))
+                .thenReturn(Map.of("__expr__", "not-valid-base64-gzip!!"));
+            node.setTemplateAdapter(adapter);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isFailure());
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("not-valid-base64-gzip!!", params.get("value"),
+                "the failure row must describe what the node tried to decompress");
+        }
+
+        @Test
         @DisplayName("executeOutputMatchesPersistedShape: execute() canonical keys equal customTransform() keys")
         void executeOutputMatchesPersistedShape() {
             FileRef stored = FileRef.of("tenant/wf/run/node/compressed.gz", "compressed.gz", "application/gzip", 42L);

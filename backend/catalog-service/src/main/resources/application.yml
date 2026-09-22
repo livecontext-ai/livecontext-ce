@@ -53,8 +53,9 @@ spring:
       # timeout: it includes executor queue wait and is NOT reset by write
       # progress. At 900s a 32 MB bundle needs to average only ~36 KB/s, well
       # under the slowest poll seen (252s), with room for the bundle to keep
-      # growing. Nothing is held for the duration except the payload array and
-      # one mvc-stream executor thread.
+      # growing. Nothing is held for the duration except one mvc-stream executor
+      # thread: the payload itself is read from the database in slices as the
+      # response is written.
       # orchestrator-service sets this for the same reason.
       request-timeout: 900000
   jpa:

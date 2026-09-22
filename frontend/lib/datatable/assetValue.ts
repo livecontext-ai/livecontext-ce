@@ -1,5 +1,6 @@
 import type { StorageExplorerEntry } from '@/lib/api/storage-api';
 import { getFileUrlById } from '@/lib/api/orchestrator/file.service';
+import { detectPreviewKind } from '@/lib/files/filePreview';
 
 /**
  * The single value contract for a table media cell, whatever produced it.
@@ -358,7 +359,26 @@ export function cellDisplayText(value: unknown): string {
   return typeof value === 'string' ? value : String(value);
 }
 
-export function isImageAsset(asset: TableAsset): boolean {
-  if (asset.mimeType) return asset.mimeType.startsWith('image/');
-  return /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)(\?|#|$)/i.test(asset.url || asset.name);
+/** What a media cell can render inline. `none` covers everything a cell shows as a type icon. */
+export type AssetPreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'none';
+
+/**
+ * Which of the four playable/viewable kinds this asset is, so a table cell previews a sound and a
+ * clip the way it already previewed a picture.
+ *
+ * Detection is the Files browser's ({@link detectPreviewKind}), on purpose: a file must not be a
+ * video in Files and an anonymous icon in a table row. MIME wins, the file name is the fallback
+ * for the generic `application/octet-stream` our own raw serve emits, and the URL's basename is
+ * tried last - an asset can carry a display name with no extension (`{name:'Ma video',
+ * url:'https://cdn/clip.mp4'}`) while its URL says exactly what it is.
+ *
+ * Textual kinds (json/csv/markdown/text) deliberately come back `none`: they are previewable in
+ * the full file view, but a cell is one line tall and a wall of source in it reads as noise.
+ */
+export function assetPreviewKind(asset: TableAsset): AssetPreviewKind {
+  const byName = detectPreviewKind(asset.mimeType, asset.name);
+  const kind = byName === 'none' && asset.url
+    ? detectPreviewKind(asset.mimeType, fileNameFromPath(asset.url))
+    : byName;
+  return kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf' ? kind : 'none';
 }

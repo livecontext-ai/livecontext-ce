@@ -4,7 +4,10 @@ import * as React from 'react';
 import { ArrowUp, Loader2, Paperclip, SlidersHorizontal, X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Popover, PopoverTrigger } from '@/components/ui/popover';
+// A menu opened from the studio is drawn on the studio's own ground: it renders in a portal on
+// the document, so it cannot inherit the surface's tokens and has to be handed them.
+import { StudioPopoverContent } from '@/components/studio/StudioPopoverContent';
 // See components/ui/menu.ts: the bare PopoverContent has no background in this theme.
 import { menuItemClass, menuSurfaceClass } from '@/components/ui/menu';
 import { fileRefToUrl, fileService, isFileRef, isImageFile, normalizeFileRef, type FileRef } from '@/lib/api/orchestrator/file.service';
@@ -16,17 +19,20 @@ import {
   buildParamSpec,
   buildSubmissionParams,
   hasSubmittableInput,
+  packAssets,
   missingRequired,
   totalAssetSlots,
   type StudioField,
 } from '@/lib/generation/paramSpec';
 import { StudioModelPicker } from '@/components/studio/StudioModelPicker';
 import { StudioParamControl } from '@/components/studio/StudioParamControl';
-import { assetRoleLabel, type LabelTranslator } from '@/lib/generation/labels';
+import { assetRoleHint, assetRoleLabel, type LabelTranslator } from '@/lib/generation/labels';
+import { forbiddenWith } from '@/lib/generation/paramSpec';
 import { useGenerationOptions } from '@/hooks/useGenerationOptions';
 import { useGenerationQuote } from '@/hooks/useGenerationQuote';
 import { platformSellsThis } from '@/lib/generation/platformSells';
-import { describeQuotedPrice } from '@/lib/generation/price';
+import { describeQuotedPrice, describePriceFactors, formatCredits } from '@/lib/generation/price';
+import { priceFactorReasons } from '@/lib/generation/priceModifiers';
 
 /**
  * The composer of the studio: one place to say what to make, on which model, from which files.
@@ -77,6 +83,15 @@ export interface StudioComposerProps {
    * studio over its own. Inside, it stays put and the box around it changes instead.
    */
   modeSwitch?: React.ReactNode;
+  /**
+   * Which ground the studio draws itself on, as a control.
+   *
+   * <p>Placed here for the same reason the mode switch is, and it is the ONLY place that works: the
+   * composer is the one thing rendered by every studio layout (empty, narrow, and with a thread
+   * open), so a control anywhere else would exist on one screen and vanish on the next. Passed in
+   * rather than built here because the surface owns the preference; this owns where it sits.
+   */
+  lookSwitch?: React.ReactNode;
   /**
    * Nothing can be sent from here at all - the conversation this composer writes into cannot be
    * read, so its kind is unknown. Distinct from `isRunning`, which is temporary.
@@ -143,6 +158,7 @@ export function StudioComposer({
   isRunning = false,
   notice,
   modeSwitch,
+  lookSwitch,
   disabled = false,
   autoFocus = false,
   credentialSource = 'platform',
@@ -267,14 +283,28 @@ export function StudioComposer({
   React.useEffect(() => { setOptionsWanted(false); }, [modelId]);
   // What is currently typed, so the price sizes THIS call. Shared with the payer control below,
   // which asks the SAME question: one request between them.
+  // The RAW values, plus the prompt, plus the files packed as they will be sent.
+  //
+  // The files have to be here at all because they can change the price: they live in their own
+  // state, so a source built from `values` alone quoted a call with no images and billed one with
+  // three. They are packed through the submission's own shaping, so the quote counts exactly the
+  // files the call will send, cap included.
+  //
+  // The VALUES stay raw, and deliberately. Passing them through that same shaping drops a number
+  // that does not parse, and `platformQuantityFor` reads an absent parameter as "nothing typed" and
+  // falls back to the model's default size - so a half-typed duration would be quoted a confident
+  // price for a call that cannot run. Raw, it arrives as the unparseable string it is and the
+  // estimate stays silent, which is what it is for.
   const quantitySource = React.useMemo(
-    () => ({ prompt, ...values }),
-    [prompt, values],
+    () => ({ prompt, ...values, ...packAssets(spec, assets) }),
+    [prompt, spec, values, assets],
   );
   // The quantity comes back with the quote so the payer control below quotes the SAME call. Both
   // computing it from their own inputs is how the pill and the popover end up naming two prices for
   // one generation.
-  const { quote, quantity, settled: priceSettled, stale: priceStale } = useGenerationQuote(selectedModel, quantitySource);
+  const {
+    quote, quantity, settled: priceSettled, stale: priceStale, multiplier: priceMultiplier,
+  } = useGenerationQuote(selectedModel, quantitySource);
   /**
    * Falls back to the reader's OWN key on a model the platform does not sell.
    *
@@ -304,6 +334,42 @@ export function StudioComposer({
   const priceLabel = React.useMemo(
     () => describeQuotedPrice(quote, tGeneration as never, tUnits as never),
     [quote, tGeneration, tUnits],
+  );
+  /**
+   * The factor the SERVER applied to the amount it just quoted, or 1.
+   *
+   * <p>Read off the answer rather than recomputed from the form, and that distinction is the whole
+   * point: a server that did not apply the factor - an older self-hosted build, a relay leg that
+   * dropped it - answers with a total at the published rate, and a badge drawn from the local
+   * calculation would then claim a surcharge the amount beside it does not contain. Saying nothing
+   * is correct there; the amount is still right, it simply carries no surcharge.
+   */
+  const quotedMultiplier = React.useMemo(() => {
+    const echoed = Number(quote?.priceMultiplier);
+    return Number.isFinite(echoed) && echoed > 0 ? echoed : 1;
+  }, [quote?.priceMultiplier]);
+  /**
+   * WHY the amount is what it is, when the reader's own choices moved it.
+   *
+   * <p>Gated on the SAME thing the badge is: the factor the server says it applied. The reason is
+   * computed locally (only this side knows which choices produced it), but a server that did not
+   * apply the factor answers with a total at the published rate, and a sentence explaining a
+   * surcharge that is not in the amount is the same lie as a badge claiming one. One rule for both,
+   * or the two halves of the explanation disagree with each other.
+   *
+   * <p><b>And gated on staleness, because the two halves are computed from different moments.</b>
+   * The badge is the server's answer for the DEBOUNCED form; the reason is read from the live one.
+   * Switch 720p to 1080p and for the length of the debounce the badge said "x2" while the sentence
+   * beside it said "includes Resolution x4" - and on a phone, where the tooltip does not exist,
+   * that sentence is read out as the badge's only explanation. `stale` already means exactly this
+   * (the hook compares the live factor against the one the answer was computed for), so the
+   * explanation waits for the answer it belongs to instead of contradicting it.
+   */
+  const priceFactorLabel = React.useMemo(
+    () => (quotedMultiplier === 1 || priceStale ? '' : describePriceFactors(
+      priceFactorReasons(selectedModel, quantitySource), tGeneration as never,
+    )),
+    [quotedMultiplier, priceStale, selectedModel, quantitySource, tGeneration],
   );
 
   const optionsByParam = useGenerationOptions(
@@ -550,12 +616,20 @@ export function StudioComposer({
               the row it changes, not after it. `flex-shrink-0` keeps it out of the folding above -
               the parameter toggles give up their words for width, this never does. */}
           {modeSwitch && <div className="flex-shrink-0">{modeSwitch}</div>}
+          {/* Beside the mode switch, and like it never folded: it is already one icon, and the
+              controls that fold do so to give the row width, which this does not cost. */}
+          {lookSwitch && <div className="flex-shrink-0">{lookSwitch}</div>}
           {/* The attachment control exists only where a file can actually go. */}
           {slotCount > 0 && (
             <AddFileControl
               fields={fileFields}
               tGeneration={tLabels}
               assets={assets}
+              // A file the turn is being held for is held HERE, so the control that opens the
+              // picker is what says so. The parameter pills carry the same mark for a value,
+              // and an unmarked file slot left the reader with a dead Send button, a tooltip
+              // about highlighted settings, and nothing highlighted.
+              missing={missing}
               disabled={isRunning || uploadingKeys.size > 0}
               onPick={openPicker}
             />
@@ -582,7 +656,7 @@ export function StudioComposer({
                   <SlidersHorizontal className="h-4 w-4" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent
+              <StudioPopoverContent
                 align="start"
                 side="top"
                 className={`${menuSurfaceClass} max-h-[60vh] w-64 overflow-y-auto`}
@@ -600,8 +674,15 @@ export function StudioComposer({
                       onChange={(next) => setValues((current) => ({ ...current, [field.name]: next }))}
                     />
                   ))}
+                  {/* WHY the price is not the rate times the size, in words, where the choices that
+                      caused it are. The badge beside the amount is a number and a tooltip, and a
+                      tooltip does not exist on a phone - which is the only width this menu appears
+                      at. Shown only when something actually moved the price. */}
+                  {priceFactorLabel && credentialSource !== 'user' && (
+                    <p className="px-3 pt-1 text-xs text-theme-muted">{priceFactorLabel}</p>
+                  )}
                 </div>
-              </PopoverContent>
+              </StudioPopoverContent>
             </Popover>
           ) : (
             valueFields.map((field) => (
@@ -640,13 +721,52 @@ export function StudioComposer({
               the button read as a warning about the model rather than about the key. */}
           {selectedModel && priceSettled && priceLabel && credentialSource !== 'user' && (
             <span
-              // Dimmed, and announced as busy, while the amount belongs to a quantity the request
-              // has already moved past. The alternative is worse than a dimmed number: a crisp one
-              // that is simply too low, read at the exact moment the reader decides to spend.
+              // A LIVE REGION, because the amount changes under the reader without them acting.
+              //
+              // This carried `aria-busy` alone and the comment said the staleness was "announced".
+              // It was not: `aria-busy` is consumed on a live region or a widget, and this is a
+              // bare span with neither, so the attribute named a state nothing would ever read out
+              // and the signal was purely visual. A reader who cannot see the dimming had a crisp
+              // number and no way to know it belonged to the previous request.
+              //
+              // `polite` rather than `assertive`: a price settling is not an interruption, and the
+              // amount is re-announced when it stops moving. `aria-busy` stays, and now has a
+              // region to apply to: it is what stops the intermediate value being read aloud.
+              role="status"
+              aria-live="polite"
               aria-busy={priceStale || undefined}
+              // The full sentence, including the reason, on a pill that truncates on a phone.
+              title={priceFactorLabel ? `${priceLabel} ${priceFactorLabel}` : priceLabel}
               className={`min-w-0 max-w-[9rem] truncate px-1 text-xs text-theme-muted transition-opacity sm:max-w-none sm:whitespace-nowrap ${priceStale ? 'opacity-50' : ''}`}
             >
               {priceLabel}
+            </span>
+          )}
+          {/* A call the reader's own choices moved off the published rate says so, compactly, beside
+              the amount that already includes it. The badge is the visible half of the explanation
+              and the pill's title is the whole of it: a total that is not rate x size otherwise
+              reads as a mistake, and the only way to check it would be to spend. */}
+          {/* Drawn from the factor the SERVER applied, never from the local calculation: a server
+              that did not apply it (an older self-hosted build, a relay leg that dropped it)
+              answers with a total at the published rate, and a badge from the local number would
+              claim a surcharge the amount beside it does not contain.
+
+              The reason is READ OUT, not just hovered: a tooltip does not exist on a phone and this
+              row is designed for one. It is a visually hidden span rather than an `aria-label`,
+              because a bare `span` has no role, and an `aria-label` on a role-less element is
+              dropped by browsers and screen readers alike: the attribute would look like an
+              accessible name in the source, name nothing in the ear, and leave the badge announced
+              as a naked "x1.2". Inside the badge, the hidden text simply continues its own
+              sentence. The same reason is written out in the parameters menu, beside the choices
+              that caused it. */}
+          {selectedModel && priceSettled && priceLabel && credentialSource !== 'user'
+            && quotedMultiplier !== 1 && (
+            <span
+              title={priceFactorLabel || undefined}
+              className="shrink-0 rounded-full border border-theme bg-theme-secondary px-1.5 py-0.5 text-xs text-theme-secondary"
+            >
+              {tGeneration('price.multiplierBadge', { factor: formatCredits(quotedMultiplier) })}
+              {priceFactorLabel && <span className="sr-only">{` ${priceFactorLabel}`}</span>}
             </span>
           )}
           <StudioModelPicker
@@ -661,6 +781,10 @@ export function StudioComposer({
             onCredentialIdChange={onCredentialIdChange}
             // The quantity already computed for the price beside it: one number, one call.
             quantity={quantity}
+            // And the factor that goes with it. Both travel so the pane's own quote lands on the
+            // SAME cache entry as the price pill: recomputed there, they would be two readings of
+            // one form and could name two prices for one generation.
+            priceMultiplier={priceMultiplier}
             // The widest thing in the row gives up its words first, so the row never has to give
             // up a control.
             compact={mergeParams}
@@ -702,16 +826,20 @@ export function StudioComposer({
 /**
  * The control that adds a file, shaped by what the model takes.
  *
- * <p>One slot goes straight to the picker: a menu with a single entry asks the reader to choose
- * between one thing. Several open a menu naming each, because "Reference image" and "First frame"
- * are different jobs and the reader is choosing the job, not the file.
+ * <p><b>It always asks what the file is FOR before opening the picker</b>, even when the model has
+ * one slot. Going straight to the picker saved a tap and spent something worth more: the reader
+ * chose a file without ever being told what the model would do with it, and "first frame",
+ * "last frame" and "reference" are three different videos from the same image. The menu is where
+ * that is said, so it is on the way in rather than in a tooltip nobody on a phone can open.
  */
 function AddFileControl({
-  fields, tGeneration, assets, disabled, onPick,
+  fields, tGeneration, assets, missing, disabled, onPick,
 }: {
   fields: StudioField[];
   tGeneration: LabelTranslator;
   assets: AssetMap;
+  /** Slots the turn is being held for, by parameter name. */
+  missing: string[];
   disabled: boolean;
   onPick: (name: string, slot: number) => void;
 }) {
@@ -727,9 +855,31 @@ function AddFileControl({
     return null;
   };
 
+  /** True when this slot already holds a file, which is what makes it forbid its opposites. */
+  const filled = (name: string) => (assets[name] ?? []).some(Boolean);
+
+  /** The label of another slot, for a sentence that names it. */
+  const labelOf = (name: string) => {
+    const other = fields.find((f) => f.name === name);
+    return other ? assetRoleLabel(other, tGeneration) : name;
+  };
+
+  // The file slots the send is waiting on, named the way the menu names them.
+  const wanted = fields
+    .filter((field) => missing.includes(field.name))
+    .map((field) => labelOf(field.name));
+
   const targets = fields
-    .map((field) => ({ field, slot: firstFreeSlot(field) }))
-    .filter((entry): entry is { field: StudioField; slot: number } => entry.slot !== null);
+    .map((field) => ({
+      field,
+      slot: firstFreeSlot(field),
+      // What this slot cannot travel with, as the model listing publishes it (the server states
+      // each rule on both halves of the pair), kept to the ones actually holding a file: a rule
+      // about an empty slot is a rule about nothing yet.
+      blockedBy: forbiddenWith(fields, field.name).filter(filled).map(labelOf),
+    }))
+    .filter((entry): entry is { field: StudioField; slot: number; blockedBy: string[] } =>
+      entry.slot !== null);
 
   // Every slot is taken. The control is kept but inert, with the reason on it: removing it would
   // make the button flicker in and out as files are added and removed.
@@ -741,46 +891,70 @@ function AddFileControl({
     );
   }
 
-  if (targets.length === 1) {
-    const only = targets[0];
-    return (
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-9 w-9"
-        disabled={disabled}
-        onClick={() => onPick(only.field.name, only.slot)}
-        title={assetRoleLabel(only.field, tGeneration)}
-      >
-        <Paperclip className="h-4 w-4" />
-      </Button>
-    );
-  }
-
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-9 w-9" disabled={disabled} title={t('composer.addFile')}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={`h-9 w-9 ${wanted.length > 0 ? 'text-red-500' : ''}`}
+          disabled={disabled}
+          title={wanted.length > 0
+            ? t('composer.fileWanted', { slots: wanted.join(', ') })
+            : t('composer.addFile')}
+          aria-label={t('composer.addFile')}
+        >
           <Paperclip className="h-4 w-4" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className={`${menuSurfaceClass} w-56`}>
-        {targets.map(({ field, slot }) => (
-          <button
-            key={field.name}
-            type="button"
-            className={`${menuItemClass} justify-between`}
-            onClick={() => { setOpen(false); onPick(field.name, slot); }}
-          >
-            <span className="truncate">{assetRoleLabel(field, tGeneration)}</span>
-            {field.slots > 1 && (
-              <span className="ml-2 flex-shrink-0 text-xs text-theme-muted">
-                {slot + 1}/{field.slots}
+      <StudioPopoverContent align="start" className={`${menuSurfaceClass} w-64`}>
+        {/* The question, not a title: what follows is a list of jobs, and the reader is picking
+            one. Kept even with a single entry, which is the case where the slot's meaning used to
+            go unsaid entirely. */}
+        <div className="px-2 pb-1 pt-0.5 text-xs text-theme-muted">{t('composer.chooseRole')}</div>
+        {targets.map(({ field, slot, blockedBy }) => {
+          const hint = assetRoleHint(field, tGeneration);
+          // A pair this provider treats as two different kinds of request. Offered and then
+          // refused is the cheap outcome; the expensive one is a finished asset that used half
+          // the files, so the slot is closed here with the reason on it rather than hidden.
+          const blocked = blockedBy.length > 0;
+          const partners = field.requiresFields.map(labelOf);
+          return (
+            <button
+              key={field.name}
+              type="button"
+              disabled={blocked}
+              className={`${menuItemClass} flex-col items-stretch gap-0.5 ${
+                blocked ? 'cursor-not-allowed opacity-50' : ''}`}
+              onClick={() => { if (!blocked) { setOpen(false); onPick(field.name, slot); } }}
+            >
+              <span className="flex items-center justify-between gap-2">
+                <span className="truncate">{assetRoleLabel(field, tGeneration)}</span>
+                {field.slots > 1 && (
+                  <span className="flex-shrink-0 text-xs text-theme-muted">
+                    {slot + 1}/{field.slots}
+                  </span>
+                )}
               </span>
-            )}
-          </button>
-        ))}
-      </PopoverContent>
+              {/* What the model does with it. Two slots on one model differ by this line and by
+                  nothing else a reader can see. */}
+              {hint && <span className="text-xs font-normal text-theme-muted">{hint}</span>}
+              {/* And what it cannot be used without, or used with. Both are refusals the reader
+                  can only otherwise discover by pressing the button. */}
+              {!blocked && partners.length > 0 && (
+                <span className="text-xs font-normal text-theme-muted">
+                  {t('composer.goesWith', { slots: partners.join(', ') })}
+                </span>
+              )}
+              {blocked && (
+                <span className="text-xs font-normal text-[var(--status-error)]">
+                  {t('composer.notWith', { slots: blockedBy.join(', ') })}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </StudioPopoverContent>
     </Popover>
   );
 }

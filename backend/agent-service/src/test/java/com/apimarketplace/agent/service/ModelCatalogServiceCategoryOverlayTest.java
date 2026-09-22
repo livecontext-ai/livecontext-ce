@@ -17,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -600,6 +601,114 @@ class ModelCatalogServiceCategoryOverlayTest {
         assertThat(captor.getValue().getRank()).isEqualTo(7);
         assertThat(captor.getValue().getEnabled()).isFalse();
         verify(cachedRateLimitProvider, times(1)).refreshCache();
+    }
+
+    @Test
+    @DisplayName("REGRESSION: a model the admin has never edited can be disabled in a category, instead of Failed to save")
+    void setCategoryEnabledCreatesTheMissingParentRow() {
+        // The admin panel lists the YAML-declared catalogue too, and a row is written only the
+        // first time something is saved about a model. The global toggle creates it, so does a
+        // drag-and-drop reorder, but this path threw "Unknown model" - which reached the
+        // browser as a bodyless failure and read as "Failed to save changes". Reported on
+        // openrouter, whose feed-synced rows an admin had never touched.
+        when(repository.findByProviderAndModelId("openrouter", "openai/gpt-5.4"))
+                .thenReturn(Optional.empty());
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(catalogWith(
+                "openrouter", "openai/gpt-5.4", "GPT-5.4 (OpenRouter)"));
+        when(repository.save(any(ModelConfigOverrideEntity.class))).thenAnswer(inv -> {
+            ModelConfigOverrideEntity e = inv.getArgument(0);
+            e.setId(77L);
+            return e;
+        });
+        when(categoryRepository.findById(new ModelCategorySettingsId(77L, "browser_agent")))
+                .thenReturn(Optional.empty());
+
+        service.setCategoryEnabled("openrouter", "openai/gpt-5.4", "browser_agent", false);
+
+        // The parent row is persisted first: the sidecar is keyed by its id.
+        ArgumentCaptor<ModelConfigOverrideEntity> parent =
+                ArgumentCaptor.forClass(ModelConfigOverrideEntity.class);
+        verify(repository).save(parent.capture());
+        assertThat(parent.getValue().getProvider()).isEqualTo("openrouter");
+        assertThat(parent.getValue().getModelId()).isEqualTo("openai/gpt-5.4");
+        // display_name is NOT NULL since V109, so a created row must carry one.
+        assertThat(parent.getValue().getDisplayName()).isEqualTo("GPT-5.4 (OpenRouter)");
+
+        ArgumentCaptor<ModelCategorySettingsEntity> sidecar =
+                ArgumentCaptor.forClass(ModelCategorySettingsEntity.class);
+        verify(categoryRepository).save(sidecar.capture());
+        assertThat(sidecar.getValue().getEnabled()).isFalse();
+        assertThat(sidecar.getValue().getModelConfigId()).isEqualTo(77L);
+    }
+
+    @Test
+    @DisplayName("REGRESSION: a model of a provider with NO key yet can be disabled in a category")
+    void setCategoryEnabledWorksOnAnUnconfiguredProvider() {
+        // The admin panel lists the full catalogue, keyless providers included, and that is
+        // most of what an admin comes here to prune. The first version of this lookup read
+        // the availability-FILTERED catalogue, so those rows were "unknown" and the tab still
+        // answered "Failed to save the change" for the very population it was meant to fix.
+        when(repository.findByProviderAndModelId("mistral", "mistral-large"))
+                .thenReturn(Optional.empty());
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(unconfiguredCatalog());
+        when(repository.save(any(ModelConfigOverrideEntity.class))).thenAnswer(inv -> {
+            ModelConfigOverrideEntity e = inv.getArgument(0);
+            e.setId(91L);
+            return e;
+        });
+        when(categoryRepository.findById(new ModelCategorySettingsId(91L, "browser_agent")))
+                .thenReturn(Optional.empty());
+
+        service.setCategoryEnabled("mistral", "mistral-large", "browser_agent", false);
+
+        ArgumentCaptor<ModelCategorySettingsEntity> sidecar =
+                ArgumentCaptor.forClass(ModelCategorySettingsEntity.class);
+        verify(categoryRepository).save(sidecar.capture());
+        assertThat(sidecar.getValue().getEnabled()).isFalse();
+    }
+
+    /** A provider present in the catalogue with NO key configured, which is the common case. */
+    private Map<String, Object> unconfiguredCatalog() {
+        Map<String, Object> model = new LinkedHashMap<>();
+        model.put("id", "mistral-large");
+        model.put("name", "Mistral Large");
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("name", "mistral");
+        p.put("configured", false);
+        p.put("models", new ArrayList<>(List.of(model)));
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("providers", new ArrayList<>(List.of(p)));
+        return catalog;
+    }
+
+    @Test
+    @DisplayName("setCategoryEnabled still refuses a pair the catalogue does not know, so a typo creates nothing")
+    void setCategoryEnabledStillRefusesAnUnknownPair() {
+        when(repository.findByProviderAndModelId("openrouter", "nope/not-a-model"))
+                .thenReturn(Optional.empty());
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(catalogWith(
+                "openrouter", "openai/gpt-5.4", "GPT-5.4 (OpenRouter)"));
+
+        assertThatThrownBy(() -> service.setCategoryEnabled(
+                "openrouter", "nope/not-a-model", "browser_agent", false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unknown model");
+        verify(repository, never()).save(any());
+        verify(categoryRepository, never()).save(any());
+    }
+
+    /** The YAML/base catalogue shape {@code collectCatalogDisplayNames} reads. */
+    private Map<String, Object> catalogWith(String provider, String modelId, String displayName) {
+        Map<String, Object> model = new LinkedHashMap<>();
+        model.put("id", modelId);
+        model.put("name", displayName);
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("name", provider);
+        p.put("configured", true);
+        p.put("models", new ArrayList<>(List.of(model)));
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("providers", new ArrayList<>(List.of(p)));
+        return catalog;
     }
 
     @Test

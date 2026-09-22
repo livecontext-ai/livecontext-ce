@@ -8,8 +8,19 @@
  * (the user clicks it to focus it). Mirrors the trigger auto-select skip.
  */
 import React from 'react';
+import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+
+const runPanelState = vi.hoisted(() => ({
+  current: {
+    runId: 'run-1',
+    runInfo: { runId: 'run-1', status: 'COMPLETED' },
+    isPreviewOnly: false,
+  } as any,
+  bySurface: new Map<string, any>(),
+  subscribers: new Set<{ surfaceId?: string; listener: (data: any) => void }>(),
+}));
 
 // The composer fetches the verdict once for its model menu. Stubbed:
 // these suites are about layout, not billing.
@@ -85,8 +96,39 @@ vi.mock('@/components/chat/TriggerTabContent', () => ({ TriggerTabContent: () =>
 vi.mock('@/components/chat/ApplicationCarousel', () => ({
   ApplicationCarousel: () => <div data-testid="app-carousel" />,
 }));
+vi.mock('@/components/workflow/WorkflowLogsPanelContent', () => ({
+  WorkflowLogsPanelContent: ({ runId, initialStepAlias, onBack }: { runId: string; initialStepAlias?: string; onBack: () => void }) => (
+    <div data-testid="logs-child" data-run-id={runId}>
+      <span>{initialStepAlias}</span>
+      <button type="button" onClick={onBack}>Back to run</button>
+    </div>
+  ),
+}));
+vi.mock('@/components/workflow/run-panel/RunPanelContent', () => ({
+  RunPanelContent: ({ onOpenLogs }: { onOpenLogs?: () => void }) => (
+    <div data-testid="run-parent">
+      {onOpenLogs && <button type="button" onClick={onOpenLogs}>Open logs</button>}
+    </div>
+  ),
+}));
+vi.mock('@/components/workflow/run-panel/runPanelBus', () => ({
+  clearRunPanelCache: vi.fn(),
+  consumeRunPanelViewRequest: vi.fn(),
+  getCachedRunPanelData: (_workflowId: string, surfaceId?: string) => (
+    runPanelState.bySurface.get(surfaceId ?? '__page__') ?? runPanelState.current
+  ),
+  getRunPanelViewRequest: () => null,
+  subscribeRunPanelData: (_workflowId: string, listener: (data: any) => void, surfaceId?: string) => {
+    const subscription = { surfaceId, listener };
+    runPanelState.subscribers.add(subscription);
+    return () => runPanelState.subscribers.delete(subscription);
+  },
+  OPEN_NODE_CREATOR_EVENT: 'workflowOpenNodeCreator',
+  OPEN_RUN_PANEL_EVENT: 'workflowOpenRunPanel',
+}));
 
 import { WorkflowPanelContent } from '@/components/app/WorkflowPanelContent';
+import { WORKFLOW_PANEL_OPEN_LOGS_EVENT } from '@/lib/sidePanel/workflowLogsNavigation';
 
 function dispatchAppConfigs() {
   act(() => {
@@ -97,7 +139,16 @@ function dispatchAppConfigs() {
 }
 
 describe('WorkflowPanelContent - Application sub-tab (side-panel workflow)', () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    runPanelState.current = {
+      runId: 'run-1',
+      runInfo: { runId: 'run-1', status: 'COMPLETED' },
+      isPreviewOnly: false,
+    };
+    runPanelState.subscribers.clear();
+    runPanelState.bySurface.clear();
+  });
 
   it('shows the Application sub-tab automatically once an interface is available', () => {
     render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
@@ -125,5 +176,241 @@ describe('WorkflowPanelContent - Application sub-tab (side-panel workflow)', () 
     // Workflow canvas tab - ApplicationCarousel only mounts when APP_TAB is active).
     expect(screen.queryByTestId('app-carousel')).toBeNull();
     expect(screen.queryByTestId('canvas-slot')).not.toBeNull();
+  });
+
+  it('keeps distinct Run and Logs sub-tabs when node logs open and returns through the header', () => {
+    render(
+      <WorkflowPanelContent
+        workflowId="wf-1"
+        runId="run-1"
+        hostTabId="workflow-run-wf-1-run-1"
+        workflowCanvasSlot={<div data-testid="canvas-slot" />}
+      />,
+    );
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(WORKFLOW_PANEL_OPEN_LOGS_EVENT, {
+        detail: {
+          targetTabId: 'workflow-run-wf-1-run-1',
+          workflowId: 'wf-1',
+          runId: 'run-1',
+          initialStepAlias: 'mcp:fetch',
+        },
+      }));
+    });
+
+    expect(screen.getByTestId('logs-child')).toHaveTextContent('mcp:fetch');
+    const logsTab = screen.getByRole('button', { name: 'actions.logs' });
+    expect(logsTab.querySelector('.lucide-file-text')).not.toBeNull();
+    expect(logsTab.querySelector('.lucide-play')).toBeNull();
+    expect(logsTab).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'sidePanel.runTab' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('canvas-slot').parentElement).toHaveStyle({ display: 'none' });
+
+    act(() => {
+      screen.getByRole('button', { name: 'Back to run' }).click();
+    });
+    expect(screen.queryByTestId('logs-child')).toBeNull();
+    expect(screen.getByTestId('run-parent')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'sidePanel.runTab' }).querySelector('.lucide-play')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'actions.logs' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('canvas-slot').parentElement).toHaveStyle({ display: 'none' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'actions.logs' }));
+    expect(screen.getByTestId('logs-child')).toHaveTextContent('mcp:fetch');
+  });
+
+  it('opens current run logs directly from their sub-tab before any logs request', () => {
+    render(<WorkflowPanelContent workflowId="wf-1" runId="run-1" workflowCanvasSlot={<div data-testid="canvas-slot" />} />);
+
+    expect(screen.getByRole('button', { name: 'sidePanel.runTab' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'actions.logs' }));
+
+    expect(screen.getByTestId('logs-child')).toHaveAttribute('data-run-id', 'run-1');
+    expect(screen.getByRole('button', { name: 'actions.logs' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByTestId('run-parent')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'common.workflow' }));
+    expect(screen.getByTestId('canvas-slot').parentElement).not.toHaveStyle({ display: 'none' });
+    expect(screen.queryByTestId('logs-child')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'sidePanel.runTab' }));
+    expect(screen.getByTestId('run-parent')).toBeInTheDocument();
+  });
+
+  it('opens the logs child from the run header action', () => {
+    render(
+      <WorkflowPanelContent
+        workflowId="wf-1"
+        runId="run-1"
+        hostTabId="workflow-run-wf-1-run-1"
+        workflowCanvasSlot={<div data-testid="canvas-slot" />}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'sidePanel.runTab' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open logs' }));
+
+    expect(screen.getByTestId('logs-child')).toBeInTheDocument();
+    expect(screen.queryByTestId('run-parent')).toBeNull();
+  });
+
+  it('returns to the run parent when the workflow binds a different run', () => {
+    render(
+      <WorkflowPanelContent
+        workflowId="wf-1"
+        runId="run-1"
+        hostTabId="workflow-run-wf-1-run-1"
+        workflowCanvasSlot={<div data-testid="canvas-slot" />}
+      />,
+    );
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(WORKFLOW_PANEL_OPEN_LOGS_EVENT, {
+        detail: {
+          targetTabId: 'workflow-run-wf-1-run-1',
+          workflowId: 'wf-1',
+          runId: 'run-1',
+        },
+      }));
+    });
+    expect(screen.getByTestId('logs-child')).toBeInTheDocument();
+
+    act(() => {
+      runPanelState.current = {
+        runId: 'run-2',
+        runInfo: { runId: 'run-2', status: 'RUNNING' },
+        isPreviewOnly: false,
+      };
+      runPanelState.subscribers.forEach(({ listener }) => listener(runPanelState.current));
+    });
+
+    expect(screen.queryByTestId('logs-child')).toBeNull();
+    expect(screen.getByTestId('run-parent')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'actions.logs' }));
+    expect(screen.getByTestId('logs-child')).toHaveAttribute('data-run-id', 'run-2');
+  });
+
+  it('keeps logs open when the host finishes rebinding to their target run', () => {
+    render(
+      <WorkflowPanelContent
+        workflowId="wf-1"
+        runId="run-1"
+        hostTabId="workflow-run-wf-1-run-1"
+        workflowCanvasSlot={<div />}
+      />,
+    );
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(WORKFLOW_PANEL_OPEN_LOGS_EVENT, {
+        detail: {
+          targetTabId: 'workflow-run-wf-1-run-1',
+          workflowId: 'wf-1',
+          runId: 'run-2',
+        },
+      }));
+    });
+    expect(screen.getByTestId('logs-child')).toBeInTheDocument();
+
+    act(() => {
+      runPanelState.current = {
+        runId: 'run-2',
+        runInfo: { runId: 'run-2', status: 'RUNNING' },
+        isPreviewOnly: false,
+      };
+      runPanelState.subscribers.forEach(({ listener }) => listener(runPanelState.current));
+    });
+
+    expect(screen.getByTestId('logs-child')).toBeInTheDocument();
+  });
+
+  it('clears logs when the pinned panel moves to another workflow', () => {
+    const { rerender } = render(
+      <WorkflowPanelContent
+        workflowId="wf-1"
+        runId="run-1"
+        hostTabId="workflow-panel"
+        workflowCanvasSlot={<div data-testid="canvas-slot" />}
+      />,
+    );
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(WORKFLOW_PANEL_OPEN_LOGS_EVENT, {
+        detail: {
+          targetTabId: 'workflow-panel',
+          workflowId: 'wf-1',
+          runId: 'run-1',
+        },
+      }));
+    });
+    expect(screen.getByTestId('logs-child')).toBeInTheDocument();
+
+    rerender(
+      <WorkflowPanelContent
+        workflowId="wf-2"
+        runId="run-2"
+        hostTabId="workflow-panel"
+        workflowCanvasSlot={<div data-testid="canvas-slot" />}
+      />,
+    );
+
+    expect(screen.queryByTestId('logs-child')).toBeNull();
+    expect(screen.getByTestId('run-parent')).toBeInTheDocument();
+  });
+
+  it('keeps logs open when another surface of the same workflow changes run', () => {
+    runPanelState.bySurface.set('surface-a', {
+      runId: 'run-a',
+      runInfo: { runId: 'run-a', status: 'COMPLETED' },
+      isPreviewOnly: false,
+    });
+    runPanelState.bySurface.set('surface-b', {
+      runId: 'run-b',
+      runInfo: { runId: 'run-b', status: 'RUNNING' },
+      isPreviewOnly: false,
+    });
+
+    render(
+      <>
+        <WorkflowPanelContent
+          workflowId="wf-1"
+          runId="run-a"
+          hostTabId="host-a"
+          runSurfaceId="surface-a"
+          workflowCanvasSlot={<div />}
+        />
+        <WorkflowPanelContent
+          workflowId="wf-1"
+          runId="run-b"
+          hostTabId="host-b"
+          runSurfaceId="surface-b"
+          workflowCanvasSlot={<div />}
+        />
+      </>,
+    );
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(WORKFLOW_PANEL_OPEN_LOGS_EVENT, {
+        detail: {
+          targetTabId: 'host-a',
+          workflowId: 'wf-1',
+          runId: 'run-a',
+        },
+      }));
+    });
+    expect(screen.getByTestId('logs-child')).toBeInTheDocument();
+
+    act(() => {
+      const surfaceBUpdate = {
+        runId: 'run-b-next',
+        runInfo: { runId: 'run-b-next', status: 'RUNNING' },
+        isPreviewOnly: false,
+      };
+      runPanelState.bySurface.set('surface-b', surfaceBUpdate);
+      runPanelState.subscribers.forEach(({ surfaceId, listener }) => {
+        if (surfaceId === 'surface-b') listener(surfaceBUpdate);
+      });
+    });
+
+    expect(screen.getByTestId('logs-child')).toBeInTheDocument();
   });
 });

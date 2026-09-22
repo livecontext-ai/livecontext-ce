@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.service.execution;
 
+import com.apimarketplace.agent.config.ToolAccessControl;
 import java.util.List;
 import java.util.Map;
 
@@ -54,14 +55,9 @@ public final class AgentToolsConfigCredentials {
             // but keeps the credential map uniformly List<String>).
             credentials.put("allowedFileIds", fileIds.stream().map(String::valueOf).toList());
         }
-        passAccessMode(credentials, tc, "tableAccessMode");
-        passAccessMode(credentials, tc, "workflowAccessMode");
-        passAccessMode(credentials, tc, "interfaceAccessMode");
-        passAccessMode(credentials, tc, "agentAccessMode");
-        passAccessMode(credentials, tc, "applicationAccessMode");
-        passAccessMode(credentials, tc, "skillAccessMode");
-        passAccessMode(credentials, tc, "fileAccessMode");
-        passAccessMode(credentials, tc, "memoryAccessMode");
+        for (String accessModeKey : ToolAccessControl.ACCESS_MODE_KEYS) {
+            passAccessMode(credentials, tc, accessModeKey);
+        }
     }
 
     /**

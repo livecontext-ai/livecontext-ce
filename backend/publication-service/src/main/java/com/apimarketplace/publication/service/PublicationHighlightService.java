@@ -151,12 +151,18 @@ public class PublicationHighlightService {
     /**
      * Which publication {@code displayMode} a highlight bucket accepts. Buckets are
      * normally 1:1 with the publication type (the {@code APPLICATION} bucket holds
-     * {@code APPLICATION} publications, etc.). The {@code LANDING} bucket is the one
-     * exception: it is the curated row driving the public landing page and it holds
-     * {@code APPLICATION}-type publications (no publication is ever of type LANDING).
+     * {@code APPLICATION} publications, etc.). The landing buckets are the exception:
+     * {@code LANDING} is the curated row driving the public home page and each
+     * {@code LANDING_*} drives one persona page, and they all hold {@code APPLICATION}
+     * publications (no publication is ever of type LANDING or LANDING_OPS).
      */
     static DisplayMode requiredPublicationMode(DisplayMode bucket) {
-        return bucket == DisplayMode.LANDING ? DisplayMode.APPLICATION : bucket;
+        return isLandingBucket(bucket) ? DisplayMode.APPLICATION : bucket;
+    }
+
+    /** A curated public-page row rather than a publication type. */
+    public static boolean isLandingBucket(DisplayMode bucket) {
+        return bucket.name().startsWith("LANDING");
     }
 
     public record HighlightedPublication(int rank, WorkflowPublicationEntity publication) {

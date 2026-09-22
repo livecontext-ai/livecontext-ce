@@ -715,4 +715,81 @@ class StepNodeTest {
             }
         };
     }
+
+    /**
+     * The catalogue gateway one frame down already decided whether a failure is a refusal (plan,
+     * credits, credential choice) or a fault, and logged it at the right level. This node then
+     * re-logged EVERY case at ERROR, which undid that entirely: the dashboard kept its incident
+     * and gained a WARN beside it. A mutation that forces this branch to ERROR left 294 tests
+     * green, which is why these two exist.
+     */
+    @Nested
+    @DisplayName("a relayed refusal is not re-raised to ERROR")
+    class RelayedRefusalLogLevel {
+
+        private ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender;
+        private ch.qos.logback.classic.Logger nodeLogger;
+
+        @BeforeEach
+        void attach() {
+            nodeLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(StepNode.class);
+            appender = new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            nodeLogger.addAppender(appender);
+        }
+
+        @org.junit.jupiter.api.AfterEach
+        void detach() {
+            nodeLogger.detachAppender(appender);
+        }
+
+        private void runWithToolError(String message) {
+            Step step = new Step("tool-123", "mcp", "API Call", null, Map.of(), null, null, null);
+            StepNode node = new StepNode("mcp:api_call", step);
+            node.setToolsGateway(mockToolsGateway);
+            when(mockToolsGateway.executeTool(any(ToolRef.class), any(), eq("tenant-1"), any()))
+                .thenReturn(new ExecutionResult(false, Map.of(),
+                    List.of(Map.of("message", message)), List.of()));
+            node.execute(context);
+        }
+
+        @Test
+        @DisplayName("out of credits relayed from the catalogue is a WARN, with no ERROR line")
+        void refusalIsWarn() {
+            runWithToolError(com.apimarketplace.orchestrator.services.credit.CreditExhaustion.MESSAGE);
+
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                .noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                .anySatisfy(e -> org.assertj.core.api.Assertions.assertThat(e.getLevel())
+                    .isEqualTo(ch.qos.logback.classic.Level.WARN));
+        }
+
+        @Test
+        @DisplayName("the CATALOGUE wording reaches this branch too - what widening the classifier bought")
+        void catalogueCreditRefusalIsWarn() {
+            // The classifier was widened with the chat vocabulary for the agent-schedule path,
+            // and because the match is a substring test it also reaches HERE, on a catalog tool's
+            // relayed 402. That is a real behaviour of this node, so it is asserted on the node
+            // rather than inferred from the classifier's own unit test. Verbatim shape from
+            // CreditConsumptionClient's 402 branch.
+            runWithToolError("402 Insufficient credits");
+
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                .noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                .anySatisfy(e -> org.assertj.core.api.Assertions.assertThat(e.getLevel())
+                    .isEqualTo(ch.qos.logback.classic.Level.WARN));
+        }
+
+        @Test
+        @DisplayName("a real tool fault still logs ERROR")
+        void faultStaysError() {
+            runWithToolError("Connection refused: connect");
+
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                .anySatisfy(e -> org.assertj.core.api.Assertions.assertThat(e.getLevel())
+                    .isEqualTo(ch.qos.logback.classic.Level.ERROR));
+        }
+    }
 }

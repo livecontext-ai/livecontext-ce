@@ -65,6 +65,14 @@ export const STATUS_ACCENT: Partial<Record<OccurrenceStatus, { chip: string; dot
     chip: 'bg-red-50 text-red-900 dark:bg-red-950/50 dark:text-red-100',
     dot: 'bg-red-500',
   },
+  // A stopped run is neither a success nor a failure, and the difference matters on a
+  // calendar: red would send someone looking for a fault in a run that a person chose to
+  // end. Slate reads as "deliberately not finished". Reachable from AGENT runs only - a
+  // workflow epoch has no cancelled verdict to report.
+  CANCELLED: {
+    chip: 'bg-slate-100 text-slate-700 dark:bg-slate-800/70 dark:text-slate-300',
+    dot: 'bg-slate-400',
+  },
   FIRED: {
     chip: 'bg-gray-100 text-gray-600 dark:bg-gray-800/70 dark:text-gray-400',
     dot: 'bg-gray-400',
@@ -85,17 +93,31 @@ export function occurrenceAccent(occurrence: AgendaOccurrence): { chip: string; 
  * Where clicking an occurrence should land.
  *
  * Applications are keyed by PUBLICATION id, not workflow id - routing an application row
- * on its resourceId is a 404. A resolved production run takes precedence for workflows so
- * the user lands in run mode, which is where the occurrence they clicked actually shows.
+ * on its resourceId is a 404. Agents have no per-agent page at all: they open in the
+ * right-side panel through the `?openAgent=<id>` deep link AgentTable handles. A resolved
+ * production run takes precedence for workflows so the user lands in run mode, which is
+ * where the occurrence they clicked actually shows.
  */
 export function occurrenceHref(occurrence: {
   resourceType: ResourceType;
   resourceId: string;
   runIdPublic?: string;
   publicationId?: string;
+  conversationId?: string;
 }): string {
   if (occurrence.resourceType === 'AGENT') {
-    return `/app/agent/${occurrence.resourceId}`;
+    // A past agent run is READ in the conversation it happened in - that is where its
+    // prompt, its answer and its tool calls are. The agent panel only says the agent
+    // exists, which is the right landing place for a planned fire (nothing has happened
+    // yet) and the wrong one for a run someone clicked to inspect.
+    //
+    // The fallback is live, not theoretical: a CLI-provider agent node inside a workflow
+    // records no conversation at all (778 of 778 such rows on a real install), so those
+    // runs land on the agent panel.
+    if (occurrence.conversationId) {
+      return `/app/c/${occurrence.conversationId}`;
+    }
+    return `/app/agent?openAgent=${occurrence.resourceId}`;
   }
   if (occurrence.resourceType === 'APPLICATION' && occurrence.publicationId) {
     return `/app/applications/${occurrence.publicationId}`;
@@ -108,7 +130,9 @@ export function occurrenceHref(occurrence: {
 
 /** Whether the agenda can act on this entry: only a live schedule can be moved or run. */
 export function isActionable(occurrence: AgendaOccurrence): boolean {
-  return occurrence.kind === 'PLANNED' && Boolean(occurrence.scheduleId);
+  return occurrence.kind === 'PLANNED'
+    && Boolean(occurrence.scheduleId)
+    && !occurrence.resourcePaused;
 }
 
 /**

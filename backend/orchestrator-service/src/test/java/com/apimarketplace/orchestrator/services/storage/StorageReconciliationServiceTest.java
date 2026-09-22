@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.services.storage;
 import com.apimarketplace.agent.client.AgentClient;
 import com.apimarketplace.common.storage.StorageUsageDto;
 import com.apimarketplace.common.storage.service.StorageBreakdownService;
+import com.apimarketplace.common.storage.service.StorageRowCategories;
 import com.apimarketplace.common.storage.service.QuotaService;
 import com.apimarketplace.datasource.client.DataSourceClient;
 import com.apimarketplace.interfaces.client.InterfaceClient;
@@ -15,6 +16,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -22,6 +25,7 @@ import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -34,6 +38,15 @@ class StorageReconciliationServiceTest {
 
     private static final String TENANT_ID = "tenant-001";
     private static final String ORG_ID = "org-42";
+
+    static java.util.stream.Stream<Object> invalidConfigurationMeasurements() {
+        return java.util.stream.Stream.of(
+                null, "not-a-map", Map.of("itemCount", 1),
+                Map.of("usedBytes", "12"), Map.of("usedBytes", -1L),
+                Map.of("usedBytes", 1.5), Map.of("usedBytes", Double.NaN),
+                Map.of("usedBytes", Double.POSITIVE_INFINITY),
+                Map.of("usedBytes", BigInteger.valueOf(Long.MAX_VALUE).add(BigInteger.ONE)));
+    }
 
     @Mock private EntityManager entityManager;
     @Mock private StorageBreakdownService breakdownService;
@@ -69,7 +82,8 @@ class StorageReconciliationServiceTest {
         // Remote: agent-service (AGENTS + SKILLS)
         when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
                 "AGENTS", Map.of("usedBytes", bytes, "itemCount", count),
-                "SKILLS", Map.of("usedBytes", bytes, "itemCount", count)
+                "SKILLS", Map.of("usedBytes", bytes, "itemCount", count),
+                "MEMORIES", Map.of("usedBytes", bytes, "itemCount", count)
         ));
 
         // Remote: interface-service
@@ -78,7 +92,7 @@ class StorageReconciliationServiceTest {
 
         // Remote: conversation-service
         when(conversationStorageClient.getStorageUsage(TENANT_ID)).thenReturn(
-                new StorageUsageDto(bytes, count));
+                Optional.of(new StorageUsageDto(bytes, count)));
 
         // Remote: datasource-service
         when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID)).thenReturn(
@@ -148,12 +162,13 @@ class StorageReconciliationServiceTest {
             // Stub remote to avoid NPE
             when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
                     "AGENTS", Map.of("usedBytes", 0, "itemCount", 0),
-                    "SKILLS", Map.of("usedBytes", 0, "itemCount", 0)
+                    "SKILLS", Map.of("usedBytes", 0, "itemCount", 0),
+                    "MEMORIES", Map.of("usedBytes", 0L, "itemCount", 0)
             ));
             when(interfaceClient.getInterfaceStorageUsage(TENANT_ID)).thenReturn(
                     Map.of("usedBytes", 0, "itemCount", 0));
             when(conversationStorageClient.getStorageUsage(TENANT_ID)).thenReturn(
-                    new StorageUsageDto(0, 0));
+                    Optional.of(new StorageUsageDto(0, 0)));
             when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID)).thenReturn(
                     Map.of("usedBytes", 0, "itemCount", 0));
             when(publicationClient.getPublicationStorageUsage(TENANT_ID)).thenReturn(
@@ -175,12 +190,13 @@ class StorageReconciliationServiceTest {
 
             when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
                     "AGENTS", Map.of("usedBytes", 0, "itemCount", 0),
-                    "SKILLS", Map.of("usedBytes", 0, "itemCount", 0)
+                    "SKILLS", Map.of("usedBytes", 0, "itemCount", 0),
+                    "MEMORIES", Map.of("usedBytes", 0L, "itemCount", 0)
             ));
             when(interfaceClient.getInterfaceStorageUsage(TENANT_ID)).thenReturn(
                     Map.of("usedBytes", 0, "itemCount", 0));
             when(conversationStorageClient.getStorageUsage(TENANT_ID)).thenReturn(
-                    new StorageUsageDto(0, 0));
+                    Optional.of(new StorageUsageDto(0, 0)));
             when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID)).thenReturn(
                     Map.of("usedBytes", 0, "itemCount", 0));
             when(publicationClient.getPublicationStorageUsage(TENANT_ID)).thenReturn(
@@ -207,7 +223,7 @@ class StorageReconciliationServiceTest {
             when(interfaceClient.getInterfaceStorageUsage(TENANT_ID))
                     .thenThrow(new RuntimeException("Interface service down"));
             when(conversationStorageClient.getStorageUsage(TENANT_ID)).thenReturn(
-                    new StorageUsageDto(200, 5));
+                    Optional.of(new StorageUsageDto(200, 5)));
             when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID)).thenReturn(
                     Map.of("usedBytes", 300, "itemCount", 3));
             when(publicationClient.getPublicationStorageUsage(TENANT_ID)).thenReturn(
@@ -315,6 +331,23 @@ class StorageReconciliationServiceTest {
         }
 
         @Test
+        @DisplayName("refreshes the org gauge from the rows it just wrote, like reconcileTenant does")
+        void reconcileOrganizationRefreshesTheGauge() {
+            // Without this the nightly pass left the org gauge on yesterday's total until somebody
+            // opened the page, so the quota gate that decides whether a WRITE is allowed read a
+            // stale number in between. The tenant path has always ended this way.
+            Query mockQuery = mock(Query.class);
+            when(mockQuery.setParameter(eq("oid"), eq(ORG_ID))).thenReturn(mockQuery);
+            when(mockQuery.getSingleResult()).thenReturn(
+                    new Object[]{BigInteger.valueOf(21_000_000_000L), BigInteger.valueOf(168_022)});
+            when(entityManager.createNativeQuery(anyString())).thenReturn(mockQuery);
+
+            service.reconcileOrganization(ORG_ID);
+
+            verify(quotaService).updateOrganizationUsage(ORG_ID);
+        }
+
+        @Test
         @DisplayName("STEP_OUTPUTS_BY_ORG and FILES_BY_ORG filter by s.organization_id directly and mirror StorageService categorization")
         void orgScopedStorageQueriesFilterByOrganizationIdNotWorkflowIdJoin() {
             // The bug: the previous shape JOINed `storage` to `workflows` via
@@ -348,12 +381,14 @@ class StorageReconciliationServiceTest {
             service.reconcileOrganization(ORG_ID);
 
             java.util.List<String> sqls = sqlCaptor.getAllValues();
+            String stepOutputsPredicate = StorageRowCategories.stepOutputsSqlPredicate("s");
+            String filesPredicate = StorageRowCategories.filesSqlPredicate("s");
             String stepOutputsSql = sqls.stream()
-                    .filter(s -> s.contains("s.storage_type = 'JSON'") && s.contains(":oid"))
+                    .filter(s -> s.contains(stepOutputsPredicate) && s.contains(":oid"))
                     .findFirst()
                     .orElseThrow(() -> new AssertionError("STEP_OUTPUTS org SQL not captured"));
             String filesSql = sqls.stream()
-                    .filter(s -> s.contains("s.storage_type IN ('BINARY','TEXT')") && s.contains(":oid"))
+                    .filter(s -> s.contains(filesPredicate) && !s.contains(stepOutputsPredicate) && s.contains(":oid"))
                     .findFirst()
                     .orElseThrow(() -> new AssertionError("FILES org SQL not captured"));
 
@@ -368,15 +403,20 @@ class StorageReconciliationServiceTest {
                     .contains("s.organization_id = :oid")
                     .contains("s.status = 'ACTIVE'");
 
+            // The org queries must classify with the SAME rule as the tenant queries and as the
+            // save/delete paths, which is what {@link StorageRowCategories} is for. Spelling the
+            // predicate out here again is what let the tenant and org copies drift: the org one
+            // was fixed in 2026-05 while the tenant one kept losing every S3-backed file.
             assertThat(stepOutputsSql)
-                    .as("regression: JSON rows without file source_type are STEP_OUTPUTS, matching StorageService.saveJsonWithContext")
-                    .contains("s.storage_type = 'JSON'")
-                    .contains("s.source_type IS NULL")
-                    .contains("s.source_type NOT IN ('S3_FILE','CHAT_ATTACHMENT')");
+                    .as("STEP_OUTPUTS_BY_ORG must use the shared classifier's predicate")
+                    .contains(stepOutputsPredicate);
             assertThat(filesSql)
-                    .as("regression: saveBinary/saveText rows have BINARY/TEXT storage_type and may have null source_type, but are still FILES")
-                    .contains("s.source_type IN ('S3_FILE','CHAT_ATTACHMENT')")
-                    .contains("s.storage_type IN ('BINARY','TEXT')");
+                    .as("FILES_BY_ORG must use the shared classifier's predicate")
+                    .contains(filesPredicate);
+            assertThat(filesSql)
+                    .as("regression: an S3-backed row is a FILE whatever produced it - the literal "
+                            + "whose absence hid 16 GB of one production tenant")
+                    .contains("COALESCE(s.storage_type, '') IN ('S3_FILE', 'BINARY', 'TEXT')");
 
             // The broken direct-PK JOIN MUST NOT come back. On prod this matched
             // 0 / 140 799 rows because storage.storage.workflow_id does not
@@ -422,7 +462,7 @@ class StorageReconciliationServiceTest {
         }
 
         @Test
-        @DisplayName("refreshOrgBreakdown throttle skips SQL but still refreshes the org quota gauge")
+        @DisplayName("refreshOrgBreakdown throttle hit skips the SQL but still refreshes the org gauge")
         void refreshOrgBreakdownThrottleStillUpdatesOrgQuotaGauge() {
             Query mockQuery = mock(Query.class);
             when(mockQuery.setParameter(eq("oid"), eq(ORG_ID))).thenReturn(mockQuery);
@@ -437,6 +477,9 @@ class StorageReconciliationServiceTest {
 
             verifyNoInteractions(entityManager);
             verify(breakdownService, never()).setOrgUsage(anyString(), anyString(), anyLong(), anyInt());
+            // The org gauge is a direct SUM over storage.storage, so it moves whenever a file is
+            // written even though the categories are throttled. The tenant path differs on
+            // purpose: its gauge is the sum of these rows, and every writer refreshes it already.
             verify(quotaService).updateOrganizationUsage(ORG_ID);
         }
 
@@ -448,6 +491,134 @@ class StorageReconciliationServiceTest {
             verifyNoInteractions(entityManager);
             verify(breakdownService, never()).setOrgUsage(anyString(), anyString(), anyLong(), anyInt());
             verify(quotaService, never()).updateOrganizationUsage(anyString());
+        }
+    }
+
+    @Nested
+    @DisplayName("which scopes the daily pass visits")
+    class ScopeEnumerationTests {
+
+        /**
+         * Enumerating from the breakdown table alone could only ever find scopes that had already
+         * been reconciled, so a scope that had never been visited never would be, and its gauge
+         * answered zero for whatever it held. Production on 2026-09-18: 31 organizations and 30
+         * tenants held ACTIVE rows with no breakdown row at all.
+         */
+        @Test
+        @DisplayName("tenants are taken from the breakdown rows UNION the storage rows")
+        void tenantEnumerationIncludesScopesWithNoBreakdownRow() {
+            assertThat(StorageReconciliationQueries.TENANTS_TO_RECONCILE)
+                    .contains("storage.tenant_storage_breakdown")
+                    .containsIgnoringCase("union")
+                    .contains("FROM storage.storage")
+                    .contains("status = 'ACTIVE'");
+        }
+
+        @Test
+        @DisplayName("organizations are taken the same way, and never a NULL organization_id")
+        void orgEnumerationIncludesScopesWithNoBreakdownRow() {
+            assertThat(StorageReconciliationQueries.ORGS_TO_RECONCILE)
+                    .contains("storage.org_storage_breakdown")
+                    .containsIgnoringCase("union")
+                    .contains("FROM storage.storage")
+                    .contains("organization_id IS NOT NULL");
+        }
+
+        @Test
+        @DisplayName("the daily pass runs those two queries, not a breakdown-only enumeration")
+        void dailyReconciliationUsesTheUnionQueries() {
+            Query tenantQuery = mock(Query.class);
+            when(tenantQuery.getResultList()).thenReturn(java.util.List.of());
+            org.mockito.ArgumentCaptor<String> sqlCaptor =
+                    org.mockito.ArgumentCaptor.forClass(String.class);
+            when(entityManager.createNativeQuery(sqlCaptor.capture())).thenReturn(tenantQuery);
+
+            service.dailyReconciliation();
+
+            assertThat(sqlCaptor.getAllValues())
+                    .contains(StorageReconciliationQueries.TENANTS_TO_RECONCILE,
+                            StorageReconciliationQueries.ORGS_TO_RECONCILE);
+        }
+    }
+
+    @Nested
+    @DisplayName("refreshTenantBreakdown()")
+    class RefreshTenantBreakdownTests {
+
+        /**
+         * The tenant scope used to refresh EXECUTION_DATA only, while the org scope refreshed all
+         * three local categories. The same workspace's storage page therefore showed numbers up to
+         * a day apart depending on which scope it was read in, and a corrected classification
+         * would have taken until the 02:00 cron to appear anywhere. How fresh a figure is must not
+         * depend on the scope it is read in.
+         */
+        @Test
+        @DisplayName("refreshes the same three local categories as the org scope")
+        void refreshesAllThreeLocalCategories() {
+            Query mockQuery = mock(Query.class);
+            when(mockQuery.setParameter(eq("tid"), eq(TENANT_ID))).thenReturn(mockQuery);
+            when(mockQuery.getSingleResult()).thenReturn(
+                    new Object[]{BigInteger.valueOf(21_000_000_000L), BigInteger.valueOf(168_022)});
+            when(entityManager.createNativeQuery(anyString())).thenReturn(mockQuery);
+
+            service.refreshTenantBreakdown(TENANT_ID);
+
+            verify(entityManager, times(3)).createNativeQuery(anyString());
+            verify(breakdownService).setUsage(TENANT_ID, "STEP_OUTPUTS", 21_000_000_000L, 168_022);
+            verify(breakdownService).setUsage(TENANT_ID, "FILES", 21_000_000_000L, 168_022);
+            verify(breakdownService).setUsage(TENANT_ID, "EXECUTION_DATA", 21_000_000_000L, 168_022);
+            verify(quotaService).updateUsage(TENANT_ID);
+        }
+
+        @Test
+        @DisplayName("a throttle hit costs a map lookup and nothing else")
+        void throttleHitDoesNothing() {
+            // The tenant gauge is the sum of these rows and every writer that changes them
+            // refreshes it on the way out, so a throttled read has nothing to correct. Refreshing
+            // here would re-write an identical value and evict the tenantQuota cache on every GET,
+            // leaving that cache unable to serve. The org path is the opposite case, see
+            // refreshOrgBreakdownThrottleStillUpdatesOrgQuotaGauge.
+            Query mockQuery = mock(Query.class);
+            when(mockQuery.setParameter(eq("tid"), eq(TENANT_ID))).thenReturn(mockQuery);
+            when(mockQuery.getSingleResult()).thenReturn(
+                    new Object[]{BigInteger.ONE, BigInteger.ONE});
+            when(entityManager.createNativeQuery(anyString())).thenReturn(mockQuery);
+
+            service.refreshTenantBreakdown(TENANT_ID);
+            clearInvocations(entityManager, breakdownService, quotaService);
+
+            service.refreshTenantBreakdown(TENANT_ID);
+
+            verifyNoInteractions(entityManager);
+            verifyNoInteractions(quotaService);
+            verify(breakdownService, never()).setUsage(anyString(), anyString(), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("a failing query does not arm the throttle, so the next caller may retry")
+        void failedQueryLeavesThrottleOpen() {
+            // doThrow, not when().thenThrow(): the latter CALLS the mock to build the stub, and
+            // the already-armed throw would escape the test itself.
+            doThrow(new RuntimeException("lock wait timeout"))
+                    .when(entityManager).createNativeQuery(anyString());
+
+            service.refreshTenantBreakdown(TENANT_ID);
+            clearInvocations(entityManager);
+
+            service.refreshTenantBreakdown(TENANT_ID);
+
+            // Three categories attempted again: a transient DB failure must not cost the tenant a
+            // 30s window of staleness it cannot retry out of.
+            verify(entityManager, times(3)).createNativeQuery(anyString());
+        }
+
+        @Test
+        @DisplayName("a blank tenantId is a no-op")
+        void blankTenantIsNoOp() {
+            service.refreshTenantBreakdown(" ");
+
+            verifyNoInteractions(entityManager);
+            verify(quotaService, never()).updateUsage(anyString());
         }
     }
 
@@ -463,7 +634,7 @@ class StorageReconciliationServiceTest {
         @DisplayName("should reconcile all tenants returned by distinct query")
         void shouldReconcileAllTenants() {
             Query tenantQuery = mock(Query.class);
-            when(entityManager.createNativeQuery("SELECT DISTINCT tenant_id FROM storage.tenant_storage_breakdown"))
+            when(entityManager.createNativeQuery(StorageReconciliationQueries.TENANTS_TO_RECONCILE))
                     .thenReturn(tenantQuery);
             when(tenantQuery.getResultList()).thenReturn(Arrays.asList("tenant-A", "tenant-B", "tenant-C"));
 
@@ -473,18 +644,20 @@ class StorageReconciliationServiceTest {
             when(mockQuery.getSingleResult()).thenReturn(
                     new Object[]{BigInteger.valueOf(1000L), BigInteger.valueOf(5)});
             when(entityManager.createNativeQuery(argThat(sql ->
-                    sql != null && !sql.equals("SELECT DISTINCT tenant_id FROM storage.tenant_storage_breakdown"))
+                    sql != null && !sql.equals(StorageReconciliationQueries.TENANTS_TO_RECONCILE)
+                            && !sql.equals(StorageReconciliationQueries.ORGS_TO_RECONCILE))
             )).thenReturn(mockQuery);
 
             // Stub remote clients for all tenants
             when(agentClient.getAgentStorageUsage(anyString())).thenReturn(Map.of(
                     "AGENTS", Map.of("usedBytes", 1000, "itemCount", 5),
-                    "SKILLS", Map.of("usedBytes", 500, "itemCount", 2)
+                    "SKILLS", Map.of("usedBytes", 500, "itemCount", 2),
+                    "MEMORIES", Map.of("usedBytes", 0L, "itemCount", 0)
             ));
             when(interfaceClient.getInterfaceStorageUsage(anyString())).thenReturn(
                     Map.of("usedBytes", 1000, "itemCount", 5));
             when(conversationStorageClient.getStorageUsage(anyString())).thenReturn(
-                    new StorageUsageDto(1000, 5));
+                    Optional.of(new StorageUsageDto(1000, 5)));
             when(dataSourceClient.getDataSourceStorageUsage(anyString())).thenReturn(
                     Map.of("usedBytes", 1000, "itemCount", 5));
             when(publicationClient.getPublicationStorageUsage(anyString())).thenReturn(
@@ -498,10 +671,40 @@ class StorageReconciliationServiceTest {
         }
 
         @Test
+        @DisplayName("each organization in the list is reconciled, and a failure does not stop the rest")
+        void shouldReconcileEveryOrgAndSurviveOne() {
+            Query tenantQuery = mock(Query.class);
+            when(tenantQuery.getResultList()).thenReturn(Collections.emptyList());
+            Query orgQuery = mock(Query.class);
+            when(orgQuery.getResultList()).thenReturn(java.util.List.of("org-A", "org-B"));
+
+            Query categoryQuery = mock(Query.class);
+            when(categoryQuery.setParameter(eq("oid"), anyString())).thenReturn(categoryQuery);
+            when(categoryQuery.getSingleResult()).thenReturn(
+                    new Object[]{BigInteger.valueOf(100L), BigInteger.valueOf(2)});
+
+            when(entityManager.createNativeQuery(anyString())).thenAnswer(inv -> {
+                String sql = inv.getArgument(0);
+                if (StorageReconciliationQueries.TENANTS_TO_RECONCILE.equals(sql)) return tenantQuery;
+                if (StorageReconciliationQueries.ORGS_TO_RECONCILE.equals(sql)) return orgQuery;
+                return categoryQuery;
+            });
+            // org-A's gauge refresh blows up. The whole night must not go with it.
+            doThrow(new RuntimeException("duplicate key"))
+                    .when(quotaService).updateOrganizationUsage("org-A");
+
+            service.dailyReconciliation();
+
+            verify(breakdownService, atLeastOnce()).setOrgUsage(eq("org-A"), anyString(), anyLong(), anyInt());
+            verify(breakdownService, atLeastOnce()).setOrgUsage(eq("org-B"), anyString(), anyLong(), anyInt());
+            verify(quotaService).updateOrganizationUsage("org-B");
+        }
+
+        @Test
         @DisplayName("should handle empty tenant list gracefully")
         void shouldHandleEmptyTenantList() {
             Query tenantQuery = mock(Query.class);
-            when(entityManager.createNativeQuery("SELECT DISTINCT tenant_id FROM storage.tenant_storage_breakdown"))
+            when(entityManager.createNativeQuery(StorageReconciliationQueries.TENANTS_TO_RECONCILE))
                     .thenReturn(tenantQuery);
             when(tenantQuery.getResultList()).thenReturn(Collections.emptyList());
 
@@ -515,7 +718,7 @@ class StorageReconciliationServiceTest {
         @DisplayName("should not throw when tenant list query itself fails")
         void shouldNotThrowWhenTenantQueryFails() {
             Query tenantQuery = mock(Query.class);
-            when(entityManager.createNativeQuery("SELECT DISTINCT tenant_id FROM storage.tenant_storage_breakdown"))
+            when(entityManager.createNativeQuery(StorageReconciliationQueries.TENANTS_TO_RECONCILE))
                     .thenReturn(tenantQuery);
             when(tenantQuery.getResultList()).thenThrow(new RuntimeException("DB connection lost"));
 
@@ -531,25 +734,45 @@ class StorageReconciliationServiceTest {
     @DisplayName("Query SQL Validation")
     class QueryValidationTests {
 
+        /**
+         * These two used to spell the predicate out again, and that is precisely how the bug
+         * survived: the old assertions described what the query DID
+         * ({@code source_type NOT IN ('S3_FILE','CHAT_ATTACHMENT')}) rather than what it had to
+         * ACHIEVE, so they stayed green while 16 GB of one tenant's files were counted in no
+         * category at all. They now pin the one property a string test can prove - that both
+         * queries take their predicate from the single classifier the save and delete paths also
+         * use. That the predicates really partition the rows is proved by executing them, in
+         * {@code StorageBreakdownPartitionPostgresIT}.
+         */
         @Test
-        @DisplayName("STEP_OUTPUTS query should mirror saveJson categorization")
+        @DisplayName("STEP_OUTPUTS query uses the shared classifier's predicate, not its own copy")
         void shouldFilterStepOutputSourceTypes() {
             assertThat(StorageReconciliationQueries.STEP_OUTPUTS)
-                    .contains("s.storage_type = 'JSON'")
-                    .contains("s.source_type IS NULL")
-                    .contains("s.source_type NOT IN ('S3_FILE','CHAT_ATTACHMENT')")
+                    .contains(StorageRowCategories.stepOutputsSqlPredicate("s"))
                     .contains("status = 'ACTIVE'")
                     .contains("storage.storage");
         }
 
         @Test
-        @DisplayName("FILES query should mirror saveBinary/saveText and file source-type categorization")
+        @DisplayName("FILES query uses the shared classifier's predicate, not its own copy")
         void shouldFilterFileSourceTypes() {
             assertThat(StorageReconciliationQueries.FILES)
-                    .contains("S3_FILE", "CHAT_ATTACHMENT")
-                    .contains("BINARY", "TEXT")
+                    .contains(StorageRowCategories.filesSqlPredicate("s"))
                     .contains("status = 'ACTIVE'")
                     .contains("storage.storage");
+        }
+
+        @Test
+        @DisplayName("REGRESSION GUARD: the FILES predicate matches the S3_FILE storage type")
+        void filesPredicateCoversS3BackedRows() {
+            // The single literal whose absence cost 16 GB of visibility: S3_FILE was tested as a
+            // SOURCE type only, so every file a workflow step or an interface node produced
+            // (storage_type = 'S3_FILE', source_type = 'STEP_OUTPUT' / 'INTERFACE_VIDEO' / ...)
+            // matched neither category.
+            assertThat(StorageReconciliationQueries.FILES)
+                    .contains("COALESCE(s.storage_type, '') IN ('S3_FILE', 'BINARY', 'TEXT')");
+            assertThat(StorageReconciliationQueries.FILES_BY_ORG)
+                    .contains("COALESCE(s.storage_type, '') IN ('S3_FILE', 'BINARY', 'TEXT')");
         }
 
         @Test
@@ -622,12 +845,13 @@ class StorageReconciliationServiceTest {
             // Stub remote clients
             when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
                     "AGENTS", Map.of("usedBytes", 0, "itemCount", 0),
-                    "SKILLS", Map.of("usedBytes", 0, "itemCount", 0)
+                    "SKILLS", Map.of("usedBytes", 0, "itemCount", 0),
+                    "MEMORIES", Map.of("usedBytes", 0L, "itemCount", 0)
             ));
             when(interfaceClient.getInterfaceStorageUsage(TENANT_ID)).thenReturn(
                     Map.of("usedBytes", 0, "itemCount", 0));
             when(conversationStorageClient.getStorageUsage(TENANT_ID)).thenReturn(
-                    new StorageUsageDto(0, 0));
+                    Optional.of(new StorageUsageDto(0, 0)));
             when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID)).thenReturn(
                     Map.of("usedBytes", 0, "itemCount", 0));
             when(publicationClient.getPublicationStorageUsage(TENANT_ID)).thenReturn(
@@ -704,12 +928,13 @@ class StorageReconciliationServiceTest {
 
             when(agentClient.getAgentStorageUsage(specialTenantId)).thenReturn(Map.of(
                     "AGENTS", Map.of("usedBytes", 500, "itemCount", 2),
-                    "SKILLS", Map.of("usedBytes", 100, "itemCount", 1)
+                    "SKILLS", Map.of("usedBytes", 100, "itemCount", 1),
+                    "MEMORIES", Map.of("usedBytes", 0L, "itemCount", 0)
             ));
             when(interfaceClient.getInterfaceStorageUsage(specialTenantId)).thenReturn(
                     Map.of("usedBytes", 500, "itemCount", 2));
             when(conversationStorageClient.getStorageUsage(specialTenantId)).thenReturn(
-                    new StorageUsageDto(500, 2));
+                    Optional.of(new StorageUsageDto(500, 2)));
             when(dataSourceClient.getDataSourceStorageUsage(specialTenantId)).thenReturn(
                     Map.of("usedBytes", 500, "itemCount", 2));
             when(publicationClient.getPublicationStorageUsage(specialTenantId)).thenReturn(
@@ -739,7 +964,7 @@ class StorageReconciliationServiceTest {
             when(interfaceClient.getInterfaceStorageUsage(TENANT_ID)).thenReturn(
                     Map.of("usedBytes", bytes, "itemCount", count));
             when(conversationStorageClient.getStorageUsage(TENANT_ID)).thenReturn(
-                    new StorageUsageDto(bytes, count));
+                    Optional.of(new StorageUsageDto(bytes, count)));
             when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID)).thenReturn(
                     Map.of("usedBytes", bytes, "itemCount", count));
             when(publicationClient.getPublicationStorageUsage(TENANT_ID)).thenReturn(
@@ -765,11 +990,10 @@ class StorageReconciliationServiceTest {
         }
 
         @Test
-        @DisplayName("treats an agent-service response with no memory key as zero rather than failing the category")
-        void missingMemoryKeyCountsAsZero() {
-            // An agent-service that predates the memory feature answers without the key.
-            // The category must still be reported, or a rolling upgrade would silently
-            // zero out every account's CONFIGURATION usage for as long as it lasts.
+        @DisplayName("preserves CONFIGURATION when an older or failing agent omits memory")
+        void missingMemoryKeyPreservesConfiguration() {
+            // Absence can mean an older service or a failed query. Neither proves zero.
+            // Keep the last complete total until both measurements are available.
             stubEverythingExceptAgentUsage(1000L, 3);
             when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
                     "AGENTS", Map.of("usedBytes", 1000L, "itemCount", 3),
@@ -778,14 +1002,14 @@ class StorageReconciliationServiceTest {
 
             service.reconcileTenant(TENANT_ID);
 
-            verify(breakdownService).setUsage(TENANT_ID, "CONFIGURATION", 1020L, 3);
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("CONFIGURATION"), anyLong(), anyInt());
         }
 
         @Test
-        @DisplayName("ignores a malformed memory entry instead of propagating a class cast into the whole reconciliation")
-        void malformedMemoryEntryCountsAsZero() {
-            // The value arrives as untyped JSON from another service. A string where a
-            // map is expected must cost the memory line, not the CONFIGURATION category.
+        @DisplayName("preserves CONFIGURATION when a remote memory entry is malformed")
+        void malformedMemoryEntryPreservesConfiguration() {
+            // The value arrives as untyped JSON. An invalid entry cannot prove zero;
+            // preserve the last complete sum while other categories keep reconciling.
             stubEverythingExceptAgentUsage(1000L, 3);
             when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
                     "AGENTS", Map.of("usedBytes", 1000L, "itemCount", 3),
@@ -795,7 +1019,280 @@ class StorageReconciliationServiceTest {
 
             service.reconcileTenant(TENANT_ID);
 
-            verify(breakdownService).setUsage(TENANT_ID, "CONFIGURATION", 1020L, 3);
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("CONFIGURATION"), anyLong(), anyInt());
+        }
+    }
+
+    // ========================================================================
+    // A remote category with NO measurement must not be written as zero
+    // ========================================================================
+
+    @Nested
+    @DisplayName("remote category with no measurement")
+    class MissingRemoteMeasurementTests {
+
+        /** Every local query returns a usable row so only the remote branch is under test. */
+        @BeforeEach
+        void localQueriesSucceed() {
+            Query mockQuery = mock(Query.class);
+            lenient().when(mockQuery.setParameter(eq("tid"), eq(TENANT_ID))).thenReturn(mockQuery);
+            lenient().when(mockQuery.getSingleResult())
+                    .thenReturn(new Object[]{BigInteger.valueOf(100L), BigInteger.ONE});
+            lenient().when(entityManager.createNativeQuery(anyString())).thenReturn(mockQuery);
+            lenient().when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
+                    "AGENTS", Map.of("usedBytes", 1L, "itemCount", 1),
+                    "SKILLS", Map.of("usedBytes", 1L, "itemCount", 1),
+                    "MEMORIES", Map.of("usedBytes", 1L, "itemCount", 1)));
+            lenient().when(interfaceClient.getInterfaceStorageUsage(TENANT_ID))
+                    .thenReturn(Map.of("usedBytes", 1L, "itemCount", 1));
+            lenient().when(conversationStorageClient.getStorageUsage(TENANT_ID))
+                    .thenReturn(Optional.of(new StorageUsageDto(1L, 1)));
+            lenient().when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID))
+                    .thenReturn(Map.of("usedBytes", 1L, "itemCount", 1));
+            lenient().when(publicationClient.getPublicationStorageUsage(TENANT_ID))
+                    .thenReturn(Map.of("usedBytes", 1L, "itemCount", 1));
+        }
+
+        // Every one of these clients degrades to an EMPTY result rather than throwing, so
+        // "the service is unreachable" and "this tenant stores nothing" reach the
+        // reconciler identically. setUsage is an ABSOLUTE set, so writing the empty case
+        // erases the last good figure. That is what turned the DATATABLES/PUBLICATIONS
+        // column-count bug into 86 tenants zeroed every night instead of a stale number.
+
+        @Test
+        @DisplayName("DATATABLES: an empty client result leaves the stored value alone")
+        void emptyDatatablesResultIsNotWrittenAsZero() {
+            when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID)).thenReturn(Map.of());
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("DATATABLES"), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("PUBLICATIONS: an empty client result leaves the stored value alone")
+        void emptyPublicationsResultIsNotWrittenAsZero() {
+            when(publicationClient.getPublicationStorageUsage(TENANT_ID)).thenReturn(Map.of());
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("PUBLICATIONS"), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("INTERFACES: an empty client result leaves the stored value alone")
+        void emptyInterfacesResultIsNotWrittenAsZero() {
+            when(interfaceClient.getInterfaceStorageUsage(TENANT_ID)).thenReturn(Map.of());
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("INTERFACES"), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("CONVERSATIONS: an absent measurement leaves the stored value alone")
+        void absentConversationsMeasurementIsNotWrittenAsZero() {
+            when(conversationStorageClient.getStorageUsage(TENANT_ID)).thenReturn(Optional.empty());
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("CONVERSATIONS"), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("a measured zero IS written, so the skip cannot hide a tenant emptying a table")
+        void measuredZeroIsStillWritten() {
+            // The other half of the contract. If the skip keyed on the VALUE rather than
+            // on the measurement being present, a tenant deleting every table would keep
+            // its old usage forever and could never get back under quota.
+            when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID))
+                    .thenReturn(Map.of("usedBytes", 0L, "itemCount", 0));
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService).setUsage(TENANT_ID, "DATATABLES", 0L, 0);
+        }
+
+        @Test
+        @DisplayName("a PARTIAL payload is not a measurement either")
+        void partialPayloadIsNotAMeasurement() {
+            // A non-empty check would accept this and write usedBytes as 0 - the same
+            // wrong-zero arriving through a slightly different door.
+            when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID))
+                    .thenReturn(Map.of("itemCount", 3));
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("DATATABLES"), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("CONFIGURATION is skipped when the skills/memory half cannot be measured")
+        void unmeasuredSkillsSkipsConfiguration() {
+            // CONFIGURATION SUMS a local and a remote half into one absolute set, so
+            // treating an unreachable agent-service as "zero skills, zero memories" does
+            // not report a smaller number, it erases those bytes from the stored total.
+            when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of());
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("CONFIGURATION"), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("CONFIGURATION is skipped when the agent call THROWS, not only when it is empty")
+        void throwingAgentClientAlsoSkipsConfiguration() {
+            // Without this, a compiling mutation survives: restore the skillsBytes/memoryBytes
+            // zero-initialisers and delete only the `return` in the catch, and the erasing
+            // behaviour is back. The pre-existing "continues when a remote client fails" test
+            // asserts atLeast(5) setUsage calls, so the count merely drops and it stays green.
+            when(agentClient.getAgentStorageUsage(TENANT_ID))
+                    .thenThrow(new RuntimeException("agent-service down"));
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("CONFIGURATION"), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("a failed skills query preserves CONFIGURATION while other categories update")
+        void omittedSkillsPreservesConfiguration() {
+            when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
+                    "AGENTS", Map.of("usedBytes", 1L, "itemCount", 1),
+                    "MEMORIES", Map.of("usedBytes", 5L, "itemCount", 1)));
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("CONFIGURATION"), anyLong(), anyInt());
+            verify(breakdownService).setUsage(TENANT_ID, "AGENTS", 1L, 1);
+            verify(quotaService).updateUsage(TENANT_ID);
+        }
+
+        @ParameterizedTest
+        @MethodSource("com.apimarketplace.orchestrator.services.storage.StorageReconciliationServiceTest#invalidConfigurationMeasurements")
+        @DisplayName("an invalid skills or memory measurement never replaces CONFIGURATION")
+        void invalidMeasurementPreservesConfiguration(Object invalid) {
+            for (String category : java.util.List.of("SKILLS", "MEMORIES")) {
+                Map<String, Object> usage = new java.util.HashMap<>();
+                usage.put("AGENTS", Map.of("usedBytes", 1L, "itemCount", 1));
+                usage.put("SKILLS", Map.of("usedBytes", 2L, "itemCount", 1));
+                usage.put("MEMORIES", Map.of("usedBytes", 3L, "itemCount", 1));
+                usage.put(category, invalid);
+                when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(usage);
+
+                service.reconcileTenant(TENANT_ID);
+            }
+
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("CONFIGURATION"), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("explicitly measured zeros still clear the remote contribution")
+        void measuredSkillsAndMemoryZerosAreWritten() {
+            when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
+                    "SKILLS", Map.of("usedBytes", 0, "itemCount", 0),
+                    "MEMORIES", Map.of("usedBytes", 0L, "itemCount", 0)));
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService).setUsage(TENANT_ID, "CONFIGURATION", 100L, 1);
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("AGENTS"), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("an overflowing complete sum preserves CONFIGURATION instead of wrapping negative")
+        void overflowingTotalPreservesConfiguration() {
+            when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
+                    "SKILLS", Map.of("usedBytes", Long.MAX_VALUE, "itemCount", 1),
+                    "MEMORIES", Map.of("usedBytes", 0L, "itemCount", 0)));
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("CONFIGURATION"), anyLong(), anyInt());
+            verify(quotaService).updateUsage(TENANT_ID);
+        }
+
+        @Test
+        @DisplayName("CONFIGURATION resumes after an incomplete measurement without losing the remote bytes")
+        void completeMeasurementAfterFailureRestoresTotal() {
+            when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
+                    "MEMORIES", Map.of("usedBytes", 5L, "itemCount", 1)));
+            service.reconcileTenant(TENANT_ID);
+            verify(breakdownService, never()).setUsage(eq(TENANT_ID), eq("CONFIGURATION"), anyLong(), anyInt());
+
+            when(agentClient.getAgentStorageUsage(TENANT_ID)).thenReturn(Map.of(
+                    "SKILLS", Map.of("usedBytes", 20L, "itemCount", 2),
+                    "MEMORIES", Map.of("usedBytes", 5L, "itemCount", 1)));
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService).setUsage(TENANT_ID, "CONFIGURATION", 125L, 1);
+        }
+
+        @Test
+        @DisplayName("the CONVERSATIONS skip leaves a trace too")
+        void theConversationsSkipIsLogged() {
+            ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                    org.slf4j.LoggerFactory.getLogger(StorageReconciliationService.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                when(conversationStorageClient.getStorageUsage(TENANT_ID)).thenReturn(Optional.empty());
+
+                service.reconcileTenant(TENANT_ID);
+
+                assertThat(appender.list).anySatisfy(e -> {
+                    assertThat(e.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+                    assertThat(e.getFormattedMessage())
+                            .contains("No CONVERSATIONS measurement")
+                            .contains(TENANT_ID);
+                });
+            } finally {
+                logger.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        @Test
+        @DisplayName("the skip leaves a trace, because a frozen figure is otherwise silent")
+        void theSkipIsLogged() {
+            // After the skip the ONLY evidence a category stopped updating is this line.
+            // Delete it and a stale number looks exactly like a correct one.
+            ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                    org.slf4j.LoggerFactory.getLogger(StorageReconciliationService.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID)).thenReturn(Map.of());
+
+                service.reconcileTenant(TENANT_ID);
+
+                assertThat(appender.list)
+                        .anySatisfy(e -> {
+                            assertThat(e.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+                            assertThat(e.getFormattedMessage())
+                                    .contains("No DATATABLES measurement")
+                                    .contains(TENANT_ID);
+                        });
+            } finally {
+                logger.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        @Test
+        @DisplayName("one unmeasured category does not stop the others from reconciling")
+        void oneMissingCategoryDoesNotBlockTheRest() {
+            when(dataSourceClient.getDataSourceStorageUsage(TENANT_ID)).thenReturn(Map.of());
+
+            service.reconcileTenant(TENANT_ID);
+
+            verify(breakdownService).setUsage(eq(TENANT_ID), eq("PUBLICATIONS"), anyLong(), anyInt());
+            verify(breakdownService).setUsage(eq(TENANT_ID), eq("INTERFACES"), anyLong(), anyInt());
+            verify(quotaService).updateUsage(TENANT_ID);
         }
     }
 }

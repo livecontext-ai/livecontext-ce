@@ -17,7 +17,9 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -279,14 +281,48 @@ class PublicationHighlightServiceTest {
     // LANDING -> APPLICATION instead of requiring displayMode == LANDING.
 
     @Test
-    @DisplayName("requiredPublicationMode maps LANDING -> APPLICATION and is identity for every other bucket")
+    @DisplayName("requiredPublicationMode maps the seven landing buckets -> APPLICATION and is identity for the real types")
     void requiredPublicationModeMapping() {
-        assertThat(PublicationHighlightService.requiredPublicationMode(DisplayMode.LANDING))
-                .isEqualTo(DisplayMode.APPLICATION);
-        for (DisplayMode m : DisplayMode.values()) {
-            if (m == DisplayMode.LANDING) continue;
-            assertThat(PublicationHighlightService.requiredPublicationMode(m)).isEqualTo(m);
+        // The persona buckets are curated rows, not types: a page that could only be
+        // filled with publications of a type nothing produces would always be empty.
+        //
+        // The seven are LISTED rather than derived with the same name.startsWith("LANDING")
+        // the implementation uses. An oracle that recomputes the rule under test agrees with
+        // whatever that rule says, including a wrong one, and would have passed just as
+        // happily on a prefix that also swallowed a real publication type. Listing them also
+        // gives the enum a guard: a bucket added later is not in this set, so it falls into
+        // the identity loop below and fails there until someone states which half it is in.
+        Set<DisplayMode> landingBuckets = EnumSet.of(
+                DisplayMode.LANDING, DisplayMode.LANDING_OPS, DisplayMode.LANDING_CREATOR,
+                DisplayMode.LANDING_SUPPORT, DisplayMode.LANDING_SALES,
+                DisplayMode.LANDING_MARKETING, DisplayMode.LANDING_RECRUITING);
+
+        for (DisplayMode bucket : landingBuckets) {
+            assertThat(PublicationHighlightService.requiredPublicationMode(bucket))
+                    .as("%s accepts APPLICATION publications", bucket)
+                    .isEqualTo(DisplayMode.APPLICATION);
         }
+        for (DisplayMode type : EnumSet.complementOf(EnumSet.copyOf(landingBuckets))) {
+            assertThat(PublicationHighlightService.requiredPublicationMode(type))
+                    .as("%s is a real publication type: its bucket holds its own type", type)
+                    .isEqualTo(type);
+        }
+    }
+
+    @Test
+    @DisplayName("replaceHighlights(LANDING_OPS) accepts an APPLICATION publication, like every landing bucket")
+    void replacePersonaLandingAcceptsApplication() {
+        UUID app = UUID.randomUUID();
+        when(publicationRepo.findAllById(List.of(app)))
+                .thenReturn(List.of(activePublic(app, DisplayMode.APPLICATION)));
+
+        service.replaceHighlights(DisplayMode.LANDING_OPS, List.of(app), ADMIN_ID);
+
+        verify(highlightRepo).deleteAllByDisplayModeBulk(DisplayMode.LANDING_OPS);
+        verify(highlightRepo).save(org.mockito.ArgumentMatchers.argThat(h ->
+                h.getDisplayMode() == DisplayMode.LANDING_OPS
+                        && h.getPublicationId().equals(app)
+                        && h.getRank() == 0));
     }
 
     @Test

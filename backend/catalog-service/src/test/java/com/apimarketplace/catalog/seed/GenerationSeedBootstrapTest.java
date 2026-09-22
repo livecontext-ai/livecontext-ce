@@ -72,7 +72,7 @@ class GenerationSeedBootstrapTest {
 
     @BeforeEach
     void setUp() {
-        when(bundleRepository.findFirstByActiveTrue()).thenReturn(Optional.empty());
+        when(bundleRepository.findActiveMetadata()).thenReturn(List.of());
         stubReads();
         stubWrites();
     }
@@ -216,8 +216,10 @@ class GenerationSeedBootstrapTest {
     @Test
     @DisplayName("an install the cloud already feeds is left alone entirely")
     void anActiveBundleSupersedesTheSeed() throws Exception {
-        when(bundleRepository.findFirstByActiveTrue())
-                .thenReturn(Optional.of(new ApiCatalogBundleEntity()));
+        // The bootstrap only asks WHETHER a bundle owns the catalog, so it reads
+        // the payload-free projection: the entity finder would pull ~24 MB of
+        // gzip into heap on every boot to answer a yes/no question.
+        when(bundleRepository.findActiveMetadata()).thenReturn(List.of(org.mockito.Mockito.mock(ApiCatalogBundleRepository.ActiveBundleMeta.class)));
         eligibleRows.put(UUID.fromString(TOOL_A), "seedance");
 
         GenerationSeedBootstrap.Result result =

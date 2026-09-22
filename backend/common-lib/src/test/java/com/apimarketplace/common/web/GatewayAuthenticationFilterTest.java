@@ -692,4 +692,114 @@ class GatewayAuthenticationFilterTest {
             throw new RuntimeException(e);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // The shared client-side signer, against the real verifier
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("InternalGatewaySigner round-trip")
+    class SignerRoundTrip {
+
+        /** An hmac-required path inside the public /api/internal/ prefix. */
+        private static final String GATED = "/api/internal/credentials/all";
+
+        private GatewayAuthenticationFilter gatedFilter() {
+            GatewayFilterProperties p = new GatewayFilterProperties();
+            p.setSecretKey(TEST_GATEWAY_SECRET_KEY);
+            p.setVerificationEnabled(true);
+            p.setPublicPaths(DEFAULT_PUBLIC_PATHS);
+            p.setHmacRequiredPaths(List.of("/api/internal/credentials/"));
+            return new GatewayAuthenticationFilter(p);
+        }
+
+        private MockHttpServletRequest signedRequest(String userId, String orgId) {
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", GATED);
+            request.setRequestURI(GATED);
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            if (userId != null) headers.set("X-User-ID", userId);
+            if (orgId != null) headers.set("X-Organization-ID", orgId);
+            InternalGatewaySigner.stamp(headers, "internal-test", TEST_GATEWAY_SECRET_KEY);
+            headers.forEach((k, v) -> request.addHeader(k, v.get(0)));
+            return request;
+        }
+
+        @Test
+        @DisplayName("a request stamped by the signer is accepted by the filter that verifies it")
+        void stampedRequestIsAccepted() throws IOException, ServletException {
+            // THE reason this class exists: the signed string lives in four places (the gateway's
+            // signer, this filter's verification, and the clients). A client that spells it
+            // differently produces a 401 that looks like a secret mismatch. This pins the two
+            // sides that ship in the same jar against each other.
+            MockHttpServletResponse response = new MockHttpServletResponse();
+
+            gatedFilter().doFilter(signedRequest("58", "org-1"), response, filterChain);
+
+            verify(filterChain).doFilter(any(), any());
+            assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_OK);
+        }
+
+        @Test
+        @DisplayName("it signs over the identity headers: changing X-User-ID after stamping is rejected")
+        void signatureBindsTheIdentityHeaders() throws IOException, ServletException {
+            MockHttpServletRequest request = signedRequest("58", "org-1");
+            request.removeHeader("X-User-ID");
+            request.addHeader("X-User-ID", "999");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+
+            gatedFilter().doFilter(request, response, filterChain);
+
+            verify(filterChain, never()).doFilter(any(), any());
+            assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+        }
+
+        @Test
+        @DisplayName("the whole /api/internal/credentials/ prefix is gated, not just the named paths")
+        void theWidenedPrefixCoversTheLookupResolvers() throws IOException, ServletException {
+            // /all, /default, /{id} and /scopes return DECRYPTED credentials and were reachable
+            // unsigned while only six sibling paths were listed one by one. Prefix matching is
+            // what makes a NEW endpoint under this prefix gated by default.
+            for (String path : List.of("/api/internal/credentials/all",
+                                       "/api/internal/credentials/default",
+                                       "/api/internal/credentials/scopes",
+                                       "/api/internal/credentials/platform/by-name")) {
+                MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
+                request.setRequestURI(path);
+                MockHttpServletResponse response = new MockHttpServletResponse();
+
+                gatedFilter().doFilter(request, response, mock(FilterChain.class));
+
+                assertThat(response.getStatus())
+                        .as("%s must require the gateway signature", path)
+                        .isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+            }
+        }
+
+        @Test
+        @DisplayName("an unrelated /api/internal/ path stays public - the widening is scoped")
+        void theWideningDoesNotGateEveryInternalPath() throws IOException, ServletException {
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/internal/chat/session");
+            request.setRequestURI("/api/internal/chat/session");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+
+            gatedFilter().doFilter(request, response, filterChain);
+
+            verify(filterChain).doFilter(request, response);
+            assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_OK);
+        }
+
+        @Test
+        @DisplayName("a blank secret leaves the request UNSIGNED instead of signing with an empty key")
+        void blankSecretDoesNotProduceAPhantomSignature() {
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            headers.set("X-User-ID", "58");
+
+            InternalGatewaySigner.stamp(headers, "internal-test", "");
+
+            // An empty key yields a well-formed signature that can never verify, so the caller
+            // would read the 401 as a secret mismatch rather than as missing configuration.
+            assertThat(headers.getFirst(InternalGatewaySigner.HEADER_SECRET)).isNull();
+            assertThat(headers.getFirst(InternalGatewaySigner.HEADER_TIMESTAMP)).isNull();
+        }
+    }
 }

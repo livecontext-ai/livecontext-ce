@@ -62,7 +62,9 @@ export function AgentVisualizeCard({ agentId, title, onDelete }: AgentVisualizeC
   const isTabActive = sidePanel?.isForward && sidePanel?.activeTabId === tabId;
 
   const handleOpenAgent = () => {
-    window.open(`/app/agent?id=${agentId}`, '_blank');
+    // `openAgent` is the param AgentTable reads to pop the agent panel; a bare
+    // `id` was read by nobody, so the new tab landed on the plain agent list.
+    window.open(`/app/agent?openAgent=${agentId}`, '_blank');
   };
 
   const handleClick = () => {

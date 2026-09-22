@@ -37,7 +37,7 @@ const COLUMNS_URL = '/api/proxy/data-sources/42/columns';
 
 const okJson = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
 
-const setup = () =>
+const setup = (setColumnOrder: (order: unknown) => void = vi.fn()) =>
   renderHook(() =>
     useDataFetching({
       dataSourceId: 42,
@@ -46,6 +46,7 @@ const setup = () =>
       showIdColumn: false,
       addToast: vi.fn(),
       setPagination: vi.fn(),
+      setColumnOrder: setColumnOrder as never,
       snapshotData: undefined,
     })
   );
@@ -185,5 +186,58 @@ describe('useDataFetching root column source', () => {
 
     expect(result.current.columns.map((c) => c.field)).toEqual(['data.title']);
     expect(mockFetch).toHaveBeenCalledWith(COLUMNS_URL);
+  });
+});
+
+/**
+ * The seeded default order is written with a FUNCTIONAL update, so a repeated
+ * fetch of the same columns does not hand the grid a brand-new array and make
+ * it re-render for nothing. These pin the two halves of that updater, including
+ * the one that is easy to get wrong: `previous` can be the raw JSONB array the
+ * server sent, whose entries the rest of this code reads defensively.
+ */
+describe('useDataFetching default column order seeding', () => {
+  const seedUpdater = async (): Promise<(previous: unknown[]) => unknown[]> => {
+    let captured: ((previous: unknown[]) => unknown[]) | null = null;
+    mockFetch.mockImplementation((url: string) => {
+      if (url === LIST_URL) return Promise.resolve(okJson([{ id: 42, mapping_spec: {} }]));
+      if (url === COLUMNS_URL) {
+        return Promise.resolve(
+          okJson([{ col_id: 'data.title', field: 'data.title', header_name: 'Title', type: 'TEXT', structure: 'SCALAR' }])
+        );
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+
+    const { result } = setup((arg) => {
+      if (typeof arg === 'function') captured = arg as (previous: unknown[]) => unknown[];
+    });
+    await act(async () => {
+      await result.current.fetchColumns();
+    });
+
+    expect(captured, 'the fallback branch must seed an order').not.toBeNull();
+    return captured!;
+  };
+
+  it('keeps the previous array when it already lists the same fields', async () => {
+    const updater = await seedUpdater();
+    const previous = updater([]);
+
+    expect(updater(previous)).toBe(previous);
+  });
+
+  it('replaces an order that lists different fields', async () => {
+    const updater = await seedUpdater();
+
+    expect(updater([{ field: 'something_else', order: 0 }])).not.toEqual([{ field: 'something_else', order: 0 }]);
+  });
+
+  it('treats a malformed stored entry as a mismatch instead of throwing', async () => {
+    // A TypeError here happens INSIDE a state updater and surfaces as a generic
+    // "columns failed to load", which points nowhere near the real cause.
+    const updater = await seedUpdater();
+
+    expect(() => updater([null, undefined, 'nonsense'])).not.toThrow();
   });
 });

@@ -3,6 +3,7 @@ package com.apimarketplace.auth.web;
 import com.apimarketplace.auth.domain.User;
 import com.apimarketplace.auth.dto.PublicProfileDto;
 import com.apimarketplace.auth.service.UserService;
+import com.apimarketplace.auth.service.VerifiedAccountService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -27,11 +28,15 @@ class PublicProfileControllerTest {
     @Mock
     private UserService userService;
 
+    @Mock
+    private VerifiedAccountService verifiedAccountService;
+
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new PublicProfileController(userService)).build();
+        mockMvc = MockMvcBuilders.standaloneSetup(
+                new PublicProfileController(userService, verifiedAccountService)).build();
     }
 
     private User user() {
@@ -44,7 +49,7 @@ class PublicProfileControllerTest {
 
     private PublicProfileDto sampleProfile() {
         return new PublicProfileDto(7L, "Alice A.", "alice_a", "/api/users/7/avatar",
-                "Builder", LocalDateTime.of(2024, 3, 1, 0, 0), false);
+                "Builder", LocalDateTime.of(2024, 3, 1, 0, 0), false, false);
     }
 
     @Test
@@ -136,5 +141,107 @@ class PublicProfileControllerTest {
                 .andExpect(status().isNotFound());
 
         org.mockito.Mockito.verifyNoInteractions(userService);
+    }
+
+    // ---------------------- verified badges (id-keyed, authenticated) ----------------------
+
+    @Test
+    @DisplayName("GET /verified-badges → only the ids that carry the badge, in one answer")
+    void verifiedBadgesReturnsTheVerifiedSubset() throws Exception {
+        when(verifiedAccountService.verifiedAmong(java.util.List.of(1L, 2L, 3L)))
+                .thenReturn(java.util.Set.of(2L));
+
+        mockMvc.perform(get("/api/users/public/verified-badges?ids=1,2,3").header("X-User-ID", "42"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verified.length()").value(1))
+                .andExpect(jsonPath("$.verified[0]").value(2));
+    }
+
+    @Test
+    @DisplayName("GET /verified-badges → empty for an ANONYMOUS caller, and nothing is looked up")
+    void verifiedBadgesAnonymousAnswersEmpty() throws Exception {
+        // Same enumeration risk as /by-id: the ids are sequential, so an anonymous
+        // version would let anyone page out every verified account. Answering an empty
+        // list rather than 401 keeps a badge lookup from ever failing a page.
+        mockMvc.perform(get("/api/users/public/verified-badges?ids=1,2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verified.length()").value(0));
+
+        org.mockito.Mockito.verifyNoInteractions(verifiedAccountService);
+    }
+
+    @Test
+    @DisplayName("GET /verified-badges → 400 above the batch cap, so one request cannot become an unbounded IN (...)")
+    void verifiedBadgesRejectsOversizedBatch() throws Exception {
+        String ids = java.util.stream.IntStream.rangeClosed(1, 101)
+                .mapToObj(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(","));
+
+        mockMvc.perform(get("/api/users/public/verified-badges?ids=" + ids).header("X-User-ID", "42"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("too_many_ids"));
+
+        org.mockito.Mockito.verifyNoInteractions(verifiedAccountService);
+    }
+
+    @Test
+    @DisplayName("GET /verified-badges → a non-numeric id is dropped, not fatal to the rest of the page")
+    void verifiedBadgesDropsJunkIds() throws Exception {
+        when(verifiedAccountService.verifiedAmong(java.util.List.of(5L))).thenReturn(java.util.Set.of(5L));
+
+        mockMvc.perform(get("/api/users/public/verified-badges?ids=5,abc").header("X-User-ID", "42"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verified[0]").value(5));
+    }
+
+    @Test
+    @DisplayName("GET /verified-badges → no ids at all is an empty answer, not an error")
+    void verifiedBadgesWithoutIdsIsEmpty() throws Exception {
+        when(verifiedAccountService.verifiedAmong(java.util.List.of())).thenReturn(java.util.Set.of());
+
+        mockMvc.perform(get("/api/users/public/verified-badges").header("X-User-ID", "42"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verified.length()").value(0));
+    }
+
+    // ---------------------- verified badges (handle-keyed, anonymous) ----------------------
+
+    @Test
+    @DisplayName("GET /verified-handles → answers an ANONYMOUS caller: handles are not enumerable")
+    void verifiedHandlesIsAnonymouslyReadable() throws Exception {
+        when(verifiedAccountService.verifiedHandlesAmong(java.util.List.of("ada", "linus")))
+                .thenReturn(java.util.Set.of("ada"));
+
+        mockMvc.perform(get("/api/users/public/verified-handles?handles=ada,linus"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verified.length()").value(1))
+                .andExpect(jsonPath("$.verified[0]").value("ada"));
+    }
+
+    @Test
+    @DisplayName("GET /verified-handles → 400 above the batch cap")
+    void verifiedHandlesRejectsOversizedBatch() throws Exception {
+        String handles = java.util.stream.IntStream.rangeClosed(1, 101)
+                .mapToObj(i -> "user" + i)
+                .collect(java.util.stream.Collectors.joining(","));
+
+        mockMvc.perform(get("/api/users/public/verified-handles?handles=" + handles))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("too_many_handles"));
+
+        org.mockito.Mockito.verifyNoInteractions(verifiedAccountService);
+    }
+
+    @Test
+    @DisplayName("GET /verified-handles → blank entries are dropped before the lookup")
+    void verifiedHandlesDropsBlanks() throws Exception {
+        when(verifiedAccountService.verifiedHandlesAmong(java.util.List.of("ada")))
+                .thenReturn(java.util.Set.of());
+
+        // .param() carries the DECODED value, which is what a real request delivers -
+        // spelling it inside the URL would test MockMvc's lack of percent-decoding.
+        mockMvc.perform(get("/api/users/public/verified-handles").param("handles", "ada,,   "))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verified.length()").value(0));
     }
 }

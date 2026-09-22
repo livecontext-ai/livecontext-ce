@@ -95,6 +95,11 @@ tmp/
 # JWT signing keys - generated at first boot (JwtKeyPairManager / ce-entrypoint.sh).
 # A real private key was historically committed here; never commit key material.
 backend/monolith-service/data/keys/*.key
+# Same generator, other host: auth-service writes ./data/keys relative to its working
+# directory, so ANY local run of the service (or of its integration tests) leaves an RSA
+# private key sitting untracked in the tree. This repo is exported to a public mirror,
+# and that export is deny-list based - a stray `git add -A` would publish it.
+backend/auth-service/data/
 
 # Local TLS-interception CA for Docker builds (per-machine, see monolith Dockerfile)
 backend/build-ca.pem

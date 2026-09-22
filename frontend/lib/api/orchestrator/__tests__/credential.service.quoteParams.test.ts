@@ -86,6 +86,41 @@ describe('getPlatformCredentialPublicInfo: what reaches the request', () => {
     expect(params).not.toHaveProperty('quantity');
   });
 
+  it('sends the price factor when the call sits off the published rate', async () => {
+    // Without it the amount on screen is the 720p one beside a button that
+    // spends the 1080p one: the biller applies the factor whether or not the
+    // quote asked about it.
+    await credentialService.getPlatformCredentialPublicInfo('seedance', 't-1', {
+      modelId: 'seedance-2.0',
+      quantity: 10,
+      generation: true,
+      quantityUnit: 'second',
+      priceMultiplier: 2.4,
+    });
+
+    const params = api.get.mock.calls.at(-1)![1].params;
+    expect(params.priceMultiplier).toBe('2.4');
+  });
+
+  it('omits a factor of 1, which is the same statement as no factor', async () => {
+    await credentialService.getPlatformCredentialPublicInfo('seedance', 't-1', {
+      modelId: 'seedance-2.0', quantity: 10, generation: true, priceMultiplier: 1,
+    });
+
+    expect(api.get.mock.calls.at(-1)![1].params).not.toHaveProperty('priceMultiplier');
+  });
+
+  it('omits a factor that is zero, negative or not a number', async () => {
+    // None of those can come from a declared modifier, and a zero sent to the
+    // quote would advertise a free generation the server then charges for.
+    for (const priceMultiplier of [0, -2, Number.NaN]) {
+      await credentialService.getPlatformCredentialPublicInfo('seedance', 't-1', {
+        modelId: 'seedance-2.0', quantity: 10, generation: true, priceMultiplier,
+      });
+      expect(api.get.mock.calls.at(-1)![1].params).not.toHaveProperty('priceMultiplier');
+    }
+  });
+
   it('percent-encodes the integration name so it cannot escape the path', async () => {
     await credentialService.getPlatformCredentialPublicInfo('a/b', null);
 

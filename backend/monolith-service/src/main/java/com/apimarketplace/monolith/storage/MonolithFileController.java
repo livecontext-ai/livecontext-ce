@@ -122,7 +122,10 @@ public class MonolithFileController {
                                 ds, out, ds.contentLength(), streamingMetrics, "showcase key=" + key);
                 ResponseEntity.BodyBuilder builder = ResponseEntity.ok()
                         .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
-                        .header(HttpHeaders.CACHE_CONTROL, "private, max-age=900")
+                        // Shared with the cloud mount so the ceiling and the formula exist once.
+                        .header(HttpHeaders.CACHE_CONTROL,
+                                com.apimarketplace.common.storage.signing.SignedResponseCacheControl
+                                        .forExpiry(exp, now))
                         .contentType(mimeType != null ? MediaType.parseMediaType(mimeType) : MediaType.APPLICATION_OCTET_STREAM);
                 if (ds.contentLength() > 0) {
                     builder.contentLength(ds.contentLength());

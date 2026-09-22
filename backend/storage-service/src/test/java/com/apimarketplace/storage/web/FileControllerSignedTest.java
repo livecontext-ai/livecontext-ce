@@ -25,6 +25,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("FileController.proxySignedDownload - HMAC-signed public proxy")
@@ -54,12 +55,14 @@ class FileControllerSignedTest {
     @Test
     @DisplayName("Valid signed URL → 200 with Cache-Control: private and Content-Type from MIME registry")
     void validSignedUrlStreams() {
-        long exp = Instant.now().getEpochSecond() + 900;
+        // 4h of link life left (the real default TTL of both minting sites), so the 900s
+        // ceiling is what caps the freshness lifetime here, not the remaining life.
+        long exp = Instant.now().getEpochSecond() + 4 * 3600;
         String key = "1/general/catalog-binary/abc.png";
         String sig = signer.sign(key, exp, "inline");
 
         DownloadStream ds = stubStream("png-bytes".getBytes(), 9);
-        lenient().when(fileStorageService.openStream(key)).thenReturn(Optional.of(ds));
+        when(fileStorageService.openStream(key)).thenReturn(Optional.of(ds));
 
         ResponseEntity<StreamingResponseBody> response =
                 controller.proxySignedDownload(key, exp, "inline", sig);
@@ -70,6 +73,32 @@ class FileControllerSignedTest {
         assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE)).isEqualTo("image/png");
         assertThat(meterRegistry.counter("storage_signed_download_total", "status", "ok").count())
                 .isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("Near-expiry signed URL caches only for what is left of the link, not the flat 900s")
+    void nearExpiryCachesOnlyForTheRemainingLinkLife() {
+        // Regression: the response used to advertise max-age=900 whatever the link had left, so a
+        // browser could re-serve a cached copy - without re-presenting the signature - for up to
+        // 15 minutes AFTER exp. The freshness lifetime must never outlast the link that earned it.
+        // Every boundary of the rule itself is pinned in SignedResponseCacheControlTest; what this
+        // asserts is that the endpoint is WIRED to it rather than to a literal.
+        long exp = Instant.now().getEpochSecond() + 60;
+        String key = "1/general/catalog-binary/soon.png";
+        String sig = signer.sign(key, exp, "inline");
+
+        when(fileStorageService.openStream(key))
+                .thenReturn(Optional.of(stubStream("png-bytes".getBytes(), 9)));
+
+        ResponseEntity<StreamingResponseBody> response =
+                controller.proxySignedDownload(key, exp, "inline", sig);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        // Range, not equality: a second may tick between the test's clock read and the controller's.
+        String header = response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL);
+        assertThat(header).startsWith("private, max-age=");
+        assertThat(Long.parseLong(header.substring("private, max-age=".length())))
+                .isBetween(55L, 60L);
     }
 
     @Test

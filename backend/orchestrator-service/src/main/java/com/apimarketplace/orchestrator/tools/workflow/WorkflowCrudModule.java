@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Value;
 import com.apimarketplace.orchestrator.tools.application.ApplicationShowcaseResolver;
 import com.apimarketplace.orchestrator.repository.OffsetLimitPageable;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
+import com.apimarketplace.orchestrator.services.NodeTypeFilters;
 import com.apimarketplace.orchestrator.services.WorkflowManagementService;
 import com.apimarketplace.orchestrator.services.WorkflowPinService;
 import com.apimarketplace.orchestrator.services.WorkflowPlanVersionService;
@@ -499,11 +500,16 @@ public class WorkflowCrudModule implements ToolModule {
         // hardRefuse auto=400). `query` (name/description substring) is the one
         // refinement filter, so the `refine` hint suggests it on large result sets.
         String query = getStringParam(parameters, "query");
+        // node_types narrows to the workflows that actually contain one of the
+        // given node types ("which of my workflows touch Gmail?"). Offered as a
+        // suggested filter beside `query` because it is the one refinement that
+        // needs no guess at how the user named things.
+        Set<String> nodeTypes = NodeTypeFilters.parse(parameters.get("node_types"));
         AgentListEnvelope.Spec spec = AgentListEnvelope.Spec.of(
                         AgentListEnvelope.Caps.STANDARD, "workflows", "workflows", "workflows")
-                .withSuggestedFilters(List.of("query"))
+                .withSuggestedFilters(List.of("query", "node_types"))
                 .withNext(Map.of(
-                        "details_with_schema", "workflow(action='get', workflow_id='<id>') - returns full plan + data_inputs_schema for fireable triggers (list items only carry trigger_types; the schema is on get)",
+                        "details_with_schema", "workflow(action='get', workflow_id='<id>') - returns full plan + data_inputs_schema for fireable triggers (list items carry trigger_types + node_types; the schema is on get)",
                         "edit", "workflow(action='load', id='<id>')",
                         "execute", "workflow(action='get', workflow_id='<id>') to read data_inputs_schema, then workflow(action='load', id='<id>') then workflow(action='execute', data_inputs={...})",
                         "delete", "workflow(action='delete', workflow_id='<id>')",
@@ -514,7 +520,9 @@ public class WorkflowCrudModule implements ToolModule {
         try {
             // Active-filter set is server-derived from the request (never a caller
             // boolean) so the hard-refuse-without-filter guard uses the real truth.
-            Set<String> activeFilters = hasQuery(query) ? Set.of("query") : Set.of();
+            Set<String> activeFilters = new LinkedHashSet<>();
+            if (hasQuery(query)) activeFilters.add("query");
+            if (!nodeTypes.isEmpty()) activeFilters.add("node_types");
             bounds = AgentListEnvelope.readBounds(parameters, spec, activeFilters);
         } catch (AgentListEnvelope.InvalidParamsException e) {
             // Structured `code:` prefix lets the agent error-mapper parse the failure.
@@ -542,6 +550,14 @@ public class WorkflowCrudModule implements ToolModule {
             if (hasQuery(query)) {
                 allWorkflows = allWorkflows.stream()
                     .filter(w -> matchesQuery(query, w.getName(), w.getDescription()))
+                    .toList();
+            }
+
+            // Node-type filter, applied like the text search: BEFORE pagination,
+            // so total/hasMore describe the filtered set.
+            if (!nodeTypes.isEmpty()) {
+                allWorkflows = allWorkflows.stream()
+                    .filter(w -> NodeTypeFilters.matches(w.getNodeTypes(), nodeTypes))
                     .toList();
             }
 
@@ -660,6 +676,13 @@ public class WorkflowCrudModule implements ToolModule {
                                  WorkflowPlan cachedPlan,
                                  Set<String> configuredIntegrations,
                                  Set<UUID> existingSubWorkflowIds) {
+        // Derived from the plan the row already carries, so it stays true even for
+        // an item whose plan failed the stricter parse above. Echoed on every item,
+        // not only when filtering: it is what tells the agent which tokens are
+        // worth passing back as `node_types` on the next call.
+        List<String> nodeTypes = workflow.getNodeTypes();
+        if (!nodeTypes.isEmpty()) summary.put("node_types", nodeTypes);
+
         if (cachedPlan != null) {
             try {
                 List<String> types = AgentTriggerSchema.fireableTriggerTypes(cachedPlan);

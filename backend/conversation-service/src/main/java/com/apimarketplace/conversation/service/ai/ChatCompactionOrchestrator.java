@@ -4,8 +4,10 @@ import com.apimarketplace.agent.summary.AgentCompactionModelResolver;
 import com.apimarketplace.agent.summary.AgentCompactionModelResolver.ModelRef;
 import com.apimarketplace.agent.summary.ColdSummarizerPromptBuilder.Turn;
 import com.apimarketplace.agent.summary.ColdSummaryEnvelope;
+import com.apimarketplace.agent.summary.ColdSummaryGate;
 import com.apimarketplace.agent.summary.ColdSummaryInvalidationKeywords;
 import com.apimarketplace.agent.summary.CompactionConfigResolver;
+import com.apimarketplace.agent.summary.CompactionTrigger;
 import com.apimarketplace.conversation.entity.Conversation;
 import com.apimarketplace.conversation.entity.Message;
 import com.apimarketplace.conversation.repository.ConversationRepository;
@@ -139,6 +141,7 @@ public class ChatCompactionOrchestrator {
     private final StreamPubSubService streamPubSubService;
     private final AgentConfigProvider agentConfigProvider;
     private final Counter dispatchFailedCounter;
+    private final MeterRegistry meterRegistry;
 
     public ChatCompactionOrchestrator(MessageRepository messageRepository,
                                       ConversationRepository conversationRepository,
@@ -159,6 +162,7 @@ public class ChatCompactionOrchestrator {
         this.dispatchFailedCounter = Counter.builder("cold_summary_dispatch_failed_total")
                 .description("Compaction post-turn dispatch threw before reaching ColdSummarizerService")
                 .register(meterRegistry);
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -236,20 +240,38 @@ public class ChatCompactionOrchestrator {
         // the monotone write guard compares coverage CARDINALITY
         // (jsonb_array_length) while shrink detection below compares the MAX
         // position - equivalent only while the list stays contiguous from 0.
+        // Prior coverage is read BEFORE the tally so the same single pass can
+        // also total the COLD tokens appended since that envelope. The size
+        // trigger compares GROWTH, never the absolute COLD size: messages are
+        // not deleted by summarisation, so an absolute test would stay true
+        // for ever and re-fire a paid summariser call on every later turn,
+        // indefinitely: nothing caps that, there is no per-day cap here.
+        PriorCoverage prior = readPriorCoverage(conversation);
+
         List<Turn> coldTurns = new ArrayList<>(coldMessages.size());
         List<Integer> turnsCovered = new ArrayList<>(coldMessages.size());
         int coldTokens = 0;
+        int newColdTokens = 0;
         for (int i = 0; i < coldMessages.size(); i++) {
             Message m = coldMessages.get(i);
             String body = m.getContent() == null ? "" : m.getContent();
-            coldTokens += body.length() / CHARS_PER_TOKEN;
+            int tokens = body.length() / CHARS_PER_TOKEN;
+            coldTokens += tokens;
+            if (i > prior.maxTurn()) {
+                // maxTurn() is -1 with no usable envelope, so everything counts
+                // as new, which is what the turn counter does in that case too.
+                newColdTokens += tokens;
+            }
             coldTurns.add(new Turn(i, roleLabel(m.getRole()), body));
             turnsCovered.add(i);
         }
 
         // ---- turnsSinceLastSummary from prior envelope metadata -----------
-        PriorCoverage prior = readPriorCoverage(conversation);
         int turnsSinceLastSummary;
+        // Seeded from the PERSISTED state so a conversation marked stale on an
+        // earlier turn stays recognised as untrustworthy, instead of only on the
+        // single turn that noticed the problem.
+        boolean envelopeInvalidated = prior.untrusted();
         if (prior.maxTurn() < 0) {
             // No usable prior envelope → everything in COLD is new.
             turnsSinceLastSummary = coldMessages.size();
@@ -263,6 +285,21 @@ public class ChatCompactionOrchestrator {
             // full cadence pressure so that regeneration happens promptly.
             coldSummarizer.markStale(conversationId, "cold-shrink");
             turnsSinceLastSummary = coldMessages.size();
+            // The stored coverage points past the end of the current COLD zone,
+            // so the loop above matched no index and left newColdTokens at 0.
+            // Everything in COLD is new relative to an envelope we no longer
+            // trust, so report it as such.
+            newColdTokens = coldTokens;
+            // Raising newColdTokens is NOT enough on its own: it only unblocks
+            // the size trigger when the zone happens to exceed the growth
+            // threshold, and between the credit floor and that threshold SIZE
+            // mode would mark the envelope stale and then refuse to regenerate
+            // it on this turn and on every later one. The flag substitutes for
+            // the SIZE condition, whose input has become meaningless here. It is
+            // deliberately NOT treated as an invalidation keyword: that would
+            // also override the CADENCE, firing the summariser in TURNS mode
+            // where it had always refused, in deployments that never opted in.
+            envelopeInvalidated = true;
         } else {
             // turns_covered holds 0-indexed positions inside the cold slice;
             // the delta to the current last COLD index counts the new turns
@@ -293,7 +330,11 @@ public class ChatCompactionOrchestrator {
                 coldTurns,
                 turnsCovered,
                 summariserModel.provider(),
-                summariserModel.name()
+                summariserModel.name(),
+                effective.trigger(),
+                newColdTokens,
+                effective.sizeTriggerColdTokens(),
+                envelopeInvalidated
         );
 
         // Tenant-bound adapter: close over tenantId so the X-User-ID hits the
@@ -302,10 +343,20 @@ public class ChatCompactionOrchestrator {
         LlmJsonInvoker tenantAwareInvoker = (p, m, s, u) -> httpInvoker.invoke(p, m, s, u, tenantId);
 
         SummarizeOutcome outcome = coldSummarizer.summarize(req, tenantAwareInvoker);
-        log.debug("Compaction outcome: conv={} outcome={} coldTok={} turnsSince={} kwHit={} summariser={}/{}",
-                conversationId, outcome.getClass().getSimpleName(),
-                coldTokens, turnsSinceLastSummary, keywordHit,
+        log.debug("Compaction outcome: conv={} outcome={} trigger={} coldTok={} newColdTok={} "
+                        + "turnsSince={} kwHit={} invalidated={} summariser={}/{}",
+                conversationId, outcome.getClass().getSimpleName(), effective.trigger(),
+                coldTokens, newColdTokens, turnsSinceLastSummary, keywordHit, envelopeInvalidated,
                 summariserModel.provider(), summariserModel.name());
+        // Which condition earned the spend, and what the spend bought. Failed and
+        // SkippedStaleWrite both invoked the LLM and are charged: counting only
+        // Persisted would answer "did it ever persist", not "what did it cost",
+        // and would hide exactly the repeat-fire cases an operator is hunting.
+        String outcomeTag = outcomeTag(outcome);
+        if (outcomeTag != null) {
+            firedCounter(triggerReason(effective.trigger(), keywordHit, envelopeInvalidated,
+                    newColdTokens, effective.sizeTriggerColdTokens()), outcomeTag).increment();
+        }
         if (outcome instanceof SummarizeOutcome.Persisted persisted) {
             publishCompactionDone(streamId, conversationId, persisted.envelope());
         } else if (keywordHit && prior.present()) {
@@ -386,15 +437,41 @@ public class ChatCompactionOrchestrator {
      * path); {@code maxTurn} is the highest covered turn index, or -1 when
      * no usable {@code turns_covered} list exists.
      */
-    record PriorCoverage(boolean present, int maxTurn) {}
+    /**
+     * @param present  a {@code summary_cold} row exists, whatever its shape.
+     * @param maxTurn  highest covered COLD index, {@code -1} when unusable.
+     * @param stale    the stored envelope declares itself stale. This is the
+     *                 PERSISTED fact, so a conversation that was marked stale on
+     *                 an earlier turn is still recognised as untrustworthy on
+     *                 every later one, rather than only on the turn that noticed.
+     */
+    record PriorCoverage(boolean present, int maxTurn, boolean stale) {
+        PriorCoverage(boolean present, int maxTurn) {
+            this(present, maxTurn, false);
+        }
+
+        /**
+         * The stored envelope cannot be relied on: a row exists but its coverage
+         * is unusable, or it declares itself stale. Both are "the growth tally is
+         * measured against something that no longer applies", which is exactly
+         * what the SIZE condition needs to be told about.
+         */
+        boolean untrusted() {
+            return present && (stale || maxTurn < 0);
+        }
+    }
 
     private PriorCoverage readPriorCoverage(Conversation conv) {
         if (conv == null) return new PriorCoverage(false, -1);
         Map<String, Object> prior = conv.getSummaryCold();
         if (prior == null || prior.isEmpty()) return new PriorCoverage(false, -1);
         Object covered = prior.get("turns_covered");
+        boolean stale = ColdSummaryEnvelope.STATUS_STALE.equals(prior.get("status"));
         if (!(covered instanceof List<?> list) || list.isEmpty()) {
-            return new PriorCoverage(true, -1);
+            // A row with no usable coverage is as untrustworthy as a stale one:
+            // it is recalled authoritatively while nothing can ever replace it
+            // in SIZE mode, because its growth tally reads against no coverage.
+            return new PriorCoverage(true, -1, stale);
         }
         int prevMaxTurn = -1;
         for (Object o : list) {
@@ -402,7 +479,7 @@ public class ChatCompactionOrchestrator {
                 prevMaxTurn = Math.max(prevMaxTurn, n.intValue());
             }
         }
-        return new PriorCoverage(true, prevMaxTurn);
+        return new PriorCoverage(true, prevMaxTurn, stale);
     }
 
     /**
@@ -485,13 +562,84 @@ public class ChatCompactionOrchestrator {
                 CompactionConfigResolver.resolve(
                         convEnabled, convAfterTurns,
                         agentEnabled, agentAfterTurns,
-                        config.isEnabled(), config.getCadenceTurns()),
+                        config.isEnabled(), config.getCadenceTurns(),
+                        config.resolvedTrigger(), config.resolvedSizeTriggerColdTokens()),
                 summariserModel);
+    }
+
+    /**
+     * Counter for a summariser call the gate allowed, tagged with the condition
+     * that earned it and what the call bought. Cardinality is bounded at
+     * {@link #triggerReason} x {@link #outcomeTag} = 12 series.
+     */
+    private Counter firedCounter(String reason, String outcome) {
+        return Counter.builder("cold_summary_fired_total")
+                .description("Summariser calls the gate allowed, by trigger condition and outcome")
+                .tag("reason", reason)
+                .tag("outcome", outcome)
+                .register(meterRegistry);
+    }
+
+    /**
+     * Tag for an outcome that COST a summariser call, or {@code null} for one
+     * that did not. {@code SkippedGate} covers both "the gate refused" and "another
+     * pod held the lock", neither of which spent anything here, so it is not counted.
+     * Bounded at three values, so the counter stays at reason x outcome = 12 series.
+     */
+    static String outcomeTag(SummarizeOutcome outcome) {
+        if (outcome instanceof SummarizeOutcome.Persisted) return "persisted";
+        if (outcome instanceof SummarizeOutcome.Failed) return "failed";
+        if (outcome instanceof SummarizeOutcome.SkippedStaleWrite) return "discarded";
+        return null;
+    }
+
+    /**
+     * Which condition earned the pass, mirroring the order the gate consults
+     * them so the metric cannot blame a condition that had no say.
+     *
+     * <p>A keyword fires in every mode, so it is attributed first. Everything
+     * else is attributed only where it could actually have decided the pass,
+     * which is narrower than "where the mode consults it":
+     * <ul>
+     *   <li>growth is checked before the substitution, mirroring the gate, so a
+     *       pass already earned by growth is never blamed on a stale envelope;</li>
+     *   <li>the substitution is reported only in {@link CompactionTrigger#SIZE}.
+     *       It is gated on the cadence having elapsed, and in
+     *       {@link CompactionTrigger#SIZE_OR_TURNS} that is precisely what the
+     *       cadence branch fires on, so the flag cannot be the cause there.</li>
+     * </ul>
+     *
+     * <p>The stale status is persisted, so a wrong label here does not cost one
+     * turn: it sticks to the conversation for every later summary until a write
+     * clears the status.
+     */
+    static String triggerReason(CompactionTrigger trigger, boolean keywordHit,
+                                boolean envelopeInvalidated, int newColdTokens,
+                                int sizeTriggerColdTokens) {
+        if (keywordHit) return "keyword";
+        CompactionTrigger mode = trigger == null ? CompactionTrigger.TURNS : trigger;
+        if (mode.usesSize()) {
+            // Growth first, because the gate tests it first: with both available
+            // the pass is already earned before the substitution is consulted.
+            if (ColdSummaryGate.passesSizeTrigger(newColdTokens, sizeTriggerColdTokens)) {
+                return "size";
+            }
+            // And only where the substitution was NECESSARY. In SIZE_OR_TURNS it
+            // requires the cadence to have elapsed, which is exactly what the
+            // cadence branch fires on anyway, so the flag can never be the
+            // reason there and labelling it so would invent a cause.
+            if (envelopeInvalidated && !mode.usesTurns()) {
+                return "invalidated";
+            }
+        }
+        return "cadence";
     }
 
     static int resolveColdCap(String chatProvider) {
         if (chatProvider == null || chatProvider.isBlank()) return DEFAULT_COLD_CAP_TOKENS;
-        String key = chatProvider.toLowerCase();
+        // Locale.ROOT: on a Turkish JVM "GEMINI-CLI".toLowerCase() yields a
+        // dotless i and misses the map, same bug class as CompactionTrigger.parse.
+        String key = chatProvider.toLowerCase(java.util.Locale.ROOT);
         // CLI-bridge providers (claude-code, gemini-cli, codex, mistral-vibe) carry
         // their own tag that isn't in COLD_CAP_BY_PROVIDER; normalise to the
         // underlying API family so the cap matches the real context window.

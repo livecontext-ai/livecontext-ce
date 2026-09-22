@@ -161,7 +161,7 @@ describe('DataTableGrid - nested `id` is a data column, not the fixed ID lane', 
   // code too, because the bug was upstream (the column filter dropped the column, and the fetch
   // overwrote the value). The regression coverage for the reported symptom lives in
   // dataTable.collisionMatrix.test.tsx and the two hook suites; this is the rendering half.
-  it('renders the id a row carries, in the node Logs table', () => {
+  it('renders the id a row carries, in a nested view with no identity lane', () => {
     const viewConfig = createViewConfig(WORKFLOW_CONTEXT, false, 'output.rows');
     const container = renderGrid(viewConfig, [col('email'), col('id')], WORKFLOW_CONTEXT, 'output.rows');
 
@@ -191,7 +191,7 @@ describe('DataTableGrid - nested `id` is a data column, not the fixed ID lane', 
   it('keeps the workflow ROOT id pinned - the backend emits it as the row index, first column', () => {
     // At root the columns come from the backend, which always emits `id` (the step's row index) as
     // FIELD_ORDER[0]. It is the identity lane there whether or not the view asked for one, so
-    // treating "no showIdColumn" as "ordinary data column" would unpin the Logs table's own ID.
+    // treating "no showIdColumn" as "ordinary data column" would unpin a step root's own ID.
     const viewConfig = createViewConfig(WORKFLOW_CONTEXT, false, '');
     const container = renderGrid(viewConfig, [col('id'), col('status')], WORKFLOW_CONTEXT, '');
 
@@ -215,8 +215,8 @@ describe('DataTableGrid - nested `id` is a data column, not the fixed ID lane', 
   });
 
   it('sizes the fixed lane on the id it SHOWS, not on the expansion counter', () => {
-    // showIdColumn=true + nested (the run-result modal): the lane holds the item's real id while
-    // row.id is still 1..N, so measuring row.id clamps "CUST-4711-LONG" to the width of "1".
+    // showIdColumn=true + nested (the run-result modal and the inspector's node Logs): the lane
+    // holds the item's real id while row.id is still 1..N, so measuring row.id clamps it to "1".
     const viewConfig = createViewConfig(WORKFLOW_CONTEXT, true, 'output.rows');
     const container = renderGrid(viewConfig, [col('id'), col('email')], WORKFLOW_CONTEXT, 'output.rows');
 

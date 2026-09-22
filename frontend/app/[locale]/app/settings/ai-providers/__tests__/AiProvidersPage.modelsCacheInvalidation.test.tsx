@@ -32,6 +32,10 @@ vi.mock('next-intl', () => {
       if (!cache.has(key)) cache.set(key, (k: string) => `${key}.${k}`);
       return cache.get(key)!;
     },
+    // The page reads the app locale to build the pricing link the own-keys upgrade
+    // prompt points at. A mock missing it throws inside the component, which reads as
+    // a failure of whatever this file is asserting rather than of the mock.
+    useLocale: () => 'en',
   };
 });
 vi.mock('@/hooks/useAuthGuard', () => ({

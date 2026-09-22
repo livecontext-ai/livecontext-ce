@@ -4,14 +4,13 @@ import React from 'react';
 import { useTranslations } from 'next-intl';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { usePathname } from '@/i18n/navigation';
-import { settingsNavItems } from './settingsNavItems';
+import { settingsNavItems, isSettingsNavItemVisible } from './settingsNavItems';
 import { cn } from '@/lib/utils';
 import { useSafeNavigate } from '@/contexts/NavigationGuardContext';
 import { triggerSidebarNavigation } from '@/components/NavigationLoader';
 import { organizationApi } from '@/lib/api';
 import type { OrganizationRole } from '@/lib/api';
 import { useAuth } from '@/lib/providers/smart-providers';
-import { IS_CE } from '@/lib/edition';
 import { useAppVersion } from '@/hooks/useAppVersion';
 import { useHorizontalScrollHint } from '@/hooks/useHorizontalScrollHint';
 
@@ -58,9 +57,7 @@ export function SettingsNav() {
 
     // Filter items based on admin role and CE mode
     const visibleItems = React.useMemo(() => {
-        return settingsNavItems.filter(item =>
-            !item.hidden && (!item.adminOnly || isAdmin) && (!item.hiddenInCE || !IS_CE) && (!item.ceOnly || IS_CE)
-        );
+        return settingsNavItems.filter(item => isSettingsNavItemVisible(item, { isAdmin }));
     }, [isAdmin]);
 
     // Determine active nav item

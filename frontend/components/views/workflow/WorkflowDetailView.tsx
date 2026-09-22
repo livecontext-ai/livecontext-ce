@@ -33,7 +33,7 @@ import {
   subscribeBindRun,
   type OpenRunPanelDetail,
 } from '@/components/workflow/run-panel/runPanelBus';
-import { Table, Bot, Workflow } from 'lucide-react';
+import { Table, Bot } from 'lucide-react';
 import { orchestratorApi } from '@/lib/api';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 
@@ -42,7 +42,6 @@ import { WorkflowUnauthorizedState } from './WorkflowUnauthorizedState';
 import { runRoutePathFor } from '@/lib/workflow/runRoutePath';
 import { useAutoCollapseSidebar } from './hooks';
 import { OPEN_TRIGGER_TAB_EVENT, findTriggerTabConfig, type OpenTriggerTabDetail } from '@/lib/workflow/triggerTabEvent';
-import { workflowPanelTabId } from '@/lib/sidePanel/tabResource';
 import { openWorkflowBuilderTab } from '@/lib/sidePanel/openWorkflowBuilderTab';
 
 // ============================================
@@ -421,20 +420,12 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
         if (pinnedRun?.runId) pinnedRunId = pinnedRun.runId;
       } catch { /* ignore - will fall back to builder panel */ }
 
-      if (pinnedRunId) {
-        import('@/components/app/WorkflowBuilderPanelContent').then(({ WorkflowBuilderPanelContent }) => {
-          sidePanel.openTab({
-            id: workflowPanelTabId(subWfId, pinnedRunId),
-            label: wfName,
-            icon: React.createElement(Workflow, { className: 'w-4 h-4' }),
-            content: React.createElement(WorkflowBuilderPanelContent, { workflowId: subWfId, runId: pinnedRunId!, readOnly: isPreviewOnly }),
-            preferredWidth: 0.5,
-            keepMounted: true,
-          });
-        });
-      } else {
-        openWorkflowBuilderTab(sidePanel, { workflowId: subWfId, workflowName: wfName, readOnly: isPreviewOnly });
-      }
+      openWorkflowBuilderTab(sidePanel, {
+        workflowId: subWfId,
+        runId: pinnedRunId,
+        workflowName: wfName,
+        readOnly: isPreviewOnly,
+      });
     };
     window.addEventListener('workflowOpenSubWorkflow', handleOpenSubWorkflow as EventListener);
     return () => window.removeEventListener('workflowOpenSubWorkflow', handleOpenSubWorkflow as EventListener);

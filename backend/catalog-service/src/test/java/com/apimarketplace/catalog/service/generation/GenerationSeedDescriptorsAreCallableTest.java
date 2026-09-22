@@ -167,6 +167,88 @@ class GenerationSeedDescriptorsAreCallableTest {
         }
     }
 
+    @Test
+    @DisplayName("every shipped model is measured the SAME by the direct path and by the relay")
+    void directAndRelayedMeasurementAgreeForEveryModel() throws Exception {
+        // The one guarantee that has to hold for EVERY provider, not just the one the feature was
+        // written against.
+        //
+        // A direct call is measured from the unified parameters the caller typed. A call relayed
+        // from a self-hosted install is measured by the cloud from the provider-shaped BODY it
+        // receives, because an install that could state its own size or its own factor could state
+        // a smaller one. Those are two different readers of two different shapes, and every
+        // provider's shape is its own: Seedance carries its opening frame, its closing frame and
+        // its references in ONE array told apart by markers; xAI gives each slot a path of its own;
+        // Runway requires its source image; Higgsfield pins the duration so there is no size
+        // parameter at all; HeyGen is measured in characters of script.
+        //
+        // If those two readings ever disagree, the same generation costs one amount locally and
+        // another through the relay, and nothing anywhere reports it. Asserting it per shipped
+        // model is what makes "all the video providers work" a checkable statement instead of a
+        // claim about the one that was tested by hand.
+        for (SeededEndpoint endpoint : shipped()) {
+            for (GenerationSpec.Model model : endpoint.spec().models()) {
+                Map<String, Object> unified = new LinkedHashMap<>();
+                if (model.accepts("prompt")) {
+                    unified.put("prompt", "a paper boat drifting down a rain gutter");
+                }
+                for (String required : model.required()) {
+                    if (unified.containsKey(required)) continue;
+                    unified.put(required, plausibleValue(model, required));
+                }
+                // NO files, deliberately. This builder defers file slots to GenerationInputResolver,
+                // which needs a tenant and real storage keys to inline the bytes, so a file put in
+                // the unified map here moves the DIRECT factor and never reaches the body the relay
+                // reads - which looks exactly like a relay that lost the files. The file half of
+                // this parity is covered where it can be exercised honestly:
+                // RelayedFactorOnGappedSlotTest (a slot whose empties were pruned) and
+                // RelayedGenerationMeasurementTest (markers, gaps, and an over-full slot).
+                //
+                // What is left is what only a per-model sweep can check: that every shipped
+                // descriptor is READ the same by both sides - the right model out of a group that
+                // shares one upstream name, the size, the unit it is counted in, and the factor.
+
+                GenerationRequestBuilder.Built built =
+                        GenerationRequestBuilder.build(endpoint.spec(), model, unified);
+                String where = endpoint.source() + " -> " + model.id();
+                assertThat(built.errors()).as(where).isEmpty();
+
+                // The relay reads the body the direct path just produced, which is exactly what it
+                // would receive from an install running this same call.
+                RelayedGenerationMeasurement.Measured relayed =
+                        RelayedGenerationMeasurement.measure(endpoint.spec(), built.params());
+
+                assertThat(relayed.modelId())
+                        .as(where + ": the relay must price the model the body names")
+                        .isEqualTo(model.id());
+                assertThat(relayed.quantityUnit())
+                        .as(where + ": a size read in another unit is a rate applied to the wrong count")
+                        .isEqualTo(built.quantityUnit());
+                if (built.quantity() == null) {
+                    assertThat(relayed.quantity()).as(where).isNull();
+                } else {
+                    assertThat(relayed.quantity())
+                            .as(where + ": direct billed " + built.quantity()
+                                    + ", relayed billed " + relayed.quantity())
+                            .isEqualByComparingTo(built.quantity());
+                }
+                // Compared as an EFFECT, with absent read as 1, because the two paths spell "no
+                // factor" differently on purpose. The direct path answers BigDecimal.ONE; the relay
+                // answers null so the query parameter is omitted entirely and every lookup that
+                // predates modifiers stays byte-identical on the wire. Both reach MarkupPolicy as a
+                // no-op, so the charge is the same - but the two spellings are a real difference
+                // between the readers, and a test that compared them literally would fail on all
+                // 100-odd unmodulated models while saying nothing about money.
+                java.math.BigDecimal relayedFactor = relayed.priceMultiplier() == null
+                        ? java.math.BigDecimal.ONE : relayed.priceMultiplier();
+                assertThat(relayedFactor)
+                        .as(where + ": direct factor " + built.priceMultiplier()
+                                + ", relayed factor " + relayed.priceMultiplier())
+                        .isEqualByComparingTo(built.priceMultiplier());
+            }
+        }
+    }
+
     /**
      * A value this model would accept for one of its required parameters.
      *
@@ -248,6 +330,127 @@ class GenerationSeedDescriptorsAreCallableTest {
         assertThat(byModel.get("eleven-flash-v2-5"))
                 .as("flash v2.5 does support it")
                 .contains("language");
+    }
+
+    @Test
+    @DisplayName("every shipped price factor is one a call can actually reach")
+    void shippedFactorsAreReachableAndBounded() throws Exception {
+        // A factor is money, and the seed's own prose quotes the worst case an owner would use to
+        // decide whether the surcharge is acceptable. Two of those figures were wrong on the first
+        // draft (a model described with frame slots it does not have, and a six-file maximum the
+        // exclusion rules make unreachable), and nothing would have caught them.
+        for (SeededEndpoint e : shipped()) {
+            for (GenerationSpec.Model model : e.spec().models()) {
+                GenerationSpec.Price price = model.price();
+                if (price == null || price.modifiers().isEmpty()) continue;
+
+                java.math.BigDecimal reachable = java.math.BigDecimal.ONE;
+                for (GenerationSpec.PriceModifier modifier : price.modifiers()) {
+                    assertThat(model.accepts(modifier.param()))
+                            .as("%s: %s prices '%s', which it does not accept",
+                                    e.source(), model.id(), modifier.param())
+                            .isTrue();
+                    reachable = reachable.multiply(
+                            modifier.maxFactor(e.spec().paramMap().get(modifier.param())));
+                }
+                assertThat(reachable)
+                        .as("%s: %s can reach %sx, which a price quote will not show",
+                                e.source(), model.id(), reachable.toPlainString())
+                        .isLessThanOrEqualTo(GenerationSpec.PriceModifier.MAX_FACTOR);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("the video models this release prices carry the factors their basis claims")
+    void theShippedVideoFactorsAreTheOnesDocumented() throws Exception {
+        Map<String, GenerationSpec.Price> prices = pricesByModel();
+
+        // Seedance: every attached frame or reference costs a twentieth of the call, and the most
+        // a call can reach is 1.2x - four references, or two frames at 1.1025x, never both.
+        assertThat(factorFor(prices, "seedance-2.0", Map.of("input_image",
+                List.of("a", "b", "c", "d")))).isEqualByComparingTo("1.2");
+        assertThat(factorFor(prices, "seedance-2.0", Map.of(
+                "first_frame_image", "a", "last_frame_image", "b"))).isEqualByComparingTo("1.1025");
+        // The 2.5 family has no frame slots at all, which is what the corrected basis says.
+        assertThat(prices.get("seedance-2.5").modifiers())
+                .extracting(GenerationSpec.PriceModifier::param)
+                .containsExactly("input_image");
+
+        // And the resolutions this release does NOT price, which is the more important half.
+        //
+        // A 2x resolution factor was written on both of these and removed before shipping. xAI
+        // publishes ONE per-second figure for grok-imagine-video covering 480p and 720p alike, and
+        // Google prices Veo 3.1 per second regardless of resolution: with no published
+        // differential behind it, the surcharge is a price rise wearing the clothes of a cost, and
+        // on top of that a `multiply` forces its parameter into `required`, so every saved call
+        // that omitted the resolution would have started being refused.
+        //
+        // Pinned as an ABSENCE on purpose. Nothing else fails if a factor creeps back: the seed
+        // validates, the parser accepts it, and every other suite here stays green while calls get
+        // dearer. Whoever adds one has to come to this line and say what published figure it
+        // tracks.
+        assertThat(factorFor(prices, "grok-imagine-video", Map.of("resolution", "720p")))
+                .as("xAI publishes one per-second figure for both resolutions")
+                .isEqualByComparingTo("1");
+        assertThat(factorFor(prices, "hf-veo-3.1", Map.of("resolution", "1080")))
+                .as("Google prices Veo 3.1 per second whatever the resolution")
+                .isEqualByComparingTo("1");
+    }
+
+    @Test
+    @DisplayName("a model whose resolution is priced REQUIRES it, so no call is billed for a guess")
+    void aPricedResolutionIsAlwaysStated() throws Exception {
+        // A factor keyed on a value the caller may omit bills the reference tier for whatever the
+        // provider renders by default. The fix is to make the parameter required, which is a
+        // BEHAVIOUR CHANGE for any saved call that omitted it: those are refused, by name, at no
+        // cost - which is the failure mode this codebase prefers over a silent mis-charge.
+        int pricedValues = 0;
+        for (SeededEndpoint e : shipped()) {
+            for (GenerationSpec.Model model : e.spec().models()) {
+                GenerationSpec.Price price = model.price();
+                if (price == null) continue;
+                for (GenerationSpec.PriceModifier modifier : price.modifiers()) {
+                    if (modifier.countsAssets()) continue;
+                    pricedValues++;
+                    assertThat(model.requires(modifier.param()))
+                            .as("%s: %s prices '%s' but does not require it, so a call that omits "
+                                    + "it is billed the reference tier for whatever the provider "
+                                    + "chooses", e.source(), model.id(), modifier.param())
+                            .isTrue();
+                }
+            }
+        }
+        // The loop above is EMPTY today, and a test that passes because it checked nothing is worth
+        // nothing, so the count is asserted too. This release ships only per-file surcharges: the
+        // two value factors that were drafted had no published cost behind them and were removed
+        // (see theShippedVideoFactorsAreTheOnesDocumented).
+        //
+        // So this line is a deliberate checkpoint rather than a nuisance. A `multiply` is a price
+        // RISE and it turns its parameter into a required one, which refuses calls that run today.
+        // Shipping the first one should cost somebody a line of test and a sentence saying which
+        // published figure it tracks.
+        assertThat(pricedValues)
+                .as("this release prices no VALUE; raise this with the modifier that changes it")
+                .isZero();
+    }
+
+    private static java.math.BigDecimal factorFor(Map<String, GenerationSpec.Price> prices,
+                                                   String modelId, Map<String, Object> supplied) {
+        GenerationSpec.Price price = prices.get(modelId);
+        assertThat(price).as("%s must be in the shipped seed", modelId).isNotNull();
+        return price.factorFor(supplied);
+    }
+
+    /** Every shipped model's price, keyed by model id. */
+    private static Map<String, GenerationSpec.Price> pricesByModel() throws Exception {
+        Map<String, GenerationSpec.Price> byModel = new LinkedHashMap<>();
+        for (SeededEndpoint e : shipped()) {
+            for (GenerationSpec.Model m : e.spec().models()) {
+                byModel.put(m.id(), m.price());
+            }
+        }
+        return byModel;
     }
 
     /** Every shipped model's capabilities, keyed by model id. */

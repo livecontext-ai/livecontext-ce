@@ -2,12 +2,12 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Brain, Plus, Search, Pin, Trash2, Pencil, Bot, Users, Eye, EyeOff, AlertTriangle } from 'lucide-react';
+import { Brain, Plus, Pin, Trash2, Pencil, Bot, Users, Eye, EyeOff, AlertTriangle } from 'lucide-react';
 import { BulkDeleteModal } from '@/components/ui/BulkDeleteModal';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { SearchField } from '@/components/ui/search-field';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useOrgScopedQuery } from '@/lib/hooks/useOrgScopedQuery';
@@ -189,40 +189,47 @@ export function MemoryTab({ className = '' }: { className?: string }) {
 
   return (
     <div className={className}>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[220px] flex-1">
-          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t('searchPlaceholder')}
-            className="pl-8"
-          />
-        </div>
+      {/* The platform's search surface, not a hand-placed icon over an Input:
+          same height, same radius and the same clear button as every other
+          search field in the app. */}
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center">
+        <SearchField
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onClear={() => setSearch('')}
+          clearLabel={t('clearSearch')}
+          placeholder={t('searchPlaceholder')}
+          containerClassName="min-w-[220px] flex-1"
+        />
 
-        <div className="flex items-center gap-1">
-          {TYPE_FILTERS.map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setTypeFilter(value)}
-              className={`rounded-md px-2.5 py-1.5 text-sm transition-colors ${
-                typeFilter === value
-                  ? 'bg-theme-secondary text-theme-primary'
-                  : 'text-theme-muted hover:text-theme-primary'
-              }`}
-            >
-              {value === 'all' ? t('filterAll') : t(`type.${value}`)}
-            </button>
-          ))}
-        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* A filter row is built from Buttons - `default` for the chosen
+              option, `outline` for the rest - and never from a private pill
+              class. That is the rule in components/ui/README.md, and it is what
+              the agenda's view switch does; the home-made pills this replaces
+              were a second button dialect sitting next to the real one. */}
+          <div role="group" aria-label={t('filterByType')} className="flex flex-wrap items-center gap-1">
+            {TYPE_FILTERS.map((value) => (
+              <Button
+                key={value}
+                type="button"
+                size="sm"
+                variant={typeFilter === value ? 'default' : 'outline'}
+                aria-pressed={typeFilter === value}
+                onClick={() => setTypeFilter(value)}
+              >
+                {value === 'all' ? t('filterAll') : t(`type.${value}`)}
+              </Button>
+            ))}
+          </div>
 
-        {canMutate && (
-          <Button onClick={() => { setEditing(null); setCreating(true); }}>
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
-            {t('createButton')}
-          </Button>
-        )}
+          {canMutate && (
+            <Button size="sm" onClick={() => { setEditing(null); setCreating(true); }}>
+              <Plus className="h-3.5 w-3.5" />
+              {t('createButton')}
+            </Button>
+          )}
+        </div>
       </div>
 
       <p className="mb-4 text-sm text-theme-muted">{t('explainer')}</p>
@@ -270,7 +277,10 @@ export function MemoryTab({ className = '' }: { className?: string }) {
               // A deactivated entry is dimmed rather than hidden: it is still the
               // person's row to correct or revive, and this screen is the only place
               // it can be switched back on.
-              className={`rounded-md border border-theme bg-theme-secondary px-4 py-3${
+              // `rounded-xl`: the radius ladder in components/ui/README.md puts a
+              // card on the same rung as a Button, and `rounded-md` is reserved
+              // for the small non-interactive labels inside it.
+              className={`rounded-xl border border-theme bg-theme-secondary px-4 py-3${
                 memory.isActive ? '' : ' opacity-60'
               }`}
             >
@@ -278,7 +288,7 @@ export function MemoryTab({ className = '' }: { className?: string }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-medium text-theme-primary">{memory.title}</span>
-                    <span className="rounded bg-theme-tertiary px-1.5 py-0.5 text-xs text-theme-muted">
+                    <span className="rounded-md bg-theme-tertiary px-1.5 py-0.5 text-xs text-theme-muted">
                       {t(`type.${memory.type}`)}
                     </span>
                     <span className="inline-flex items-center gap-1 text-xs text-theme-muted">
@@ -311,50 +321,71 @@ export function MemoryTab({ className = '' }: { className?: string }) {
                 </div>
 
                 {canMutate && (
-                  <div className="flex flex-shrink-0 items-center gap-1">
-                    <button
+                  /* Row actions are Buttons, `ghost`/`icon` at h-8 w-8 rounded-lg,
+                     which is the shape the dialog's own close button and the task
+                     board's row actions already use. Written by hand they had no
+                     focus ring and no disabled handling, and their radius was one
+                     rung off the card they sit on.
+
+                     No `aria-pressed` on the two toggles here: both flip their
+                     LABEL with the state ("Deactivate" becomes "Reactivate"),
+                     which is the alternative to a pressed state rather than a
+                     companion to it - together they announce "Reactivate,
+                     pressed". The type filters above are the opposite case: one
+                     fixed label each, so their state has to be carried by
+                     `aria-pressed`. */
+                  <div className="flex flex-shrink-0 items-center gap-0.5">
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon"
                       onClick={() => handleTogglePin(memory)}
                       title={memory.pinned ? t('unpinAction') : t('pinAction')}
                       aria-label={memory.pinned ? t('unpinAction') : t('pinAction')}
-                      className={`rounded p-1.5 hover:bg-theme-tertiary ${
-                        memory.pinned ? 'text-[var(--accent-primary)]' : 'text-theme-muted'
+                      className={`h-8 w-8 rounded-lg ${
+                        memory.pinned ? 'text-[var(--accent-primary)]' : 'text-[var(--text-muted)]'
                       }`}
                     >
                       <Pin className="h-3.5 w-3.5" />
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon"
                       onClick={() => handleToggleActive(memory)}
                       title={memory.isActive ? t('deactivateAction') : t('activateAction')}
                       aria-label={memory.isActive ? t('deactivateAction') : t('activateAction')}
-                      className={`rounded p-1.5 hover:bg-theme-tertiary ${
-                        memory.isActive ? 'text-theme-muted' : 'text-amber-600 dark:text-amber-400'
+                      className={`h-8 w-8 rounded-lg ${
+                        memory.isActive ? 'text-[var(--text-muted)]' : 'text-amber-600 dark:text-amber-400'
                       }`}
                     >
                       {memory.isActive
                         ? <Eye className="h-3.5 w-3.5" />
                         : <EyeOff className="h-3.5 w-3.5" />}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon"
                       onClick={() => openEditor(memory)}
                       disabled={opening === memory.id}
                       title={t('editAction')}
                       aria-label={t('editAction')}
-                      className="rounded p-1.5 text-theme-muted hover:bg-theme-tertiary hover:text-theme-primary"
+                      className="h-8 w-8 rounded-lg text-[var(--text-muted)]"
                     >
                       <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon"
                       onClick={() => setConfirmingDelete(memory)}
                       title={t('deleteAction')}
                       aria-label={t('deleteAction')}
-                      className="rounded p-1.5 text-theme-muted hover:bg-theme-tertiary hover:text-red-400"
+                      className="h-8 w-8 rounded-lg text-[var(--text-muted)] hover:text-red-500"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>

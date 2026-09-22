@@ -74,7 +74,18 @@ public class CatalogRegisterModule implements ToolModule {
                 "apiName, baseUrl, endpoints[{name, endpoint, method, description, " +
                 "outputSchema: [{key, type, description}]}]. " +
                 "outputSchema is REQUIRED on every endpoint - it defines the typed response shape " +
-                "used by workflows and the variable picker.");
+                "used by workflows and the variable picker. " +
+                "Constant request headers: put them in requiredHeaders {name: value} at the top level " +
+                "when they apply to every endpoint (an API version pin), or in headers {name: value} on " +
+                "one endpoint. Both are sent automatically and stay hidden from the tool's parameters. " +
+                "Only short literal values are kept (no spaces, at most 64 characters, no { } placeholder), " +
+                "and a header is ignored when the transport owns it (Content-Type, Content-Length, Host, " +
+                "Connection, Transfer-Encoding, Accept-Encoding) or when its name is the one the credential " +
+                "already fills (that header depends on authType and on auth[0].apiKeyConfig - see " +
+                "auth_placement in catalog(action='help', topics=['register'])). " +
+                "Accept registers but is never sent: the platform sets it to application/json first, " +
+                "and a declared header never overrides one that is already present. " +
+                "Per-call values belong in params with location 'query', 'path', 'body' or 'header' instead.");
         }
 
         try {
@@ -87,6 +98,17 @@ public class CatalogRegisterModule implements ToolModule {
             result.put("apiName", response.apiName() != null ? response.apiName() : "");
             result.put("tools", buildToolSummary(response));
             result.put("message", "Custom API registered successfully");
+            // An API that needs a key is NOT usable yet, and nothing used to say so: the reply was
+            // a flat success, and the first sign of trouble was a 401 from the provider several
+            // steps later. Name the connection the tools will look for, so the next move is
+            // obvious instead of guessed.
+            String credentialName = CustomApiRegistrationService.credentialNameFor(apiJson, response.apiName());
+            if (credentialName != null && !credentialName.isBlank()) {
+                result.put("credential_name", credentialName);
+                result.put("next_step", "This API authenticates, so its tools stay unusable until a "
+                        + "credential named '" + credentialName + "' holds a key for this user. Ask for one with "
+                        + "credential(action='require', services=['" + credentialName + "']), then run a tool to verify.");
+            }
             return ToolExecutionResult.success(result);
         } catch (IllegalArgumentException e) {
             return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
@@ -122,7 +144,29 @@ public class CatalogRegisterModule implements ToolModule {
             result.put("apiName", response.apiName() != null ? response.apiName() : "");
             result.put("tools", buildToolSummary(response));
             result.put("message", "Custom API updated successfully");
-            result.put("warning", "Update generates a new API ID. Workflows referencing the old tool IDs must be updated.");
+            // The warning below tells the caller to reconnect under this name after a rename, so
+            // the name has to be IN the response. Referring to a field that is not returned is
+            // the same dead end as naming an action that does not exist.
+            String updatedCredentialName =
+                    CustomApiRegistrationService.credentialNameFor(updatesJson, response.apiName());
+            if (updatedCredentialName != null && !updatedCredentialName.isBlank()) {
+                result.put("credential_name", updatedCredentialName);
+            }
+            // Conditional, because the sentence names a response FIELD: an API that needs no
+            // credential has no credential_name in the result, and pointing at one that is not
+            // there is the same dead end as naming an action that does not exist.
+            String keptKeyNote = updatedCredentialName == null || updatedCredentialName.isBlank()
+                    ? "This API needs no credential."
+                    : "The stored key is kept as long as apiName and iconSlug are unchanged. Renaming "
+                            + "either one changes the credential name the tools require, and the key "
+                            + "stored under the old name does NOT move with it: the tools fail on their "
+                            + "first call until a key is connected under credential_name '"
+                            + updatedCredentialName + "'.";
+            result.put("warning", "Update generates a new API ID and new tool IDs: a workflow step "
+                    + "pointing at an old tool ID no longer resolves and must be re-pointed at the IDs "
+                    + "in 'tools' above. " + keptKeyNote + " Changing apiName or iconSlug also moves the "
+                    + "API's icon slug, which is the first segment of the node type a workflow node was "
+                    + "placed with, so keep both unchanged unless you mean to re-point those nodes too.");
             return ToolExecutionResult.success(result);
         } catch (IllegalArgumentException e) {
             return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,

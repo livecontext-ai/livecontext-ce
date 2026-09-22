@@ -6,6 +6,8 @@ import { MoveRight } from 'lucide-react';
 import type { AgendaOccurrence } from '@/lib/api/orchestrator/agenda.service';
 import { dayKey, formatFullDate, formatTimeInZone } from '@/lib/utils/agendaTime';
 import { useDayKey } from '@/hooks/useNow';
+import { AgendaKindIcon } from './AgendaKindIcon';
+import { occurrenceKind } from './agendaLaunchKinds';
 import { occurrenceAccent, resourceIcon } from './agendaVisuals';
 
 interface AgendaListViewProps {
@@ -62,7 +64,8 @@ export function AgendaListView({ occurrences, timezone, focusScheduleId, onSelec
           <ul>
             {group.items.map((occurrence) => {
               const accent = occurrenceAccent(occurrence);
-              const Icon = resourceIcon(occurrence.resourceType);
+              const ResourceIcon = resourceIcon(occurrence.resourceType);
+              const kind = occurrenceKind(occurrence);
               // A planned fire the backend says will NOT happen: the workflow is
               // over its spending cap for now. Drawn faded rather than hidden,
               // because it comes back on its own and a calendar that silently
@@ -83,7 +86,9 @@ export function AgendaListView({ occurrences, timezone, focusScheduleId, onSelec
                       {formatTimeInZone(new Date(occurrence.startAt), timezone)}
                     </span>
                     <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${accent.chip}`}>
-                      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                      {kind
+                        ? <AgendaKindIcon kind={kind} />
+                        : <ResourceIcon className="h-3.5 w-3.5" aria-hidden="true" />}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm text-theme-primary">{occurrence.name}</span>

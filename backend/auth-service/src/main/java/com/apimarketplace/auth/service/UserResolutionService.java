@@ -1,6 +1,7 @@
 package com.apimarketplace.auth.service;
 
 import com.apimarketplace.auth.audit.AuthEventRecorder;
+import com.apimarketplace.auth.metrics.AuthMetrics;
 import org.springframework.context.annotation.Lazy;
 import com.apimarketplace.auth.domain.AuthProvider;
 import com.apimarketplace.auth.domain.BillingCustomer;
@@ -22,9 +23,13 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.Date;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Service for user resolution from the gateway.
@@ -78,19 +83,64 @@ public class UserResolutionService {
     private io.micrometer.core.instrument.MeterRegistry meterRegistry;
 
     /**
-     * Threshold below which two consecutive resolveUser() calls are considered the
-     * same active session (and we do NOT count it as a new login). Above this gap
-     * we increment auth_login_total and emit an audit LOGIN_SUCCESS.
+     * How stale last_login_at ("last seen") has to be before we rewrite it.
      *
-     * The dedup is enforced via an atomic SQL UPDATE (UserRepository
-     * .updateLastLoginIfStale) that returns rowsUpdated as the canonical
-     * "is this a real login" flag - safe under the ~10 parallel resolveUser()
-     * calls the frontend issues per page load.
+     * <p>Purely a write-throttle: resolveUser runs on every gateway request carrying a
+     * JWT, and rewriting a row on each of them would be one UPDATE per request for no
+     * added information.
+     *
+     * <p>It is NOT the login rule and must never become it again. Reading "the throttle
+     * let a write through" as "this person just signed in" is what published one login
+     * per active principal per 10 minutes, for as long as anything kept making requests:
+     * an open tab, a scheduled workflow, an API key. Prod, 2026-09-17: 96 login.success
+     * in 12h for 3 accounts, smallest gap exactly 10.0 minutes, against 16 real LOGIN
+     * events in Keycloak over 24h. {@code auth_time} decides logins now.
+     *
+     * <p>Note that resolveUser does NOT run on every gateway request: the gateway caches a
+     * resolution per provider id for 5 minutes behind a per-id lock, so auth-service sees
+     * at most one resolve per user per 5 minutes per gateway replica. The consequence for
+     * the login rule is that a fresh sign-in is observed up to 5 minutes late, and not at
+     * all until that user's next request. Delayed, never double counted.
      */
     private static final long LOGIN_DEDUP_MINUTES = 10L;
 
+    /**
+     * OIDC claim naming the instant the end user authenticated. Constant across every
+     * refresh of one session, newer on a new one. That is the whole login rule.
+     */
+    private static final String AUTH_TIME_CLAIM = "auth_time";
+
+    /** How far ahead of us a token's {@code auth_time} may be before we refuse to store it. */
+    private static final java.time.Duration MAX_AUTH_TIME_SKEW = java.time.Duration.ofHours(1);
+
+    /**
+     * FREE subscription ids whose initial credit grant is known to exist. The grant is
+     * idempotent (ledger source_id unique), but {@link #attributeCreditsIfEligible} runs on
+     * EVERY gateway request of a FREE user, so without this memo each request re-read the
+     * subscription and the ledger and logged "Attributing credits" for nothing (75 lines
+     * for one user in two short sessions, 2026-09-15). Keyed by subscription id, not user
+     * id: a new FREE row after a downgrade has a new id and gets its own grant. Per-JVM
+     * and never invalidated on purpose: a memoized id only ever means "granted", which
+     * cannot become false. Bounded so a long-lived pod cannot grow it without limit.
+     */
+    private final Set<Long> freeInitGrantDone = ConcurrentHashMap.newKeySet();
+    static final int FREE_INIT_GRANT_MEMO_MAX = 50_000;
+
+    /**
+     * Provider-and-reason pairs already warned about. Bounded by the provider enum times the
+     * two reasons, so it needs no eviction.
+     */
+    private final Set<String> missingAuthTimeWarned = ConcurrentHashMap.newKeySet();
+
     @Autowired(required = false)
     private AuthEventRecorder authEventRecorder;
+
+    /**
+     * The issuer {@code JwtTokenProvider} stamps on tokens we mint ourselves. Bound from the
+     * same property, so the two cannot drift apart into a guard that recognises nothing.
+     */
+    @org.springframework.beans.factory.annotation.Value("${auth.jwt.issuer:livecontext}")
+    private String embeddedJwtIssuer = "livecontext";
 
     /**
      * Self-injection so updateLastLoginAtomic() goes through the Spring proxy
@@ -183,12 +233,23 @@ public class UserResolutionService {
             ensureFreeSubscription(user);
 
             // 4b. Attribute credits if email is verified (idempotent)
-            attributeCreditsIfEligible(user);
+            attributeCreditsSafely(user);
             ensureSamlMembershipForBrokeredLogin(user, keycloakJwt);
 
-            // 5. Atomic conditional last-login update - see updateLastLoginAtomic.
-            // Goes through self-injected proxy so @Transactional applies.
-            boolean realLogin = isNewUser || self.updateLastLoginAtomic(user);
+            // 5. "Last seen" bookkeeping. Throttled, and deliberately not a login signal.
+            // Goes through the self-injected proxy so @Transactional applies, and through a
+            // catch on THIS side of it (see updateLastLoginSafely).
+            updateLastLoginSafely(user);
+
+            // 5a. Did this token carry a NEWER authentication than anything we have seen
+            // for this account? That, and only that, is a login. A refreshed token repeats
+            // its session's auth_time and matches nothing; a token with no auth_time at all
+            // (an API key resolve, a self-hosted embedded token) is a non-interactive
+            // principal and never claims to be a sign-in.
+            LocalDateTime authenticatedAt = authenticationInstant(keycloakJwt, user);
+            boolean newAuthentication = authenticatedAt != null
+                    && recordAuthenticationSafely(user, authenticatedAt);
+            boolean realLogin = isNewUser || newAuthentication;
 
             // 5b. Record metrics + audit only on real login transitions.
             if (realLogin && authEventRecorder != null) {
@@ -240,6 +301,38 @@ public class UserResolutionService {
                     .filter(user -> user.getAuthProvider() == AuthProvider.LOCAL);
         } catch (NumberFormatException e) {
             return Optional.empty();
+        }
+    }
+
+    /**
+     * Is this a token {@code JwtTokenProvider} minted, rather than one an identity provider
+     * issued?
+     *
+     * <p>Keyed on the {@code token_type} claim AND our own issuer, both of which
+     * {@code JwtTokenProvider} stamps on every token it signs. Two conditions rather than
+     * one because this is the only branch in the design with NO detector: a token
+     * misclassified as ours short-circuits with no login, no counter and no log line, so a
+     * false positive here is invisible by construction. {@code token_type} alone would
+     * classify any future token that happens to carry that unnamespaced claim; pinning the
+     * issuer as well means a token has to claim to be ours before we treat it as ours.
+     *
+     * <p>Deliberately NOT keyed on {@code provider == "local"}: that claim carries the
+     * SIGN-IN METHOD, so a self-hosted person who used Google carries
+     * {@code provider: "google"} on a token we minted ourselves. Testing for "local" would
+     * let that token through as if an identity provider had sent it, and the install would
+     * then be told that "keycloak" had stopped sending auth_time, on a deployment running no
+     * Keycloak at all.
+     */
+    private boolean isOwnEmbeddedToken(String jwt) {
+        if (jwt == null || jwt.isBlank()) {
+            return false;
+        }
+        try {
+            var claims = SignedJWT.parse(jwt).getJWTClaimsSet();
+            return claims.getStringClaim("token_type") != null
+                    && embeddedJwtIssuer.equals(claims.getIssuer());
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -436,7 +529,37 @@ public class UserResolutionService {
         // proxy) and the method was private (which the proxy cannot advise at all). The two
         // halves therefore ran unsynchronised, and concurrent first-login requests each
         // created a subscription. See FreeSubscriptionProvisioner for the full story.
-        freeSubscriptionProvisioner.provisionIfMissing(user);
+        //
+        // The catch lives HERE, on this side of the provisioner's proxy, and that placement is
+        // the whole point. Inside the transaction it would be useless: an
+        // UnexpectedRollbackException raised at the commit is thrown by the proxy, after the
+        // method body has returned, so no catch within the bean can see it. Out here it is
+        // reachable, and the only sane answer to it is this one. A user who exists must resolve;
+        // a missing FREE subscription is bookkeeping, it costs nobody their session and the next
+        // request repairs it. Letting it bubble into resolveUser's generic handler is what turned
+        // one duplicate-key into a login failure for roughly four of every ten new accounts.
+        try {
+            freeSubscriptionProvisioner.provisionIfMissing(user);
+        } catch (Exception e) {
+            log.warn("Could not ensure free subscription for userId={}, continuing: {}",
+                    user.getId(), e.toString());
+        }
+    }
+
+    /**
+     * {@link #attributeCreditsIfEligible} with the failure handled OUTSIDE its transaction.
+     *
+     * <p>Same reasoning as {@link #ensureFreeSubscription}: credit attribution is idempotent
+     * bookkeeping replayed on every resolve, so a bad run is repaired by the next request and
+     * must never cost the caller their login.
+     */
+    private void attributeCreditsSafely(User user) {
+        try {
+            attributeCreditsIfEligible(user);
+        } catch (Exception e) {
+            log.warn("Could not attribute credits for userId={}, continuing: {}",
+                    user.getId(), e.toString());
+        }
     }
 
     /**
@@ -467,50 +590,219 @@ public class UserResolutionService {
             return;
         }
 
+        // No catch here, deliberately, though the two callers reach this method very differently
+        // and only one of them made the old catch a lie. From EmailVerificationController the
+        // call goes through the proxy, so @Transactional applies: a swallowed failure would not
+        // stay swallowed there, the transaction is flagged rollback-only and the commit throws an
+        // UnexpectedRollbackException from outside this body, where no catch of its own can
+        // intercept it. From resolveUser it is a plain self-call, so no proxy and no transaction,
+        // and moving the catch out was a no-op for behaviour. It is still the right place for it:
+        // one handler, on the side of the proxy where a handler can work, for both callers.
+        // attributeCreditsSafely holds it here, the controller holds its own there.
+        Optional<Subscription> subOpt = subscriptionRepository.findActiveByUserId(user.getId());
+        if (subOpt.isEmpty()) {
+            return;
+        }
+
+        Subscription subscription = subOpt.get();
+        Plan plan = subscription.getPlan();
+        if (plan == null) {
+            return;
+        }
+
+        // Only grant credits for FREE (internal) subscriptions.
+        // Paid plans get credits via Stripe webhooks - granting here would double-count.
+        if (!"internal".equalsIgnoreCase(subscription.getProvider())) {
+            return;
+        }
+        // ... and only while the plan is still FREE. An admin comp tier is also
+        // provider='internal', and its credits come from assignPlan; letting it reach
+        // attributeOnSubscription releases the unused pack_sub_N_init key for a duplicate
+        // 5K grant. See the javadoc for the four production accounts this hit.
+        if (!"FREE".equalsIgnoreCase(plan.getCode())) {
+            return;
+        }
+
+        // Already granted for this subscription (see freeInitGrantDone): nothing to read,
+        // nothing to log. The memo is filled only after a successful attribution call, so
+        // a failed grant (DB hiccup) is retried on the next request as before.
+        if (freeInitGrantDone.contains(subscription.getId())) {
+            return;
+        }
+
+        creditAttributionService.attributeOnSubscription(user.getId(), subscription, 0);
+        rememberFreeInitGrant(subscription.getId());
+        log.debug("Credits attribution check done for userId={} (idempotent)", user.getId());
+    }
+
+    private void rememberFreeInitGrant(Long subscriptionId) {
+        if (subscriptionId == null) {
+            return;
+        }
+        if (freeInitGrantDone.size() >= FREE_INIT_GRANT_MEMO_MAX) {
+            // Crude bound, same idiom as NonceUtil's cache: a cleared memo only costs one
+            // extra idempotent ledger check per subscription, never a wrong grant.
+            freeInitGrantDone.clear();
+        }
+        freeInitGrantDone.add(subscriptionId);
+    }
+
+    /**
+     * The instant this token says the person authenticated, or {@code null} when the
+     * token does not say.
+     *
+     * <p>Reads the OIDC {@code auth_time} claim. Three outcomes, and the difference
+     * between the last two is the point:
+     * <ul>
+     *   <li><b>Claim present</b> - returned. The caller compares it against what we
+     *       already stored for this account.</li>
+     *   <li><b>No token at all</b> - {@code null}, silently. This is the API-key resolve
+     *       ({@code ApiKeyService} passes a null JWT) and the self-hosted embedded token,
+     *       both non-interactive by construction. Nothing is wrong and nothing is
+     *       reported; they are simply not sign-ins.</li>
+     *   <li><b>Token present but carrying no {@code auth_time}</b> - {@code null}, and
+     *       LOUD: a counter plus a one-shot warning. This is the failure mode that would
+     *       otherwise sink the whole feature without a trace, because "we counted no
+     *       logins" and "nobody logged in" look identical on a dashboard. If an identity
+     *       provider ever stops sending the claim, the counter says so on the first
+     *       request instead of the login graph quietly flatlining.</li>
+     * </ul>
+     */
+    LocalDateTime authenticationInstant(String jwt, User user) {
+        if (jwt == null || jwt.isBlank() || isOwnEmbeddedToken(jwt)) {
+            // Expected shapes, never reported. A null token is the API-key resolve
+            // (ApiKeyService passes one on purpose). An embedded token is minted by our own
+            // JwtTokenProvider, which has no auth_time to give and no session to describe;
+            // its sign-in is recorded where it happens, in PasswordAuthService and
+            // OAuthUserProcessor. Without the second test they would be reported as a broken
+            // identity provider, and mislabelled too: providerTagFromJwt can only ever answer
+            // keycloak, google or github, so a self-hosted install would page about
+            // "keycloak" it does not run.
+            return null;
+        }
         try {
-            Optional<Subscription> subOpt = subscriptionRepository.findActiveByUserId(user.getId());
-            if (subOpt.isEmpty()) {
-                return;
+            Date authTime = SignedJWT.parse(jwt).getJWTClaimsSet().getDateClaim(AUTH_TIME_CLAIM);
+            if (authTime != null) {
+                Instant authenticatedAt = Instant.ofEpochMilli(authTime.getTime());
+                // A value from the future would be written once and then never beaten, so the
+                // account's logins would go uncounted until the wall clock caught up, with no
+                // way back short of editing the row. The very monotonicity that makes two
+                // live sessions safe is what makes a skewed value unrecoverable, so it is
+                // refused at the door rather than stored. An hour is far more than any real
+                // clock drift and far less than the skew a misconfigured provider produces.
+                if (authenticatedAt.isAfter(Instant.now().plus(MAX_AUTH_TIME_SKEW))) {
+                    log.warn("Ignoring auth_time {} for user {}: more than {} in the future",
+                            authenticatedAt, user != null ? user.getId() : null, MAX_AUTH_TIME_SKEW);
+                    // Its own reason, because the page has to send an operator to the clock
+                    // and not to the token configuration. Reporting a future-dated claim as
+                    // "carries no auth_time" would be a correct alert with a wrong diagnosis.
+                    reportUnusableAuthTime(jwt, AuthMetrics.AUTH_TIME_FUTURE);
+                    return null;
+                }
+                // UTC, not the JVM zone. The column is TIMESTAMPTZ and every value in it is
+                // compared only against other values from this same conversion, so the zone
+                // has to be FIXED rather than merely consistent: with a local zone, the hour
+                // that repeats at the end of DST maps two different instants to one
+                // LocalDateTime, and a genuinely newer authentication inside it would not
+                // compare greater and would be dropped in silence, once a year.
+                return LocalDateTime.ofInstant(authenticatedAt, ZoneOffset.UTC);
             }
-
-            Subscription subscription = subOpt.get();
-            Plan plan = subscription.getPlan();
-            if (plan == null) {
-                return;
-            }
-
-            // Only grant credits for FREE (internal) subscriptions.
-            // Paid plans get credits via Stripe webhooks - granting here would double-count.
-            if (!"internal".equalsIgnoreCase(subscription.getProvider())) {
-                return;
-            }
-            // ... and only while the plan is still FREE. An admin comp tier is also
-            // provider='internal', and its credits come from assignPlan; letting it reach
-            // attributeOnSubscription releases the unused pack_sub_N_init key for a duplicate
-            // 5K grant. See the javadoc for the four production accounts this hit.
-            if (!"FREE".equalsIgnoreCase(plan.getCode())) {
-                return;
-            }
-
-            creditAttributionService.attributeOnSubscription(user.getId(), subscription, 0);
-            log.debug("Credits attribution check done for userId={} (idempotent)", user.getId());
         } catch (Exception e) {
-            log.warn("Could not attribute credits for userId={}: {}", user.getId(), e.getMessage());
+            // An unparseable token is not our problem here: the gateway already validated
+            // the signature to get this far. Treat it like a token with no claim so the
+            // gap is still visible rather than swallowed.
+            log.debug("Could not read {} for user {}: {}", AUTH_TIME_CLAIM,
+                    user != null ? user.getId() : null, e.getMessage());
+        }
+        reportUnusableAuthTime(jwt, AuthMetrics.AUTH_TIME_ABSENT);
+        return null;
+    }
+
+    /**
+     * Counts, and warns once per provider per JVM, that a real token arrived without
+     * {@code auth_time}. Once per provider rather than once per request: the condition is
+     * a property of the identity provider's configuration, so repeating it on every
+     * request would bury it in its own volume. The counter carries the volume.
+     */
+    private void reportUnusableAuthTime(String jwt, String reason) {
+        String providerTag = providerTagFromJwt(jwt);
+        if (authEventRecorder != null) {
+            authEventRecorder.recordAuthTimeClaimMissing(providerTag, reason);
+        }
+        if (missingAuthTimeWarned.add(providerTag + ":" + reason)) {
+            log.warn("Tokens from provider '{}' cannot date their authentication ({}={}) - logins "
+                            + "from this provider can no longer be counted or audited.",
+                    providerTag, AUTH_TIME_CLAIM, reason);
         }
     }
 
     /**
-     * Atomic conditional update of {@code lastLoginAt}.
+     * Atomic conditional advance of {@code lastAuthenticatedAt}.
      *
-     * Returns {@code true} iff this call actually moved the timestamp - meaning
-     * either the user had never logged in OR their previous login was more than
-     * {@link #LOGIN_DEDUP_MINUTES} ago. The boolean is the canonical "real new
-     * login" flag and is safe under concurrent resolveUser() calls (the frontend
-     * fires ~10 parallel requests per page load - only one will see {@code true}).
+     * <p>Returns {@code true} exactly once per authentication event, for the same reason
+     * {@code updateLastLoginAtomic} is race-free: the comparison and the write are one SQL
+     * statement, so when several resolves for the same user race (two gateway replicas with
+     * cold caches, or a cache entry dropped mid-page-load) only one can observe the
+     * transition.
      *
-     * Race-free because the WHERE clause and UPDATE happen in a single SQL
-     * statement; without this, two concurrent reads would both see the old
-     * timestamp and both fire a login event.
+     * <p><b>Throws rather than swallowing, on purpose.</b> Catching here would not contain
+     * the failure: a DataAccessException from the {@code @Modifying} query marks the
+     * surrounding transaction rollback-only, and the PROXY then throws
+     * UnexpectedRollbackException at commit, which is after this method has returned. The
+     * only place that can absorb it is the call site, outside the boundary, which is where
+     * {@link #resolveUser} catches it. Swallowing it here would look safe and leave the
+     * caller taking the rollback exception anyway, which would fail the whole resolution
+     * and sign the person out because a counter could not be written.
+     */
+    @Transactional
+    public boolean recordAuthenticationAtomic(User user, LocalDateTime authenticatedAt) {
+        int rows = userRepository.recordAuthenticationIfNewer(user.getId(), authenticatedAt);
+        if (rows > 0) {
+            user.setLastAuthenticatedAt(authenticatedAt); // keep in-memory entity consistent
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * {@link #recordAuthenticationAtomic} with the transaction boundary crossed first, so a
+     * storage fault costs a login count and never a sign-in. Fails CLOSED: an account that
+     * could not be written is reported as "not a new login", because inventing sign-ins on
+     * the audit trail a security review reads is the worse of the two errors.
+     */
+    private boolean recordAuthenticationSafely(User user, LocalDateTime authenticatedAt) {
+        try {
+            return self.recordAuthenticationAtomic(user, authenticatedAt);
+        } catch (Exception e) {
+            log.warn("Failed to record authentication instant for user {}: {}",
+                    user.getId(), e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * {@link #updateLastLoginAtomic} with the same boundary crossed. "Last seen" is
+     * bookkeeping: it must never be the reason a resolution fails.
+     */
+    private void updateLastLoginSafely(User user) {
+        try {
+            self.updateLastLoginAtomic(user);
+        } catch (Exception e) {
+            log.warn("Failed to update lastLoginAt for user {}: {}", user.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * Atomic conditional update of {@code lastLoginAt}, the "last seen" marker.
+     *
+     * <p>Moves the timestamp iff it is null or older than {@link #LOGIN_DEDUP_MINUTES},
+     * which is a WRITE THROTTLE and nothing more. The returned boolean is deliberately
+     * ignored by {@code resolveUser}: it used to be read as the canonical "real new login"
+     * flag, and since the condition it answers is "has enough wall-clock passed", that
+     * published one login per active principal per ten minutes for anything that kept
+     * making requests. {@link #recordAuthenticationAtomic} is the login signal.
+     *
+     * <p>Single SQL statement, so concurrent resolves cannot both move it.
      */
     @Transactional
     public boolean updateLastLoginAtomic(User user) {

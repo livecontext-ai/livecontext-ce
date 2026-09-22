@@ -22,6 +22,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -563,6 +564,86 @@ class ApplicationCrudModuleTest {
             assertThat(apps).hasSize(1);
         }
 
+        /** A published-app map as the publisher listing returns it. */
+        private Map<String, Object> publishedApp(String title, List<String> nodeTypes) {
+            Map<String, Object> app = new HashMap<>();
+            app.put("id", UUID.randomUUID().toString());
+            app.put("title", title);
+            if (nodeTypes != null) app.put("nodeTypes", nodeTypes);
+            return app;
+        }
+
+        private ToolExecutionContext noOrgContext() {
+            return new ToolExecutionContext(TENANT_ID, Map.of(), Map.of(), Set.of(), null, null, null, null);
+        }
+
+        @SuppressWarnings("unchecked")
+        private List<Map<String, Object>> appsOf(ToolExecutionResult result) {
+            return (List<Map<String, Object>>) ((Map<String, Object>) result.data()).get("applications");
+        }
+
+        @Test
+        @DisplayName("node_types narrows the publisher listing to the apps that use that node")
+        void myNodeTypesFiltersPublisherList() {
+            // The no-org branch reads publication MAPS, not workflow rows: it can only
+            // filter if the publisher listing actually carries nodeTypes. It did not,
+            // and this filter silently answered "you have 0 applications".
+            when(publicationClient.getPublicationsByPublisher(TENANT_ID)).thenReturn(List.of(
+                    publishedApp("Gmail Tool", List.of("mcp:gmail", "core:loop")),
+                    publishedApp("Slack Tool", List.of("mcp:slack"))));
+            lenient().when(credentialClient.getConfiguredIntegrations(TENANT_ID)).thenReturn(Set.of());
+
+            ToolExecutionResult result = module.execute(
+                    "my", Map.of("node_types", List.of("mcp:gmail")), TENANT_ID, noOrgContext())
+                    .orElseThrow();
+
+            assertThat(result.success()).isTrue();
+            assertThat(appsOf(result)).extracting(a -> a.get("title")).containsExactly("Gmail Tool");
+        }
+
+        @Test
+        @DisplayName("every listed application reports its own node_types, so the agent need not guess a token")
+        void myItemsCarryTheirNodeTypes() {
+            when(publicationClient.getPublicationsByPublisher(TENANT_ID)).thenReturn(List.of(
+                    publishedApp("Gmail Tool", List.of("mcp:gmail", "core:loop"))));
+            lenient().when(credentialClient.getConfiguredIntegrations(TENANT_ID)).thenReturn(Set.of());
+
+            ToolExecutionResult result = module.execute("my", Map.of(), TENANT_ID, noOrgContext())
+                    .orElseThrow();
+
+            assertThat((List<String>) appsOf(result).get(0).get("node_types"))
+                    .containsExactly("mcp:gmail", "core:loop");
+        }
+
+        @Test
+        @DisplayName("an application published before node types existed is dropped by the filter, not by an error")
+        void myAppWithoutNodeTypesIsFilteredOut() {
+            when(publicationClient.getPublicationsByPublisher(TENANT_ID)).thenReturn(List.of(
+                    publishedApp("Legacy Tool", null)));
+            lenient().when(credentialClient.getConfiguredIntegrations(TENANT_ID)).thenReturn(Set.of());
+
+            ToolExecutionResult result = module.execute(
+                    "my", Map.of("node_types", List.of("mcp:gmail")), TENANT_ID, noOrgContext())
+                    .orElseThrow();
+
+            assertThat(result.success()).isTrue();
+            assertThat(appsOf(result)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("an empty node_types list leaves the listing alone")
+        void myEmptyNodeTypesIsNoFilter() {
+            when(publicationClient.getPublicationsByPublisher(TENANT_ID)).thenReturn(List.of(
+                    publishedApp("Gmail Tool", List.of("mcp:gmail")),
+                    publishedApp("Slack Tool", List.of("mcp:slack"))));
+            lenient().when(credentialClient.getConfiguredIntegrations(TENANT_ID)).thenReturn(Set.of());
+
+            ToolExecutionResult result = module.execute(
+                    "my", Map.of("node_types", List.of()), TENANT_ID, noOrgContext()).orElseThrow();
+
+            assertThat(appsOf(result)).hasSize(2);
+        }
+
         @Test
         @DisplayName("Lists the org's ACQUIRED apps - pre-fix a consumer who published nothing was told 'you have no applications'")
         void myListsAcquiredAppsNotJustPublished() {
@@ -597,6 +678,81 @@ class ApplicationCrudModuleTest {
             // Regression pin: the workspace path is used, never the publisher-only list.
             verify(workflowRepository).findAcquiredByOrganizationId(CALLER_ORG_ID, WorkflowEntity.WorkflowType.APPLICATION);
             verify(publicationClient, never()).getPublicationsByPublisher(any());
+        }
+
+        /** An acquired clone reporting the given node types, plus its publication. */
+        private UUID stubAcquired(String title, List<String> nodeTypes) {
+            UUID pubId = UUID.randomUUID();
+            WorkflowEntity clone = mock(WorkflowEntity.class);
+            lenient().when(clone.getSourcePublicationId()).thenReturn(pubId);
+            lenient().when(clone.getNodeTypes()).thenReturn(nodeTypes);
+            Map<String, Object> pub = new HashMap<>();
+            pub.put("id", pubId.toString());
+            pub.put("title", title);
+            // The publication carries a DIFFERENT token set on purpose: the source was
+            // re-published after this clone was acquired. Without a conflicting value
+            // here the override under test would pass by doing nothing.
+            pub.put("nodeTypes", List.of("mcp:republished_since"));
+            lenient().when(publicationClient.getPublicationById(pubId)).thenReturn(pub);
+            acquiredClones.add(clone);
+            return pubId;
+        }
+
+        private final List<WorkflowEntity> acquiredClones = new ArrayList<>();
+
+        private ToolExecutionResult listMyInOrg(Map<String, Object> params) {
+            when(workflowRepository.findAcquiredByOrganizationId(
+                    CALLER_ORG_ID, WorkflowEntity.WorkflowType.APPLICATION))
+                    .thenReturn(List.copyOf(acquiredClones));
+            lenient().when(credentialClient.getConfiguredIntegrations(TENANT_ID)).thenReturn(Set.of());
+            return module.execute("my", params, TENANT_ID, contextWithOrg()).orElseThrow();
+        }
+
+        @SuppressWarnings("unchecked")
+        private List<Map<String, Object>> orgApps(ToolExecutionResult result) {
+            return (List<Map<String, Object>>) ((Map<String, Object>) result.data()).get("applications");
+        }
+
+        @Test
+        @DisplayName("org scope: node_types keeps only the apps whose acquired plan uses that node")
+        void orgNodeTypesFiltersAcquiredApps() {
+            stubAcquired("Gmail App", List.of("mcp:gmail", "core:loop"));
+            stubAcquired("Slack App", List.of("mcp:slack"));
+
+            ToolExecutionResult result = listMyInOrg(Map.of("node_types", List.of("mcp:gmail")));
+
+            assertThat(orgApps(result)).extracting(a -> a.get("title")).containsExactly("Gmail App");
+        }
+
+        @Test
+        @DisplayName("org scope: the node_types an item reports are the ones the filter matched on")
+        void orgNodeTypesEchoMatchesTheFilterSource() {
+            // The filter reads the acquired CLONE's plan while the item itself is the
+            // publication, whose stored tokens can differ (a clone is frozen at acquire
+            // time, the publication can be re-published since). Reporting one while
+            // filtering on the other breaks the loop the help promises: the agent reads
+            // a token off an item and gets that very item filtered away.
+            stubAcquired("Gmail App", List.of("mcp:gmail"));
+
+            ToolExecutionResult result = listMyInOrg(Map.of());
+
+            assertThat((List<String>) orgApps(result).get(0).get("node_types"))
+                    .as("the CLONE's tokens, not the publication's - the publication says "
+                      + "mcp:republished_since here, and reporting that would hand the agent "
+                      + "a token this branch does not filter on")
+                    .containsExactly("mcp:gmail");
+        }
+
+        @Test
+        @DisplayName("org scope: total counts the filtered set, so paging is not computed on the unfiltered one")
+        void orgNodeTypesFiltersBeforePagination() {
+            stubAcquired("Gmail App", List.of("mcp:gmail"));
+            stubAcquired("Slack App", List.of("mcp:slack"));
+            stubAcquired("Notion App", List.of("mcp:notion"));
+
+            ToolExecutionResult result = listMyInOrg(Map.of("node_types", List.of("mcp:gmail")));
+
+            assertThat(((Map<String, Object>) result.data()).get("total")).isEqualTo(1L);
         }
 
         @Test

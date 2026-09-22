@@ -106,6 +106,7 @@ export function MarketplaceHeaderActions({ publicationId, compact = false }: Mar
 
       {isAcquireModalOpen && typeof document !== 'undefined' && createPortal(
         <AcquirePublicationModal
+          demoEligible
           isOpen={isAcquireModalOpen}
           onClose={() => setIsAcquireModalOpen(false)}
           publication={publication}

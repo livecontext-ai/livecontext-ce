@@ -33,6 +33,22 @@ public class SecurityConfig {
                                                .requestMatchers("/api/auth/health", "/public/**").permitAll()
                                                .requestMatchers("/api/auth/register", "/api/auth/login",
                                                        "/api/auth/refresh", "/api/auth/logout",
+                                                       // Reset must be public: someone who has forgotten
+                                                       // their password cannot present a token.
+                                                       //
+                                                       // Parity with the register/login entries beside it, and
+                                                       // inert like them: this config is not the door in either
+                                                       // edition. CE runs MonolithSecurityFilter (MonolithApplication
+                                                       // component-scan-EXCLUDES this class) and cloud runs
+                                                       // auth.mode=keycloak, where the controller does not exist.
+                                                       // The door that does decide is pinned by
+                                                       // MonolithSecurityFilterPasswordResetPathTest. Deleting
+                                                       // these two lines breaks neither SHIPPED edition, which is
+                                                       // why they carry no test of their own; it would break a
+                                                       // split stack running auth.mode=embedded, where this config
+                                                       // IS the door (and which has no gateway route for these
+                                                       // paths anyway, so it cannot reach them today).
+                                                       "/api/auth/forgot-password", "/api/auth/reset-password",
                                                        "/api/auth/openid-configuration").permitAll() // Embedded auth (CE)
                                                .requestMatchers("/api/users/health").permitAll() // Sante du service seulement
                                                .requestMatchers("/webhooks/**").permitAll() // <-- match le contrôleur corrige

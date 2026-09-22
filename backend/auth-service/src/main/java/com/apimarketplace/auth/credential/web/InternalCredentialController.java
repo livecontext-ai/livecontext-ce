@@ -253,18 +253,26 @@ public class InternalCredentialController {
     }
 
     /**
-     * Delete all user credentials for a given integration name (across all tenants).
-     * Used when an API's auth type changes during catalog reimport.
+     * Mark every usable credential of an integration as needing re-authentication, across tenants.
+     * Called when an API's auth type changes during a catalog re-import: the stored shape may no
+     * longer fit the new auth, so the credential must stop being USED.
+     *
+     * <p>There is deliberately NO delete-by-integration endpoint. The previous one ran
+     * {@code DELETE FROM auth.credentials WHERE integration = ?} for every tenant, with no backup
+     * and no confirmation, and a user lost a credential to it. A secret the platform destroys is
+     * usually not recoverable by its owner, so an automated caller may take a credential out of
+     * service but may never take it away.
      */
-    @DeleteMapping("/by-integration/{integrationName}")
-    public ResponseEntity<Map<String, Object>> deleteByIntegration(
+    @PostMapping("/by-integration/{integrationName}/needs-reauth")
+    public ResponseEntity<Map<String, Object>> markNeedsReauthByIntegration(
             @PathVariable String integrationName) {
         if (integrationName == null || integrationName.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "integrationName is required"));
         }
-        int deleted = userCredentialService.deleteByIntegration(integrationName);
-        log.info("Deleted {} credentials for integration '{}'", deleted, integrationName);
-        return ResponseEntity.ok(Map.of("deleted", deleted, "integration", integrationName));
+        int marked = userCredentialService.markNeedsReauthByIntegration(integrationName);
+        log.info("Marked {} credential(s) as needs_reauth for integration '{}' (none deleted)",
+                marked, integrationName);
+        return ResponseEntity.ok(Map.of("marked", marked, "integration", integrationName));
     }
 
     // ========== Platform Credentials ==========
@@ -454,7 +462,12 @@ public class InternalCredentialController {
             // optional, because every pre-existing caller is a flat per-call
             // debit and must keep behaving identically.
             @RequestParam(value = "modelId", required = false) String modelId,
-            @RequestParam(value = "quantity", required = false) java.math.BigDecimal quantity) {
+            @RequestParam(value = "quantity", required = false) java.math.BigDecimal quantity,
+            // What the call's own choices do to the published rate, measured by
+            // the cloud from the body it was sent. Optional: absent means the
+            // call sits at that rate, which is every pre-existing caller.
+            @RequestParam(value = "priceMultiplier", required = false)
+                    java.math.BigDecimal priceMultiplier) {
         UUID apiToolId;
         try {
             apiToolId = UUID.fromString(apiToolIdStr);
@@ -467,9 +480,13 @@ public class InternalCredentialController {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "quantity must not be negative"));
         }
+        String multiplierError = rejectAbsurdMultiplier(priceMultiplier);
+        if (multiplierError != null) {
+            return ResponseEntity.badRequest().body(Map.of("error", multiplierError));
+        }
 
-        Optional<FrozenMarkup> frozen =
-                pricingVersionService.resolveFrozenMarkup(pricingVersionId, apiToolId, modelId, quantity);
+        Optional<FrozenMarkup> frozen = pricingVersionService.resolveFrozenMarkup(
+                pricingVersionId, apiToolId, modelId, quantity, priceMultiplier);
         if (frozen.isEmpty()) {
             return ResponseEntity.ok(Map.of("found", false));
         }
@@ -491,6 +508,23 @@ public class InternalCredentialController {
         // credits, so without this it is indistinguishable from a flat price
         // chosen on purpose.
         response.put("pricedByPublishedRow", f.pricedByPublishedRow());
+        // The factor this amount was resolved WITH, echoed for the same reason the scope-rate
+        // answer echoes it: so the caller can explain the total rather than only state it.
+        //
+        // Given to the direct path and not to this one, which is the RELAY's leg. A relayed
+        // generation was therefore charged a surcharge whose reason appeared in no log line and no
+        // ledger row, and support answering "why 182 credits when the rate is 152 per second and
+        // the clip was one second" could only re-derive it from the body.
+        //
+        // It is the factor this resolution was ASKED with, not proof that it moved the amount:
+        // `MarkupPolicy` returns the credential-wide default untouched when no per-tool row
+        // matched, and clamps to minCredits/maxCredits AFTER multiplying. On a clamped row the
+        // amount is the ceiling and this number did not produce it. Reading it as "rate = total
+        // divided by factor" is therefore wrong in exactly those two cases, which is why it is
+        // named as the factor that was applied to the RESOLUTION rather than to the total.
+        if (priceMultiplier != null) {
+            response.put("priceMultiplier", priceMultiplier);
+        }
         return ResponseEntity.ok(response);
     }
 
@@ -571,7 +605,9 @@ public class InternalCredentialController {
             @RequestParam("platformCredentialId") Long platformCredentialId,
             @RequestParam("apiToolId") String apiToolIdStr,
             @RequestParam(value = "modelId", required = false) String modelId,
-            @RequestParam(value = "quantity", required = false) java.math.BigDecimal quantity) {
+            @RequestParam(value = "quantity", required = false) java.math.BigDecimal quantity,
+            @RequestParam(value = "priceMultiplier", required = false)
+                    java.math.BigDecimal priceMultiplier) {
         if (!"RUN".equals(scopeKind) && !"STREAM".equals(scopeKind)) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "scopeKind must be RUN or STREAM"));
@@ -587,10 +623,18 @@ public class InternalCredentialController {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "quantity must be >= 0"));
         }
+        // Refused rather than ignored. A factor outside the band cannot be derived
+        // from any descriptor this platform accepts, so one arriving here means
+        // something upstream is wrong; charging the unmodified amount anyway would
+        // hide that behind a price that looks ordinary.
+        String multiplierError = rejectAbsurdMultiplier(priceMultiplier);
+        if (multiplierError != null) {
+            return ResponseEntity.badRequest().body(Map.of("error", multiplierError));
+        }
 
         Optional<PlatformCredentialPricingService.ResolvedMarkup> resolved =
                 pricingService.resolveScopeMarkup(scopeKind, scopeId, userId,
-                        platformCredentialId, apiToolId, modelId, quantity);
+                        platformCredentialId, apiToolId, modelId, quantity, priceMultiplier);
         if (resolved.isEmpty()) {
             return ResponseEntity.ok(Map.of("found", false));
         }
@@ -616,6 +660,13 @@ public class InternalCredentialController {
         }
         if (r.quantity() != null) {
             response.put("quantity", r.quantity());
+        }
+        // Echoed so the caller can EXPLAIN the amount rather than only state it:
+        // without it, a total that is not rate x quantity has no visible reason,
+        // and the first assumption a reader makes about an unexplained total is
+        // that one of the two numbers beside it is wrong.
+        if (r.multiplier() != null) {
+            response.put("priceMultiplier", r.multiplier());
         }
         return ResponseEntity.ok(response);
     }
@@ -1051,6 +1102,39 @@ public class InternalCredentialController {
         }
         if (value instanceof String text && !text.isBlank()) {
             return Long.parseLong(text);
+        }
+        return null;
+    }
+
+    /**
+     * Why an absurd price factor is REFUSED here and dropped on the quote doors.
+     *
+     * <p>These two endpoints decide an amount. A factor they cannot explain means
+     * something upstream is wrong, and charging the unmodified price anyway would
+     * hide that behind a number that looks ordinary. The quote endpoints make the
+     * opposite trade on purpose: they only read, so a malformed factor there must
+     * leave the reader looking at the published rate rather than at an error.
+     *
+     * <p>The band is the descriptor parser's own, through the one shared constant:
+     * the parser refuses a model whose modifiers can reach more than that TOGETHER,
+     * so nothing inside it can produce a factor above it. Only {@code <= 0} was
+     * checked before, which let a caller that reached this port directly name a
+     * factor of a million on a row with no maxCredits.
+     *
+     * @return the error to answer with, or {@code null} when the factor is usable
+     */
+    private static String rejectAbsurdMultiplier(java.math.BigDecimal priceMultiplier) {
+        if (priceMultiplier == null) {
+            return null;
+        }
+        if (priceMultiplier.signum() <= 0) {
+            return "priceMultiplier must be > 0";
+        }
+        if (priceMultiplier.compareTo(
+                com.apimarketplace.common.web.BillingContextHeaders.MAX_GENERATION_MULTIPLIER) > 0) {
+            return "priceMultiplier must be <= "
+                    + com.apimarketplace.common.web.BillingContextHeaders.MAX_GENERATION_MULTIPLIER
+                            .toPlainString();
         }
         return null;
     }

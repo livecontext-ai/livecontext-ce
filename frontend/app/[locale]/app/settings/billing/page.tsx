@@ -9,6 +9,7 @@ import {
   FileText,
   RefreshCw,
   Calendar,
+  Coins,
   ArrowUpRight,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
@@ -17,6 +18,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import PageHeader from '@/components/settings/PageHeader';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { useSubscription } from '@/lib/hooks/smart-hooks-complete';
+import { useScheduledPlanChange } from '@/lib/hooks/useScheduledPlanChange';
 import { unifiedApiService } from '@/lib/api/unified-api-service';
 import { SettingsPageSkeleton } from '@/components/skeletons/SettingsSkeletons';
 import { CancellationModal } from '@/components/billing';
@@ -24,12 +26,12 @@ import { OwnerOnlyBillingAction } from '@/components/billing/OwnerOnlyBillingAct
 import { useIsCurrentOrgOwner } from '@/lib/stores/current-org-store';
 import { Button } from '@/components/ui/button';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { formatUtcDate } from '@/lib/utils/dateFormatters';
+import { formatUtcDate, formatUtcDateOrNull } from '@/lib/utils/dateFormatters';
 import { isCeMode } from '@/lib/format-cost';
+import { resolveMonthlyAllowance } from '@/lib/billing/credit-allowance';
 import type {
   BillingInvoice,
   InvoiceListResponse,
-  ScheduledChangeResponse,
 } from '@/lib/api/services/billing-api.service';
 
 /**
@@ -84,12 +86,12 @@ function BillingPageInner() {
     refetchOnWindowFocus: true,
   });
 
-  const scheduledQuery = useQuery<ScheduledChangeResponse>({
-    queryKey: ['billing', 'scheduledChange'],
-    queryFn: () => unifiedApiService.getScheduledChange(),
-    enabled: !!(isAuthenticated && !isAuthChecking),
-    staleTime: 60_000,
-  });
+  // Shared with the wallet card on Quota & Usage, which must suppress its credit-renewal
+  // amount under the same condition and for a harder reason: that amount is the CURRENT
+  // tier's, and a scheduled tier change means a different one lands on the date it names.
+  const { hasScheduledChange, scheduledChange: scheduled } = useScheduledPlanChange(
+    !!(isAuthenticated && !isAuthChecking),
+  );
 
   // useSubscription has refetchOnMount: false (smart-hooks-complete.ts).
   // Explicit kick here covers the post-Stripe-Portal return path: user
@@ -118,6 +120,8 @@ function BillingPageInner() {
       status?: string;
       cancelAtPeriodEnd?: boolean;
       currentPeriodEnd?: string;
+      nextCreditGrantAt?: string | null;
+      creditTierIndex?: number;
     } | null;
   } | null)?.subscription ?? null;
 
@@ -128,9 +132,30 @@ function BillingPageInner() {
   const cancelAtPeriodEnd = !!subscription?.cancelAtPeriodEnd;
   const currentPeriodEnd = subscription?.currentPeriodEnd ?? undefined;
   const isFree = planCode === 'FREE';
+  /**
+   * When the CREDITS come back, which on a yearly plan is NOT when the card is charged.
+   *
+   * <p>This page used to show one date, "next billing", and a yearly subscriber read it as
+   * the answer to "when do my credits come back" because it was the only date on the screen.
+   * It was eleven months wrong for most of the year: the invoice is annual, the credit pack
+   * is granted monthly. Both dates are now stated, each labelled for what it is.
+   *
+   * <p>Server-computed beside the code that performs the grant, and null whenever no further
+   * grant is owed (cancelled, past due), in which case nothing is drawn: the cancel banner
+   * above already says when access ends, and a renewal promised to somebody who cancelled
+   * would contradict it.
+   */
+  const nextCreditGrantAt =
+    typeof subscription?.nextCreditGrantAt === 'string' ? subscription.nextCreditGrantAt : null;
+  // The user's OWN plan grant. No payer guard needed here, unlike the wallet card: /billing/me
+  // answers for the signed-in user's subscription, never for a workspace owner's.
+  const cycleAllowance = resolveMonthlyAllowance(planCode, subscription?.creditTierIndex ?? 0);
+  // Parsed rather than passed through safeDate, which cannot render nothing: its fallback is
+  // read as `|| '-'`, so an unreadable value would put "Credits refresh: -" on the card. The
+  // other dates here predate that rule and keep safeDate's behaviour; this row is new, and a
+  // row whose whole content is one date has nothing left to say once the date is unreadable.
+  const creditGrantDate = formatUtcDateOrNull(nextCreditGrantAt, { locale: getClientLocale() });
 
-  const hasScheduledChange = scheduledQuery.data?.hasScheduledChange === true;
-  const scheduled = scheduledQuery.data?.scheduledChange;
   const invoices = invoicesQuery.data?.invoices ?? [];
 
   const safeDate = (s?: string | null) => {
@@ -290,6 +315,41 @@ function BillingPageInner() {
             <div className="flex items-center gap-2 text-sm text-theme-secondary mb-4">
               <Calendar className="h-3.5 w-3.5" />
               <span>{t('summary.nextBilling', { date: safeDate(currentPeriodEnd) })}</span>
+            </div>
+          )}
+
+          {/* Drawn on EVERY plan that is owed a grant, FREE included: a free account's
+              monthly reset is a real renewal and the row above never mentions it. Not
+              conditioned on the two dates differing either - a monthly subscriber reading
+              the same date twice learns that the two events coincide, where a row that
+              appears only for yearly customers would leave everybody else inferring.
+
+              Suppressed under a SCHEDULED CHANGE, following this card's stated precedence
+              (scheduled change > pending cancel > next billing) and for a harder reason of
+              its own: `cycleAllowance` is this subscription's CURRENT tier, and a scheduled
+              credit-tier change means the amount granted on that date is the target tier,
+              not this one. The banner above already names the change and its date, so the
+              alternative to staying quiet is printing a wrong number about money.
+
+              NOT suppressed by a pending cancellation, deliberately: a cancelling YEARLY
+              subscriber keeps receiving a monthly pack until the year they have paid for
+              runs out, and that is precisely what they are trying to find out. The backend
+              returns null for the cases that really are owed nothing, so the absence of a
+              date is the only gate needed here. */}
+          {!hasScheduledChange && creditGrantDate && (
+            <div
+              className="flex items-center gap-2 text-sm text-theme-secondary mb-4 flex-wrap"
+              data-testid="billing-credits-refresh"
+            >
+              <Coins className="h-3.5 w-3.5" />
+              <span>{t('summary.creditsRefresh', { date: creditGrantDate })}</span>
+              {cycleAllowance !== null && cycleAllowance > 0 && (
+                <span className="text-theme-muted">
+                  {t('summary.creditsRefreshAmount', {
+                    amount: cycleAllowance.toLocaleString(getClientLocale()),
+                  })}
+                </span>
+              )}
             </div>
           )}
 

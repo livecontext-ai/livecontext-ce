@@ -90,7 +90,12 @@ public class QuotaService implements QuotaOperations {
         // path. updateLimits below already evicts both; this brings updateUsage in line.
         logger.debug("Mise a jour usage pour tenant: {}", tenantId);
 
-        long totalUsage = breakdownService.getTotalUsage(tenantId);
+        // Clamped because this total feeds checkQuota, where a negative reads as room to spare
+        // rather than as an error. The tenant breakdown rows are clamped at their upsert AND by a
+        // V184 CHECK constraint, so this is belt and braces rather than a known hole. Unlike the
+        // org gauge above, the tenant gauge has always been the sum of the categories; that is
+        // pre-existing and not changed here.
+        long totalUsage = Math.max(0L, breakdownService.getTotalUsage(tenantId));
         TenantStorageQuota quota = getOrCreateQuota(tenantId);
 
         quota.setUsedBytes(totalUsage);
@@ -188,6 +193,23 @@ public class QuotaService implements QuotaOperations {
                 : checkQuota(tenantId, additionalBytes);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The allowance is the ACCOUNT's, not the workspace's. A plan that includes 100 GB grants
+     * 100 GB to the customer; before this, each workspace was measured against that figure on its
+     * own, so the same plan handed 100 GB to every workspace the customer created (a TEAM account
+     * could reach 1 TB, and the plans with no workspace cap were unbounded). Consumption is now
+     * summed across every workspace the account owns, which also means the account is blocked in
+     * ALL of its workspaces once the pool is full, not only in the one that filled it.
+     *
+     * <p><b>Falls back to the old per-workspace check when the row has no {@code accountId}.</b>
+     * That is deliberate and is what makes the change safe to roll out: an unattributed row (one
+     * created between the migration and auth-service learning to stamp it, or a workspace whose
+     * owner could not be resolved) keeps behaving exactly as it did rather than failing closed
+     * and refusing writes it should allow. The failure mode of a missing attribution is "too
+     * generous", never "wrongly blocked".
+     */
     @Override
     public QuotaStatus checkOrganizationQuota(String organizationId, long additionalBytes) {
         // See checkQuota: the decision depends on additionalBytes, so it must
@@ -196,9 +218,66 @@ public class QuotaService implements QuotaOperations {
             return QuotaStatus.OK;
         }
         OrganizationStorageQuota quota = getOrCreateOrganizationQuota(organizationId);
-        return quota.canStore(additionalBytes)
+        return accountCanStore(quota, additionalBytes)
                 ? QuotaStatus.OK
                 : QuotaStatus.HARD_LIMIT_REACHED;
+    }
+
+    /**
+     * The shared pool a workspace draws on, or null when it is not attributed to an account
+     * (enforcement is then per-workspace and there is no pool).
+     *
+     * <p><b>One resolution, used by everything.</b> The write gate and every surface that
+     * displays or judges the quota read the pool from here, so they cannot disagree. An earlier
+     * round of this change computed the ceiling one way in the gate and another way in the
+     * response, which produced a page showing a red "full" bar over uploads the server was
+     * happily accepting.
+     *
+     * <p>Reads without creating. The getOrCreate variant would attempt an INSERT inside this
+     * read-only transaction; a workspace with no row yet also has nothing stored and no
+     * attribution, so the honest answer is "no pool", not a freshly minted row.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public AccountPool getAccountPool(String organizationId) {
+        return orgQuotaRepository.findByOrganizationId(organizationId)
+                .map(row -> resolvePool(row))
+                .orElse(null);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Long getAccountUsedBytes(String organizationId) {
+        AccountPool pool = getAccountPool(organizationId);
+        return pool == null ? null : pool.usedBytes();
+    }
+
+    /** The pool for a row already in hand, or null when that row is unattributed. */
+    private AccountPool resolvePool(OrganizationStorageQuota row) {
+        String accountId = row.getAccountId();
+        if (accountId == null || accountId.isBlank()) {
+            return null;
+        }
+        long ownCeiling = row.getHardLimitBytes() != null ? row.getHardLimitBytes() : 0L;
+        // Freshest row wins, falling back to this one. See the repository javadoc: recency is
+        // what survives BOTH a row lagging low (a stale FREE default would refuse a paying
+        // account) and a row lagging high (a half-applied downgrade would stay non-binding).
+        long ceiling = orgQuotaRepository.currentCeilingForAccount(accountId).orElse(ownCeiling);
+        if (ceiling <= 0) {
+            ceiling = ownCeiling;
+        }
+        long used = Math.max(0L, orgQuotaRepository.sumUsedBytesForAccount(accountId));
+        return new AccountPool(accountId, used, ceiling);
+    }
+
+    /** Whether the account as a whole can take {@code additionalBytes} more. */
+    private boolean accountCanStore(OrganizationStorageQuota quota, long additionalBytes) {
+        AccountPool pool = resolvePool(quota);
+        if (pool == null) {
+            return quota.canStore(additionalBytes);
+        }
+        long additional = Math.max(0L, additionalBytes);
+        return pool.usedBytes() <= pool.maxBytes() && additional <= pool.maxBytes() - pool.usedBytes();
     }
 
     @Override
@@ -207,10 +286,31 @@ public class QuotaService implements QuotaOperations {
         return getOrCreateOrganizationQuota(organizationId);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Reads a fresh {@code SUM(size_bytes)} over {@code storage.storage}, NOT the sum of the
+     * breakdown categories. Making it the breakdown sum is tempting, because the storage page
+     * draws the gauge above a bar built from those categories and the two should add up. It was
+     * tried and reverted, for a reason worth keeping written down: this value is also the write
+     * gate ({@code checkOrganizationQuota} reads it with no refresh of any kind), and the
+     * breakdown is a LEDGER, which can be incomplete in ways a direct sum cannot. An organization
+     * that has never been reconciled has no rows for most of its categories, so the first save
+     * after that would write one file's size over a correct total and hand the workspace its
+     * whole cap. Measured on production 2026-09-18: 31 organizations held ACTIVE storage rows
+     * with no breakdown row at all. A gauge that protects revenue should not depend on a
+     * bookkeeping table being healthy.
+     *
+     * <p>What that costs, measured on the same day: the gauge leaves out the categories that do
+     * not live in {@code storage.storage} (execution data and workflow configuration), which on
+     * the largest production workspace is 16 MB against 21 GB, so the bar can total a hair more
+     * than the number above it. That is the honest residual. The 16 GB the categories used to
+     * omit was a different thing entirely, and it is fixed in the classification, not here.
+     */
     @Override
     @CacheEvict(value = {"orgQuotaStatus", "orgQuota"}, key = "#organizationId")
     public void updateOrganizationUsage(String organizationId) {
-        long totalUsage = storageRepository.calculateOrganizationUsage(organizationId);
+        long totalUsage = Math.max(0L, storageRepository.calculateOrganizationUsage(organizationId));
         OrganizationStorageQuota quota = getOrCreateOrganizationQuota(organizationId);
         quota.setUsedBytes(totalUsage);
         quota.setUpdatedAt(Instant.now());
@@ -219,15 +319,32 @@ public class QuotaService implements QuotaOperations {
     }
 
     @Override
-    @CacheEvict(value = {"orgQuotaStatus", "orgQuota"}, key = "#organizationId")
     public void updateOrganizationLimits(String organizationId, long maxBytes, double softLimitRatio) {
-        logger.info("Updating org storage limits: org={} -> {} bytes (soft: {}%)",
-                organizationId, maxBytes, softLimitRatio * 100);
+        updateOrganizationLimits(organizationId, maxBytes, softLimitRatio, null);
+    }
+
+    @Override
+    @CacheEvict(value = {"orgQuotaStatus", "orgQuota"}, key = "#organizationId")
+    public void updateOrganizationLimits(String organizationId, long maxBytes, double softLimitRatio,
+                                         String accountId) {
+        logger.info("Updating org storage limits: org={} -> {} bytes (soft: {}%), account={}",
+                organizationId, maxBytes, softLimitRatio * 100, accountId);
         OrganizationStorageQuota quota = getOrCreateOrganizationQuota(organizationId);
         quota.setMaxBytes(maxBytes);
         quota.setSoftLimitBytes((long) (maxBytes * softLimitRatio));
         quota.setHardLimitBytes(maxBytes);
-        quota.setUpdatedAt(Instant.now());
+        // Null leaves the existing attribution alone. Clearing it would silently drop the
+        // workspace out of its account's shared pool and back to its own private allowance,
+        // which is the exact over-granting this is meant to end.
+        if (accountId != null && !accountId.isBlank()) {
+            quota.setAccountId(accountId);
+        }
+        Instant now = Instant.now();
+        // Stamped ONLY here, where the allowance actually changes. The account's shared ceiling
+        // is read from whichever of its workspaces has the freshest allowance, and updatedAt
+        // cannot serve: every upload bumps it.
+        quota.setLimitsUpdatedAt(now);
+        quota.setUpdatedAt(now);
         orgQuotaRepository.save(quota);
     }
 

@@ -1,5 +1,10 @@
 package com.apimarketplace.conversation.service;
 
+
+import org.springframework.beans.factory.annotation.Autowired;
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.conversation.security.ConversationTokenAtRestBackfill;
+
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.scope.TolerantScope;
 import com.apimarketplace.conversation.dto.ConversationDto;
@@ -21,6 +26,14 @@ public class ConversationSharingService {
 
     private final ConversationRepository conversationRepository;
     private final ConversationMapper conversationMapper;
+
+    /**
+     * Read-only plaintext fallback for a conversation whose share token is still stored in clear (pre-2026-09-17).
+     * Optional so a unit test can build the service without a database; in a Spring context
+     * the component is always present (same package tree).
+     */
+    @Autowired(required = false)
+    private ConversationTokenAtRestBackfill tokenBackfill;
 
     public ConversationSharingService(ConversationRepository conversationRepository,
                                       ConversationMapper conversationMapper) {
@@ -126,7 +139,8 @@ public class ConversationSharingService {
     }
 
     public Optional<Conversation> findByShareToken(String shareToken) {
-        return conversationRepository.findByShareToken(shareToken);
+        return TokenAtRest.lookup(shareToken, conversationRepository::findByShareTokenHash,
+                t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(ConversationTokenAtRestBackfill.SHARE_TOKENS, t, conversationRepository::findLegacyPlaintext));
     }
 
     private static String generateShareToken() {

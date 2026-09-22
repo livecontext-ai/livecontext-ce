@@ -16,6 +16,7 @@ import com.apimarketplace.auth.repository.PlanRepository;
 import com.apimarketplace.auth.repository.PriceRepository;
 import com.apimarketplace.auth.repository.SubscriptionRepository;
 import com.apimarketplace.auth.repository.UserRepository;
+import com.apimarketplace.auth.service.CreditAttributionService;
 import com.apimarketplace.auth.service.StripeBillingService;
 import com.apimarketplace.auth.util.NonceUtil;
 import org.slf4j.Logger;
@@ -713,6 +714,12 @@ public class BillingController {
                     subMap.put("currentPeriodStart", subscription.getCurrentPeriodStart());
                     subMap.put("currentPeriodEnd", subscription.getCurrentPeriodEnd());
                     subMap.put("cancelAtPeriodEnd", subscription.getCancelAtPeriodEnd());
+                    // When the credits themselves come back, which is NOT currentPeriodEnd on a
+                    // yearly subscription: the invoice is annual, the credit pack is monthly.
+                    // Null means "no next grant can be named" (cancelled, or not in good
+                    // standing) and the client must render nothing rather than a date.
+                    subMap.put("nextCreditGrantAt",
+                               CreditAttributionService.nextCreditGrantAt(subscription, LocalDateTime.now()));
                     subMap.put("provider", subscription.getProvider());
                     subMap.put("providerSubscriptionId", subscription.getProviderSubscriptionId());
                     String planCode = plan != null ? plan.getCode() : "FREE";
@@ -986,6 +993,10 @@ public class BillingController {
                 planData.put("includedStorageBytes", plan.getIncludedStorageBytes());
                 planData.put("includedToolCredits", plan.getIncludedToolCredits());
                 planData.put("includedLlmTokens", plan.getIncludedLlmTokens());
+                // V494: the monthly AI allowance, so a pricing surface announces the
+                // value an admin actually configured instead of a number frozen into a
+                // translation string. null = this plan has no allowance.
+                planData.put("includedAiCredits", plan.getIncludedAiCredits());
                 planData.put("maxMembers", plan.getMaxMembers());
 
                 // Recuperer les prix pour ce plan depuis le cache
@@ -1021,7 +1032,18 @@ public class BillingController {
     }
 
     /**
-     * Cree un abonnement gratuit pour un utilisateur
+     * Cree un abonnement gratuit pour un utilisateur.
+     *
+     * <p><b>Currently unreachable: no production caller.</b> (One test reaches it reflectively.)
+     * Left in place rather than deleted, but do not wire it up as it stands: it inserts an ACTIVE
+     * subscription without retiring the user's existing active row, which V423's partial unique
+     * index rejects, and the caller would then get that rejection at the commit rather than from
+     * the catch below. {@code FreeSubscriptionProvisioner} is the path that does this correctly,
+     * under a per-user lock and with a re-check.
+     *
+     * <p>{@code StripeBillingService.createFreeSubscription} is the same method again, equally
+     * unreachable and with the same defect, except that its catch SWALLOWS instead of rethrowing,
+     * so there it would surface as silence.
      */
     private void createFreeSubscription(User user) {
         try {
@@ -1031,15 +1053,10 @@ public class BillingController {
                 throw new RuntimeException("Plan gratuit non trouve");
             }
 
-            var billingCustomerOpt = billingCustomerRepository.findByUserId(user.getId());
-            BillingCustomer billingCustomer;
-
-            if (billingCustomerOpt.isEmpty()) {
-                billingCustomer = new BillingCustomer(user, "internal");
-                billingCustomer = billingCustomerRepository.save(billingCustomer);
-            } else {
-                billingCustomer = billingCustomerOpt.get();
-            }
+            // findOrCreate: the find-then-save this replaced is a check-then-act on a uniquely
+            // constrained column, which does not lose a row under a race, it kills the caller's
+            // transaction. See the repository method.
+            BillingCustomer billingCustomer = billingCustomerRepository.findOrCreate(user.getId(), "internal");
 
             Subscription freeSubscription = new Subscription();
             freeSubscription.setBillingCustomer(billingCustomer);
@@ -1048,6 +1065,9 @@ public class BillingController {
             freeSubscription.setCurrentPeriodStart(LocalDateTime.now());
             freeSubscription.setCurrentPeriodEnd(LocalDateTime.now().plusMonths(1));
             freeSubscription.setCancelAtPeriodEnd(false);
+            // V494: no AI allowance seeded here, same as FreeSubscriptionProvisioner. The
+            // pot is granted with the monthly credits, behind the email-verification gate;
+            // a row created here gets it on the owner's next resolveUser.
             freeSubscription.setCreatedAt(LocalDateTime.now());
             freeSubscription.setUpdatedAt(LocalDateTime.now());
 

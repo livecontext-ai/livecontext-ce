@@ -330,6 +330,27 @@ class LoopNodeFailureTest {
                 .collect(Collectors.toCollection(TreeSet::new));
         }
 
+        /**
+         * What the node emits that is NOT part of its persisted output, deliberately.
+         *
+         * <p>{@code GenericOutputSchemaMapper} builds the persisted JSONB from the SPEC
+         * alone, so an undeclared key never reaches {@code {{core:loop.output....}}}.
+         * These six are read straight off the raw result by
+         * {@code StepDataPersistenceService.enrichLoopFields} and land in the step row's
+         * columns instead, exactly as a decision's {@code condition_expression} and
+         * {@code condition_result} always have. They are inspector fields, not an output
+         * contract, and declaring them would mean a migration, a frontend schema entry
+         * and a doc change for something no expression should address.
+         */
+        private static final Set<String> INSPECTOR_ONLY_KEYS = Set.of(
+            "loop_condition", "max_iterations",
+            "condition_expression", "condition_resolved", "condition_result",
+            "evaluations");
+
+        /** Engine envelope, stripped before persistence for every node. */
+        private static final Set<String> ENVELOPE_KEYS = Set.of(
+            "node_type", "resolved_params", "loop_node", "item_index", "itemIndex", "item_id");
+
         @Test
         @DisplayName("LoopNodeSpec declares exactly the runtime output keys, incl. the termination-only reason")
         void specDeclaresExactRuntimeKeys() {
@@ -338,6 +359,30 @@ class LoopNodeFailureTest {
                 specOutputKeys(),
                 "LoopNodeSpec must stay aligned with LoopNode.execute() + BackEdgeHandler output keys; "
                     + "if this changes, also update V358 node_type_documentation and docs/node-schemas/loop.md");
+        }
+
+        /**
+         * The half the assertion above cannot see.
+         *
+         * <p>It compares the spec against a hardcoded literal, so the spec and the
+         * literal can agree while {@code execute()} emits something neither mentions:
+         * six keys were added that way and this class stayed green, with its own failure
+         * message still telling the reader to keep three artefacts aligned. Reading the
+         * runtime is what makes the guard bite.
+         */
+        @Test
+        @DisplayName("execute() emits nothing the spec has not declared, beyond the inspector-only keys")
+        void executeEmitsNothingUndeclaredAndUnlisted() {
+            Set<String> emitted = new TreeSet<>(buildLoop(null, 5).execute(context).output().keySet());
+            emitted.removeAll(specOutputKeys());
+            emitted.removeAll(INSPECTOR_ONLY_KEYS);
+            emitted.removeAll(ENVELOPE_KEYS);
+
+            assertTrue(emitted.isEmpty(),
+                "execute() emits " + emitted + ", which is neither declared in LoopNodeSpec nor listed as "
+                    + "inspector-only. Declare it (and update node_type_documentation + "
+                    + "docs/node-schemas/loop.md + the frontend schema), or add it to INSPECTOR_ONLY_KEYS "
+                    + "with the reason it is not addressable as an output.");
         }
 
         @Test
@@ -377,7 +422,11 @@ class LoopNodeFailureTest {
                     .maxIterations(7)
                     .templateEngine(mockTemplateEngine)
                     .build();
-            loopNode.setTemplateAdapter(adapterResolvingTo("0 < 5"));
+            // No template adapter on purpose. The resolved condition now comes from the
+            // evaluation that decided whether to enter the body, so the adapter - a second
+            // resolver that renders an absent value as an empty string where the evaluator
+            // renders it as null - is not consulted. Stubbing it would be an unused stub,
+            // which is the cleanest possible proof that the second resolution is gone.
             when(mockTemplateEngine.evaluateConditionWithDetailsWithMap(eq("{{counter < 5}}"), anyMap()))
                     .thenReturn(new TemplateEngine.ConditionEvaluationResult("{{counter < 5}}", "0 < 5", true, null));
 
@@ -407,7 +456,10 @@ class LoopNodeFailureTest {
 
             // "repeat N times" is a real configuration, and an absent condition is
             // part of it: blanking the row would read as "this loop was not set up".
-            assertEquals("(none)", params.get("loopCondition"));
+            // One spelling across both panels: the evaluation entry says "(no condition)"
+            // and so does this. The BackEdgeHandler termination row keeps "(none)" for the
+            // CONFIGURED expression, which is a different value, not a second spelling.
+            assertEquals("(no condition)", params.get("loopCondition"));
             assertEquals(5, params.get("maxIterations"));
         }
     }

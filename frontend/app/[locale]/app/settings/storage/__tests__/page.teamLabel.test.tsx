@@ -25,6 +25,11 @@ const getOrganizations = vi.fn();
 
 vi.mock('@/lib/stores/current-org-store', () => ({
   useCurrentOrg: () => ({ currentOrgId }),
+  // The page asks whether the viewer owns the workspace, to decide if the account-wide storage
+  // pool may be shown (it is hidden from members: it would expose usage from workspaces they
+  // cannot see). This suite is about the plan/team LABEL, so the answer is irrelevant here and
+  // false keeps the pool line out of the way.
+  useIsCurrentOrgOwner: () => false,
 }));
 vi.mock('@/lib/providers/smart-providers', () => ({
   useAuth: () => ({ isLoading: false, isAuthenticated: true, loginWithRedirect: vi.fn() }),

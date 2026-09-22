@@ -152,17 +152,130 @@ public class CatalogHelpModule implements ToolModule {
                     "baseUrl", "string - base URL (https://...)",
                     "endpoints", "array - at least one endpoint"
                 ),
-                "optional", Map.of(
-                    "apiDescription", "string - shown in search results",
-                    "authType", "bearer | oauth2 | apikey | none (default: none)",
-                    "apiCategory", "string (default: 'Custom APIs')",
-                    "visibility", "private | public (default: private)",
-                    "iconSlug", "string - brand icon identifier",
-                    "apiVersion", "string - e.g. 'v2'",
-                    "documentation", "string - URL to external docs (max 1000 chars)",
-                    "rateLimits", "{ requestsPerSecond?: number, requestsPerDay?: number }",
-                    "apiFixtures", "array - example responses for schema inference (see fixtures section)"
+                "optional", Map.ofEntries(
+                    Map.entry("apiDescription", "string - shown in search results"),
+                    Map.entry("authType", "none | apikey | bearer | basic | oauth2 (default: none). Aliases "
+                        + "accepted: api_key, bearer_token, basic_auth. An unrecognised value is REJECTED with "
+                        + "the list of accepted ones, never silently treated as an API key. 'oauth2' REQUIRES "
+                        + "auth[0].oauth2Config and is refused without it - see auth_placement.oauth2 below. "
+                        + "'custom' (a credential made of several fields) is not available here. Where the "
+                        + "credential is SENT is auth_placement below."),
+                    Map.entry("auth", "array - [{type, apiKeyConfig, oauth2Config}], first entry used. Later "
+                        + "entries are ignored. 'type' takes the same values as authType. apiKeyConfig and "
+                        + "oauth2Config are described in auth_placement below."),
+                    Map.entry("apiCategory", "string (default: 'Custom APIs')"),
+                    Map.entry("visibility", "private | public (default: private)"),
+                    Map.entry("iconSlug", "string - brand icon identifier. It also NAMES the credential every "
+                        + "tool of this API requires. When omitted it is derived from apiName: accents "
+                        + "stripped, a trailing '-api' removed, then reduced to lowercase letters and digits "
+                        + "('Weather API' gives weatherapi, 'Weather-API' gives weather). Read it back from "
+                        + "credential_name in the register response rather than deriving it yourself. A key "
+                        + "already in use on this installation is refused, whether it belongs to a built-in "
+                        + "integration or to someone else's custom API, because one credential name is shared "
+                        + "by everyone here. Updating YOUR OWN api keeps its key, so update_api never trips "
+                        + "on this."),
+                    Map.entry("apiVersion", "string - e.g. 'v2'"),
+                    Map.entry("documentation", "string - URL to external docs (max 1000 chars)"),
+                    Map.entry("rateLimits", "{ requestsPerSecond?: number, requestsPerDay?: number }"),
+                    Map.entry("apiFixtures", "array - example responses for schema inference (see fixtures section)"),
+                    Map.entry("requiredHeaders", "{ name: value } - constant headers sent on EVERY endpoint (an API version pin). See static_headers below.")
                 )
+            )),
+
+            Map.entry("auth_placement", Map.ofEntries(
+                Map.entry("what", "Where the credential is placed on each request. Declare it as "
+                    + "auth[0].apiKeyConfig. Omit it and the default for your authType is used."),
+                Map.entry("defaults", Map.of(
+                    "bearer", "Authorization header, value prefixed 'Bearer '",
+                    "apikey", "X-API-Key header, value sent raw",
+                    "basic", "Authorization header, 'Basic ' + base64(username:password); the connection "
+                        + "asks for a username and a password instead of one key",
+                    "oauth2", "Authorization header with the access token the consent flow returns; "
+                        + "apiKeyConfig does not apply, see auth_placement.oauth2",
+                    "none", "no credential is sent and no connection is required"
+                )),
+                Map.entry("fields", Map.ofEntries(
+                    Map.entry("location", "header (default) | query"),
+                    Map.entry("headerName", "header carrying the credential when location=header, e.g. "
+                        + "'X-Api-Token'. Any name is accepted."),
+                    Map.entry("queryParamName", "query parameter carrying it when location=query, e.g. 'api_key'"),
+                    Map.entry("keyName", "name of the credential field the secret is read from at "
+                        + "execution (default: access_token for bearer, api_key otherwise). The connection "
+                        + "form asks for one key whatever this says, so set it only when the provider's own "
+                        + "field name matters."),
+                    Map.entry("prefix", "string put in front of the value, e.g. 'Token '. OMIT it to get the "
+                        + "default for your authType. Set it to \"\" to send the value raw, which some "
+                        + "providers require on the Authorization header.")
+                )),
+                Map.entry("example_custom_header", Map.of(
+                    "auth", List.of(Map.of("type", "apikey",
+                        "apiKeyConfig", Map.of("location", "header", "headerName", "X-Api-Token"))))),
+                Map.entry("example_query_key", Map.of(
+                    "auth", List.of(Map.of("type", "apikey",
+                        "apiKeyConfig", Map.of("location", "query", "queryParamName", "api_key"))))),
+                Map.entry("example_non_bearer_prefix", Map.of(
+                    "auth", List.of(Map.of("type", "bearer",
+                        "apiKeyConfig", Map.of("headerName", "Authorization", "prefix", "Token "))))),
+                Map.entry("oauth2", Map.ofEntries(
+                    Map.entry("what", "For authType 'oauth2', declare the provider's endpoints in "
+                        + "auth[0].oauth2Config. Without them the connection can never complete, so "
+                        + "registration REFUSES an oauth2 API that omits the block."),
+                    Map.entry("authorizationUrl", "REQUIRED - the provider's authorize endpoint (https)"),
+                    Map.entry("tokenUrl", "REQUIRED - the provider's token endpoint (https)"),
+                    Map.entry("refreshUrl", "optional - defaults to tokenUrl"),
+                    Map.entry("scopes", "optional - array of scope strings requested at consent"),
+                    Map.entry("example", Map.of("auth", List.of(Map.of("type", "oauth2",
+                        "oauth2Config", Map.of(
+                            "authorizationUrl", "https://provider.example.com/oauth/authorize",
+                            "tokenUrl", "https://provider.example.com/oauth/token",
+                            "scopes", List.of("read", "write")))))),
+                    Map.entry("what_the_user_does", "The user creates an application on the provider's side "
+                        + "and supplies its client id and secret when they connect. You cannot do that step "
+                        + "for them; request the connection with credential(action='require', "
+                        + "services=['<credential_name>']) and the user resolves it."),
+                    Map.entry("an_endpoint_that_is_refused", "Both URLs are checked for shape: https, a "
+                        + "hostname, and not a literal private or loopback address. The host is NOT resolved, so "
+                        + "a name pointing at a private address still passes here and fails later at the "
+                        + "provider. A refused URL comes back naming which field failed.")
+                )),
+
+                Map.entry("updating_keeps_nothing_you_omit", "update_api replaces the whole definition. An "
+                    + "update that omits auth[0].apiKeyConfig RESETS the placement to the default for its "
+                    + "auth type, and one that omits auth[0].oauth2Config on an oauth2 API is refused. Read "
+                    + "the current definition with get_custom_api_details and resubmit the auth block with "
+                    + "your changes."),
+
+                Map.entry("after_registering", "An API with an authType other than 'none' has NO usable tools "
+                    + "until a credential exists for this user. The register response returns credential_name; "
+                    + "ask the user for the key with credential(action='require', services=['<credential_name>'], "
+                    + "reason='...'), then call the tool to confirm. Executing before that returns "
+                    + "approval_needed, not a result."),
+                Map.entry("wrong_placement_symptom", "If the placement is wrong the provider answers 401 or 403 "
+                    + "and the error comes from the provider, not from this tool - nothing here can detect it. "
+                    + "Check the provider's documentation for the exact header or query parameter name and "
+                    + "prefix, then apply it with update_api.")
+            )),
+
+            Map.entry("static_headers", Map.of(
+                "what", "A header whose value never changes. Declare it as requiredHeaders {name: value} at the "
+                      + "api level when every endpoint needs it, or headers {name: value} on one endpoint. It is "
+                      + "sent automatically on every call, so nothing has to pass it: execute the tool without it. "
+                      + "A value that changes per call is a param with location query/path/body/header instead.",
+                "example", Map.of("requiredHeaders", Map.of("anthropic-version", "2023-06-01")),
+                "accepted_values", "Short literals only: non-empty, at most 64 characters, no whitespace at all, no { } "
+                      + "placeholder. Anything longer or templated is documentation or a runtime template and is refused.",
+                "never_sent", "Headers the transport owns (Content-Type, Content-Length, Host, Connection, "
+                      + "Transfer-Encoding, Accept-Encoding, plus the hop-by-hop ones: Expect, Upgrade, TE, "
+                      + "Trailer, Keep-Alive, Proxy-Authenticate, Proxy-Authorization); the header the "
+                      + "credential fills, which depends on this API's authType and auth[0].apiKeyConfig (see "
+                      + "auth_placement); and Accept, which the platform sets to application/json before a "
+                      + "declared header could apply.",
+                "a_refused_value_is_simply_absent", "A value the rules below refuse is not registered at all, "
+                      + "and nothing says so at registration: the upstream then answers 4xx without naming the "
+                      + "missing header. Check each value against accepted_values BEFORE registering. To confirm "
+                      + "afterwards, call response_schema for the tool: a header that was kept appears in its "
+                      + "input schema with location 'header', and the value that will be sent is its default.",
+                "endpoint_wins", "When both levels declare the same header name, the endpoint value is used."
             )),
 
             Map.entry("endpoint_fields", Map.of(
@@ -175,6 +288,7 @@ public class CatalogHelpModule implements ToolModule {
                 ),
                 "optional", Map.of(
                     "toolCategory", "string - grouping label (e.g. 'Data Access')",
+                    "headers", "{ name: value } - constant headers sent on THIS endpoint only. See static_headers below.",
                     "nextHint", "string - LLM hint: what to do after using this tool",
                     "execution", "object - see execution_modes below",
                     "synthesis", "object - search index metadata (resource, action, summary, keywords)",
@@ -185,7 +299,9 @@ public class CatalogHelpModule implements ToolModule {
             Map.entry("param_fields", Map.of(
                 "required", Map.of(
                     "name", "string - parameter name",
-                    "in", "query | path | body (alias: 'location')",
+                    "in", "query | path | body | header (alias: 'location'). in='header' declares a header "
+                        + "the CALLER fills per request; it is rejected if it collides with the header the "
+                        + "credential occupies, or with a header the transport owns.",
                     "type", "string | integer | boolean | number",
                     "required", "boolean",
                     "description", "string"
@@ -441,7 +557,17 @@ public class CatalogHelpModule implements ToolModule {
                     "[] in a path is the array-index wildcard.",
                 "metadata.nextAction",
                     "ONE concrete next call. Has shape {tool, hint, params:{tool_id, parameters}}. " +
-                    "Copy params verbatim. Ignore at your peril - it's how you recover from truncation/digest."
+                    "Copy params verbatim. Ignore at your peril - it's how you recover from truncation/digest.",
+                "metadata.credentialSource",
+                    "Which key answered: 'user' (a key the account configured itself) or 'platform'. " +
+                    "It is what HAPPENED, not what you asked for: leave credential_source unset and the " +
+                    "call tries the account's own key first and falls back to the platform's.",
+                "metadata.billedCredits",
+                    "Credits this call was charged, present ONLY when the platform key answered and the " +
+                    "charge went through whole. ABSENT MEANS NOT CHARGED HERE, never zero: the account's " +
+                    "own key pays its provider directly, and most endpoints carry no platform price at " +
+                    "all. Report it when the user asks what something cost; never add it up as though a " +
+                    "missing one were a nothing."
             )),
 
             Map.entry("when_to_use_expand", List.of(

@@ -96,7 +96,7 @@ class CloudLlmRelayControllerTest {
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(llmResponse);
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256)))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
         when(creditClient.consumeCredits(eq("42"), eq("CE_LLM_RELAY"), any(),
                 eq(PROVIDER), eq(MODEL), eq(11), eq(7), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
@@ -117,6 +117,10 @@ class CloudLlmRelayControllerTest {
         // Regression: the tenant rewrite used to DROP the CE-resolved reasoning
         // effort, silently resetting relayed requests to the API default (high).
         assertThat(cloudRequest.reasoningEffort()).isEqualTo("xhigh");
+        // The relay is platform-billed (CE_LLM_RELAY at token rate), so it must be pinned
+        // to the platform key: on the cloud user's own saved key they would pay twice.
+        assertThat(cloudRequest.keyRoute())
+                .isEqualTo(com.apimarketplace.agent.domain.KeyRoute.PLATFORM);
     }
 
     @Test
@@ -161,7 +165,7 @@ class CloudLlmRelayControllerTest {
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(llmResponse);
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256)))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
         when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any(),
                 any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
@@ -186,7 +190,7 @@ class CloudLlmRelayControllerTest {
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(llmResponse);
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256)))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
         when(creditClient.consumeCredits(any(), any(), any(), any(), any(), any(), any(),
                 any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
@@ -218,7 +222,7 @@ class CloudLlmRelayControllerTest {
         when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256)))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(false);
 
         ResponseEntity<?> response = controller.complete(
@@ -273,7 +277,7 @@ class CloudLlmRelayControllerTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).isEqualTo(Map.of("error", "MODEL_NOT_SUPPORTED"));
-        verify(creditClient, never()).checkChatBudget(any(), any(), any(), anyInt(), anyInt());
+        verify(creditClient, never()).checkChatBudget(any(), any(), any(), anyInt(), anyInt(), any());
         verify(provider, never()).complete(any());
     }
 
@@ -299,7 +303,7 @@ class CloudLlmRelayControllerTest {
         assertThat(events.get(0).type()).isEqualTo(CloudLlmStreamEvent.Type.ERROR);
         assertThat(events.get(0).error()).isEqualTo("MODEL_NOT_SUPPORTED");
         verify(provider, never()).completeStreaming(any(), any());
-        verify(creditClient, never()).checkChatBudget(any(), any(), any(), anyInt(), anyInt());
+        verify(creditClient, never()).checkChatBudget(any(), any(), any(), anyInt(), anyInt(), any());
     }
 
     @Test
@@ -311,7 +315,7 @@ class CloudLlmRelayControllerTest {
         when(provider.getDefaultModel()).thenReturn("provider-default");
         // Gate fails so we can assert execution REACHED it - i.e. the model guard did not reject the
         // blank-model request (it resolves to the trusted provider default, never validated).
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq("provider-default"), anyInt(), anyInt()))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq("provider-default"), anyInt(), anyInt(), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(false);
 
         ResponseEntity<?> response = controller.complete(
@@ -345,7 +349,7 @@ class CloudLlmRelayControllerTest {
         when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256)))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
         when(creditClient.consumeCredits(eq("42"), eq("CE_LLM_RELAY"), any(),
                 eq(PROVIDER), eq(MODEL), eq(13), eq(5), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
@@ -383,6 +387,9 @@ class CloudLlmRelayControllerTest {
         verify(provider).completeStreaming(requestCaptor.capture(), any());
         assertThat(requestCaptor.getValue().tenantId()).isEqualTo("42");
         assertThat(requestCaptor.getValue().stream()).isTrue();
+        // Streaming shares withCloudTenant with the sync path: pinned to the platform key too.
+        assertThat(requestCaptor.getValue().keyRoute())
+                .isEqualTo(com.apimarketplace.agent.domain.KeyRoute.PLATFORM);
         verify(creditClient).consumeCredits(eq("42"), eq("CE_LLM_RELAY"), any(),
                 eq(PROVIDER), eq(MODEL), eq(13), eq(5), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
     }
@@ -393,7 +400,7 @@ class CloudLlmRelayControllerTest {
         when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256)))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
         when(creditClient.consumeCredits(eq("42"), eq("CE_LLM_RELAY"), any(),
                 eq(PROVIDER), eq(MODEL), anyInt(), anyInt(), any(com.apimarketplace.common.credit.LlmCacheTokens.class)))
@@ -421,7 +428,7 @@ class CloudLlmRelayControllerTest {
         when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256)))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
         when(creditClient.consumeCredits(eq("42"), eq("CE_LLM_RELAY"), any(),
                 eq(PROVIDER), eq(MODEL), anyInt(), anyInt(),
@@ -460,7 +467,7 @@ class CloudLlmRelayControllerTest {
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(response("done", 11, 7));
         when(accrualStore.snapshot("exec-1")).thenReturn(Optional.empty());
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256)))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
 
         ResponseEntity<?> response = controller.complete(
@@ -484,13 +491,13 @@ class CloudLlmRelayControllerTest {
         when(accrualStore.snapshot("exec-1")).thenReturn(Optional.of(new CeRelayAccrualStore.AccruedSnapshot(
                 "42", PROVIDER, MODEL, new CeRelayAccrualStore.AccruedUsage(1000, 500, 0, 0, 0, 0), 123L)));
         // est completion = maxTokens (256); accrued completion 500 ⇒ cumulative 756.
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(756)))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(756), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
 
         controller.complete(CLOUD_USER_ID, INSTALL_ID,
                 new CloudLlmRelayRequest(PROVIDER, request(false), "exec-1"));
 
-        verify(creditClient).checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(756));
+        verify(creditClient).checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(756), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY));
     }
 
     @Test
@@ -504,7 +511,7 @@ class CloudLlmRelayControllerTest {
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(accrualStore.snapshot("exec-1")).thenReturn(java.util.Optional.empty());
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256)))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
         doAnswer(invocation -> {
             StreamingCallback callback = invocation.getArgument(1);
@@ -603,7 +610,7 @@ class CloudLlmRelayControllerTest {
         when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
         when(provider.getProviderName()).thenReturn(PROVIDER);
         when(provider.complete(any())).thenReturn(response("done", 11, 7));
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256)))
+        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), eq(256), eq(CreditConsumptionClient.SOURCE_TYPE_CE_LLM_RELAY)))
                 .thenReturn(true);
         when(creditClient.consumeCredits(eq("42"), eq("CE_LLM_RELAY"), any(),
                 eq(PROVIDER), eq(MODEL), eq(11), eq(7), any(LlmCacheTokens.class)))

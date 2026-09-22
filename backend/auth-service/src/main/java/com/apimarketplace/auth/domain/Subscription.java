@@ -63,6 +63,32 @@ public class Subscription {
     @Column(name = "credit_quantity")
     private Integer creditQuantity = 0;
 
+    /**
+     * Yearly Stripe subscriptions only: index of the last MONTHLY credit cycle granted (V498).
+     *
+     * <p>The credit pack is priced per unit per month, on every cadence, and sold as "credits
+     * per month", but a yearly subscription raises its {@code invoice.paid} once every twelve
+     * months, so it was re-granted once a year. Cycle {@code N} starts at
+     * {@code currentPeriodStart + N months} ({@code N} in 1..11) and is granted by
+     * {@code YearlyCreditCycleScheduler} through
+     * {@code CreditAttributionService.attributeMonthlyCreditCycle}; cycle 0 is the grant made at
+     * the start of the billing period (creation or {@code invoice.paid}).
+     *
+     * <p>Anchored on the BILLING period, so it is reset to 0 by {@link #setCurrentPeriodStart}
+     * whenever that period moves (Stripe renewal, plan swap, cycle change, admin grant). That
+     * single reset point is what keeps the index meaningful: a stale index after a renewal would
+     * silently make every drip of the new year "already granted". Always 0 on monthly and
+     * internal subscriptions.
+     *
+     * <p>Known, deferred: the webhook upsert saves the whole row without {@code @DynamicUpdate},
+     * so a {@code customer.subscription.updated} that overlaps the scheduler's commit can write
+     * this column back to its pre-grant value. Never a double grant (the ledger keys are the
+     * second guard, and the next pass reports {@code ABSORBED}), and the same race already
+     * exists for {@code remainingCredits}; fixing it is a change to the upsert, not to this feature.
+     */
+    @Column(name = "credit_cycle_index", nullable = false)
+    private Integer creditCycleIndex = 0;
+
     @Column(name = "remaining_credits", nullable = false, precision = 15, scale = 4)
     private BigDecimal remainingCredits = BigDecimal.ZERO;
 
@@ -77,6 +103,21 @@ public class Subscription {
      */
     @Column(name = "payg_remaining_credits", nullable = false, precision = 15, scale = 4)
     private BigDecimal paygRemainingCredits = BigDecimal.ZERO;
+
+    /**
+     * Third bucket (V494): the monthly AI allowance, drawn ONLY by agent/chat/LLM
+     * debits that run on a model opened to the free tier. Refilled to
+     * {@code plan.included_ai_credits} on renewal; a plan with no allowance leaves
+     * it at zero forever, which is why paid plans are unaffected.
+     *
+     * <p>Deliberately OUTSIDE {@link #getTotalBalance()}: that total feeds every
+     * existing gate and ledger arithmetic, and silently growing it would let this
+     * restricted pot pay for things it must never pay for (workflow nodes, web
+     * search, image generation, a model not on the free tier). It is surfaced
+     * separately in the balance breakdown instead.
+     */
+    @Column(name = "ai_remaining_credits", nullable = false, precision = 12, scale = 4)
+    private BigDecimal aiRemainingCredits = BigDecimal.ZERO;
 
     /**
      * Account-level delinquency flag. Set TRUE by partial-charge / floored-charge
@@ -196,7 +237,18 @@ public class Subscription {
         return currentPeriodStart;
     }
 
+    /**
+     * Moves the billing-period anchor. A NEW anchor also restarts the monthly credit cycle
+     * ({@link #creditCycleIndex} back to 0): the index counts months since this instant, so
+     * carrying it across a renewal would make the whole next year look already granted.
+     * Setting the same value again (Stripe re-sends the unchanged period on every
+     * {@code customer.subscription.updated}) leaves the index alone. Hibernate hydrates by
+     * field access, so loading a row never goes through here.
+     */
     public void setCurrentPeriodStart(LocalDateTime currentPeriodStart) {
+        if (!java.util.Objects.equals(this.currentPeriodStart, currentPeriodStart)) {
+            this.creditCycleIndex = 0;
+        }
         this.currentPeriodStart = currentPeriodStart;
     }
 
@@ -224,6 +276,16 @@ public class Subscription {
         this.creditQuantity = creditQuantity;
     }
 
+    /** See {@link #creditCycleIndex}. Never null once persisted; treated as 0 when unset. */
+    public Integer getCreditCycleIndex() {
+        return creditCycleIndex == null ? 0 : creditCycleIndex;
+    }
+
+    /** Null is normalised to 0 here, not only in the getter: the column is NOT NULL. */
+    public void setCreditCycleIndex(Integer creditCycleIndex) {
+        this.creditCycleIndex = creditCycleIndex == null ? 0 : creditCycleIndex;
+    }
+
     public BigDecimal getRemainingCredits() {
         return remainingCredits == null ? BigDecimal.ZERO : remainingCredits;
     }
@@ -234,6 +296,14 @@ public class Subscription {
 
     public BigDecimal getPaygRemainingCredits() {
         return paygRemainingCredits == null ? BigDecimal.ZERO : paygRemainingCredits;
+    }
+
+    public BigDecimal getAiRemainingCredits() {
+        return aiRemainingCredits == null ? BigDecimal.ZERO : aiRemainingCredits;
+    }
+
+    public void setAiRemainingCredits(BigDecimal aiRemainingCredits) {
+        this.aiRemainingCredits = aiRemainingCredits == null ? BigDecimal.ZERO : aiRemainingCredits;
     }
 
     public void setPaygRemainingCredits(BigDecimal paygRemainingCredits) {

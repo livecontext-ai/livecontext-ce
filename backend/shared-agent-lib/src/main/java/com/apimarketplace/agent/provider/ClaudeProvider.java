@@ -51,6 +51,9 @@ public class ClaudeProvider extends AbstractLLMProvider {
 
     private static final String ANTHROPIC_VERSION = "2023-06-01";
 
+    /** Anthropic caps the model listing page at 1000; the default is 20. */
+    private static final int MODELS_PAGE_LIMIT = 1000;
+
     // Stage 1b.2 - Anthropic native context-management thresholds.
     // Matches the shape in CONTEXT_OPTIMIZATION_PLAN.md Stage 1b.2 and
     // the Python SDK's BetaInputTokensTrigger / BetaInputTokensClearAtLeast.
@@ -113,12 +116,67 @@ public class ClaudeProvider extends AbstractLLMProvider {
     }
 
     @Override
-    protected HttpHeaders buildHeaders() {
+    protected HttpHeaders buildHeaders(CompletionRequest request) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.set("x-api-key", resolveApiKey());
+        headers.set("x-api-key", resolveApiKey(request));
         headers.set("anthropic-version", ANTHROPIC_VERSION);
         headers.set("anthropic-beta", "prompt-caching-2024-07-31");
+        return headers;
+    }
+
+    /**
+     * Anthropic's completions path is {@code /v1/messages}, not
+     * {@code /chat/completions}, so the inherited derivation finds nothing.
+     * The listing lives at {@code /v1/models} - a sibling of messages - and
+     * returns the same {@code {data:[{id}]}} envelope every OpenAI-shaped
+     * vendor uses, so only the URL needs overriding here.
+     */
+    @Override
+    protected String modelsEndpoint() {
+        String apiUrl = getApiUrl();
+        if (apiUrl == null || apiUrl.isBlank()) {
+            return null;
+        }
+        int idx = apiUrl.indexOf("/messages");
+        if (idx < 0) {
+            return null;
+        }
+        // The listing paginates at 20 by default and caps limit at 1000. Ask
+        // for the cap: Anthropic serves a couple of dozen models, so one page
+        // covers the catalogue many times over, while the default would
+        // silently truncate it - and a truncated listing looks exactly like a
+        // vendor that retired a model. Overflow past the cap is reported by
+        // extractModelIds rather than assumed away.
+        return apiUrl.substring(0, idx) + "/models?limit=" + MODELS_PAGE_LIMIT;
+    }
+
+    /**
+     * Same {@code {data:[{id}]}} envelope as every OpenAI-shaped vendor, plus
+     * a truncation check.
+     *
+     * <p>Asking for the maximum page makes overflow improbable, not
+     * impossible. If it ever happens, a silently short listing looks exactly
+     * like a vendor that retired a model, so say so rather than let the next
+     * reader trust a comment. Saying it is enough: the ids that did arrive are
+     * still correct, and discovery only ever adds.
+     */
+    @Override
+    protected List<String> extractModelIds(Map<String, Object> body) {
+        if (body != null && Boolean.TRUE.equals(body.get("has_more"))) {
+            log.warn("Anthropic model listing reports more pages past the {} requested; "
+                    + "the catalogue is larger than one page and discovery sees only the first",
+                    MODELS_PAGE_LIMIT);
+        }
+        return super.extractModelIds(body);
+    }
+
+    /** Anthropic authenticates with {@code x-api-key}, never a bearer token. */
+    @Override
+    protected HttpHeaders discoveryHeaders(String apiKey) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("x-api-key", apiKey);
+        headers.set("anthropic-version", ANTHROPIC_VERSION);
         return headers;
     }
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useOrgScopedQuery } from '@/lib/hooks/useOrgScopedQuery';
 import { useAuth } from '@/lib/providers/smart-providers';
 import { useChannel } from '@/lib/websocket/use-channel';
@@ -26,6 +26,31 @@ const QUERY_KEY = ['home-status'] as const;
  */
 function homeStatusKeyFor(orgKeySegment: string) {
   return ['org', orgKeySegment, ...QUERY_KEY] as const;
+}
+
+/**
+ * When each (client, workspace) pair was last ASKED for its rows.
+ *
+ * <p>Deliberately not a ref inside the hook. The two forms of this refresh are called from
+ * DIFFERENT components: a pin site asks, and the bell visit that follows is a second component
+ * entirely. A per-component ref cannot see the other's ask, so a visit landing inside the bound
+ * would cancel and re-issue the request the pin had just put on the wire - two requests for one
+ * action, and the second one starting from scratch.
+ *
+ * <p>Keyed on the QueryClient, so the scope is exactly one app instance: a client that goes away
+ * takes its stamps with it, and a test holding a fresh client starts from "never asked" without
+ * needing a reset hook.
+ */
+const lastAskedByClient = new WeakMap<QueryClient, Map<string, number>>();
+
+function lastAskedAtFor(client: QueryClient, orgKeySegment: string): number {
+  return lastAskedByClient.get(client)?.get(orgKeySegment) ?? 0;
+}
+
+function stampAsked(client: QueryClient, orgKeySegment: string, at: number): void {
+  const stamps = lastAskedByClient.get(client) ?? new Map<string, number>();
+  stamps.set(orgKeySegment, at);
+  lastAskedByClient.set(client, stamps);
 }
 /**
  * Query-key prefix for {@code useNotificationsPaged} - defined here too so the
@@ -193,6 +218,67 @@ export function useHomeStatus(): UseHomeStatusResult {
   };
 }
 
+/** Options for the refresh returned by {@link useRefreshHomeStatus}. */
+export interface RefreshHomeStatusOptions {
+  /**
+   * Stay silent when the rows were already asked for, or answered, within this many
+   * milliseconds. Omit to ask unconditionally.
+   */
+  freshForMs?: number;
+}
+
+/**
+ * Whether a bounded ask should actually go out. Pure, and exported, because it is the whole
+ * rule: branches that stop being visible from the outside the moment they are inlined in a hook.
+ *
+ * <p>"Fresh" counts an ASK as well as an ANSWER, and both halves are load-bearing:
+ * <ul>
+ *   <li><b>Answered</b> - a payload that recent cannot be missing an action the user has only
+ *       just performed, so asking again would buy nothing.</li>
+ *   <li><b>Asked</b> - invalidating cancels a fetch already on the wire and starts another, so
+ *       without this half a user flipping tabs quickly would restart the same request over and
+ *       over and never see a row land. It is also what makes it safe to ask WHILE a fetch is in
+ *       flight, and asking then is the point: a poll issued BEFORE the user's action is about
+ *       to answer with pre-action rows and clear the staleness for another full poll, which is
+ *       the reported symptom wearing a different hat. It counts only the asks made THROUGH this
+ *       hook: the 60s poll, a focus refetch and the WS invalidation start fetches it does not
+ *       see, so a visit can still restart one of those. Bounded and cheap - the restart costs
+ *       one request and answers with rows that include the user's action, which is the point.</li>
+ * </ul>
+ *
+ * <p>A failed load counts as an answer. {@code dataUpdatedAt} never moves on failure, so
+ * reading it alone would leave a query whose load failed unaskable for good, and a failed load
+ * is exactly when a visit most wants to retry.
+ *
+ * <p>"Answered" is the cache's last UPDATE, not strictly the last thing the server said: an
+ * optimistic local write bumps {@code dataUpdatedAt} too, and this cache takes exactly one
+ * ({@code markAllRead}). So marking the inbox read and stepping onto Triggers within the bound
+ * skips that visit's ask. Known and accepted: mark-all-read changes no automation row, the next
+ * visit past the bound asks, and the alternative is the hook keeping its own settle clock to
+ * win back two seconds on one path.
+ *
+ * <p>Never settled at all is the one case never worth asking: nothing older is on screen to be
+ * stale, so there is nothing to correct.
+ *
+ * <p>One residual, stated because it is the same shape as the bug and its window is small rather
+ * than zero. React Query only cancels and restarts a fetch when the query already HAS data, so
+ * an ask made while the FIRST load is on the wire cannot restart it: that load lands with
+ * pre-action rows, and being brand new they then read as fresh for the length of the bound. It
+ * takes acting inside the first home-status load of a session or of a workspace switch, and it
+ * costs one bound, after which the next visit asks.
+ */
+export function shouldAskForHomeStatus(
+  state: { dataUpdatedAt: number; errorUpdatedAt: number } | undefined,
+  lastAskedAt: number,
+  freshForMs: number,
+  now: number,
+): boolean {
+  if (!state) return false;
+  const settledAt = Math.max(state.dataUpdatedAt, state.errorUpdatedAt);
+  if (settledAt === 0) return false;
+  return now - Math.max(settledAt, lastAskedAt) >= freshForMs;
+}
+
 /**
  * Ask for the bell's automation rows again, now.
  *
@@ -204,11 +290,33 @@ export function useHomeStatus(): UseHomeStatusResult {
  * <p>Exported from here rather than rebuilt at the call site because the key is
  * org-scoped: {@code useOrgScopedQuery} prefixes it with the active workspace, and a
  * hand-written {@code ['home-status']} would invalidate nothing while looking correct.
+ *
+ * <p>Called with no options it always asks. That is what an ACTION wants: the caller just
+ * changed the data, so how old the cached copy is says nothing about whether it is still
+ * right. Called with {@code freshForMs} it asks only when the rows are not already that
+ * fresh, which is what a SURFACE wants: the bell's Triggers tab tops its rows up every time
+ * the user lands on it, without turning a tab click into a request.
  */
-export function useRefreshHomeStatus(): () => void {
+export function useRefreshHomeStatus(): (options?: RefreshHomeStatusOptions) => void {
   const queryClient = useQueryClient();
   const orgKeySegment = useCurrentOrgStore((s) => s.currentOrgId) ?? '__personal__';
-  return useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: homeStatusKeyFor(orgKeySegment) });
+  return useCallback((options?: RefreshHomeStatusOptions) => {
+    const key = homeStatusKeyFor(orgKeySegment);
+    const freshForMs = options?.freshForMs;
+    // Read once: the decision below and the stamp that follows it must be the same instant.
+    const now = Date.now();
+    // Exact, matching the complete key. `invalidateQueries` matches by prefix, and with a key
+    // this long the two select the same single query - but reading exactly is what guarantees
+    // the state consulted is that query's and not some future sibling's.
+    const state = queryClient.getQueryState(key);
+    if (freshForMs !== undefined
+      && !shouldAskForHomeStatus(state, lastAskedAtFor(queryClient, orgKeySegment), freshForMs, now)) {
+      return;
+    }
+    // Stamped per workspace: an ask against the workspace the user just left says nothing about
+    // the rows of the one now on screen, and silencing the first visit after a switch is exactly
+    // the staleness this exists to remove.
+    stampAsked(queryClient, orgKeySegment, now);
+    queryClient.invalidateQueries({ queryKey: key });
   }, [queryClient, orgKeySegment]);
 }

@@ -16,6 +16,13 @@
 
     <dependencies>
         <!-- Agent Common (domain types, tool framework, registry) -->
+        <!-- Shared scratch-Postgres gate for the SQL tests. Test scope only. -->
+        <dependency>
+            <groupId>com.apimarketplace</groupId>
+            <artifactId>test-support</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>com.apimarketplace</groupId>
             <artifactId>agent-common</artifactId>
@@ -176,6 +183,22 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
         </dependency>
+        <!--
+          MySQL driver, for DatabaseNode ONLY (an external database a workflow
+          queries), never for this service's own datasource, which is Postgres.
+          DatabaseNode.buildJdbcUrl has always emitted jdbc:mysql for db_type
+          "mysql" while no MySQL driver was on the classpath, so that branch
+          could only ever fail with "No suitable driver". The same is still true
+          of its "mssql" branch: adding mssql-jdbc is what would make that option
+          real, and until then the database credential template deliberately does
+          not offer SQL Server.
+        -->
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <version>9.3.0</version>
+            <scope>runtime</scope>
+        </dependency>
         <!-- H2 pour les tests uniquement -->
         <dependency>
             <groupId>com.h2database</groupId>
@@ -203,7 +226,7 @@
             <scope>test</scope>
         </dependency>
         <!-- Testcontainers Postgres for jsonb_set integration tests against real DB.
-             Used by JsonbPatchPostgresIT only (Phase 2 patch path validation).
+             Used by JsonbPatchPostgresTest only (Phase 2 patch path validation).
              Requires Docker available locally + in CI. -->
         <dependency>
             <groupId>org.testcontainers</groupId>
@@ -401,7 +424,7 @@
             Routine-CI profile: compiles the e2e package (like -P e2e) but RUNS only the curated
             node-COMBINATION subset (special × special: decision/switch/classify-ports, fork/merge,
             split/loop, aggregate, and their nestings). These boot on H2 + mocked service clients
-            (no live infra), so they are cheap enough to gate combination regressions in CI - which
+            (no live infra), so they are cheap enough to gate combination regressions in CI, which
             -P e2e (whole suite, off CI) is not. Run: mvn test -P e2e-combinations
             Add a new combination test's class here when you add one.
         -->
@@ -429,7 +452,7 @@
                                  is cached and SHARED across classes in one JVM (reuseForks=true), so a
                                  backed-up exec queue from one class leaks into the next and times the
                                  heavier agent-in-fork tests out at the 30s poll. A fresh fork per class
-                                 isolates them - slower, but reliable enough to gate CI. -->
+                                 isolates them: slower, but reliable enough to gate CI. -->
                             <reuseForks>false</reuseForks>
                             <forkCount>1</forkCount>
                             <includes>

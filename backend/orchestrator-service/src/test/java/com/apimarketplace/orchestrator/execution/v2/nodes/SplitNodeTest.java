@@ -170,6 +170,13 @@ class SplitNodeTest {
                 new ArrayList<>(),
                 mockTemplateEngine
             );
+            // WITH a template adapter, which is what makes this test able to fail. Without
+            // one, `resolveTemplateString` returns the template unchanged, so the pre-fix
+            // reporting produced the same string as the fixed one and the assertion below
+            // held on the code it is named for.
+            node.setTemplateAdapter(
+                new com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter(
+                    mockTemplateEngine));
 
             Map<String, Object> params =
                 (Map<String, Object>) node.execute(mockContext).output().get("resolved_params");
@@ -180,16 +187,82 @@ class SplitNodeTest {
             // `list_expression` was a third name for the same setting, on top of
             // the executor's `source_expression` and the form's `list`.
             assertFalse(params.containsKey("list_expression"));
-            assertTrue(params.containsKey("list"));
+
+            // `list` is the expression the author wrote, on this producer as on the
+            // executor. It used to be the RESOLVED value here and the expression there,
+            // so one key meant two things depending on which produced the row - and
+            // resolving it for display also coerced the list to a String. What it
+            // resolved to is reported beside it, under its own key.
+            assertEquals("{{items}}", params.get("list"));
+            assertEquals("List(size=3)", params.get("listResolved"));
 
             // The claim this test makes, asserted rather than described: the two
-            // producers of a split's parameters use the same key SET. Their values
-            // differ by design (this one reports the RESOLVED list, the executor the
-            // raw expression), which is why only the keys are compared.
+            // producers of a split's parameters use one vocabulary. Both the key set
+            // and the meaning of `list` are pinned here; the executor's own test pins
+            // the same two from its side.
             assertEquals(
-                java.util.Set.of("list", "maxItems", "splitStrategy", "itemCount"),
+                java.util.Set.of("list", "listResolved", "maxItems", "splitStrategy", "itemCount"),
                 params.keySet(),
                 "SplitNode and SplitNodeExecutor must describe one node with one vocabulary");
+        }
+
+        @Test
+        @DisplayName("The shared report's presence rules cannot hide a split's cap or strategy: this node defaults both")
+        @SuppressWarnings("unchecked")
+        void shouldKeepReportingTheCapAndStrategyItDefaults() {
+            // SplitParamsReport omits an unset cap and an absent strategy, and a workflow can
+            // address a reported key as {{core:<split>.input.<key>}}. Routing this node
+            // through those rules would be a silent key removal if it could ever pass 0 or
+            // null - it cannot: the constructor defaults them, and that is asserted here
+            // rather than read once in the constructor and assumed.
+            SplitNode node = new SplitNode(
+                "core:split", "{{items}}", 0, null, new ArrayList<>(), mockTemplateEngine);
+
+            Map<String, Object> params =
+                (Map<String, Object>) node.execute(context).output().get("resolved_params");
+
+            assertEquals(100, params.get("maxItems"));
+            assertEquals("continue-anyway", params.get("splitStrategy"));
+        }
+
+        @Test
+        @DisplayName("An empty list reports what the expression resolved to, which is the only thing that tells an empty array from a wrapper object")
+        @SuppressWarnings("unchecked")
+        void shouldReportWhatAnEmptyListResolvedTo() {
+            lenient().when(mockTemplateEngine.evaluateTemplate(anyString(), any(WorkflowExecutionContext.class)))
+                .thenReturn(List.of());
+
+            SplitNode node = new SplitNode(
+                "core:split", "{{items}}", 10, "stop-on-error", new ArrayList<>(), mockTemplateEngine);
+
+            Map<String, Object> params =
+                (Map<String, Object>) node.execute(context).output().get("resolved_params");
+
+            assertEquals("{{items}}", params.get("list"));
+            assertEquals("List(size=0)", params.get("listResolved"));
+        }
+
+        @Test
+        @DisplayName("A split that could not iterate reports the shape it got, beside the error")
+        @SuppressWarnings("unchecked")
+        void shouldReportTheShapeItCouldNotIterate() {
+            // A single object where an array was expected: the 2026-05-14 prod shape. The
+            // error message names the keys; the Params column now shows them too, so the
+            // panel the reader opens is not the one panel with nothing in it.
+            lenient().when(mockTemplateEngine.evaluateTemplate(anyString(), any(WorkflowExecutionContext.class)))
+                .thenReturn(Map.of("id", 1));
+
+            SplitNode node = new SplitNode(
+                "core:split", "{{items}}", 10, "stop-on-error", new ArrayList<>(), mockTemplateEngine);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isFailure());
+            Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
+            assertEquals("{{items}}", params.get("list"));
+            assertEquals("Map(keys=[id])", params.get("listResolved"));
+            assertEquals(10, params.get("maxItems"));
+            assertTrue(params.containsKey("error"), "a failed split must say why in the panel it is read from");
         }
 
         @Test

@@ -68,7 +68,7 @@ public class PublicationListQueryService {
             p.resource_id,
             p.public_slug, p.publisher_handle,
             p.ce_exclusive, CAST(p.ce_exclusive_features AS TEXT),
-            p.studio
+            p.studio, CAST(p.node_types AS TEXT)
             """;
 
     private static final String FROM_CLAUSE = """
@@ -800,7 +800,8 @@ public class PublicationListQueryService {
                 toStr(row[i++]),           // publisherHandle
                 toBool(row[i++]),          // ceExclusive
                 toStr(row[i++]),           // ceExclusiveFeatures (CAST to TEXT)
-                toBool(row[i++])           // studio
+                toBool(row[i++]),          // studio
+                toStr(row[i++])            // nodeTypes (CAST to TEXT)
         );
     }
 

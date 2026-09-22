@@ -387,6 +387,25 @@ class WaitNodeTest {
         }
 
         @Test
+        @DisplayName("records its `duration` on the signal, the only carrier a parked node has")
+        @SuppressWarnings("unchecked")
+        void recordsItsReportOnTheSignal() {
+            // Above the inline threshold a wait YIELDS, and a yield persists no step row.
+            // The row written when the timer resolves used to report `signal_config.durationMs`
+            // - the signal's spelling of the same setting, which the panel has no label for -
+            // while the plan, the form and the inspector all call it `duration`.
+            WaitNode node = new WaitNode("core:wait", 10000);
+            node.setSignalService(mockSignalService);
+
+            node.execute(context);
+
+            org.mockito.ArgumentCaptor<Map<String, Object>> recorded =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+            verify(mockSignalService).recordReportedParams(any(), recorded.capture());
+            assertEquals(10000L, recorded.getValue().get("duration"));
+        }
+
+        @Test
         @DisplayName("Should include expires_at and duration_ms in signal output")
         void shouldIncludeExpiresAtAndDurationInOutput() {
             WaitNode node = new WaitNode("core:wait", 10000);

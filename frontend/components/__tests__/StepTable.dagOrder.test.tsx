@@ -77,7 +77,7 @@ const SCRAMBLED = [row('save'), row('notify'), row('enrich'), row('start'), row(
 /** Alias-cell texts, in DOM row order. */
 function renderedLabels(container: HTMLElement, expected: string[]): string[] {
   const known = new Set(expected);
-  return [...container.querySelectorAll('tbody tr td:nth-child(4) span')]
+  return [...container.querySelectorAll('tbody tr td:nth-child(3) span')]
     .map((el) => el.textContent ?? '')
     .filter((text) => known.has(text));
 }
@@ -96,6 +96,13 @@ afterEach(() => {
 });
 
 describe('StepTable (Logs modal) - rows follow the DAG', () => {
+  it('does not expose selection or deletion on execution history', async () => {
+    getAggregatedSteps.mockResolvedValue(SCRAMBLED);
+    render(<StepTable workflowId="wf-1" runId="run-1" />);
+    await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(6));
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: /delete/i })).toBeNull();
+  });
   it('renders a scrambled aggregate trigger-first, terminal-node-last', async () => {
     getAggregatedSteps.mockResolvedValue(SCRAMBLED);
     publishCanvas();

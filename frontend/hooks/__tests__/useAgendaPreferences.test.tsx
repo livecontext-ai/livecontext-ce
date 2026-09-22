@@ -161,4 +161,75 @@ describe('useAgendaPreferences', () => {
     expect(result.current.preferences.density).toBe('comfortable');
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
+  /**
+   * The first view on a phone.
+   *
+   * Week is the right default on a laptop and the worst of the four on a phone: seven
+   * columns of a 390px screen are ~50px each, and a chip that narrow can only draw its
+   * time. The screen therefore gets a say, but only while nothing has been stored: a
+   * choice, once made, is the whole point of a preference.
+   *
+   * jsdom ships no `matchMedia` at all, which is why the hook guards for it and why every
+   * test above still gets `week`.
+   */
+  describe('the first view follows the screen', () => {
+    function pretendNarrow(narrow: boolean) {
+      vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+        matches: narrow && query.includes('900px'),
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })));
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('opens a narrow screen on the list rather than a seven column week', async () => {
+      pretendNarrow(true);
+      const { result } = renderHook(() => useAgendaPreferences());
+      await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+      expect(result.current.preferences.view).toBe('list');
+      // Only the view is screen-dependent; nothing else about the agenda changes.
+      expect(result.current.preferences.weekStartsOn).toBe(1);
+      expect(result.current.preferences.showWeekends).toBe(true);
+    });
+
+    it('keeps a wide screen on the week', async () => {
+      pretendNarrow(false);
+      const { result } = renderHook(() => useAgendaPreferences());
+      await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+      expect(result.current.preferences.view).toBe('week');
+    });
+
+    it('never overrules a stored choice, however narrow the screen is', async () => {
+      pretendNarrow(true);
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ view: 'month' }));
+
+      const { result } = renderHook(() => useAgendaPreferences());
+      await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+      expect(result.current.preferences.view).toBe('month');
+    });
+
+    it('resets to what this screen would have opened on', async () => {
+      pretendNarrow(true);
+      const { result } = renderHook(() => useAgendaPreferences());
+      await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+      act(() => result.current.update({ view: 'week' }));
+      expect(result.current.preferences.view).toBe('week');
+
+      act(() => result.current.reset());
+      expect(result.current.preferences.view).toBe('list');
+      expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+    });
+  });
 });

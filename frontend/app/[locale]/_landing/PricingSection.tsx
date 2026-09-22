@@ -6,7 +6,7 @@ import { Check } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { useAuth } from '@/lib/providers/smart-providers';
 import { setLandingIntent, track } from '@/lib/analytics/analytics';
-import { calcPrice, creditFactsFor, CREDIT_TIERS } from '@/lib/billing/pricing-constants';
+import { calcPrice, creditFactsFor, CREDIT_TIERS, FREE_AI_CREDITS } from '@/lib/billing/pricing-constants';
 import DeploymentBadge from '@/components/pricing/DeploymentBadge';
 import ReferencePrice from '@/components/pricing/ReferencePrice';
 import FoundingPriceNote from '@/components/pricing/FoundingPriceNote';
@@ -65,7 +65,14 @@ export default function PricingSection() {
   // examples list and re-formatting the same figures is work for one answer.
   const creditFacts = useMemo(() => creditFactsFor(locale), [locale]);
   const featuresFor = (id: string): string[] =>
-    planFeatureLabels(id, { tCards, tPricing, credits: landingCredits, creditFacts });
+    planFeatureLabels(id, { tCards, tPricing, credits: landingCredits, creditFacts,
+      // Public page, no authenticated plans fetch: the seeded default. The settings
+      // pricing page shows the live configured value.
+      // The seeded figure, not the live plan row: the plans endpoint is not in the
+      // gateway's public allow-list, so this surface cannot read it at all. If an admin
+      // changes the allowance, the landing keeps quoting the shipped default until the
+      // reader signs in - stale rather than wrong, and the only option available here.
+      aiCredits: FREE_AI_CREDITS.toLocaleString(locale) });
 
   const plans: PlanCard[] = [
     {
@@ -301,9 +308,12 @@ function PlanCardView({
         <ul className="space-y-2.5 text-sm inline-flex flex-col">
           <DeploymentBadge />
           {plan.features.map((f) => (
-            <li key={f} className="flex items-center gap-2">
-              <Check className="w-4 h-4 flex-shrink-0" style={{ color: '#10b981' }} />
-              <span style={{ color: 'var(--text-secondary)' }}>
+            <li key={f} className="flex items-start gap-2">
+              <Check className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#10b981' }} />
+              {/* `flex-1` so FeatureLabel owns the rest of the row and can pin
+                  its "i" to the right edge; `items-start` so a label that wraps
+                  keeps the check and the "i" on its first line. */}
+              <span className="flex flex-1 min-w-0" style={{ color: 'var(--text-secondary)' }}>
                 <FeatureLabel feature={f} />
               </span>
             </li>

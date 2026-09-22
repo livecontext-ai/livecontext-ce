@@ -4,6 +4,8 @@ import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.orchestrator.execution.v2.nodes.MediaNode;
 import com.apimarketplace.orchestrator.tools.workflow.builder.creators.DecisionNodeCreator;
 import com.apimarketplace.orchestrator.utils.EdgeRefParser;
+import com.apimarketplace.orchestrator.domain.workflow.NodePolicy;
+import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlanParser;
 import com.apimarketplace.orchestrator.utils.LabelNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -453,8 +455,82 @@ public class WorkflowBuilderPlanExporter {
         validateLabelsOnly(plan, "tables", allLabels);
         validateLabelsOnly(plan, "notes", allLabels);
         validateEdges(plan, errors, allLabels);
+        validateNodePolicies(plan, errors);
 
         return errors;
+    }
+
+    /**
+     * Refuses a {@code nodePolicy} the engine could not honour, on the same terms as
+     * {@code add_node} and {@code modify}.
+     *
+     * <p>Without this, {@code set_plan} was the door that let a policy in that the other two
+     * refused: the plan stored fine, {@code validate} passed, {@code describe} announced the block,
+     * and the engine ignored it. A caller has no way to see that, and the field it thought it set
+     * was the one that stops the platform multiplying its requests.
+     *
+     * <p>Refused here rather than at parse time on purpose: a plan already stored with such a block
+     * must stay OPENABLE, so {@code WorkflowPlanParser} drops the field with a warning instead of
+     * throwing. This is the door, not the wall.
+     */
+    @SuppressWarnings("unchecked")
+    private void validateNodePolicies(Map<String, Object> plan, List<String> errors) {
+        // Triggers and notes are not executed steps, so the engine collects NO policy for them at
+        // all: one written here is accepted and ignored, which reads to the caller exactly like one
+        // that works. add_node and modify refuse it; this is the third door.
+        for (String arrayName : List.of("triggers", "notes")) {
+            Object raw = plan.get(arrayName);
+            if (!(raw instanceof List<?> entries)) continue;
+            for (Object entryObj : entries) {
+                if (!(entryObj instanceof Map)) continue;
+                Map<String, Object> entry = (Map<String, Object>) entryObj;
+                if (entry.get(NodePolicy.JSON_KEY) == null) continue;
+                errors.add("nodePolicy on '" + entry.getOrDefault("label", entry.get("id"))
+                        + "': an execution policy is not available on trigger or note nodes. A policy "
+                        + "governs how an executed step behaves on failure, and a trigger starts the "
+                        + "run while a note annotates the canvas. Put it on the node that does the work.");
+            }
+        }
+        // `mcps` is in this loop even though it is the one array allowed to carry a provider-retry
+        // budget: the SHAPE still has to be checked there. Leaving it out let a malformed policy
+        // (a negative retryCount, a non-numeric timeout) reach the session on the one node type the
+        // feature exists for, and the parser THROWS on it - so the workflow stored fine and could
+        // then neither be opened nor run, with the error arriving on a later unrelated call.
+        for (String arrayName : List.of("mcps", "agents", "cores", "interfaces", "tables")) {
+            boolean carriesProviderCalls = "mcps".equals(arrayName);
+            Object raw = plan.get(arrayName);
+            if (!(raw instanceof List<?> entries)) continue;
+            for (Object entryObj : entries) {
+                if (!(entryObj instanceof Map)) continue;
+                Map<String, Object> entry = (Map<String, Object>) entryObj;
+                Object policyRaw = entry.get(NodePolicy.JSON_KEY);
+                if (policyRaw == null) continue;
+                String label = String.valueOf(entry.getOrDefault("label", entry.get("id")));
+                NodePolicy policy;
+                try {
+                    policy = NodePolicy.fromMap(policyRaw, label);
+                } catch (IllegalArgumentException e) {
+                    errors.add(e.getMessage());
+                    continue;
+                }
+                String rejection = WorkflowPlanParser.providerRetryRejection(
+                        label, policy, carriesProviderCalls);
+                if (rejection == null && "cores".equals(arrayName)) {
+                    // The two rules the PARSER throws on. Storing a plan that carries one leaves a
+                    // workflow that cannot be opened and cannot be run, with the error arriving on
+                    // some later unrelated call - strictly worse than the budget case this method
+                    // was written for, and the helpers are the ones this change extracted.
+                    String coreType = String.valueOf(entry.get("type"));
+                    rejection = WorkflowPlanParser.continueOnFailureRejection(coreType, policy, label);
+                    if (rejection == null) {
+                        rejection = WorkflowPlanParser.executeOnceRejection(coreType, policy, label);
+                    }
+                }
+                if (rejection != null) {
+                    errors.add(rejection);
+                }
+            }
+        }
     }
 
     /**

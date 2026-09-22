@@ -405,6 +405,84 @@ class BrowserAgentModuleTest {
         assertThat(resolvedLlm).containsEntry("provider", "openai");
         assertThat(resolvedLlm).containsEntry("model", "gpt-4o");
         verify(credentialResolver).resolveApiKey((String) null, "openai");
+        // The platform key served: the run is pinned PLATFORM for the billing row.
+        assertThat(jobParams).containsEntry(BrowserAgentModule.KEY_ROUTE_KEY, "PLATFORM");
+    }
+
+    @Test
+    @DisplayName("agent_browse: the user's OWN saved key is handed to the runner first, and the run is pinned OWN_KEY on the job and on the result (flat fee, not the token rate)")
+    @SuppressWarnings("unchecked")
+    void agentBrowseRunsOnTheUsersOwnKeyAndPinsTheRoute() throws Exception {
+        LlmCredentialResolver credentialResolver = org.mockito.Mockito.mock(LlmCredentialResolver.class);
+        when(credentialResolver.resolveUserApiKey("user-1", "openai"))
+            .thenReturn(Optional.of("sk-users-own-key"));
+
+        BrowserAgentModule moduleWithCreds = new BrowserAgentModule(
+            restTemplate, config, redisTemplate, objectMapper, null, null, credentialResolver);
+
+        when(config.getBrowserAgentBlpopTimeout()).thenReturn(150);
+        when(redisTemplate.opsForList()).thenReturn(listOps);
+        when(listOps.leftPop(anyString(), any(Duration.class)))
+            .thenReturn("{\"final_result\":\"ok\",\"stop_reason\":\"COMPLETED\"}");
+        ArgumentCaptor<Map> bodyCaptor = ArgumentCaptor.forClass(Map.class);
+        when(restTemplate.postForObject(eq(SERVICE_URL + "/jobs/submit"), bodyCaptor.capture(), eq(Map.class)))
+            .thenReturn(Map.of("job_id", "job-own-1"));
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("task", "x");
+        params.put("llm", Map.of("provider", "openai", "model", "gpt-4o"));
+        ToolExecutionContext ctx = new ToolExecutionContext(
+            "user-1", Map.of(), Map.of(), java.util.Set.of(), null, null, null, null);
+
+        ToolExecutionResult res = moduleWithCreds.execute("agent_browse", params, "user-1", ctx).orElseThrow();
+
+        Map<String, Object> jobParams = (Map<String, Object>) bodyCaptor.getValue().get("parameters");
+        Map<String, Object> resolvedLlm = (Map<String, Object>) jobParams.get("llm");
+        assertThat(resolvedLlm).containsEntry("api_key", "sk-users-own-key");
+        assertThat(jobParams).containsEntry(BrowserAgentModule.KEY_ROUTE_KEY, "OWN_KEY");
+        // Surfaced on the result: both observability writers (chat tool + workflow node) bill from it.
+        assertThat((Map<String, Object>) res.data()).containsEntry(BrowserAgentModule.KEY_ROUTE_KEY, "OWN_KEY");
+        verify(credentialResolver, never()).resolveApiKey(any(), any());
+    }
+
+    @Test
+    @DisplayName("agent_browse: a plan that does not allow the own key SKIPS it - the platform key serves, the run is PLATFORM, nothing fails")
+    @SuppressWarnings("unchecked")
+    void agentBrowseSkipsTheOwnKeyWhenThePlanDoesNotAllowIt() throws Exception {
+        LlmCredentialResolver credentialResolver = org.mockito.Mockito.mock(LlmCredentialResolver.class);
+        when(credentialResolver.resolveApiKey((String) null, "openai"))
+            .thenReturn(Optional.of("sk-platform-key"));
+        com.apimarketplace.auth.client.entitlement.OwnKeyFeatureGate gate =
+            org.mockito.Mockito.mock(com.apimarketplace.auth.client.entitlement.OwnKeyFeatureGate.class);
+        when(gate.isAllowed("user-1")).thenReturn(false);
+
+        BrowserAgentModule moduleWithCreds = new BrowserAgentModule(
+            restTemplate, config, redisTemplate, objectMapper, null, null, credentialResolver);
+        moduleWithCreds.setOwnKeyFeatureGate(gate);
+
+        when(config.getBrowserAgentBlpopTimeout()).thenReturn(150);
+        when(redisTemplate.opsForList()).thenReturn(listOps);
+        when(listOps.leftPop(anyString(), any(Duration.class)))
+            .thenReturn("{\"final_result\":\"ok\",\"stop_reason\":\"COMPLETED\"}");
+        ArgumentCaptor<Map> bodyCaptor = ArgumentCaptor.forClass(Map.class);
+        when(restTemplate.postForObject(eq(SERVICE_URL + "/jobs/submit"), bodyCaptor.capture(), eq(Map.class)))
+            .thenReturn(Map.of("job_id", "job-gated-1"));
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("task", "x");
+        params.put("llm", Map.of("provider", "openai", "model", "gpt-4o"));
+        ToolExecutionContext ctx = new ToolExecutionContext(
+            "user-1", Map.of(), Map.of(), java.util.Set.of(), null, null, null, null);
+
+        ToolExecutionResult res = moduleWithCreds.execute("agent_browse", params, "user-1", ctx).orElseThrow();
+
+        Map<String, Object> jobParams = (Map<String, Object>) bodyCaptor.getValue().get("parameters");
+        Map<String, Object> resolvedLlm = (Map<String, Object>) jobParams.get("llm");
+        assertThat(resolvedLlm).containsEntry("api_key", "sk-platform-key");
+        assertThat(jobParams).containsEntry(BrowserAgentModule.KEY_ROUTE_KEY, "PLATFORM");
+        assertThat((Map<String, Object>) res.data()).containsEntry(BrowserAgentModule.KEY_ROUTE_KEY, "PLATFORM");
+        // The saved key was never even looked up: not entitled means not consulted.
+        verify(credentialResolver, never()).resolveUserApiKey(any(), any());
     }
 
     @Test
@@ -1219,6 +1297,42 @@ class BrowserAgentModuleTest {
         assertThat(req.getCompletionTokens()).isEqualTo(250L);
         assertThat(req.getTotalTokens()).isEqualTo(5250L);
         assertThat(req.getSource()).isEqualTo("chat_tool");
+        // No credential resolver here: the platform key served, and the chat-tool row says so.
+        assertThat(req.getKeyRoute()).isEqualTo("PLATFORM");
+    }
+
+    @Test
+    @DisplayName("postProcess: the chat-tool observability row is billed under the route the run was handed (OWN_KEY when the user's own key served)")
+    @SuppressWarnings("unchecked")
+    void postProcessRecordsTheOwnKeyRouteOnTheChatToolRow() throws Exception {
+        AgentClient agentClient = org.mockito.Mockito.mock(AgentClient.class);
+        LlmCredentialResolver credentialResolver = org.mockito.Mockito.mock(LlmCredentialResolver.class);
+        when(credentialResolver.resolveUserApiKey("tenant-abc", "openai"))
+            .thenReturn(Optional.of("sk-users-own-key"));
+
+        BrowserAgentModule moduleWithObs = new BrowserAgentModule(
+            restTemplate, config, redisTemplate, objectMapper,
+            null, null, credentialResolver, null, null, agentClient);
+
+        when(config.getBrowserAgentBlpopTimeout()).thenReturn(150);
+        when(redisTemplate.opsForList()).thenReturn(listOps);
+        when(listOps.leftPop(anyString(), any(Duration.class)))
+            .thenReturn(resultWithCost("gpt-4o", 5000L, 250L));
+        when(restTemplate.postForObject(anyString(), any(), eq(Map.class)))
+            .thenReturn(Map.of("job_id", "job-obs-own"));
+
+        ToolExecutionContext ctx = new ToolExecutionContext(
+            "tenant-abc", Map.of(), Map.of(), java.util.Set.of(), null, null, null, null);
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("task", "x");
+        params.put("llm", Map.of("provider", "openai", "model", "gpt-4o", "max_steps", 5));
+
+        moduleWithObs.execute("agent_browse", params, "tenant-abc", ctx).orElseThrow();
+
+        ArgumentCaptor<AgentObservabilityRequest> reqCaptor =
+            ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient).recordObservability(reqCaptor.capture());
+        assertThat(reqCaptor.getValue().getKeyRoute()).isEqualTo("OWN_KEY");
     }
 
     @Test
@@ -1406,8 +1520,18 @@ class BrowserAgentModuleTest {
             ArgumentCaptor.forClass(AgentObservabilityRequest.class);
         verify(agentClient).recordObservability(reqCaptor.capture());
         AgentObservabilityRequest req = reqCaptor.getValue();
-        assertThat(req.getCacheReadTokens()).isEqualTo(12000L);
-        assertThat(req.getCacheCreationTokens()).isEqualTo(3000L);
+        // The llm block bills as openai, whose family reads cachedTokens and ignores
+        // cacheReadTokens - so the cached subset has to land under that name or the
+        // discount never applies. tokens_in already contains it, so the prompt is not
+        // reduced; and the 3,000 cache-CREATION tokens, which the runner reports disjoint
+        // from tokens_in, are folded into it because an OpenAI-billed model has no counter
+        // that prices a cache write. 50,000 + 3,000. Folding bills them at full input rate
+        // (Anthropic charges 1.25x for a write, so this slightly under-bills); dropping
+        // them would lose 3,000 real tokens outright.
+        assertThat(req.getPromptTokens()).isEqualTo(53000L);
+        assertThat(req.getCachedTokens()).isEqualTo(12000L);
+        assertThat(req.getCacheReadTokens()).isZero();
+        assertThat(req.getCacheCreationTokens()).isZero();
         assertThat(req.getDurationMs()).isEqualTo(12500L); // browser_seconds × 1000
         assertThat(req.getIterationCount()).isEqualTo(4);   // 4 steps
         assertThat(req.getTotalToolCalls()).isEqualTo(7);   // llm_calls

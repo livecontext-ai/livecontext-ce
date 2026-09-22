@@ -1,5 +1,6 @@
 package com.apimarketplace.trigger.repository;
 
+
 import com.apimarketplace.trigger.domain.StandaloneWebhookEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -19,7 +20,8 @@ import java.util.UUID;
 @Repository
 public interface StandaloneWebhookRepository extends JpaRepository<StandaloneWebhookEntity, UUID> {
 
-    Optional<StandaloneWebhookEntity> findByToken(String token);
+    /** Lookup by HMAC of the plaintext token (TokenAtRest.hash); the token column is encrypted, no findByToken on purpose. */
+    Optional<StandaloneWebhookEntity> findByTokenHash(String tokenHash);
 
     // ──────────────────────────────────────────────────────────────────────
     // Strict-isolation finders - post-V261 every row has a non-null
@@ -27,7 +29,7 @@ public interface StandaloneWebhookRepository extends JpaRepository<StandaloneWeb
     // workspace users get their personal org UUID). The legacy
     // *OrganizationIdIsNull* personal-scope variants were removed in the
     // V261 sweep; callers route 100% through *OrganizationIdStrict*. The
-    // anonymous fire path (findByToken) is intentionally NOT scope-routed -
+    // anonymous fire path (findByTokenHash) is intentionally NOT scope-routed -
     // the token IS the auth and the orchestrator stamps the returned
     // entity's organization_id onto the created workflow_run.
     // ──────────────────────────────────────────────────────────────────────
@@ -75,4 +77,13 @@ public interface StandaloneWebhookRepository extends JpaRepository<StandaloneWeb
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("DELETE FROM StandaloneWebhookEntity w WHERE w.workflowId IN :workflowIds")
     int deleteByWorkflowIdIn(@Param("workflowIds") Collection<UUID> workflowIds);
+
+    /**
+     * READ-ONLY plaintext match for a row written before 2026-09-17 (token in clear, no hash).
+     * Native on purpose: a JPQL comparison would convert the parameter through the encrypting
+     * converter. Rewrites nothing; the delayed startup backfill does. Gated by the service on
+     * {@code PlaintextTokenBackfill.mayHaveLegacyRows}.
+     */
+    @Query(value = "SELECT * FROM trigger.standalone_webhooks WHERE token = :plain AND token_hash IS NULL", nativeQuery = true)
+    Optional<StandaloneWebhookEntity> findLegacyPlaintext(@Param("plain") String plain);
 }

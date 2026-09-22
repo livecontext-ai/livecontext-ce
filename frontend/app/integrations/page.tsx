@@ -26,7 +26,7 @@ const MAX_JSON_LD_ITEMS = 100;
  * production there: the gateway is unreachable from the CI builder, so a
  * prerender bakes an EMPTY directory, and every frontend replica then serves
  * that copy until it individually revalidates. A crawler landing on the wrong
- * replica would see a site claiming 700+ integrations and listing none.
+ * replica would see a site claiming 1000+ integrations and listing none.
  *
  * <p>The upstream read keeps its own hourly cache window, so this costs one
  * gateway walk per hour per replica, not one per page view.

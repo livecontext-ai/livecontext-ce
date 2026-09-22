@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   detectPreviewKind,
+  mimeEssence,
   resolveMediaMimeType,
   isTextualKind,
   parseDelimited,
@@ -8,6 +9,24 @@ import {
   selectTextRenderMode,
   MAX_HIGHLIGHT_CHARS,
 } from '../filePreview';
+
+describe('mimeEssence', () => {
+  it('drops the parameters a served Content-Type legitimately carries', () => {
+    // Every decision made by comparing a type to a fixed string goes through this. Without it,
+    // an exact-match check answers "no" for the commonest spelling of what it means to catch -
+    // and for the checks that decide whether bytes may execute, that is the guard gone.
+    expect(mimeEssence('text/html;charset=utf-8')).toBe('text/html');
+    expect(mimeEssence('text/html; charset=UTF-8')).toBe('text/html');
+    expect(mimeEssence('application/octet-stream;charset=binary')).toBe('application/octet-stream');
+  });
+
+  it('normalises case and spacing, and answers empty for nothing', () => {
+    expect(mimeEssence('  TEXT/HTML  ')).toBe('text/html');
+    expect(mimeEssence('')).toBe('');
+    expect(mimeEssence(null)).toBe('');
+    expect(mimeEssence(undefined)).toBe('');
+  });
+});
 
 describe('resolveMediaMimeType', () => {
   it('keeps a specific stored mime type as-is', () => {
@@ -22,6 +41,12 @@ describe('resolveMediaMimeType', () => {
     expect(resolveMediaMimeType(null, 'movie.mov')).toBe('video/quicktime');
     expect(resolveMediaMimeType(undefined, 'song.mp3')).toBe('audio/mpeg');
     expect(resolveMediaMimeType('binary/octet-stream', 'pic.png')).toBe('image/png');
+  });
+
+  it('sees a generic type as generic even with its parameters attached', () => {
+    // Same value, the way a server actually spells it: still unable to drive a <video>, so the
+    // name must still be consulted.
+    expect(resolveMediaMimeType('application/octet-stream;charset=binary', 'clip.mp4')).toBe('video/mp4');
   });
 
   it('returns undefined when neither the mime nor the extension yields a media type', () => {
@@ -103,6 +128,31 @@ describe('detectPreviewKind', () => {
     expect(detectPreviewKind('application/zip', 'a.zip')).toBe('none');
     expect(detectPreviewKind('application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'a.docx')).toBe('none');
     expect(detectPreviewKind('application/octet-stream', 'a.bin')).toBe('none');
+  });
+});
+
+describe('detectPreviewKind - a served type carries parameters', () => {
+  // The call site the essence conversion actually changes, and the one nothing pinned: six
+  // production callers classify every preview surface through it. The four deltas below were
+  // measured against the old raw-string version; they are recorded here so a later change that
+  // moves them has to say so.
+  it('classifies a parameterised type the same as its bare form', () => {
+    expect(detectPreviewKind('application/xml;charset=utf-8', 'feed')).toBe('text');
+    expect(detectPreviewKind('application/atom+xml;charset=utf-8', 'feed')).toBe('text');
+    expect(detectPreviewKind('  TEXT/HTML  ', 'page')).toBe('text');
+    // Unchanged by the conversion, asserted so the essence cannot start eating them either.
+    expect(detectPreviewKind('application/pdf;version=1.7', 'doc')).toBe('pdf');
+    expect(detectPreviewKind('image/svg+xml;charset=utf-8', 'logo')).toBe('image');
+    expect(detectPreviewKind('text/csv;charset=utf-8', 'rows')).toBe('csv');
+  });
+
+  it('stops reading a file name smuggled into a mime parameter', () => {
+    // `application/octet-stream; name="invoice.pdf"` used to be read as a PDF, because the raw
+    // string contained "pdf". The parameter is the sender's claim about a name, not a type, and
+    // the real name is the argument next to it - which still decides.
+    expect(detectPreviewKind('application/octet-stream; name="invoice.pdf"', 'blob')).toBe('none');
+    expect(detectPreviewKind('application/octet-stream; name="report.json"', 'blob')).toBe('none');
+    expect(detectPreviewKind('application/octet-stream', 'invoice.pdf')).toBe('pdf');
   });
 });
 

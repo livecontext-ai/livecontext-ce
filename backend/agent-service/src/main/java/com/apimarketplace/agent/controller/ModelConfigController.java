@@ -49,6 +49,56 @@ public class ModelConfigController {
     }
 
     /**
+     * GET /api/model-config/providers-disabled - the providers switched off entirely.
+     *
+     * <p>Only the exceptions travel: anything absent is on. The panel already holds the full
+     * provider list from the catalogue it just rendered, so sending both would be two sources
+     * for one fact.
+     */
+    @GetMapping("/providers-disabled")
+    public ResponseEntity<?> listDisabledProviders(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles) {
+        var denied = AdminRoleGuard.denyIfNotAdmin(roles);
+        if (denied != null) return denied;
+        return ResponseEntity.ok(service.disabledProviderNames());
+    }
+
+    /**
+     * PUT /api/model-config/providers/{provider}/enabled - switch a whole provider on or off.
+     * Body: {@code {"enabled": false}}.
+     *
+     * <p>The one move that makes a feed-filled provider manageable: OpenRouter alone carries
+     * 438 models, and taking it out of the pickers used to mean 438 clicks. Each model's own
+     * flag is left untouched, so switching the provider back on restores the selection the
+     * admin had curated instead of turning everything on.
+     */
+    @PutMapping("/providers/{provider}/enabled")
+    public ResponseEntity<?> setProviderEnabled(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles,
+            @PathVariable String provider,
+            @RequestBody Map<String, Object> body) {
+        var denied = AdminRoleGuard.denyIfNotAdmin(roles);
+        if (denied != null) return denied;
+
+        Boolean enabled;
+        try {
+            enabled = optionalBoolean(body, "enabled");
+        } catch (IllegalArgumentException e) {
+            return badRequest(e.getMessage());
+        }
+        if (enabled == null) {
+            return badRequest("enabled field is required");
+        }
+        try {
+            service.setProviderEnabled(provider, enabled);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return badRequest(e.getMessage());
+        }
+        log.info("Set provider enabled: provider={}, enabled={}", provider, enabled);
+        return ResponseEntity.ok(Map.of("success", true, "provider", provider, "enabled", enabled));
+    }
+
+    /**
      * Create or update a model override.
      */
     @PutMapping("/overrides")
@@ -72,6 +122,14 @@ public class ModelConfigController {
                 entity.setBundleEnabledExplicitlySet(true);
                 entity.setBundleEnabled(optionalBoolean(body, "bundleEnabled"));
             }
+            if (body.containsKey("freeTierEnabled")) {
+                // V493: opens the model to FREE-plan grants. Admin-gated like every
+                // field here. Absent key leaves the stored value alone; a null value
+                // reads as false (the column is NOT NULL, and "not on the free tier"
+                // is the safe meaning of an unset flag).
+                entity.setFreeTierEnabledExplicitlySet(true);
+                entity.setFreeTierEnabled(Boolean.TRUE.equals(optionalBoolean(body, "freeTierEnabled")));
+            }
             if (body.containsKey("displayName")) entity.setDisplayName(optionalString(body, "displayName"));
             if (body.containsKey("tier")) entity.setTier(optionalString(body, "tier"));
             if (body.containsKey("ranking")) entity.setRanking(optionalInteger(body, "ranking", 0, 100_000));
@@ -80,6 +138,13 @@ public class ModelConfigController {
                 entity.setPriceInput(optionalBigDecimal(body, "priceInput"));
             if (body.containsKey("priceOutput") && body.get("priceOutput") != null)
                 entity.setPriceOutput(optionalBigDecimal(body, "priceOutput"));
+            // Cache prices decide what a cached token costs since V491, so they are
+            // editable like the other two rather than feed-only. Accepted on the same
+            // terms: present-and-non-null overwrites, absent leaves the feed's value.
+            if (body.containsKey("priceCacheRead") && body.get("priceCacheRead") != null)
+                entity.setPriceCacheRead(optionalBigDecimal(body, "priceCacheRead"));
+            if (body.containsKey("priceCacheWrite") && body.get("priceCacheWrite") != null)
+                entity.setPriceCacheWrite(optionalBigDecimal(body, "priceCacheWrite"));
             if (body.containsKey("isCustom")) entity.setCustom(Boolean.TRUE.equals(optionalBoolean(body, "isCustom")));
             if (body.containsKey("defaultReasoningEffort")) {
                 // Tolerate any JSON scalar: a non-string value stringifies and then fails
@@ -107,7 +172,15 @@ public class ModelConfigController {
             return badRequest(e.getMessage());
         }
 
-        ModelConfigOverrideEntity saved = service.saveOverride(entity);
+        ModelConfigOverrideEntity saved;
+        try {
+            saved = service.saveOverride(entity);
+        } catch (IllegalArgumentException e) {
+            // The price guard refuses to enable an unpriced model, and says why. Thrown from
+            // the service, so it used to land outside the try above and reach the browser as a
+            // bodyless 500 - which the panel could only render as "Failed to save changes".
+            return badRequest(e.getMessage());
+        }
         log.info("Saved model config override: provider={}, modelId={}, ranking={}",
                 saved.getProvider(), saved.getModelId(), saved.getRanking());
 

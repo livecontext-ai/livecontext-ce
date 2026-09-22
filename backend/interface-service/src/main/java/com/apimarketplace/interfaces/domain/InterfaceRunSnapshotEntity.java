@@ -35,16 +35,16 @@ public class InterfaceRunSnapshotEntity {
     @Column(name = "description")
     private String description;
 
-    @Lob
-    @Column(name = "html_template", nullable = false)
+    // Plain text columns (NOT @Lob) - see the same note on InterfaceEntity. V7 declares these
+    // TEXT; @Lob made them PG large objects readable only inside a transaction, which is a
+    // 500 waiting for the first non-transactional reader of this entity.
+    @Column(name = "html_template", nullable = false, columnDefinition = "TEXT")
     private String htmlTemplate;
 
-    @Lob
-    @Column(name = "css_template")
+    @Column(name = "css_template", columnDefinition = "TEXT")
     private String cssTemplate;
 
-    @Lob
-    @Column(name = "js_template")
+    @Column(name = "js_template", columnDefinition = "TEXT")
     private String jsTemplate;
 
     /**

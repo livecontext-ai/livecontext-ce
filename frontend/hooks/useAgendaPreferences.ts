@@ -92,6 +92,22 @@ function clampHour(value: unknown, fallback: number): number {
   return Math.min(24, Math.max(0, Math.round(value)));
 }
 
+/**
+ * The view a FIRST visit opens on, which is not the same answer on every screen.
+ *
+ * Week is right on a laptop for the reason `defaults()` gives. On a phone it is the worst
+ * of the four: seven columns of a 390px screen are ~50px each, and a chip that narrow can
+ * only show its time, so the view meant to show the most shows a wall of digits. The list
+ * gives every run a full row at any width, which is what a phone calendar opens on.
+ *
+ * Consulted ONCE, when nothing has been stored yet. The moment somebody picks a view it is
+ * written to storage and this is never asked again, on any screen.
+ */
+function firstView(): AgendaViewMode {
+  if (typeof window === 'undefined' || !window.matchMedia) return defaults().view;
+  return window.matchMedia('(max-width: 900px)').matches ? 'list' : defaults().view;
+}
+
 /** A zone the platform can actually format in; a stale or invented id must not throw. */
 function isUsableTimezone(timeZone: string): boolean {
   try {
@@ -116,7 +132,9 @@ export function useAgendaPreferences() {
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
+      // Nothing stored is the one moment the screen gets a say in the view: see firstView.
       if (raw) setPreferences(hydrate(JSON.parse(raw)));
+      else setPreferences((current) => ({ ...current, view: firstView() }));
     } catch {
       // Private mode, blocked site data, corrupt JSON: the defaults are a fine agenda.
     }
@@ -136,7 +154,9 @@ export function useAgendaPreferences() {
   }, []);
 
   const reset = useCallback(() => {
-    const next = defaults();
+    // Reset puts the agenda back to how it would arrive on THIS screen, not to how it would
+    // arrive on a laptop: landing a phone back on a seven-column week is not a clean slate.
+    const next = { ...defaults(), view: firstView() };
     try {
       window.localStorage.removeItem(STORAGE_KEY);
     } catch {

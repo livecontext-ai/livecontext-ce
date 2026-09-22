@@ -10,11 +10,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 import java.util.zip.GZIPOutputStream;
 
 /**
@@ -64,6 +66,7 @@ public class ApiCatalogBundleService {
     private final ApiCatalogSnapshotReader snapshotReader;
     private final ApiCatalogGenerationPriceReader priceReader;
     private final ApiCatalogBundleSigner signer;
+    private final ApiCatalogBundleChunkReader chunkReader;
 
     /**
      * Snapshot the current catalog, sign it, and insert a new
@@ -220,43 +223,54 @@ public class ApiCatalogBundleService {
      */
     @Transactional(readOnly = true)
     public Optional<RawBundle> getActiveRawBundle() {
-        return bundleRepository.findFirstByActiveTrue().flatMap(this::toRawBundle);
+        return bundleRepository.findActiveServingView().stream().findFirst().flatMap(this::toRawBundle);
     }
 
     /** As {@link #getActiveRawBundle()} for one specific version. */
     @Transactional(readOnly = true)
     public Optional<RawBundle> getRawBundleByVersion(long version) {
-        return bundleRepository.findByVersion(version).flatMap(this::toRawBundle);
+        return bundleRepository.findServingViewByVersion(version).stream().findFirst().flatMap(this::toRawBundle);
     }
 
-    private Optional<RawBundle> toRawBundle(ApiCatalogBundleEntity entity) {
-        byte[] gz = entity.getPayloadGz();
-        if (gz == null || gz.length == 0) {
-            // CE-side rows record applied bundles without the payload and
-            // are not servable. The length check is defence in depth: buildBundle
-            // refuses to persist an empty payload, so this and the projection's
-            // "payload_gz IS NULL" describe the same set of rows.
-            log.warn("API catalog bundle version {} has no stored payload - not servable", entity.getVersion());
+    private Optional<RawBundle> toRawBundle(ApiCatalogBundleRepository.ServingView view) {
+        // Read off the projection here, while the read-only transaction is still
+        // open. The payload supplier below runs later, on the response-writing
+        // thread, and must not reach back into `view` for anything.
+        long version = view.getVersion();
+        long length = chunkReader.payloadLength(version);
+        if (length <= 0) {
+            // CE-side rows record applied bundles without the payload and are
+            // not servable; a zero-length one cannot happen (buildBundle refuses
+            // to persist it) but is treated the same way.
+            log.warn("API catalog bundle version {} has no stored payload - not servable", version);
             return Optional.empty();
         }
         return Optional.of(new RawBundle(
-                entity.getVersion(),
-                entity.getSchemaVersion(),
-                entity.getChecksum(),
-                entity.getSignature(),
-                entity.getSigningKeyId(),
-                entity.getIssuer(),
-                entity.getApiCount() == null ? 0 : entity.getApiCount(),
-                entity.getToolCount() == null ? 0 : entity.getToolCount(),
-                entity.getRawBytesSize() == null ? 0 : entity.getRawBytesSize(),
-                gz
+                version,
+                // No default: schema_version is NOT NULL, and inventing one would
+                // ship a fabricated field inside a SIGNED envelope. Failing is
+                // the honest outcome if that column ever becomes nullable.
+                view.getSchemaVersion(),
+                view.getChecksum(),
+                view.getSignature(),
+                view.getSigningKeyId(),
+                view.getIssuer(),
+                view.getApiCount() == null ? 0 : view.getApiCount(),
+                view.getToolCount() == null ? 0 : view.getToolCount(),
+                view.getRawBytesSize() == null ? 0 : view.getRawBytesSize(),
+                length,
+                () -> new ChunkedPayloadInputStream(
+                        chunkReader, version, length, ApiCatalogBundleChunkReader.CHUNK_BYTES)
         ));
     }
 
     /**
-     * The same envelope as {@link ApiCatalogSignedBundle} but carrying the GZIP
-     * bytes rather than their base64 text, so the encoder can write straight
-     * into the response stream.
+     * The served envelope, with the payload as a stream to open rather than
+     * bytes already in hand.
+     *
+     * <p>Holding the bytes here is what put a ~24 MB humongous allocation in old
+     * gen on every download. {@code payload} opens a slice-fed stream instead,
+     * so peak memory is one slice regardless of how large the catalog grows.
      */
     public record RawBundle(
             long version,
@@ -268,7 +282,8 @@ public class ApiCatalogBundleService {
             int apiCount,
             int toolCount,
             long rawBytesSize,
-            byte[] payloadGz
+            long payloadLength,
+            Supplier<InputStream> payload
     ) {}
 
     /**

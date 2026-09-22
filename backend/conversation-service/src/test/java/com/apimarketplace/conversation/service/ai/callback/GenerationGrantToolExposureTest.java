@@ -75,6 +75,13 @@ class GenerationGrantToolExposureTest {
     private static final String GENERATION_KEY = "generation";
 
     /**
+     * The other opt-in, added later and for a different reason: not cost, reach. Covered in
+     * this file rather than its own because the failure mode it guards against is the one
+     * this file exists for, a grant that is persisted and never arrives.
+     */
+    private static final String MAILBOX = "mailbox";
+
+    /**
      * The RETIRED legacy tool name and its grant key. Nothing serves the tool and
      * nothing honours the grant; both are kept here only so the tests below can prove
      * a row still carrying the grant gets neither.
@@ -85,7 +92,7 @@ class GenerationGrantToolExposureTest {
     /** Every core tool name the platform can serve, so nothing is missing by accident. */
     private static final List<String> ALL_CORE_TOOL_NAMES = List.of(
             "catalog", "workflow", "table", "interface", "agent", "skill", "application",
-            "web_search", GENERATION, "files", "wait");
+            "web_search", GENERATION, "files", "wait", MAILBOX);
 
     @Mock
     private RestTemplate agentServiceRestTemplate;
@@ -369,6 +376,57 @@ class GenerationGrantToolExposureTest {
             AgentLoopContext context = buildForGeneralChat();
 
             assertThat(toolNames(context)).contains(GENERATION);
+        }
+
+        /**
+         * The general chat had no way to reach a mailbox at all: its {@code ToolsConfig} was
+         * built through a constructor that predated the field, so the grant was dropped on the
+         * floor whatever the settings panel wrote. The switch would have rendered, saved, and
+         * done nothing, which is the exact failure this whole file was written for.
+         */
+        @Test
+        @DisplayName("mailbox granted in chat_config → the runtime tool list CONTAINS mailbox")
+        void chatConfigMailboxGrantOnExposesMailbox() {
+            givenGeneralChatConfig(Map.of(MAILBOX, Map.of("enabled", true)));
+
+            AgentLoopContext context = buildForGeneralChat();
+
+            assertThat(toolNames(context)).contains(MAILBOX);
+            assertThat(context.enabledModules()).contains(MAILBOX);
+        }
+
+        @Test
+        @DisplayName("nothing configured → the general chat does NOT get a mailbox")
+        void chatConfigWithoutMailboxGetsNone() {
+            givenGeneralChatConfig(Map.of());
+
+            assertThat(toolNames(buildForGeneralChat())).doesNotContain(MAILBOX);
+        }
+
+        @Test
+        @DisplayName("mailbox turned back OFF → the tool is withdrawn")
+        void chatConfigMailboxGrantOffHidesIt() {
+            givenGeneralChatConfig(Map.of(MAILBOX, Map.of("enabled", false)));
+
+            assertThat(toolNames(buildForGeneralChat())).doesNotContain(MAILBOX);
+        }
+
+        /**
+         * The half that decides whether the chat can SEND. An absent mode reads as full access
+         * everywhere on this platform, so the axis has to survive the same trip as the grant,
+         * or granting a mailbox in the settings panel always grants sending with it.
+         */
+        @Test
+        @DisplayName("the read-only mode travels with the grant, all the way to the credentials")
+        void chatConfigMailboxAccessModeReachesTheCredentials() {
+            givenGeneralChatConfig(Map.of(MAILBOX, Map.of("enabled", true), "mailboxAccessMode", "read"));
+
+            AgentLoopContext context = buildForGeneralChat();
+
+            assertThat(toolNames(context)).contains(MAILBOX);
+            assertThat(context.credentials())
+                    .as("dropped here, the tool sees no stated permission and reads that as ALLOWED")
+                    .containsEntry("__mailboxAccessMode__", "read");
         }
 
         @Test

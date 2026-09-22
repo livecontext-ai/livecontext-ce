@@ -100,6 +100,11 @@ public class ApplicationToolsProvider implements ToolsProvider {
             stringParam("workflow_id", "Workflow ID - UUID (for: create). Auto-detected from context if viewing a workflow.", false),
             stringParam("application_id", "Application ID - UUID (for: get, acquire, execute, runs, visualize)", false),
             stringParam("query", "Filter by title/name or description (for: search, my). Case-insensitive substring; for 'my' it is applied before pagination.", false),
+            arrayParam("node_types", "Keep only applications that CONTAIN one of these node types (for: my). "
+                + "Applied before pagination. Several values mean ANY of them, not all, and at most 50 are read (extra values are ignored). "
+                + "Tokens: 'mcp:<integration>' (mcp:gmail), 'core:<type>' (core:loop, core:code), 'agent:<type>' (agent:agent), "
+                + "'trigger:<type>' (trigger:webhook), 'table:<type>' (table:find), and 'interface'. "
+                + "Run 'my' once without it to read the node_types each application reports, rather than guessing a token.", false),
             stringParam("category", "Category slug to filter (for: search)", false),
             boolParam("studio", "(for: create) Put the app on the Studio shelf - the surface for apps whose point is to produce an image, a video or a sound and show it. This is a SECOND axis, not a category: the app keeps whatever category it has. Set it true only when the app's own output is the media; an app that merely embeds a player is not one. Omit to leave it alone: on a re-publish that keeps the existing shelf placement, and a new app defaults to off. Returned as 'studio' by get/search/my when the app is on the shelf, absent when it is not.", false, null),
             stringParam("title", "Title override (for: create, visualize)", false),

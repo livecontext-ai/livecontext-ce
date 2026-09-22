@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.repository;
 
+
 import com.apimarketplace.agent.domain.AgentWebhookTokenEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -18,9 +19,11 @@ import java.util.UUID;
 public interface AgentWebhookTokenRepository extends JpaRepository<AgentWebhookTokenEntity, Long> {
 
     /**
-     * Find webhook token by token value.
+     * Lookup by the HMAC of the plaintext token ({@code TokenAtRest.hash}). The token column
+     * itself is encrypted with a random IV, so a JPQL equality on it can never match: there is
+     * no {@code findByToken} on purpose.
      */
-    Optional<AgentWebhookTokenEntity> findByToken(String token);
+    Optional<AgentWebhookTokenEntity> findByTokenHash(String tokenHash);
 
     /**
      * Find webhook token by agent ID.
@@ -42,8 +45,8 @@ public interface AgentWebhookTokenRepository extends JpaRepository<AgentWebhookT
     /**
      * Find active webhook by token.
      */
-    @Query("SELECT t FROM AgentWebhookTokenEntity t WHERE t.token = :token AND t.isActive = true")
-    Optional<AgentWebhookTokenEntity> findActiveByToken(@Param("token") String token);
+    @Query("SELECT t FROM AgentWebhookTokenEntity t WHERE t.tokenHash = :tokenHash AND t.isActive = true")
+    Optional<AgentWebhookTokenEntity> findActiveByTokenHash(@Param("tokenHash") String tokenHash);
 
     /**
      * Find every active webhook owned by a tenant - used by the dashboard
@@ -74,4 +77,13 @@ public interface AgentWebhookTokenRepository extends JpaRepository<AgentWebhookT
            "AND t.isActive = true " +
            "ORDER BY t.createdAt ASC")
     List<AgentWebhookTokenEntity> findActiveByOrganizationId(@Param("orgId") String orgId);
+
+    /**
+     * READ-ONLY plaintext match for a row written before 2026-09-17 (token in clear, no hash).
+     * Native on purpose: a JPQL comparison would convert the parameter through the encrypting
+     * converter. Rewrites nothing; the delayed startup backfill does. Gated by the service on
+     * {@code PlaintextTokenBackfill.mayHaveLegacyRows}.
+     */
+    @Query(value = "SELECT * FROM agent.agent_webhook_tokens WHERE token = :plain AND token_hash IS NULL", nativeQuery = true)
+    Optional<AgentWebhookTokenEntity> findLegacyPlaintext(@Param("plain") String plain);
 }

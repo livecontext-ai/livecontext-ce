@@ -77,15 +77,27 @@ class FindNodeTest {
             ));
     }
 
+    /**
+     * The node as the engine builds it: WITH a template adapter.
+     *
+     * <p>Without one, `BaseNode.resolveTemplateString` returns the template unchanged, so
+     * the pre-fix reporting path produced the same string as the fixed one and every test
+     * named for the change passed on the code it was meant to catch. Wiring the adapter is
+     * what makes `{{trigger:start.items}}` actually resolve to the three rows, and therefore
+     * what makes "the expression, not a stringified rendering of its value" a real assertion.
+     */
     private FindNode createFindNode(String listExpression, int maxItems) {
         Step stepConfig = new Step("tool-1", "crud-find", "Find Users", null, Map.of(), 123L, null, null);
-        return new FindNode("table:find_users", stepConfig, listExpression, maxItems, mockTemplateEngine);
+        FindNode node = new FindNode("table:find_users", stepConfig, listExpression, maxItems, mockTemplateEngine);
+        node.setTemplateAdapter(new V2TemplateAdapter(mockTemplateEngine));
+        return node;
     }
 
     private FindNode createFindNodeWithToolsGateway(String listExpression, int maxItems) {
         Step stepConfig = new Step("tool-1", "crud-find", "Find Users", null, Map.of(), 123L, null, null);
         FindNode node = new FindNode("table:find_users", stepConfig, listExpression, maxItems, mockTemplateEngine);
         node.setToolsGateway(mockToolsGateway);
+        node.setTemplateAdapter(new V2TemplateAdapter(mockTemplateEngine));
         return node;
     }
 
@@ -450,6 +462,200 @@ class FindNodeTest {
         }
     }
 
+    /**
+     * What a find says about the `list` expression it was configured with.
+     *
+     * <p>It used to report {@code resolveTemplateString(listExpression, context)}: a second
+     * resolution of the same expression the node evaluates for real, through the resolver
+     * that coerces every value to a String. So the one parameter a find returning nothing
+     * is diagnosed from was reported as text that matched neither the node's own items[]
+     * nor the expression the author wrote.
+     */
+    @Nested
+    @DisplayName("Reported list expression")
+    class ReportedListExpressionTests {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> paramsOf(NodeExecutionResult result) {
+            return (Map<String, Object>) result.output().get("resolved_params");
+        }
+
+        @Test
+        @DisplayName("`list` is the expression the author wrote, never a stringified copy of the rows it produced")
+        void reportsTheExpressionNotItsStringifiedValue() {
+            FindNode node = createFindNode("{{trigger:start.items}}", 100);
+
+            Map<String, Object> params = paramsOf(node.execute(context));
+
+            assertEquals("{{trigger:start.items}}", params.get("list"));
+            // The pre-fix value: the three rows flattened into one String by
+            // resolveTemplateString, which is neither the configuration nor the data.
+            assertFalse(String.valueOf(params.get("list")).contains("Alice"),
+                "the expression must not be replaced by a coerced rendering of its value");
+        }
+
+        @Test
+        @DisplayName("`listResolved` describes what the evaluation returned, from that evaluation and not a second one")
+        void reportsWhatTheEvaluationReturned() {
+            FindNode node = createFindNode("{{trigger:start.items}}", 100);
+
+            Map<String, Object> params = paramsOf(node.execute(context));
+
+            assertEquals("List(size=3)", params.get("listResolved"));
+        }
+
+        @Test
+        @DisplayName("an expression that resolved to nothing reads as null, not as an empty string")
+        void reportsNullRatherThanAnEmptyString() {
+            // resolveTemplateString rendered an absent value as "", which reads exactly
+            // like an expression that resolved to an empty string. The evaluation says null.
+            lenient().when(mockTemplateEngine.evaluateTemplate(anyString(), any(WorkflowExecutionContext.class)))
+                .thenReturn(null);
+            FindNode node = createFindNode("{{trigger:start.missing}}", 100);
+
+            Map<String, Object> params = paramsOf(node.execute(context));
+
+            assertEquals("{{trigger:start.missing}}", params.get("list"));
+            assertEquals("null", params.get("listResolved"));
+        }
+
+        @Test
+        @DisplayName("when the table served the rows, the expression is reported as NOT evaluated rather than credited with them")
+        void saysWhenTheExpressionWasNotEvaluated() {
+            Step stepConfig = new Step(null, "crud-read-row", "Get Data", null, Map.of(), 1L, null, null);
+            FindNode node = new FindNode("table:get_data", stepConfig, "{{trigger:start.items}}", 100, mockTemplateEngine);
+            node.setToolsGateway(mockToolsGateway);
+            lenient().when(mockToolsGateway.executeTool(any(ToolRef.class), any(), anyString(), any()))
+                .thenReturn(new ExecutionResult(true,
+                    Map.of("rows", List.of(Map.of("x", 1))), List.of(), List.of()));
+
+            NodeExecutionResult result = node.execute(context);
+            Map<String, Object> params = paramsOf(result);
+
+            assertEquals(1, result.output().get("item_count"));
+            assertEquals("(not evaluated: the table returned rows)", params.get("listResolved"));
+        }
+
+        @Test
+        @DisplayName("a fallback that threw says so, where the reader is asking why nothing came back")
+        void reportsAFailedEvaluation() {
+            lenient().when(mockTemplateEngine.evaluateTemplate(anyString(), any(WorkflowExecutionContext.class)))
+                .thenThrow(new IllegalStateException("bad expression"));
+            FindNode node = createFindNode("{{trigger:start.items}}", 100);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isFailure());
+            assertEquals("(evaluation failed: bad expression)", paramsOf(result).get("listResolved"));
+        }
+
+        @Test
+        @DisplayName("a table that returned NO rows hands over to the expression, and the report follows the strategy that ran")
+        void reportsTheFallbackWhenTheTableReturnedNothing() {
+            // The sentinel is seeded before the strategies run, so this is the branch where
+            // it has to be OVERWRITTEN: the table came back empty, the expression ran, and
+            // reporting "the table returned rows" here would name the wrong strategy AND
+            // contradict the rows the node returns.
+            Step stepConfig = new Step(null, "crud-read-row", "Get Data", null, Map.of(), 1L, null, null);
+            FindNode node = new FindNode("table:get_data", stepConfig, "{{trigger:start.items}}", 100, mockTemplateEngine);
+            node.setToolsGateway(mockToolsGateway);
+            lenient().when(mockToolsGateway.executeTool(any(ToolRef.class), any(), anyString(), any()))
+                .thenReturn(new ExecutionResult(true, Map.of("rows", List.of()), List.of(), List.of()));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals(3, result.output().get("item_count"), "the fallback's rows are the ones returned");
+            assertEquals("List(size=3)", paramsOf(result).get("listResolved"));
+        }
+
+        @Test
+        @DisplayName("a table read that FAILED hands over to the expression, and the report says what that expression gave")
+        void reportsTheFallbackWhenTheTableReadFailed() {
+            Step stepConfig = new Step(null, "crud-read-row", "Get Data", null, Map.of(), 1L, null, null);
+            FindNode node = new FindNode("table:get_data", stepConfig, "{{trigger:start.items}}", 100, mockTemplateEngine);
+            node.setToolsGateway(mockToolsGateway);
+            lenient().when(mockToolsGateway.executeTool(any(ToolRef.class), any(), anyString(), any()))
+                .thenReturn(new ExecutionResult(false, Map.of("error", "Connection failed"),
+                    List.of(Map.of("message", "fail")), List.of()));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals(3, result.output().get("item_count"));
+            assertEquals("List(size=3)", paramsOf(result).get("listResolved"));
+        }
+
+        @Test
+        @DisplayName("the CRUD echo does not overwrite `list` with a resolved copy of itself (the shape the factory actually builds)")
+        void survivesTheCrudParamsEcho() {
+            // The production wiring, which every other fixture here skips: `list` LIVES in
+            // the step's params (ExecutionNodeFactory reads listExpression from params.list),
+            // and prepareCrudInput echoes that whole params map, resolved, into the same
+            // report. With an empty params map and no template adapter - the shape of the
+            // other fixtures - the collision cannot happen, so the panel shipped the
+            // resolved rows under `list` beside "(not evaluated)" under `listResolved` and
+            // nothing was red.
+            Step stepConfig = new Step(null, "crud-find", "Find Users", null,
+                Map.of("list", "{{trigger:start.items}}"), 1L, null, null);
+            FindNode node = new FindNode("table:find_users", stepConfig,
+                "{{trigger:start.items}}", 100, mockTemplateEngine);
+            node.setToolsGateway(mockToolsGateway);
+            node.setTemplateAdapter(new V2TemplateAdapter(mockTemplateEngine));
+            lenient().when(mockToolsGateway.executeTool(any(ToolRef.class), any(), anyString(), any()))
+                .thenReturn(new ExecutionResult(true, Map.of("rows", List.of(Map.of("x", 1))), List.of(), List.of()));
+
+            Map<String, Object> params = paramsOf(node.execute(context));
+
+            assertEquals("{{trigger:start.items}}", params.get("list"),
+                "`list` must stay the expression on the path that ships");
+            assertEquals("(not evaluated: the table returned rows)", params.get("listResolved"));
+            // And the resolved collection is no longer copied onto the persisted row under
+            // a key that claims to hold configuration.
+            assertFalse(String.valueOf(params.get("list")).contains("Alice"));
+        }
+
+        @Test
+        @DisplayName("the resolved value sits beside the expression, not below every CRUD key")
+        void keepsTheTwoListKeysTogether() {
+            // One question, two keys: "Items" and "Items (resolved)" are read as a pair, and
+            // the map's order is the panel's order.
+            Step stepConfig = new Step(null, "crud-read-row", "Get Data", null, Map.of(), 1L, null, null);
+            FindNode node = new FindNode("table:get_data", stepConfig, "{{trigger:start.items}}", 100, mockTemplateEngine);
+            node.setToolsGateway(mockToolsGateway);
+            lenient().when(mockToolsGateway.executeTool(any(ToolRef.class), any(), anyString(), any()))
+                .thenReturn(new ExecutionResult(true, Map.of("rows", List.of(Map.of("x", 1))), List.of(), List.of()));
+
+            List<String> keys = new ArrayList<>(paramsOf(node.execute(context)).keySet());
+
+            assertEquals("list", keys.get(0));
+            assertEquals("listResolved", keys.get(1));
+        }
+
+        @Test
+        @DisplayName("a failure message the size of a stack trace is shortened before it is persisted")
+        void shortensTheFailureReason() {
+            lenient().when(mockTemplateEngine.evaluateTemplate(anyString(), any(WorkflowExecutionContext.class)))
+                .thenThrow(new IllegalStateException("q".repeat(5000)));
+            FindNode node = createFindNode("{{trigger:start.items}}", 100);
+
+            String reported = String.valueOf(paramsOf(node.execute(context)).get("listResolved"));
+
+            assertTrue(reported.length() < 300, "resolved_params is persisted on every step row");
+            assertTrue(reported.contains("5000 chars"), "and the reader must be told what was cut");
+        }
+
+        @Test
+        @DisplayName("no expression configured, no key invented")
+        void reportsNothingWhenNoExpressionIsConfigured() {
+            FindNode node = createFindNode(null, 100);
+
+            Map<String, Object> params = paramsOf(node.execute(context));
+
+            assertFalse(params.containsKey("list"));
+            assertFalse(params.containsKey("listResolved"));
+            assertEquals(100, params.get("maxItems"));
+        }
+    }
+
     // ===== Billing identifier propagation - regression for centralized dispatcher =====
 
     @Nested
@@ -495,6 +701,63 @@ class FindNodeTest {
                 "__analyticsNodeId__ attributes api_call_completed to the node");
             assertEquals(null, ids.get("__nodeId__"),
                 "__nodeId__ is the billing step key and must stay unset");
+        }
+    }
+
+    /**
+     * The last relay site of this change without a call-site test, kept honest by a mutation:
+     * forcing this branch back to ERROR left 62 tests green before these existed.
+     */
+    @Nested
+    @DisplayName("a relayed CRUD refusal is not re-raised to ERROR")
+    class RelayedRefusalLogLevel {
+
+        private ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender;
+        private ch.qos.logback.classic.Logger nodeLogger;
+
+        @BeforeEach
+        void attach() {
+            nodeLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(FindNode.class);
+            appender = new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            nodeLogger.addAppender(appender);
+        }
+
+        @org.junit.jupiter.api.AfterEach
+        void detach() {
+            nodeLogger.detachAppender(appender);
+        }
+
+        private void readWithError(String message) {
+            Step stepConfig = new Step(null, "crud-find", "Find Users", null, Map.of(), 123L, null, null);
+            FindNode node = new FindNode("table:find_users", stepConfig, null, 100, mockTemplateEngine);
+            node.setToolsGateway(mockToolsGateway);
+            lenient().when(mockToolsGateway.executeTool(any(ToolRef.class), any(), anyString(), any()))
+                .thenReturn(new ExecutionResult(false, Map.of(),
+                    List.of(Map.of("message", message)), List.of()));
+            node.execute(context);
+        }
+
+        @Test
+        @DisplayName("out of credits is a WARN, with no ERROR line")
+        void refusalIsWarn() {
+            readWithError(com.apimarketplace.orchestrator.services.credit.CreditExhaustion.MESSAGE);
+
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                .noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                .anySatisfy(e -> org.assertj.core.api.Assertions.assertThat(e.getLevel())
+                    .isEqualTo(ch.qos.logback.classic.Level.WARN));
+        }
+
+        @Test
+        @DisplayName("a real fault still logs ERROR")
+        void faultStaysError() {
+            readWithError("Connection refused: connect");
+
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                .anySatisfy(e -> org.assertj.core.api.Assertions.assertThat(e.getLevel())
+                    .isEqualTo(ch.qos.logback.classic.Level.ERROR));
         }
     }
 }

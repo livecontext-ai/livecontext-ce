@@ -17,6 +17,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -232,7 +233,7 @@ class AgentRemoteExecutionMemoryInjectionTest {
         // out of four. This is the path every claude-code and codex agent takes.
         org.mockito.ArgumentCaptor<AgentExecutionRequestDto> captor =
             org.mockito.ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-        verify(bridgeDispatcher).dispatchRaw(captor.capture(), any());
+        verify(bridgeDispatcher).dispatchRaw(captor.capture(), any(), anyBoolean());
         assertThat(captor.getValue().systemPrompt()).isEqualTo("PROMPT-WITH-MEMORY-BLOCK");
     }
 

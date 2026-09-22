@@ -3,6 +3,7 @@ import { useTranslations } from 'next-intl';
 import { ChevronRight, Pencil, Check, X, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ResourceInfoPopover, type ResourceInfoPopoverProps } from "@/components/resource-info/ResourceInfoPopover";
 
 export interface BreadcrumbItem {
   label: string;
@@ -28,6 +29,16 @@ export interface BreadcrumbItem {
    * by the component (common.addToFavorites / common.removeFromFavorites).
    */
   favorite?: { isFavorite: boolean; onToggle: () => void };
+  /**
+   * When set, renders an info control on this segment: hover/focus-revealed like the
+   * rename pencil next to it, and kept visible while its popover is open. Opens the
+   * resource's attribution (who created it, when it last changed, who has edited it).
+   *
+   * <p>Takes the DATA, not a node, so every call site stays a plain object and this
+   * component remains the single place that decides where the control sits - same
+   * contract as {@link BreadcrumbItem.favorite}.
+   */
+  info?: Pick<ResourceInfoPopoverProps, 'resourceKey' | 'ownerId' | 'createdAt' | 'updatedAt' | 'loadEditors'>;
 }
 
 export interface BreadcrumbProps {
@@ -38,6 +49,19 @@ export interface BreadcrumbProps {
   variant?: "default" | "minimal" | "subtle";
 }
 
+/*
+ * A note on the hover colours below. They are written as arbitrary values
+ * (`hover:text-[var(--text-primary)]`) rather than `hover:text-theme-primary`, because the
+ * `*-theme-*` classes are hand-written CSS in `@layer components` and Tailwind v4 emits no
+ * VARIANT of them: every `hover:` on one produces nothing. Every hover in this file was in
+ * that form, so no crumb has had hover feedback since the v4 upgrade - the segments, the
+ * favourite star and the info control alike. Pinned by
+ * `components/resource-info/__tests__/hoverVariantsAreEmitted.test.ts`.
+ *
+ * The `/50` opacity modifier that used to sit on the editable-segment ground is gone for the
+ * same reason (an opacity modifier on those classes is dropped too): `--bg-secondary` IS the
+ * one-step-up ground this codebase reaches for on hover.
+ */
 export function Breadcrumb({
   items,
   className,
@@ -53,6 +77,10 @@ export function Breadcrumb({
   const [editingIndex, setEditingIndex] = React.useState<number | null>(null);
   const [editValue, setEditValue] = React.useState<string>("");
   const [isHovering, setIsHovering] = React.useState<number | null>(null);
+  // Which segment's info popover is open, so its (hover-revealed) trigger stays painted
+  // while the panel is up - the panel is portalled out of the crumb, so the pointer being
+  // inside it reads as "not hovering the crumb".
+  const [infoOpenIndex, setInfoOpenIndex] = React.useState<number | null>(null);
 
   // Focus input when editing starts
   React.useEffect(() => {
@@ -200,21 +228,21 @@ export function Breadcrumb({
   const getVariantClasses = (isLast: boolean, isClickable: boolean) => {
     if (variant === "minimal") {
       return {
-        clickable: "text-theme-muted hover:text-theme-primary transition-colors text-sm",
+        clickable: "text-theme-muted hover:text-[var(--text-primary)] transition-colors text-sm",
         last: "text-theme-primary font-medium text-sm",
         inactive: "text-theme-muted text-sm"
       };
     }
     if (variant === "subtle") {
       return {
-        clickable: "text-theme-secondary hover:text-theme-primary transition-colors opacity-70 hover:opacity-100",
+        clickable: "text-theme-secondary hover:text-[var(--text-primary)] transition-colors opacity-70 hover:opacity-100",
         last: "text-theme-primary",
         inactive: "text-theme-secondary opacity-60"
       };
     }
     // default
     return {
-      clickable: "text-theme-secondary hover:text-theme-primary transition-colors",
+      clickable: "text-theme-secondary hover:text-[var(--text-primary)] transition-colors",
       last: "text-theme-primary",
       inactive: "text-theme-secondary"
     };
@@ -258,8 +286,8 @@ export function Breadcrumb({
           );
         }
 
-        return (
-          <React.Fragment key={index}>
+        const crumbNode = (
+          <>
             {isClickable ? (
               item.href ? (
                 <a
@@ -279,7 +307,7 @@ export function Breadcrumb({
                     item.editable ? variantClasses.last : variantClasses.clickable,
                     "flex items-center flex-shrink-0 group/editable",
                     hasOnlyIcon ? "p-1" : "gap-1.5",
-                    item.editable && "cursor-pointer hover:bg-theme-secondary/50 rounded px-1 -mx-1 transition-colors"
+                    item.editable && "cursor-pointer hover:bg-[var(--bg-secondary)] rounded px-1 -mx-1 transition-colors"
                   )}
                   title={hasOnlyIcon ? t('home') : item.label !== displayLabel ? item.label : undefined}
                 >
@@ -339,7 +367,7 @@ export function Breadcrumb({
                   "flex items-center group/editable",
                   isLast ? "min-w-0 shrink" : "shrink-0",
                   hasOnlyIcon ? "p-1" : "gap-1.5",
-                  item.editable && editingIndex !== index && "cursor-pointer hover:bg-theme-secondary/50 rounded px-1 -mx-1 transition-colors"
+                  item.editable && editingIndex !== index && "cursor-pointer hover:bg-[var(--bg-secondary)] rounded px-1 -mx-1 transition-colors"
                 )}
                 title={isLast && item.label !== displayLabel ? item.label : undefined}
                 style={isLast ? { minWidth: 0 } : undefined}
@@ -361,7 +389,11 @@ export function Breadcrumb({
                     title={item.favorite.isFavorite ? t('removeFromFavorites') : t('addToFavorites')}
                     className={cn(
                       "ml-1 inline-flex items-center justify-center rounded p-0.5 flex-shrink-0 transition-colors",
-                      item.favorite.isFavorite ? "text-amber-500" : "text-theme-muted hover:text-theme-primary"
+                      // Arbitrary value, not `hover:text-theme-primary`: the *-theme-*
+                      // classes are hand-written CSS, so Tailwind v4 emits no variant of
+                      // them and the shorthand paints nothing. Matches the info control
+                      // sitting right beside this star.
+                      item.favorite.isFavorite ? "text-amber-500" : "text-theme-muted hover:text-[var(--text-primary)]"
                     )}
                   >
                     <Star className={cn("w-3 h-3", item.favorite.isFavorite && "fill-current")} />
@@ -369,6 +401,39 @@ export function Breadcrumb({
                 )}
               </span>
             )}
+          </>
+        );
+
+        return (
+          <React.Fragment key={index}>
+            {item.info ? (
+              /* The info control is a SIBLING of the crumb, never a child: an editable last
+                 crumb renders as a <button>, and a button inside a button is invalid HTML that
+                 React refuses to nest. The wrapper is a hover GROUP rather than another pair of
+                 mouse handlers, because the crumb's own onMouseLeave fires the moment the
+                 pointer crosses from the label onto the control - which would hide the control
+                 exactly as it is being reached. */
+              <span className={cn("group/crumb flex items-center", isLast ? "min-w-0 shrink" : "flex-shrink-0")}>
+                {crumbNode}
+                {editingIndex !== index && (
+                  <ResourceInfoPopover
+                    {...item.info}
+                    // The crumb IS the resource's name, so the control can name itself
+                    // without every call site having to repeat it.
+                    resourceName={item.label}
+                    variant="breadcrumb"
+                    align="start"
+                    onOpenChange={(open) => setInfoOpenIndex(open ? index : null)}
+                    className={cn(
+                      "transition-opacity",
+                      infoOpenIndex === index
+                        ? "opacity-100"
+                        : "opacity-0 pointer-events-none group-hover/crumb:opacity-100 group-hover/crumb:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto",
+                    )}
+                  />
+                )}
+              </span>
+            ) : crumbNode}
             {!isLast && (
               <span className="flex items-center text-theme-muted flex-shrink-0">
                 {getSeparator()}

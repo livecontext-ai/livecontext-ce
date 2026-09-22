@@ -51,9 +51,19 @@ export function resolveMonthlyAllowance(
   planCode: string | null | undefined,
   creditTierIndex: number | null | undefined,
 ): number | null {
+  // A PURCHASED PACK WINS OVER THE PLAN, on every plan code including FREE. The backend's
+  // `grantsBasePack` is true for any row with `creditQuantity > 0`, and a tier index above 0
+  // can only come from a quantity that matched a tier's cost exactly (`resolveTierIndex` falls
+  // back to 0 otherwise), so such a row is granted CREDIT_TIERS[index] and never the plan's
+  // included_llm_tokens. Keying on the plan code first said 1,000 for a FREE row holding a
+  // real pack: the wrong denominator on the gauge, and once the card began naming a date, a
+  // dated promise of an amount that is not the one that lands.
+  const purchased = CREDIT_TIERS[creditTierIndex ?? 0];
+  if ((creditTierIndex ?? 0) > 0) {
+    return typeof purchased === 'number' ? purchased : null;
+  }
   if (!planCode || planCode === 'FREE') return FREE_MONTHLY_CREDITS;
-  const tier = CREDIT_TIERS[creditTierIndex ?? 0];
-  return typeof tier === 'number' ? tier : null;
+  return typeof purchased === 'number' ? purchased : null;
 }
 
 export interface CreditGauge {

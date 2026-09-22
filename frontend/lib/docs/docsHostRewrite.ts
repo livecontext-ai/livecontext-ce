@@ -28,12 +28,19 @@ function stripDocsPrefix(pathname: string): string {
   return pathname.slice('/docs'.length);
 }
 
+/**
+ * True for the documentation subdomain. Exported because the proxy has to ask
+ * the same question before it can claim a path name site-wide: on this host the
+ * path space belongs to the docs, not to the main site.
+ */
+export function isDocsHost(host: string | null | undefined): boolean {
+  return (host ?? '').split(':')[0].toLowerCase().startsWith('docs.');
+}
+
 export function resolveDocsRoute(host: string | null | undefined, pathname: string): DocsRouteAction {
-  const hostname = (host ?? '').split(':')[0].toLowerCase();
-  const isDocsHost = hostname.startsWith('docs.');
   const underDocs = pathname === '/docs' || pathname.startsWith('/docs/');
 
-  if (isDocsHost) {
+  if (isDocsHost(host)) {
     // A stray `/docs`-prefixed URL on the subdomain → send it to the clean path.
     if (underDocs) return { kind: 'redirect', url: stripDocsPrefix(pathname) };
     // Clean path on the subdomain → render the underlying `/docs/...` route.

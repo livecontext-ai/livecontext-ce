@@ -79,6 +79,98 @@ class NodeParamsValidatorLiveCatalogTest {
         return catalog;
     }
 
+    /** A catalogue entry whose models were all filtered out: the key is present and empty. */
+    private Map<String, Object> catalogWithEmptyProvider(String emptied, List<String> keep) {
+        List<Map<String, Object>> entries = new java.util.ArrayList<>();
+        for (String name : keep) {
+            entries.add(Map.of("name", name, "models", List.of(Map.of("id", name + "-1"))));
+        }
+        entries.add(Map.of("name", emptied, "models", List.of()));
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("providers", entries);
+        catalog.put("defaultProvider", keep.get(0));
+        catalog.put("defaultModel", keep.get(0) + "-1");
+        return catalog;
+    }
+
+    /** A catalogue whose providers each carry one model. */
+    private Map<String, Object> liveCatalogWithModels(List<String> providers) {
+        List<Map<String, Object>> entries = new java.util.ArrayList<>();
+        for (String name : providers) {
+            entries.add(Map.of("name", name, "models", List.of(Map.of("id", name + "-1"))));
+        }
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("providers", entries);
+        return catalog;
+    }
+
+    @Nested
+    @DisplayName("the decision engine belongs to classify and to nothing else")
+    class DecisionEngineScope {
+
+        @Test
+        @DisplayName("guardrail REFUSES a provider whose models the chat catalogue filtered out")
+        void guardrailRefusesAProviderWithNoUsableModel() {
+            // The catalogue removes the models a category does not accept but keeps the
+            // provider shell. Taking the name off that shell put a decision provider into
+            // the guardrail allow-list: a plan naming it saved cleanly and failed at run
+            // time, because a guardrail has to write prose and that engine cannot.
+            when(nodeLibraryService.findByType("guardrail")).thenReturn(Optional.of(seededLlmNode("guardrail")));
+            when(agentClient.getModelsInfo()).thenReturn(
+                catalogWithEmptyProvider("typesafe", List.of("anthropic", "openai")));
+
+            ValidationResult result = validator.validate("guardrail", Map.of(
+                "provider", "typesafe",
+                "model", "jev-latest",
+                "input", "{{trigger:t.output.message}}"
+            ));
+
+            assertThat(result.valid())
+                .as("a guardrail cannot run a model that returns a typed decision instead of prose")
+                .isFalse();
+        }
+
+        @Test
+        @DisplayName("classify ACCEPTS it, because the decision slice is fetched for that node type")
+        void classifyAcceptsTheDecisionProvider() {
+            when(nodeLibraryService.findByType("classify")).thenReturn(Optional.of(seededLlmNode("classify")));
+            when(agentClient.getModelsInfo()).thenReturn(
+                catalogWithEmptyProvider("typesafe", List.of("anthropic", "openai")));
+            when(agentClient.getModelsInfo("classification")).thenReturn(
+                liveCatalogWithModels(List.of("typesafe")));
+
+            ValidationResult result = validator.validate("classify", Map.of(
+                "provider", "typesafe",
+                "model", "jev-latest",
+                "prompt", "Classify: {{trigger:t.output.message}}"
+            ));
+
+            assertThat(result.valid())
+                .as("the classify node runs on either engine, so both must validate")
+                .isTrue();
+        }
+
+        @Test
+        @DisplayName("an unreachable decision slice narrows classify rather than opening it up")
+        void classifyFallsBackWhenTheDecisionSliceFails() {
+            when(nodeLibraryService.findByType("classify")).thenReturn(Optional.of(seededLlmNode("classify")));
+            when(agentClient.getModelsInfo()).thenReturn(
+                catalogWithEmptyProvider("typesafe", List.of("anthropic", "openai")));
+            when(agentClient.getModelsInfo("classification"))
+                .thenThrow(new RuntimeException("catalog down"));
+
+            ValidationResult result = validator.validate("classify", Map.of(
+                "provider", "typesafe",
+                "model", "jev-latest",
+                "prompt", "Classify: {{trigger:t.output.message}}"
+            ));
+
+            // Refusing a valid plan is visible and recoverable; accepting an invalid one is
+            // neither, so the fallback narrows.
+            assertThat(result.valid()).isFalse();
+        }
+    }
+
     @Nested
     @DisplayName("classify + guardrail - provider acceptance matches live catalog")
     class LiveAcceptance {

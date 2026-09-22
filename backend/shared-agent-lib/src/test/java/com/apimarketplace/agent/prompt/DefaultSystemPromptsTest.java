@@ -25,7 +25,7 @@ class DefaultSystemPromptsTest {
 
         assertThat(coreRules)
             .contains("# Rules")
-            .contains("fails twice");
+            .contains("stop repeating that approach");
     }
 
     @Test
@@ -49,7 +49,7 @@ class DefaultSystemPromptsTest {
 
         assertThat(prompt)
             .contains("# Rules")
-            .contains("fails twice")
+            .contains("stop repeating that approach")
             .contains("Response Style")
             .contains("Help First")
             .contains("action='help'");
@@ -195,10 +195,25 @@ class DefaultSystemPromptsTest {
     // MODULE DEFINITIONS
     // ═══════════════════════════════════════════════════════════════════════════════
 
+    /**
+     * The keys, not the count.
+     *
+     * <p>A size assertion fails for the right reason exactly once and is then edited to the new
+     * number, which is what a number invites. What this list actually decides is whether a tool
+     * is visible AT ALL: {@code build()} collects the core tool names from here, and every
+     * consumer filters strictly against that set, so a module missing from it is a tool that is
+     * registered, routed, and then silently absent from every agent's tool list. Naming the keys
+     * makes a removal fail as loudly as an addition.
+     */
     @Test
-    @DisplayName("ALL_RESOURCE_MODULES contains 13 modules (incl. generation, files, wait, memory)")
-    void allResourceModulesContains13Modules() {
-        assertThat(DefaultSystemPrompts.ALL_RESOURCE_MODULES).hasSize(13);
+    @DisplayName("ALL_RESOURCE_MODULES lists exactly the resources an agent can be given")
+    void allResourceModulesAreDeclared() {
+        assertThat(DefaultSystemPrompts.ALL_RESOURCE_MODULES)
+                .extracting(DefaultSystemPrompts.PromptModule::key)
+                .containsExactly(
+                        "catalog", "table", "interface", "agent", "skill", "memory", "workflow",
+                        "application", "web_search", "generation", "files", "mailbox", "wait",
+                        "ask_user");
     }
 
     /**
@@ -216,7 +231,10 @@ class DefaultSystemPromptsTest {
         assertThat(DefaultSystemPrompts.MEMORY.promptSection())
                 .contains("Declarative facts")
                 .contains("never instructions")
-                .contains("memory(action='get'");
+                .contains("memory(action='get'")
+                .contains("slug AND scope")
+                .contains("current user's request takes priority")
+                .contains("must not interrupt the task");
     }
 
     @Test
@@ -634,4 +652,17 @@ class DefaultSystemPromptsTest {
         }
         return count;
     }
+    @Test
+    @DisplayName("Chat, scoped bridge and agent defaults pursue verified outcomes without retry loops")
+    void completionRulesReachEveryPromptRoute() {
+        for (String prompt : java.util.List.of(DefaultSystemPrompts.getDefault(),
+                DefaultSystemPrompts.getAgentDefault(),
+                DefaultSystemPrompts.build(Set.of("application"), false).systemPrompt())) {
+            assertThat(prompt).contains("verified outcome", "stop repeating that approach",
+                    "Respect permissions, user stops and budgets", "original task",
+                    "data_inputs_schema", "get_run/get_node_output")
+                    .doesNotContain("Errors: retry once, then report.", "fails twice → stop.");
+        }
+    }
+
 }

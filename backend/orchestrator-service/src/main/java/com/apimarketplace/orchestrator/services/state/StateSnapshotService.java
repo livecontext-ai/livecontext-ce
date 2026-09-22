@@ -2683,7 +2683,7 @@ public class StateSnapshotService
                 // StorageReconciliationQueries.EXECUTION_DATA aggregates pg_column_size
                 // (TOAST-compressed disk size). The asymmetry guarantees drift between
                 // every state-snapshot write and the daily 2 AM reconciliation, which is
-                // why StorageReconciliationService.refreshExecutionData has to mask the
+                // why StorageReconciliationService.refreshTenantBreakdown has to mask the
                 // residual on every GET /storage/quota and /storage/breakdown. Aligning
                 // units (or dropping incremental tracking entirely + shortening the cron)
                 // would let us remove that inline-refresh workaround.

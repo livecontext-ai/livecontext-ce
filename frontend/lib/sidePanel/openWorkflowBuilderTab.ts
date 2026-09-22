@@ -10,6 +10,8 @@ export interface WorkflowTabOpener {
 
 export interface OpenWorkflowBuilderTabOptions {
   workflowId: string;
+  /** Open the workflow on a specific run and give that run its own tab identity. */
+  runId?: string;
   /** Tab label. Falls back to a generic one so a relation with no resolvable name still reads. */
   workflowName?: string | null;
   /** Mount the canvas read-only (marketplace/publisher views). Omitted = editable, as before. */
@@ -45,16 +47,24 @@ export interface OpenWorkflowBuilderTabOptions {
  */
 export function openWorkflowBuilderTab(
   sidePanel: WorkflowTabOpener | null | undefined,
-  { workflowId, workflowName, readOnly, canEditWorkflow }: OpenWorkflowBuilderTabOptions,
+  { workflowId, runId, workflowName, readOnly, canEditWorkflow }: OpenWorkflowBuilderTabOptions,
 ): void {
   if (!sidePanel || !workflowId) return;
   import('@/components/app/WorkflowBuilderPanelContent').then(({ WorkflowBuilderPanelContent }) => {
+    const tabId = workflowPanelTabId(workflowId, runId);
     sidePanel.openTab({
-      id: workflowPanelTabId(workflowId),
+      id: tabId,
       label: workflowName || 'Workflow',
       icon: React.createElement(Workflow, { className: 'w-4 h-4' }),
-      content: React.createElement(WorkflowBuilderPanelContent, { workflowId, readOnly, canEditWorkflow, canEditRelatedWorkflows: canEditWorkflow }),
-      preferredWidth: 0.5,
+      content: React.createElement(WorkflowBuilderPanelContent, {
+        workflowId,
+        runId,
+        hostTabId: tabId,
+        readOnly,
+        canEditWorkflow,
+        canEditRelatedWorkflows: canEditWorkflow,
+      }),
+      preferredWidth: runId ? 0.55 : 0.5,
       keepMounted: true,
     });
   });

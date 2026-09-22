@@ -148,6 +148,13 @@ public class GenerationInputResolver {
             }
         }
 
+        // Last, because everything above is still writing into the request: the
+        // holes this closes are made by the very slots it just filled, and by the
+        // ones it found nothing for. Run unconditionally - a call with no input
+        // asset at all can still carry an array whose scaffolding outlived the
+        // value it was built for.
+        GenerationRequestBuilder.pruneEmpty(request);
+
         return new Prepared(errors);
     }
 

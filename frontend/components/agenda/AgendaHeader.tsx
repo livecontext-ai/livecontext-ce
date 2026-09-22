@@ -1,14 +1,13 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import { ChevronLeft, ChevronRight, RotateCcw, Search, Settings2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Filter, RotateCcw, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { menuItemClass, menuSurfaceClass } from '@/components/ui/menu';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import type { ResourceType } from '@/lib/api/orchestrator/agenda.service';
+import type { AgendaMarker, AgendaOccurrence, ResourceType } from '@/lib/api/orchestrator/agenda.service';
 import { formatTimeInZone, formatZoneAbbreviation } from '@/lib/utils/agendaTime';
 import { useNow } from '@/hooks/useNow';
 import {
@@ -16,8 +15,11 @@ import {
   type AgendaPreferences,
   type AgendaViewMode,
 } from '@/hooks/useAgendaPreferences';
+import { AgendaKindIcon } from './AgendaKindIcon';
+import { AGENDA_KIND_ORDER, type AgendaKind } from './agendaLaunchKinds';
 import { resourceIcon } from './agendaVisuals';
 import { DatePickerPopover } from './DatePickerPopover';
+import { TriggerSearch } from './TriggerSearch';
 
 interface AgendaHeaderProps {
   title: string;
@@ -26,7 +28,19 @@ interface AgendaHeaderProps {
   preferences: AgendaPreferences;
   timezoneOptions: string[];
   search: string;
+  triggers?: AgendaMarker[];
+  /** Every marker in the window, so the picker's use counts match what selecting shows. */
+  triggerCatalogue?: AgendaMarker[];
+  occurrences?: AgendaOccurrence[];
+  selectedTriggerKey?: string | null;
+  triggerTypes?: readonly AgendaKind[];
+  busy?: boolean;
+  canMutate?: boolean;
   onSearchChange: (value: string) => void;
+  onSelectTrigger?: (key: string | null) => void;
+  onToggleTriggerType?: (type: AgendaKind) => void;
+  onToggleResourcePause?: (trigger: AgendaMarker) => void;
+  onOpenTrigger?: (trigger: AgendaMarker) => void;
   onPrevious: () => void;
   onNext: () => void;
   onToday: () => void;
@@ -74,7 +88,18 @@ export function AgendaHeader({
   preferences,
   timezoneOptions,
   search,
+  triggers = [],
+  triggerCatalogue,
+  occurrences = [],
+  selectedTriggerKey = null,
+  triggerTypes = AGENDA_KIND_ORDER,
+  busy = false,
+  canMutate = false,
   onSearchChange,
+  onSelectTrigger = () => {},
+  onToggleTriggerType = () => {},
+  onToggleResourcePause = () => {},
+  onOpenTrigger = () => {},
   onPrevious,
   onNext,
   onToday,
@@ -128,15 +153,19 @@ export function AgendaHeader({
 
       <NowClock timezone={preferences.timezone} label={t('clock.tooltip', { zone: preferences.timezone })} />
 
-      <div className="relative min-w-[7rem] flex-1 sm:flex-none">
-        <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
-        <Input
-          value={search}
-          onChange={(event) => onSearchChange(event.target.value)}
-          placeholder={t('searchPlaceholder')}
-          className="h-8 w-full pl-7 text-sm sm:w-44"
-        />
-      </div>
+      <TriggerSearch
+        triggers={triggers}
+        catalogue={triggerCatalogue}
+        occurrences={occurrences}
+        selectedKey={selectedTriggerKey}
+        query={search}
+        busy={busy}
+        canMutate={canMutate}
+        onQueryChange={onSearchChange}
+        onSelect={onSelectTrigger}
+        onTogglePause={onToggleResourcePause}
+        onOpen={onOpenTrigger}
+      />
 
       {/* Resource-kind chips: single click to hide a kind, click again to bring it back.
           On the bar rather than in the popover because filtering by kind is what a user
@@ -171,6 +200,44 @@ export function AgendaHeader({
           );
         })}
       </div>
+
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            className={BAR_ICON_BUTTON}
+            aria-label={t('filters.launchKinds')}
+            title={t('filters.launchKinds')}
+          >
+            <Filter className="h-3.5 w-3.5" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className={`w-64 ${menuSurfaceClass} p-2`}>
+          <p className="px-1.5 pb-2 text-xs font-medium text-theme-muted">{t('filters.launchKinds')}</p>
+          <div className="grid grid-cols-2 gap-1">
+            {/* The eight workflow trigger kinds, then the three an agent alone can
+                report (a sub-agent spawn, a task, the embedded widget). One list rather
+                than two, because "Chat" means the same thing on both sides and a second
+                control saying it again would be a worse answer to the same question. */}
+            {AGENDA_KIND_ORDER.map((type) => {
+              const active = triggerTypes.includes(type);
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => onToggleTriggerType(type)}
+                  className={`${menuItemClass} ${active ? '' : 'opacity-40'}`}
+                >
+                  <AgendaKindIcon kind={type} />
+                  <span>{t(`kind.${type.toLowerCase()}`)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </PopoverContent>
+      </Popover>
 
       <div role="group" aria-label={t('filters.view')} className="flex items-center gap-1">
         {VIEW_MODES.map((mode) => (

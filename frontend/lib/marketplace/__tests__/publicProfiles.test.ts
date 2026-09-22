@@ -15,6 +15,7 @@ function rawProfile(overrides: Record<string, unknown> = {}) {
     bio: 'Builds invoice bots.',
     joinedAt: '2026-01-15T09:00:00',
     searchIndexable: true,
+    verified: true,
     ...overrides,
   };
 }
@@ -29,7 +30,21 @@ describe('mapProfile', () => {
       bio: 'Builds invoice bots.',
       joinedAt: '2026-01-15T09:00:00',
       searchIndexable: true,
+      verified: true,
     });
+  });
+
+  it.each([
+    ['the field is absent', undefined],
+    ['it is the string "true"', 'true'],
+    ['it is the number 1', 1],
+    ['it is null', null],
+    ['it is explicitly false', false],
+  ])('is not verified when %s', (_label, verified) => {
+    // Strict equality with `true`, same reasoning as searchIndexable: a badge is a
+    // public claim about who an account belongs to, and a malformed payload must
+    // never be able to grant one.
+    expect(mapProfile(rawProfile({ verified }))?.verified).toBe(false);
   });
 
   it.each([

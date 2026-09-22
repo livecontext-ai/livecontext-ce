@@ -50,7 +50,7 @@ class AbstractLLMProviderStopTest {
         }
 
         @Override
-        protected HttpHeaders buildHeaders() {
+        protected HttpHeaders buildHeaders(CompletionRequest request) {
             return new HttpHeaders();
         }
 

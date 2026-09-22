@@ -42,6 +42,13 @@ export interface ActiveMarketplaceInstall {
   /** CE remote mode: acquired from the cloud marketplace instead of local. */
   ceMode: boolean;
   /**
+   * Admin demo mode: the whole animation runs but NO acquire call is made, so
+   * nothing is created, billed or receipted. Consumers use it to withhold the
+   * things that only make sense for a real install (the post-install analytics,
+   * and the "installed" flip of the card, which is driven by a null acquiredId).
+   */
+  demo: boolean;
+  /**
    * True when the install was started in inline-progress mode (marketplace
    * grid / preview header): the marketplace page renders the progress on the
    * CARD and consumes the terminal states. False for full-modal consumers
@@ -95,6 +102,35 @@ export interface ActiveMarketplaceInstall {
 export type InstalledResourceCounts = Partial<Record<'workflows' | 'interfaces' | 'tables' | 'agents', number>>
   & Record<string, number | undefined>;
 
+/**
+ * Demo mode has no acquire response, so the summary is built from the counts the
+ * publication already DECLARES. Those are real numbers taken from its own
+ * metadata, never invented, but they are not the acquire tally: a publication
+ * only carries the counts its publish step recorded, so an application does not
+ * declare its sub-workflows and the summary stays silent about them rather than
+ * guessing.
+ *
+ * The one place the two genuinely disagree is an agent publication, whose
+ * `agentCount` COUNTS THE ROOT AGENT while a real acquire reports only the
+ * sub-agents it cloned alongside it. Left as-is, a plain agent with no
+ * sub-agents would show a phantom "1 agent" line that no real install produces,
+ * so the root is subtracted back out here.
+ */
+function demoResourceCounts(publication: WorkflowPublication): InstalledResourceCounts {
+  const counts: InstalledResourceCounts = {};
+  const add = (key: string, value: number | undefined) => {
+    if (typeof value === 'number' && value > 0) counts[key] = value;
+  };
+  add('workflows', publication.workflowCount);
+  add('interfaces', publication.interfaceCount);
+  add('tables', publication.datasourceCount);
+  const agents = publication.publicationType === 'AGENT'
+    ? (publication.agentCount ?? 0) - 1
+    : publication.agentCount;
+  add('agents', agents);
+  return counts;
+}
+
 /** The acquire response's resource summary, tolerant of an older backend that omits it. */
 function readResourceCounts(result: unknown): InstalledResourceCounts {
   const raw = (result as { resources?: unknown } | null)?.resources;
@@ -116,7 +152,7 @@ interface MarketplaceInstallState {
    */
   startInstall: (
     publication: WorkflowPublication,
-    opts?: { ceMode?: boolean; inline?: boolean; withEditableCopy?: boolean },
+    opts?: { ceMode?: boolean; inline?: boolean; withEditableCopy?: boolean; demo?: boolean },
   ) => boolean;
   /**
    * Consume a terminal 'success' for the given publication: drops it WITHOUT
@@ -149,7 +185,11 @@ export const useMarketplaceInstallStore = create<MarketplaceInstallState>((set, 
     if (get().active?.status === 'installing') return false;
     const ceMode = Boolean(opts?.ceMode);
     const inline = Boolean(opts?.inline);
-    const withEditableCopy = Boolean(opts?.withEditableCopy);
+    const demo = Boolean(opts?.demo);
+    // A demo install creates nothing, so there is nothing to make an editable
+    // copy OF: the request would be a real backend write in a mode whose whole
+    // point is that it performs none.
+    const withEditableCopy = Boolean(opts?.withEditableCopy) && !demo;
     const token = ++installSeq;
     stopProgressTicker();
 
@@ -162,17 +202,22 @@ export const useMarketplaceInstallStore = create<MarketplaceInstallState>((set, 
       publication.publicationType === 'INTERFACE' ||
       publication.publicationType === 'SKILL';
 
-    track('app_install_started', {
-      publication_id: publication.id,
-      publication_type: publication.publicationType ?? null,
-      is_free: isFree,
-      ce_mode: ceMode,
-    });
+    // A rehearsed install is not a product signal. Emitting it would inflate the
+    // install funnel with events that have no acquisition behind them.
+    if (!demo) {
+      track('app_install_started', {
+        publication_id: publication.id,
+        publication_type: publication.publicationType ?? null,
+        is_free: isFree,
+        ce_mode: ceMode,
+      });
+    }
 
     set({
       active: {
         publication,
         ceMode,
+        demo,
         inline,
         status: 'installing',
         progress: 0,
@@ -212,20 +257,25 @@ export const useMarketplaceInstallStore = create<MarketplaceInstallState>((set, 
     // CE-cloud (ceMode): every type installs through the unified remote acquire
     // (/publications/remote/{id}/acquire). Off CE-cloud, each type keeps its own
     // local acquire endpoint.
-    const acquireCall = ceMode
-      ? publicationService.acquireRemotePublication(publication.id)
-      : isAgent
-        ? publicationService.acquireAgentPublication(publication.id)
-        : isResource
-          ? publicationService.acquireResourcePublication(publication.id)
-          : publicationService.acquirePublication(publication.id);
+    // Demo mode must not even CONSTRUCT the call: these service methods fire the
+    // request on the spot, so building the promise and ignoring it would still
+    // acquire the publication.
+    const acquireCall = demo
+      ? null
+      : ceMode
+        ? publicationService.acquireRemotePublication(publication.id)
+        : isAgent
+          ? publicationService.acquireAgentPublication(publication.id)
+          : isResource
+            ? publicationService.acquireResourcePublication(publication.id)
+            : publicationService.acquirePublication(publication.id);
 
     void runInstall();
     return true;
 
     async function runInstall() {
       try {
-        const result = await acquireCall;
+        const result = acquireCall ? await acquireCall : null;
         if (token !== installSeq) return;
 
         // Requested editable copy: fire it as soon as the install landed, so it runs
@@ -256,11 +306,15 @@ export const useMarketplaceInstallStore = create<MarketplaceInstallState>((set, 
 
         // Result shape varies by acquire endpoint - agent → {agentId},
         // resource → {resourceId, type}, workflow/remote → {workflowId, ...}.
-        const id = isAgent
-          ? (result as { agentId: string }).agentId
-          : isResource
-            ? (result as { resourceId: string }).resourceId
-            : (result as { workflowId: string }).workflowId;
+        // Demo mode has no id on purpose: consumers gate "open what you just
+        // installed" on it, and there is nothing to open.
+        const id = demo
+          ? null
+          : isAgent
+            ? (result as { agentId: string }).agentId
+            : isResource
+              ? (result as { resourceId: string }).resourceId
+              : (result as { workflowId: string }).workflowId;
 
         const active = get().active;
         if (!active) return;
@@ -270,18 +324,20 @@ export const useMarketplaceInstallStore = create<MarketplaceInstallState>((set, 
             status: 'success',
             progress: 100,
             acquiredId: id,
-            resources: readResourceCounts(result),
+            resources: demo ? demoResourceCounts(publication) : readResourceCounts(result),
             editableCopyWorkflowId,
             editableCopyFailed: withEditableCopy && !editableCopyWorkflowId,
           },
         });
-        track('app_install_succeeded', {
-          publication_id: publication.id,
-          publication_type: publication.publicationType ?? null,
-          is_free: isFree,
-          acquired_id: id,
-          duration_ms: Math.round(performance.now() - startTime),
-        });
+        if (!demo) {
+          track('app_install_succeeded', {
+            publication_id: publication.id,
+            publication_type: publication.publicationType ?? null,
+            is_free: isFree,
+            acquired_id: id,
+            duration_ms: Math.round(performance.now() - startTime),
+          });
+        }
       } catch (err: any) {
         if (token !== installSeq) return;
         stopProgressTicker();
@@ -309,12 +365,14 @@ export const useMarketplaceInstallStore = create<MarketplaceInstallState>((set, 
           outcome = 'error';
         }
         set({ active: { ...active, status, error: err?.message || null } });
-        track('app_install_failed', {
-          publication_id: publication.id,
-          publication_type: publication.publicationType ?? null,
-          outcome,
-          error_code: err?.code ?? (err?.status != null ? String(err.status) : null),
-        });
+        if (!demo) {
+          track('app_install_failed', {
+            publication_id: publication.id,
+            publication_type: publication.publicationType ?? null,
+            outcome,
+            error_code: err?.code ?? (err?.status != null ? String(err.status) : null),
+          });
+        }
       }
     }
   },

@@ -163,7 +163,8 @@ class RemoteToolExecutionAuthorizationTest {
         assertThat(content).containsEntry("executed", false);
         assertThat(String.valueOf(content.get("message")))
                 .contains("NOT been installed")
-                .contains("USER");
+                .contains("USER", "installation confirmation", "Resume the original task")
+                .doesNotContain("come back and ask again");
     }
 
     @Test
@@ -196,5 +197,157 @@ class RemoteToolExecutionAuthorizationTest {
                 creds, System.currentTimeMillis());
         assertThat(other).isNotNull();
         assertThat(other.metadata()).containsEntry("rule", "agent:execute");
+    }
+
+    // ---- Arming production: pin/unpin and a scheduled agent. These are the calls whose
+    // effects outlive the conversation, so each is pinned end to end from the gate decision.
+
+    @Test
+    @DisplayName("workflow:pin is gated - regression: putting a version live armed every trigger with no card")
+    void workflowPinIsGated() {
+        ToolResult result = service.checkToolAuthorization(
+                new ToolCall("call-10", "workflow",
+                        Map.of("action", "pin", "workflow_id", "w-1", "version", 12), null),
+                chatCredentials(), System.currentTimeMillis());
+
+        assertThat(result).isNotNull();
+        assertThat(result.metadata()).containsEntry("rule", "workflow:pin");
+        // The card must be able to say WHICH workflow and version, or the question is
+        // unanswerable. The name is not here on purpose - agent-service cannot resolve it.
+        assertThat(result.metadata()).extracting("subject").asInstanceOf(
+                org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("kind", "workflow")
+                .containsEntry("id", "w-1")
+                .containsEntry("version", 12);
+    }
+
+    @Test
+    @DisplayName("workflow:unpin is gated - taking production off the air is not a silent action")
+    void workflowUnpinIsGated() {
+        ToolResult result = service.checkToolAuthorization(
+                new ToolCall("call-11", "workflow", Map.of("action", "unpin", "workflow_id", "w-1"), null),
+                chatCredentials(), System.currentTimeMillis());
+
+        assertThat(result).isNotNull();
+        assertThat(result.metadata()).containsEntry("rule", "workflow:unpin");
+    }
+
+    @Test
+    @DisplayName("Creating an agent WITH a cron is gated, and the card carries the cron and its zone")
+    void agentCreateWithCronIsGated() {
+        ToolResult result = service.checkToolAuthorization(
+                new ToolCall("call-12", "agent",
+                        Map.of("action", "create", "name", "Inbox Watcher",
+                               "schedule_cron", "0 9 * * *", "schedule_timezone", "Europe/Paris"), null),
+                chatCredentials(), System.currentTimeMillis());
+
+        assertThat(result).isNotNull();
+        assertThat(result.metadata()).containsEntry("rule", "agent:schedule");
+        assertThat(result.metadata()).extracting("subject").asInstanceOf(
+                org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("cron", "0 9 * * *")
+                .containsEntry("timezone", "Europe/Paris")
+                .containsEntry("name", "Inbox Watcher");
+    }
+
+    @Test
+    @DisplayName("Creating an agent WITHOUT a cron is not gated - that is why the rule is conditional")
+    void agentCreateWithoutCronProceeds() {
+        // If this ever starts returning a result, every agent anyone writes in chat gets a
+        // card, which is the failure this design exists to avoid.
+        ToolResult result = service.checkToolAuthorization(
+                new ToolCall("call-13", "agent",
+                        Map.of("action", "create", "name", "Researcher",
+                               "system_prompt", "You research things"), null),
+                chatCredentials(), System.currentTimeMillis());
+
+        assertThat(result).isNull();
+    }
+
+    @Test
+    @DisplayName("Removing a schedule (blank cron) is not gated - what disarms is never held up")
+    void agentUpdateClearingTheCronProceeds() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("action", "update");
+        args.put("agent_id", "a-1");
+        args.put("schedule_cron", "");
+
+        assertThat(service.checkToolAuthorization(
+                new ToolCall("call-14", "agent", args, null),
+                chatCredentials(), System.currentTimeMillis())).isNull();
+    }
+
+    @Test
+    @DisplayName("A pin inside a scheduled run proceeds with no card - nobody is there to answer")
+    void pinInAnExemptContextProceeds() {
+        // The gate exists for the chat. In an unattended run a card would hang the run on a
+        // click that will never come, so the scope decision must keep failing toward exempt.
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__workflowRunId__", "run-1");
+
+        assertThat(service.checkToolAuthorization(
+                new ToolCall("call-15", "workflow",
+                        Map.of("action", "pin", "workflow_id", "w-1", "version", 3), null),
+                creds, System.currentTimeMillis())).isNull();
+    }
+
+    @Test
+    @DisplayName("One standing grant on agent:schedule covers both create and update")
+    void oneGrantCoversCreateAndUpdate() {
+        // The user ticked "don't ask again" on the creation. Asking again the first time the
+        // agent adjusts that same cron would read as the platform forgetting their answer.
+        Map<String, Object> creds = chatCredentials();
+        creds.put("__approvedToolActions__", List.of("agent:schedule"));
+
+        assertThat(service.checkToolAuthorization(
+                new ToolCall("call-16", "agent",
+                        Map.of("action", "update", "agent_id", "a-1", "schedule_cron", "*/10 * * * *"), null),
+                creds, System.currentTimeMillis())).isNull();
+    }
+
+    @Test
+    @DisplayName("A gated call with nothing to name carries no subject at all")
+    void rulesWithoutASubjectCarryNone() {
+        ToolResult result = service.checkToolAuthorization(
+                new ToolCall("call-17", "workflow", Map.of("action", "execute", "id", "w-1"), null),
+                chatCredentials(), System.currentTimeMillis());
+
+        assertThat(result).isNotNull();
+        assertThat(result.metadata()).doesNotContainKey("subject");
+    }
+
+    @Test
+    @DisplayName("The nested params shape the agent help publishes is gated, and its card names the cron")
+    void nestedParamsShapeIsGatedAndNamed() {
+        // agent(action='create', params={..., schedule_cron: ...}) is the form the tool's own
+        // help gives in all three of its scheduled-agent examples, and AgentCrudModule flattens
+        // it before reading anything. Read only the top level and this call arms a recurring
+        // agent, returns success, and raises no card at all.
+        ToolResult result = service.checkToolAuthorization(
+                new ToolCall("call-18", "agent",
+                        Map.of("action", "create",
+                               "params", Map.of("name", "Daily Reporter",
+                                                "system_prompt", "Generate reports.",
+                                                "schedule_cron", "0 9 * * *",
+                                                "schedule_timezone", "Europe/Paris")), null),
+                chatCredentials(), System.currentTimeMillis());
+
+        assertThat(result).isNotNull();
+        assertThat(result.metadata()).containsEntry("rule", "agent:schedule");
+        assertThat(result.metadata()).extracting("subject").asInstanceOf(
+                org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("cron", "0 9 * * *")
+                .containsEntry("timezone", "Europe/Paris")
+                .containsEntry("name", "Daily Reporter");
+    }
+
+    @Test
+    @DisplayName("A nested create with no cron still proceeds, so the merge did not over-gate")
+    void nestedParamsWithoutCronProceeds() {
+        assertThat(service.checkToolAuthorization(
+                new ToolCall("call-19", "agent",
+                        Map.of("action", "create",
+                               "params", Map.of("name", "Researcher", "system_prompt", "Research.")), null),
+                chatCredentials(), System.currentTimeMillis())).isNull();
     }
 }

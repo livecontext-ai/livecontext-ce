@@ -10,6 +10,8 @@ import { useTranslations } from 'next-intl';
 import { useRouter } from 'next/navigation';
 import { calcPrice as calcPriceBase } from '@/lib/billing/pricing-constants';
 import { useSubscription } from '@/lib/hooks/smart-hooks-complete';
+import { useFreeAiCredits } from '@/lib/hooks/useFreeAiCredits';
+import { getClientLocale } from '@/lib/utils/locale';
 import FoundingPriceNote from '@/components/pricing/FoundingPriceNote';
 import ReferencePrice from '@/components/pricing/ReferencePrice';
 import { usePricingEvent } from '@/hooks/usePricingEvent';
@@ -108,8 +110,23 @@ export default function InsufficientStorageModal() {
   const calcPrice = (planId: string) => calcPriceBase(planId, billingCycle, 0);
   // Same server-resolved window as the pricing page, so the two never disagree.
   const { event: pricingEvent } = usePricingEvent();
+  // Live, admin-configurable allowance rather than the seeded constant, same
+  // source the pricing card and the comparison table read.
+  const freeAiCredits = useFreeAiCredits();
 
-  const usagePercent = quota ? Math.min(quota.usagePercentage, 100) : 0;
+  // This dialog appears BECAUSE the write was refused, so its numbers have to be the ones that
+  // refused it. The allowance is shared across the account's workspaces: showing this
+  // workspace's own bytes would print something like "3 GB of 100 GB" under a 3% bar while the
+  // upload is being rejected. When the account total is available (the server sends it to the
+  // owning account only), that is what the bar and the figure report.
+  const displayedUsedBytes = quota
+    ? (quota.accountUsedBytes ?? quota.usedBytes)
+    : 0;
+  const usagePercent = quota && quota.maxBytes > 0
+    ? Math.min((displayedUsedBytes / quota.maxBytes) * 100, 100)
+    : quota
+      ? Math.min(quota.usagePercentage, 100)
+      : 0;
 
   const plans: PlanCard[] = [
     {
@@ -119,6 +136,15 @@ export default function InsufficientStorageModal() {
       features: [
         t('features.freeStorage'),
         t('features.freeCredits'),
+        // Both pots, as everywhere else prices are stated: the monthly credits
+        // fund workflows, the AI allowance funds chat and agent turns. Dropped
+        // when an admin has closed the free tier (allowance 0), the same rule
+        // the plan cards apply.
+        ...(freeAiCredits > 0
+          ? [t('features.freeAiCredits', {
+              credits: freeAiCredits.toLocaleString(getClientLocale()),
+            })]
+          : []),
       ],
     },
     {
@@ -173,7 +199,7 @@ export default function InsufficientStorageModal() {
             <div className="flex justify-between text-xs text-theme-secondary mb-1.5">
               <span>{t('currentUsage')}</span>
               <span>
-                {formatBytes(quota.usedBytes)} {t('of')} {formatBytes(quota.maxBytes)}
+                {formatBytes(displayedUsedBytes)} {t('of')} {formatBytes(quota.maxBytes)}
               </span>
             </div>
             <div className="w-full h-2.5 bg-theme-tertiary rounded-full overflow-hidden">

@@ -14,8 +14,6 @@ import { OutputColumn } from './OutputColumn';
 import { OutputSettingsMenu } from './OutputSettingsMenu';
 import { InterfaceMappingsColumn } from './InterfaceMappingsColumn';
 import { PreviewColumn } from './PreviewColumn';
-import { NodeResultDataTable } from './NodeResultDataTable';
-import { ViewMode } from './ViewModeTabs';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 
 import { extractFormFields, extractFormFieldsByAction } from '../../utils/interfaceHtmlUtils';
@@ -42,7 +40,6 @@ interface InspectorDesktopContentProps {
   effectiveRunModeForForms: boolean;
   runId?: string;
   workflowId?: string;
-  viewMode: ViewMode | string;
   /** Centralized toggle: true = show run data, false = show config/schema */
   showExecutionData: boolean;
   isAdvanced: boolean;
@@ -159,9 +156,6 @@ interface InspectorDesktopContentProps {
   getEditorExpression?: () => string;
   handleEditorExpressionChange?: (value: string) => void;
 
-  // Breadcrumb
-  onBreadcrumbChange?: (items: Array<{ label: string; onClick?: () => void }>) => void;
-
   // Webhook tokens map for multi-DAG support (triggerId -> token)
   webhookTokens?: Record<string, string>;
 }
@@ -208,7 +202,6 @@ export function InspectorDesktopContent({
   effectiveRunModeForForms,
   runId,
   workflowId,
-  viewMode,
   showExecutionData,
   isAdvanced,
   isFullscreen = false,
@@ -305,7 +298,6 @@ export function InspectorDesktopContent({
   approvalDelegation,
   getEditorExpression,
   handleEditorExpressionChange,
-  onBreadcrumbChange,
   webhookTokens,
 }: InspectorDesktopContentProps) {
   const { isRunMode: contextIsRunMode, runId: contextRunId, workflowId: contextWorkflowId } = useWorkflowMode();
@@ -431,9 +423,7 @@ export function InspectorDesktopContent({
     setLoadedRunOutput(null);
   }, [node?.id]);
 
-  // Show configuration mode or result mode
-  if (!runId || viewMode === 'configuration' || isInterfaceNode) {
-    return (
+  return (
       <div className="flex flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
         {/* Toast notifications (Use-as-mock confirmation) - same pattern as CredentialSection */}
         {toasts.length > 0 && (
@@ -838,17 +828,4 @@ export function InspectorDesktopContent({
         )}
       </div>
     );
-  }
-
-  // Result mode - show merged DataTable directly for the node's step (full height)
-  return (
-    <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-      <NodeResultDataTable
-        node={node}
-        runId={runId}
-        workflowId={workflowId}
-        onBreadcrumbChange={onBreadcrumbChange}
-      />
-    </div>
-  );
 }

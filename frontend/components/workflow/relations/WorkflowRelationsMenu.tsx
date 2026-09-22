@@ -87,7 +87,11 @@ export function WorkflowRelationsMenu({
       ? canvasChromeCompactButtonClass(open, className)
       : cn(
         'inline-flex items-center justify-center h-7 w-7 rounded-xl',
-        'text-theme-secondary transition-colors hover:bg-theme-secondary hover:text-theme-primary',
+        // Arbitrary values, not `hover:bg-theme-secondary`: the *-theme-* classes are
+        // hand-written CSS, so Tailwind v4 emits the base class and no variant of it -
+        // this button had no hover feedback at all. Same ground as the info control it
+        // now sits next to.
+        'text-theme-secondary transition-colors hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]',
         className,
       )
   ), [variant, className, open]);

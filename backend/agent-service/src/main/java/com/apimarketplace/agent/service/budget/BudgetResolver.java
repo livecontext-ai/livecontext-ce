@@ -1,6 +1,7 @@
 package com.apimarketplace.agent.service.budget;
 
 import com.apimarketplace.agent.domain.AgentEntity;
+import com.apimarketplace.common.credit.AgentBudgetRule;
 import com.apimarketplace.agent.repository.AgentRepository;
 import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
@@ -10,10 +11,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.YearMonth;
-import java.time.ZoneOffset;
-import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -94,14 +91,16 @@ public class BudgetResolver {
             return BudgetState.disabled();
         }
 
+        // The rollover rule itself lives in AgentBudgetRule (common-lib), because the
+        // schedule gate and the agenda have to predict this exact decision without writing
+        // to the row. Two copies of it is how one of them would start answering differently.
+        //
+        // The mode is passed RAW, which preserves the behaviour this method has always had:
+        // the match is exact and case-sensitive, so a row stored as "Monthly" has never reset
+        // and must not start now. See AgentBudgetRule.resetDue.
         String mode = agent.getBudgetResetMode();
-        if (mode == null) mode = "cumulative";
 
-        boolean reset = switch (mode) {
-            case "weekly"  -> isMoreThan7DaysAgo(agent.getBudgetLastReset(), now);
-            case "monthly" -> isInPreviousCalendarMonth(agent.getBudgetLastReset(), now);
-            default        -> false; // cumulative or unknown → never reset
-        };
+        boolean reset = AgentBudgetRule.resetDue(mode, agent.getBudgetLastReset(), now);
 
         if (reset) {
             // Targeted CAS UPDATE with atomic credits_reserved = 0 gate (§4.6).
@@ -149,17 +148,4 @@ public class BudgetResolver {
         return new BudgetState(totalBudget, consumed, reserved, false);
     }
 
-    /** True when {@code lastReset} is null OR more than 7 days before {@code now}. */
-    static boolean isMoreThan7DaysAgo(Instant lastReset, Instant now) {
-        if (lastReset == null) return true;
-        return ChronoUnit.DAYS.between(lastReset, now) >= 7;
-    }
-
-    /** True when {@code lastReset} is null OR falls in a calendar month strictly before {@code now}. */
-    static boolean isInPreviousCalendarMonth(Instant lastReset, Instant now) {
-        if (lastReset == null) return true;
-        YearMonth lastMonth = YearMonth.from(LocalDate.ofInstant(lastReset, ZoneOffset.UTC));
-        YearMonth nowMonth = YearMonth.from(LocalDate.ofInstant(now, ZoneOffset.UTC));
-        return nowMonth.isAfter(lastMonth);
-    }
 }

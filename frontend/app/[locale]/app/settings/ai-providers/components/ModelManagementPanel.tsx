@@ -27,9 +27,12 @@ import {
   Plus,
   AlertTriangle,
   Gauge,
+  Sparkles,
+  KeyRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -37,22 +40,32 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { IS_CE } from "@/lib/edition/edition";
+import { IS_CE, IS_CLOUD } from "@/lib/edition/edition";
 import { cn } from "@/lib/utils";
 import LoadingSpinner from '@/components/LoadingSpinner';
 import {
   modelConfigService,
   type ModelConfigEntry,
   type ModelConfigOverrideInput,
+  type ModelExecutionLink,
 } from "@/lib/api/model-config.service";
 import { clearModelsCache } from "@/hooks/useModels";
 import { getProviderIconSrc } from "@/lib/ai-providers/providerIcons";
 import { REASONING_EFFORT_LEVELS, supportsReasoningEffort } from "@/lib/ai-providers/reasoningEffort";
 import AddModelDialog from "./AddModelDialog";
+import ModelExecutionLinkCell from "./ModelExecutionLinkCell";
 
 interface ModelManagementPanelProps {
-  t: (key: string) => string;
+  /**
+   * next-intl's translator. Values are part of the signature because the panel names a
+   * provider inside a sentence; the ROW components below keep the narrower key-only shape,
+   * since a row has nothing to interpolate and the narrower type says so.
+   */
+  t: (key: string, values?: Record<string, string>) => string;
 }
+
+/** One shared empty array for the (many) models with no execution link. */
+const NO_EXECUTION_LINKS: ModelExecutionLink[] = [];
 
 const TIER_OPTIONS = [
   { value: "top", label: "Top", badgeClass: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" },
@@ -74,13 +87,15 @@ const EFFORT_SELECT_OPTIONS = [
 // Single source of truth for the table's grid template - the header row and
 // every model row MUST use the same one (each row is its own grid container,
 // so a child-count/template mismatch wraps the last cell onto an implicit
-// second line and the whole table misaligns). Cloud gets one extra FIXED
-// column for the CE-ship chip; fixed (not auto) so the varying chip labels
-// (auto/on/off) cannot shift the following columns from row to row. The chip
-// is absent on CE builds, which keep the original 10-column layout.
+// second line and the whole table misaligns). Cloud gets two extra FIXED
+// columns: the CE-ship chip (V381) and the free-tier chip (V493). Fixed (not
+// auto) so their varying labels cannot shift the following columns from row to
+// row. Both are absent on CE builds, which keep the original 10-column layout -
+// a CE install ships no bundle and meters no credits, so neither chip means
+// anything there.
 const ROW_GRID_COLS = IS_CE
-  ? "grid-cols-[40px_28px_auto_1fr_auto_auto_24px_100px_140px_52px]"
-  : "grid-cols-[40px_28px_88px_auto_1fr_auto_auto_24px_100px_140px_52px]";
+  ? "grid-cols-[28px_40px_28px_auto_1fr_auto_auto_24px_100px_140px_52px]"
+  : "grid-cols-[28px_40px_28px_88px_60px_auto_1fr_auto_auto_24px_100px_140px_52px]";
 
 function ProviderBadge({ provider }: { provider: string }) {
   const iconSrc = getProviderIconSrc(provider);
@@ -143,11 +158,21 @@ function NameCell({
   }
 
   return (
+    // `block w-full` is what makes `truncate` do anything at all. A <button> is
+    // shrink-to-fit, so its width is its TEXT: `overflow-hidden` then has nothing to
+    // clip and the name simply ran out of the cell and under the tier and effort
+    // selects, which paint their own background and so appeared to sit on top of it.
+    // The grid column is `1fr` and its item already carries `min-w-0`, so the column
+    // really is narrower than a long id: the name is the part that has to give.
     <button
       type="button"
       onClick={() => { setValue(model.name); setEditing(true); }}
-      className="text-sm font-medium text-theme-primary truncate text-left hover:underline decoration-dotted underline-offset-2"
-      title={t("modelConfig.editName")}
+      data-testid={`model-name-${model.provider}-${model.id}`}
+      className="block w-full min-w-0 truncate text-left text-sm font-medium text-theme-primary hover:underline decoration-dotted underline-offset-2"
+      // The full name, because a truncated one is unreadable otherwise, and the
+      // action on the aria-label, which is where a screen reader looks for it.
+      title={model.name}
+      aria-label={`${t("modelConfig.editName")}: ${model.name}`}
     >
       {model.name}
     </button>
@@ -408,8 +433,13 @@ function RateLimitCell({
 function SortableModelRow({
   model,
   index,
+  executionLinks,
+  executionLinksLoaded,
+  onExecutionLinksChanged,
+  onExecutionLinkError,
   onToggleEnabled,
   onCycleBundleEnabled,
+  onToggleFreeTier,
   onToggleRecommended,
   onTierChange,
   onReasoningEffortChange,
@@ -418,12 +448,22 @@ function SortableModelRow({
   onNameChange,
   onDelete,
   onReset,
+  selected,
+  onSelectedChange,
   t,
 }: {
   model: ModelConfigEntry;
   index: number;
+  /** Execution links whose BILLED pair is this model - empty when unrouted. */
+  executionLinks: ModelExecutionLink[];
+  /** False while the list is unknown (never read, or the read failed). */
+  executionLinksLoaded: boolean;
+  onExecutionLinksChanged: () => Promise<void>;
+  /** Surface a failed link write, or clear a previous one with null. */
+  onExecutionLinkError: (message: string | null) => void;
   onToggleEnabled: (model: ModelConfigEntry) => void;
   onCycleBundleEnabled: (model: ModelConfigEntry) => void;
+  onToggleFreeTier: (model: ModelConfigEntry) => void;
   onToggleRecommended: (model: ModelConfigEntry) => void;
   onTierChange: (model: ModelConfigEntry, tier: string) => void;
   onReasoningEffortChange: (model: ModelConfigEntry, effort: string) => void;
@@ -437,6 +477,8 @@ function SortableModelRow({
   }) => void;
   onDelete: (model: ModelConfigEntry) => void;
   onReset: (model: ModelConfigEntry) => void;
+  selected: boolean;
+  onSelectedChange: (model: ModelConfigEntry, selected: boolean) => void;
   t: (key: string) => string;
 }) {
   const {
@@ -464,6 +506,15 @@ function SortableModelRow({
         model.enabled === false && "opacity-40"
       )}
     >
+      {/* Selection, for the bulk bar above the list. Its own column so the drag handle
+          stays where the eye expects it. */}
+      <Checkbox
+        checked={selected}
+        onCheckedChange={(v) => onSelectedChange(model, v === true)}
+        aria-label={`${t("modelConfig.selectRow")} ${model.name}`}
+        data-testid={`model-select-${model.provider}-${model.id}`}
+      />
+
       {/* Drag handle + number */}
       <div className="flex items-center gap-1">
         <button
@@ -514,17 +565,64 @@ function SortableModelRow({
         </button>
       )}
 
+      {/* Free-tier opening (V493): whether a Free-plan account may spend its monthly
+          AI ALLOWANCE (the separate pot, not the workflow credits) on this model. Off
+          by default. Cloud only - a CE install meters nothing, so there is no
+          allowance to open. Only rendered on the chat and browser_agent tabs, whose
+          source types the allowance actually funds; image rows are mode-filtered out
+          of both and can never reach this. */}
+      {!IS_CE && (
+        <button
+          type="button"
+          onClick={() => onToggleFreeTier(model)}
+          data-testid={`model-free-tier-${model.provider}-${model.id}`}
+          title={t("modelConfig.freeTierTooltip")}
+          className={cn(
+            "w-full px-1.5 py-0.5 rounded-md text-xs font-medium border transition-colors whitespace-nowrap text-center",
+            model.freeTierEnabled
+              ? "border-sky-300 text-sky-700 bg-sky-50 dark:border-sky-700 dark:text-sky-400 dark:bg-sky-900/20"
+              : "border-theme text-theme-secondary bg-theme-tertiary"
+          )}
+        >
+          {t("modelConfig.freeTierChip")}
+        </button>
+      )}
+
       {/* Provider badge - icon + name (icons distinguish CLI from API) */}
       <ProviderBadge provider={model.provider} />
 
-      {/* Model name + badges */}
+      {/* Model name, then the real id under it, then the badges.
+
+          The id line is the point of this cell. The name is editable, so it is whatever an
+          admin last typed, and with only that on screen there was no way to tell a renamed
+          model from one still wearing its catalogue name, nor to find the id a workflow or
+          an execution link actually refers to. It appears ONLY when the two differ, so a
+          second line means "this one has been renamed" at a glance and an untouched
+          catalogue stays one line per row. */}
       <div className="flex items-center gap-1.5 min-w-0">
         <div className="min-w-0 flex-1">
           <NameCell model={model} onNameChange={onNameChange} t={t} />
+          {model.name !== model.id && (
+            <span
+              className="block truncate text-[11px] leading-tight text-theme-secondary"
+              title={model.id}
+              data-testid={`model-id-${model.provider}-${model.id}`}
+            >
+              {model.id}
+            </span>
+          )}
         </div>
+        {/* Both of these used to be text pills. On a catalogue where most rows carry at
+            least one, the row read as a sentence of badges and the name lost the fight for
+            attention. They keep their full wording in the tooltip. */}
         {model.isCustom && (
-          <span className="text-sm bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 px-1.5 py-0.5 rounded-md whitespace-nowrap flex-shrink-0">
-            {t("modelConfig.custom")}
+          <span
+            title={t("modelConfig.custom")}
+            aria-label={t("modelConfig.custom")}
+            data-testid={`model-custom-${model.provider}-${model.id}`}
+            className="flex-shrink-0 text-purple-600 dark:text-purple-400"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
           </span>
         )}
         {/* Full catalog is listed for ranking even without a key. Mark rows the
@@ -533,10 +631,25 @@ function SortableModelRow({
         {model.available === false && model.providerKind !== 'bridge' && (
           <span
             title={t("modelConfig.notConfiguredTooltip")}
-            className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded-md whitespace-nowrap flex-shrink-0"
+            aria-label={t("modelConfig.notConfigured")}
+            data-testid={`model-unconfigured-${model.provider}-${model.id}`}
+            className="flex-shrink-0 text-amber-600 dark:text-amber-400"
           >
-            {t("modelConfig.notConfigured")}
+            <KeyRound className="w-3.5 h-3.5" />
           </span>
+        )}
+        {/* Execution-link badge + one-click "route to the CLI" button. Cloud
+            only: the execution-link endpoints are not loaded in CE, so the
+            control would 404 there. Renders nothing for a model that is neither
+            linked nor routable by a CLI, so it stays a badge among badges rather
+            than a new grid column (ROW_GRID_COLS is unchanged). */}
+        {IS_CLOUD && executionLinksLoaded && (
+          <ModelExecutionLinkCell
+            model={model}
+            links={executionLinks}
+            onChanged={onExecutionLinksChanged}
+            onError={onExecutionLinkError}
+          />
         )}
       </div>
 
@@ -686,6 +799,18 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [providerFilter, setProviderFilter] = useState<string>("all");
   /**
+   * Providers switched off entirely, lower-cased. Absent from the list means on; null means
+   * the answer could not be read, which is NOT the same and must not draw a switch.
+   */
+  const [disabledProviders, setDisabledProviders] = useState<string[] | null>([]);
+  /** Rows ticked for a bulk change, keyed `provider:id`. */
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
+  /** Free-text match on the model id and on the name an admin gave it. */
+  const [search, setSearch] = useState<string>("");
+  const [tierFilter, setTierFilter] = useState<string>("all");
+  /** "all" | "on" | "off" - which side of the per-model switch to show. */
+  const [stateFilter, setStateFilter] = useState<string>("all");
+  /**
    * Active category tab. {@code 'chat'} mirrors the legacy global view -
    * writes go to the parent {@code model_config_overrides.ranking} column
    * via {@code bulkUpdateRankings} (no category param) so existing chat
@@ -693,6 +818,28 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
    * {@code bulkUpdateRankings(category)} + {@code setCategoryEnabled}.
    */
   const [category, setCategory] = useState<Category>('chat');
+  /**
+   * Every execution link, indexed per billed model below. Cloud only: the
+   * endpoint is not loaded in CE, and the routing it configures does not exist
+   * there either.
+   */
+  const [executionLinks, setExecutionLinks] = useState<ModelExecutionLink[]>([]);
+  /**
+   * Did the list actually load? An empty list because the read FAILED is not the same
+   * fact as "this model is not routed", and the difference is a write: the row would
+   * fall back to the create button, whose PUT upserts on (pair, scope) and would
+   * overwrite an existing ALL link (its target, its execution model, its enabled flag)
+   * that the admin never saw. Unknown renders no control at all.
+   */
+  const [executionLinksLoaded, setExecutionLinksLoaded] = useState(false);
+  /**
+   * Everything execution-link (a failed read, a failed write) reports here rather than
+   * into the panel's shared error slot. Sharing needed a provenance flag to stop a link
+   * write clearing a tier error, and that flag could not guard the other direction: a
+   * successful tier write refreshes the model list, which clears the slot, so "the
+   * routing failed to save" vanished on an unrelated success.
+   */
+  const [executionLinkError, setExecutionLinkError] = useState<string | null>(null);
 
   // Sliding-indicator pill toggle for the category selector - mirrors the
   // page's connection-mode toggle so the two read as the same kind of control.
@@ -720,6 +867,41 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
 
   const hasAnyOverride = useMemo(() => models.some(m => m.hasOverride), [models]);
 
+  const isProviderOff = useCallback(
+    (provider: string) => (disabledProviders ?? []).includes(provider.toLowerCase()),
+    [disabledProviders],
+  );
+
+  /**
+   * Switch the whole provider currently being filtered on. This is the move the panel had no
+   * answer for: a provider the feed fills carries hundreds of rows (OpenRouter alone is 438),
+   * so taking it out of the pickers one model at a time was not a real option.
+   *
+   * Optimistic like the per-model toggle, and rolled back with the server's own message on
+   * failure. Each model's flag is untouched, so switching back on restores what was curated.
+   */
+  const handleToggleProvider = useCallback(
+    (provider: string) => {
+      const key = provider.toLowerCase();
+      const nextEnabled = (disabledProviders ?? []).includes(key);
+      setDisabledProviders((prev) =>
+        nextEnabled ? (prev ?? []).filter((p) => p !== key) : [...(prev ?? []), key],
+      );
+      setSaving(true);
+      modelConfigService
+        .setProviderEnabled(provider, nextEnabled)
+        .then(() => clearModelsCache())
+        .catch((e) => {
+          setDisabledProviders((prev) =>
+            nextEnabled ? [...(prev ?? []), key] : (prev ?? []).filter((p) => p !== key),
+          );
+          setError(e instanceof Error && e.message ? e.message : t("modelConfig.saveError"));
+        })
+        .finally(() => setSaving(false));
+    },
+    [disabledProviders, t],
+  );
+
   const providerOptions = useMemo(() => {
     const seen = new Set<string>();
     const list: string[] = [];
@@ -729,9 +911,19 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         list.push(m.provider);
       }
     }
+    // A provider switched off can be GONE from the catalogue it came from: one made only of
+    // custom models is not in the base list at all, and the switch that removed it is only
+    // reachable once it is picked here. Without this union such a provider is stuck off with
+    // no route back in the UI.
+    for (const p of disabledProviders ?? []) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        list.push(p);
+      }
+    }
     list.sort((a, b) => a.localeCompare(b));
     return list;
-  }, [models]);
+  }, [models, disabledProviders]);
 
   const visibleModels = useMemo(() => {
     let filtered = providerFilter === "all"
@@ -747,8 +939,33 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
     if (category === 'browser_agent') {
       filtered = filtered.filter(m => m.providerKind !== 'bridge');
     }
+    if (tierFilter !== "all") {
+      filtered = filtered.filter(m => (m.tier ?? "") === tierFilter);
+    }
+    if (stateFilter !== "all") {
+      const wantEnabled = stateFilter === "on";
+      filtered = filtered.filter(m => (m.enabled !== false) === wantEnabled);
+    }
+    const needle = search.trim().toLowerCase();
+    if (needle) {
+      // Both the id and the name, because the two diverge as soon as an admin renames a
+      // model, and searching for what you see on screen has to work either way.
+      filtered = filtered.filter(m =>
+        m.id.toLowerCase().includes(needle) || (m.name ?? "").toLowerCase().includes(needle),
+      );
+    }
     return filtered;
-  }, [models, providerFilter, category]);
+  }, [models, providerFilter, category, tierFilter, stateFilter, search]);
+
+  const filtersActive =
+    providerFilter !== "all" || tierFilter !== "all" || stateFilter !== "all" || search.trim() !== "";
+
+  const clearFilters = useCallback(() => {
+    setProviderFilter("all");
+    setTierFilter("all");
+    setStateFilter("all");
+    setSearch("");
+  }, []);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -771,6 +988,24 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
       const data = await modelConfigService.getEffectiveModels(categoryParam);
       setModels(data);
       setError(null);
+      // Which providers are switched off ENTIRELY. Kept OUT of the await above, and out of
+      // the model list itself, for two reasons. A disabled provider must keep every one of
+      // its models listed here or there would be no way to switch it back on; and this is a
+      // refinement of the list, never a reason to fail rendering it, so an install whose
+      // agent-service predates the endpoint still gets a working panel instead of an error
+      // where the catalogue should be. Promise.resolve().then so a synchronous throw lands
+      // in the same place as a rejection.
+      void Promise.resolve()
+        .then(() => modelConfigService.getDisabledProviders())
+        .then((off) => setDisabledProviders(off.map((p) => p.toLowerCase())))
+        .catch(() => {
+          // Unknown, not "none off". Treating a failed read as an empty list drew every
+          // switch ON, so the first click on a provider that is already OFF wrote OFF again:
+          // a no-op that flips the control and takes two clicks to undo. The switch is
+          // hidden instead, and the banner says why.
+          setDisabledProviders(null);
+          setError(t("modelConfig.providerSwitchUnavailable"));
+        });
     } catch {
       setError(t("modelConfig.fetchError"));
     } finally {
@@ -778,12 +1013,166 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
     }
   }, [t, category]);
 
+  const keyOf = (m: ModelConfigEntry) => `${m.provider}:${m.id}`;
+
+  const allFilteredSelected =
+    visibleModels.length > 0 && visibleModels.every((m) => selectedKeys.has(keyOf(m)));
+
+  /** Tick or untick every row the current filters leave on screen, and only those. */
+  const selectAllFiltered = useCallback(
+    (next: boolean) => {
+      setSelectedKeys((prev) => {
+        const out = new Set(prev);
+        for (const m of visibleModels) {
+          if (next) out.add(`${m.provider}:${m.id}`);
+          else out.delete(`${m.provider}:${m.id}`);
+        }
+        return out;
+      });
+    },
+    [visibleModels],
+  );
+
+  const setRowSelected = useCallback((model: ModelConfigEntry, next: boolean) => {
+    setSelectedKeys((prev) => {
+      const out = new Set(prev);
+      const key = `${model.provider}:${model.id}`;
+      if (next) out.add(key);
+      else out.delete(key);
+      return out;
+    });
+  }, []);
+
+  /** The selected rows, in the order they are on screen. */
+  const selectedModels = useMemo(
+    () => visibleModels.filter((m) => selectedKeys.has(`${m.provider}:${m.id}`)),
+    [visibleModels, selectedKeys],
+  );
+
+  /**
+   * Apply one change to every selected row, sequentially.
+   *
+   * <p>Sequential on purpose: these are admin writes against a shared catalogue, a selection
+   * is tens of rows rather than hundreds (the provider switch is the answer for hundreds),
+   * and a burst of parallel PUTs would only make a partial failure harder to read. The
+   * panel reloads once at the end so the list reflects what the server actually took, and
+   * says how many failed rather than claiming success.
+   */
+  const applyToSelection = useCallback(
+    async (label: string, apply: (model: ModelConfigEntry) => Promise<unknown>) => {
+      if (selectedModels.length === 0) return;
+      setSaving(true);
+      setError(null);
+      let failed = 0;
+      let lastMessage = "";
+      for (const model of selectedModels) {
+        try {
+          await apply(model);
+        } catch (e) {
+          failed++;
+          lastMessage = e instanceof Error && e.message ? e.message : "";
+        }
+      }
+      clearModelsCache();
+      // Reload FIRST: a successful reload clears the error banner, so reporting a partial
+      // batch before it would wipe the one message that says the batch was partial.
+      await fetchModels({ silent: true });
+      if (failed > 0) {
+        setError(
+          t("modelConfig.bulkPartial", {
+            action: label,
+            failed: String(failed),
+            total: String(selectedModels.length),
+            reason: lastMessage,
+          }),
+        );
+      }
+      setSaving(false);
+    },
+    [selectedModels, t, fetchModels],
+  );
+
+  const bulkSetEnabled = useCallback(
+    (enabled: boolean) =>
+      applyToSelection(
+        enabled ? t("modelConfig.bulkEnable") : t("modelConfig.bulkDisable"),
+        (model) =>
+          category === "chat"
+            ? modelConfigService.saveOverride({
+                provider: model.provider,
+                modelId: model.id,
+                enabled,
+              })
+            : modelConfigService.setCategoryEnabled(model.provider, model.id, category, enabled),
+      ),
+    [applyToSelection, category, t],
+  );
+
+  const bulkSetTier = useCallback(
+    (tier: string) =>
+      applyToSelection(t("modelConfig.bulkTier"), (model) =>
+        modelConfigService.saveOverride({
+          provider: model.provider,
+          modelId: model.id,
+          tier,
+        }),
+      ),
+    [applyToSelection, t],
+  );
+
+
   // Re-fetch on tab change. fetchModels is memoised on category so this is
   // exactly one fetch per tab switch - no thrash, no race window where the
   // user sees stale data from the previous tab.
   useEffect(() => {
     fetchModels();
   }, [fetchModels]);
+
+  /**
+   * Execution links are independent of the category tab (a link is keyed on the billed
+   * pair, not on a surface tab), so the DATA does not change per tab. The tab is still a
+   * dependency below, as the retry: a failed read hides every routing control, and
+   * without it that would last the whole session.
+   */
+  const loadExecutionLinks = useCallback(async () => {
+    if (!IS_CLOUD) return;
+    try {
+      const data = await modelConfigService.listExecutionLinks();
+      setExecutionLinks(Array.isArray(data) ? data : []);
+      setExecutionLinksLoaded(true);
+      // Clear only the message this loader owns: a write failure re-reads the list on
+      // its way out (that is how a half-done multi-row delete stops being displayed), so
+      // a blanket clear here would erase the failure the admin has not read yet.
+      setExecutionLinkError((prev) => (prev === t("executionLinks.loadError") ? null : prev));
+    } catch (err) {
+      // A model list that renders is worth more than the badges, so the failure is not
+      // fatal - but it IS surfaced, and the routing controls stay hidden rather than
+      // claiming every model is unrouted.
+      console.error("Failed to load model execution links:", err);
+      setExecutionLinks([]);
+      setExecutionLinksLoaded(false);
+      setExecutionLinkError(t("executionLinks.loadError"));
+    }
+    // `category` is not read here (a link is keyed on the billed pair, not on a tab),
+    // it is the retry: switching tabs re-runs this, so a transient failure is not a
+    // dead end for the rest of the session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t, category]);
+
+  useEffect(() => {
+    loadExecutionLinks();
+  }, [loadExecutionLinks]);
+
+  const executionLinksByModel = useMemo(() => {
+    const byPair = new Map<string, ModelExecutionLink[]>();
+    for (const link of executionLinks) {
+      const key = `${link.billedProvider}:${link.billedModel}`;
+      const existing = byPair.get(key);
+      if (existing) existing.push(link);
+      else byPair.set(key, [link]);
+    }
+    return byPair;
+  }, [executionLinks]);
 
   const saveAndRefresh = async (fn: () => Promise<void>) => {
     setSaving(true);
@@ -868,6 +1257,34 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
       });
   };
 
+  // Free-tier opening (V493): lets a Free-plan account fund a chat / agent turn on
+  // this model from its monthly AI allowance (V494's separate pot) instead of the
+  // PAYG bucket alone. This is what makes an agent usable for a visitor who has not
+  // topped up. The monthly credit grant is unaffected and stays workflow-only.
+  const handleToggleFreeTier = (model: ModelConfigEntry) => {
+    const current = model.freeTierEnabled === true;
+    const next = !current;
+    setModels((prev) =>
+      prev.map((m) =>
+        m.provider === model.provider && m.id === model.id
+          ? { ...m, freeTierEnabled: next, hasOverride: true }
+          : m,
+      ),
+    );
+    modelConfigService
+      .saveOverride({ provider: model.provider, modelId: model.id, freeTierEnabled: next })
+      .catch((e) => {
+        setModels((prev) =>
+          prev.map((m) =>
+            m.provider === model.provider && m.id === model.id
+              ? { ...m, freeTierEnabled: current }
+              : m,
+          ),
+        );
+        setError(e instanceof Error ? e.message : String(e));
+      });
+  };
+
   const handleToggleEnabled = (model: ModelConfigEntry) => {
     // currently disabled (enabled === false) → turn on; otherwise turn off.
     const nextEnabled = model.enabled === false;
@@ -903,7 +1320,7 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
       .then(() => {
         clearModelsCache();
       })
-      .catch(() => {
+      .catch((e) => {
         // Roll back the optimistic flip and surface the error.
         setModels((prev) =>
           prev.map((m) =>
@@ -912,7 +1329,10 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
               : m,
           ),
         );
-        setError(t("modelConfig.saveError"));
+        // The SERVER message when there is one. This used to discard it and show a generic
+        // sentence, so a refusal that names its reason (an unpriced model cannot be enabled,
+        // an unknown pair) reached the admin as "Failed to save changes" and nothing else.
+        setError(e instanceof Error && e.message ? e.message : t("modelConfig.saveError"));
       })
       .finally(() => setSaving(false));
   };
@@ -1072,8 +1492,50 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         <p className="text-xs text-theme-secondary">
           {t(`modelConfig.category.${category}.hint`)}
         </p>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           {saving && <LoadingSpinner size="xs" />}
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t("modelConfig.searchPlaceholder")}
+            aria-label={t("modelConfig.searchPlaceholder")}
+            data-testid="model-search"
+            className="h-9 w-[200px] rounded-lg border border-theme bg-theme-primary px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60"
+          />
+          {/* Wrapped so a test can scope to THIS select: every row carries a tier select of
+              its own, with the same option values. */}
+          <div data-testid="tier-filter">
+          <Select value={tierFilter} onValueChange={setTierFilter}>
+            <SelectTrigger
+              className="rounded-lg px-3 text-sm min-w-[120px]"
+              aria-label={t("modelConfig.filterByTier")}
+              title={t("modelConfig.filterByTier")}
+            >
+              <SelectValue placeholder={t("modelConfig.filterByTier")} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t("modelConfig.allTiers")}</SelectItem>
+              {TIER_OPTIONS.map((tier) => (
+                <SelectItem key={tier.value} value={tier.value}>{tier.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          </div>
+          <Select value={stateFilter} onValueChange={setStateFilter}>
+            <SelectTrigger
+              className="rounded-lg px-3 text-sm min-w-[120px]"
+              aria-label={t("modelConfig.filterByState")}
+              title={t("modelConfig.filterByState")}
+            >
+              <SelectValue placeholder={t("modelConfig.filterByState")} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t("modelConfig.allStates")}</SelectItem>
+              <SelectItem value="on">{t("modelConfig.stateOn")}</SelectItem>
+              <SelectItem value="off">{t("modelConfig.stateOff")}</SelectItem>
+            </SelectContent>
+          </Select>
           <Select value={providerFilter} onValueChange={setProviderFilter}>
             {/* rounded-lg keeps a softly-squared edge (less pill-like than the
                 action buttons); height inherits the standard h-9 control size. */}
@@ -1087,10 +1549,33 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
             <SelectContent>
               <SelectItem value="all">{t("modelConfig.allProviders")}</SelectItem>
               {providerOptions.map((p) => (
-                <SelectItem key={p} value={p}>{p}</SelectItem>
+                <SelectItem key={p} value={p}>
+                  {isProviderOff(p) ? t("modelConfig.providerOffOption", { provider: p }) : p}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
+          {/* The provider switch lives next to the provider filter on purpose: it acts on the
+              provider you are looking at, and there is no sensible "all providers" version of
+              it. Hidden until one is picked. */}
+          {providerFilter !== "all" && disabledProviders !== null && (
+            <div className="flex items-center gap-2 rounded-lg border border-theme px-3 h-9">
+              <span className="text-sm text-theme-secondary whitespace-nowrap">
+                {t("modelConfig.providerEnabled")}
+              </span>
+              <Switch
+                checked={!isProviderOff(providerFilter)}
+                onCheckedChange={() => handleToggleProvider(providerFilter)}
+                testId={`provider-toggle-${providerFilter}`}
+                aria-label={t("modelConfig.providerEnabled")}
+              />
+            </div>
+          )}
+          {filtersActive && (
+            <Button size="sm" variant="ghost" onClick={clearFilters} data-testid="clear-filters">
+              {t("modelConfig.clearFilters")}
+            </Button>
+          )}
           <Button
             size="sm"
             variant="outline"
@@ -1117,14 +1602,103 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         </div>
       )}
 
+      {/* Said once, here, rather than on every row: the list below still shows each model and
+          its own switch, and none of them is offered anywhere while the provider is off. */}
+      {providerFilter !== "all" && isProviderOff(providerFilter) && (
+        <div
+          className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3"
+          role="status"
+          data-testid="provider-off-notice"
+        >
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+          <p className="text-sm text-amber-700 dark:text-amber-400">
+            {t("modelConfig.providerOffNotice", { provider: providerFilter })}
+          </p>
+        </div>
+      )}
+
+      {/* V494: the pricing page, the plan cards and the comparison table all announce
+          the Free plan's monthly AI allowance unconditionally. The allowance can only
+          be spent on the models opened below, so with none open the promise is real
+          money the platform advertises and then refuses on the first turn. Nothing
+          errors and no log fires - the only place this is visible is here, in front of
+          the person who can fix it in one click. Cloud only; CE meters nothing.
+
+          Scoped to the CURRENT tab, because the models list is: each tab is its own kind of
+          turn (chat, browser agent) and each is refused independently, so "nothing open
+          here" is the true and useful statement. The copy says "on this tab" for that
+          reason. */}
+      {!IS_CE && models.length > 0 && !models.some((m) => m.freeTierEnabled) && (
+        <div
+          data-testid="free-tier-none-open"
+          className="flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3"
+        >
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            {t("modelConfig.freeTierNoneOpen")}
+          </p>
+        </div>
+      )}
+
+      {/* Its own line, amber not red: the model list is fine, only the routing badges
+          are missing, and this has to stay on screen for as long as they are. */}
+      {executionLinkError && (
+        <div className="flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+          <p className="text-sm text-amber-800 dark:text-amber-300">{executionLinkError}</p>
+        </div>
+      )}
+
+      {/* Bulk bar. Only on screen when something is ticked, so it never takes room from the
+          list it acts on. */}
+      {selectedModels.length > 0 && (
+        <div
+          className="flex items-center gap-2 flex-wrap rounded-lg border border-theme bg-theme-secondary/40 px-3 py-2"
+          data-testid="bulk-bar"
+        >
+          <span className="text-sm text-theme-primary font-medium">
+            {t("modelConfig.bulkSelected", { count: String(selectedModels.length) })}
+          </span>
+          <Button size="sm" variant="outline" data-testid="bulk-enable" onClick={() => bulkSetEnabled(true)}>
+            {t("modelConfig.bulkEnable")}
+          </Button>
+          <Button size="sm" variant="outline" data-testid="bulk-disable" onClick={() => bulkSetEnabled(false)}>
+            {t("modelConfig.bulkDisable")}
+          </Button>
+          <div data-testid="bulk-tier">
+            <Select value="" onValueChange={bulkSetTier}>
+              <SelectTrigger className="rounded-lg px-3 text-sm min-w-[130px] h-8" aria-label={t("modelConfig.bulkTier")}>
+                <SelectValue placeholder={t("modelConfig.bulkTier")} />
+              </SelectTrigger>
+              <SelectContent>
+                {TIER_OPTIONS.map((tier) => (
+                  <SelectItem key={tier.value} value={tier.value}>{tier.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button size="sm" variant="ghost" data-testid="bulk-clear" onClick={() => setSelectedKeys(new Set())}>
+            {t("modelConfig.bulkClear")}
+          </Button>
+        </div>
+      )}
+
       {/* Column headers */}
       <div className={cn(
         "grid items-center gap-2 px-3 py-1 text-sm text-theme-secondary font-medium",
         ROW_GRID_COLS
       )}>
+        <Checkbox
+          checked={allFilteredSelected}
+          onCheckedChange={(v) => selectAllFiltered(v === true)}
+          aria-label={t("modelConfig.selectAll")}
+          data-testid="model-select-all"
+        />
         <div>#</div>
         <div />
         {/* CE-ship chip column (cloud only) - the chip labels itself, no header text */}
+        {!IS_CE && <div />}
+        {/* Free-tier chip column (cloud only) - same, the chip labels itself */}
         {!IS_CE && <div />}
         <div>{t("modelConfig.columns.provider")}</div>
         <div>{t("modelConfig.columns.model")}</div>
@@ -1157,8 +1731,15 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
                 key={`${model.provider}:${model.id}`}
                 model={model}
                 index={models.indexOf(model)}
+                executionLinks={
+                  executionLinksByModel.get(`${model.provider}:${model.id}`) ?? NO_EXECUTION_LINKS
+                }
+                executionLinksLoaded={executionLinksLoaded}
+                onExecutionLinksChanged={loadExecutionLinks}
+                onExecutionLinkError={setExecutionLinkError}
                 onToggleEnabled={handleToggleEnabled}
                 onCycleBundleEnabled={handleCycleBundleEnabled}
+                onToggleFreeTier={handleToggleFreeTier}
                 onToggleRecommended={handleToggleRecommended}
                 onTierChange={handleTierChange}
                 onReasoningEffortChange={handleReasoningEffortChange}
@@ -1167,6 +1748,8 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
                 onNameChange={handleNameChange}
                 onDelete={handleDelete}
                 onReset={handleReset}
+                selected={selectedKeys.has(`${model.provider}:${model.id}`)}
+                onSelectedChange={setRowSelected}
                 t={t}
               />
             ))}

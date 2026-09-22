@@ -1,9 +1,11 @@
+import { CATALOG_INTEGRATIONS_CLAIM } from '@/lib/integrations/integrationCount';
 import type { Metadata } from 'next'
 import { Inter, Outfit } from 'next/font/google'
 import './globals.css'
 import '../styles/chat.css'
 import Providers from './providers'
 import NavigationLoader from '../components/NavigationLoader'
+import { searchEngineVerification } from '@/lib/seo/verification'
 
 
 const inter = Inter({
@@ -20,7 +22,7 @@ const outfit = Outfit({
 })
 
 const SITE_TITLE = 'LiveContext: The AI automation platform. Chat, workflows, agents, apps.';
-const SITE_DESCRIPTION = 'Build AI agents, automate workflows and ship interactive apps without code. 700+ integrations, custom APIs, data tables, marketplace and AI chat in one platform.';
+const SITE_DESCRIPTION = `Build AI agents, automate workflows and ship interactive apps without code. ${CATALOG_INTEGRATIONS_CLAIM} integrations, custom APIs, data tables, marketplace and AI chat in one platform.`;
 const SITE_URL = 'https://livecontext.ai';
 
 export const metadata: Metadata = {
@@ -76,6 +78,12 @@ export const metadata: Metadata = {
     description: SITE_DESCRIPTION,
     images: ['/og-image.jpg'],
   },
+  // Ownership of the search-console properties. Set GOOGLE_SITE_VERIFICATION,
+  // BING_SITE_VERIFICATION or YANDEX_SITE_VERIFICATION to claim one; unset, and
+  // on CE, nothing is emitted. This object is static, so most pages capture the
+  // value at BUILD time - DNS verification is the better instrument and this is
+  // the fallback. See lib/seo/verification.ts.
+  verification: searchEngineVerification(),
   robots: {
     index: true,
     follow: true,

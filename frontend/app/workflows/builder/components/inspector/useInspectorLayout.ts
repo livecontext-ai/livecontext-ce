@@ -115,6 +115,42 @@ export function shouldConstrainPanelToContainer({
   return !isFullscreen && !isDocked && !isWindowMobile;
 }
 
+/**
+ * Whether the inspector is pinned to its single-column, 300px panel.
+ *
+ * It means ONE thing: the node still has to be pointed at something before it
+ * has parameters to show, and the picker that does the pointing is a
+ * single-column screen. Exactly one such picker is left in the inspector,
+ * `McpToolSelector` in the Params column, which an MCP node uses to choose its
+ * API and then its tool. A tool node has already chosen, so it is never pinned.
+ *
+ * It used to mean the same thing for triggers, AI nodes and core nodes, back
+ * when `InspectorTriggerNode` / `InspectorAiNode` / `InspectorCoreNode` rendered
+ * their own pickers. Those components are gone (the pickers moved to the Add
+ * Node panel and the empty-canvas chat), so for those families the gate had no
+ * picker left to protect and only took things away: the Input and Output
+ * columns, the Expand button, and - the expensive one - the Edit / Run data
+ * switcher, which is how a reader reaches what a step actually ran with.
+ *
+ * It also matched on `data.id` PREFIXES, which do not survive a plan round-trip:
+ * a node is re-imported with `data.id` set to its graph node id, so a form
+ * trigger saved as `trigger-new-clip` and the transform shipped by the
+ * onboarding template as `core-1` both stopped looking like themselves and
+ * started looking like "a type has not been chosen yet". On production plans
+ * that was 466 of 479 triggers. Nothing here reads an id any more.
+ */
+export function shouldForceCompactPanel({
+  isApiNode,
+  isMcpGenericNode,
+  isToolNode,
+}: {
+  isApiNode: boolean;
+  isMcpGenericNode: boolean;
+  isToolNode: boolean;
+}): boolean {
+  return (isApiNode || isMcpGenericNode) && !isToolNode;
+}
+
 interface UseInspectorLayoutProps {
   isAdvanced: boolean;
   isFullscreen?: boolean;

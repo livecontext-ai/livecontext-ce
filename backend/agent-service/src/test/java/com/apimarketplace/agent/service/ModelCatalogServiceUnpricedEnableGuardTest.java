@@ -18,6 +18,9 @@ import org.mockito.quality.Strictness;
 import java.math.BigDecimal;
 import java.util.Optional;
 
+import org.mockito.ArgumentCaptor;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -161,6 +164,125 @@ class ModelCatalogServiceUnpricedEnableGuardTest {
 
         assertThatCode(() -> service.saveOverride(input)).doesNotThrowAnyException();
         verify(repository).save(any());
+    }
+
+    @Test
+    @DisplayName("REGRESSION: renaming an ALREADY-ENABLED unpriced model persists, instead of silently reverting")
+    void renamingAnAlreadyEnabledUnpricedModelPersists() {
+        // The case the test above just misses: there `enabled` is null on the ROW, so the
+        // guard read false whichever state it tested. On a model that is already on, reading
+        // the row instead of the request made a name-only edit throw, and the transactional
+        // save rolled back the name AND its user-modified marker. The admin saw a generic
+        // banner, the cell snapped back, and the next feed sync was free to keep writing its
+        // own name over the one they had chosen. Reported as "my alias reverts on refresh".
+        ModelConfigOverrideEntity stored = row("zai", "glm-5.3", null, null);
+        stored.setEnabled(true);
+        when(repository.findByProviderAndModelId("zai", "glm-5.3")).thenReturn(Optional.of(stored));
+
+        ModelConfigOverrideEntity input = new ModelConfigOverrideEntity();
+        input.setProvider("zai");
+        input.setModelId("glm-5.3");
+        input.setDisplayName("GLM 5.3 turbo maison");
+
+        assertThatCode(() -> service.saveOverride(input)).doesNotThrowAnyException();
+
+        ArgumentCaptor<ModelConfigOverrideEntity> saved =
+                ArgumentCaptor.forClass(ModelConfigOverrideEntity.class);
+        verify(repository).save(saved.capture());
+        assertThat(saved.getValue().getDisplayName()).isEqualTo("GLM 5.3 turbo maison");
+        // And the marker, or the next sync overwrites the name anyway and the bug survives
+        // the fix in a slower form.
+        assertThat(saved.getValue().getUserModifiedFields()).contains("displayName");
+        // The model stays on: a rename is not a state change.
+        assertThat(saved.getValue().getEnabled()).isTrue();
+    }
+
+    @Test
+    @DisplayName("REGRESSION: renaming a model already open to the free tier persists too")
+    void renamingAFreeTierModelPersists() {
+        // Same shape, other guard: it ran on every save and read the row, so a model already
+        // open to the free tier could not be renamed either once its price was out of the
+        // billable range.
+        ModelConfigOverrideEntity stored = row("openrouter", "openrouter/auto",
+                new BigDecimal("-1"), new BigDecimal("-1"));
+        stored.setFreeTierEnabled(true);
+        when(repository.findByProviderAndModelId("openrouter", "openrouter/auto"))
+                .thenReturn(Optional.of(stored));
+
+        ModelConfigOverrideEntity input = new ModelConfigOverrideEntity();
+        input.setProvider("openrouter");
+        input.setModelId("openrouter/auto");
+        input.setDisplayName("Auto router");
+
+        assertThatCode(() -> service.saveOverride(input)).doesNotThrowAnyException();
+
+        ArgumentCaptor<ModelConfigOverrideEntity> saved =
+                ArgumentCaptor.forClass(ModelConfigOverrideEntity.class);
+        verify(repository).save(saved.capture());
+        // The name has to REACH the save, not merely fail to throw on the way there.
+        assertThat(saved.getValue().getDisplayName()).isEqualTo("Auto router");
+    }
+
+    @Test
+    @DisplayName("Opening a model to the free tier IS still refused when its price cannot be billed")
+    void openingToTheFreeTierIsStillGuarded() {
+        // The refusal the guard exists for must survive the fix: it fires when the REQUEST
+        // carries the free-tier key, which is exactly when the admin is opening the model.
+        ModelConfigOverrideEntity stored = row("openrouter", "openrouter/auto",
+                new BigDecimal("-1"), new BigDecimal("-1"));
+        when(repository.findByProviderAndModelId("openrouter", "openrouter/auto"))
+                .thenReturn(Optional.of(stored));
+
+        ModelConfigOverrideEntity input = new ModelConfigOverrideEntity();
+        input.setProvider("openrouter");
+        input.setModelId("openrouter/auto");
+        input.setFreeTierEnabledExplicitlySet(true);
+        input.setFreeTierEnabled(true);
+
+        assertThatThrownBy(() -> service.saveOverride(input))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("free tier");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("REGRESSION: repricing a free-tier model to an unbillable rate is still refused")
+    void repricingAFreeTierModelToAnUnbillableRateIsRefused() {
+        // Narrowing the guard to "the request carries the free-tier key" gave the silent lie a
+        // second door: a price-only save on a row already open to the free tier was accepted,
+        // the mirror refused the rate, and the catalogue kept showing a price billing never
+        // took, with a WARN log as the only trace.
+        ModelConfigOverrideEntity stored = row("openrouter", "openrouter/auto", null, null);
+        stored.setFreeTierEnabled(true);
+        when(repository.findByProviderAndModelId("openrouter", "openrouter/auto"))
+                .thenReturn(Optional.of(stored));
+
+        ModelConfigOverrideEntity input = new ModelConfigOverrideEntity();
+        input.setProvider("openrouter");
+        input.setModelId("openrouter/auto");
+        input.setPriceInput(new BigDecimal("-1"));
+        input.setPriceOutput(new BigDecimal("-1"));
+
+        assertThatThrownBy(() -> service.saveOverride(input))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("free tier");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("repricing a model that is NOT on the free tier is none of that guard's business")
+    void repricingANonFreeTierModelIsAllowed() {
+        ModelConfigOverrideEntity stored = row("openrouter", "openrouter/auto", null, null);
+        when(repository.findByProviderAndModelId("openrouter", "openrouter/auto"))
+                .thenReturn(Optional.of(stored));
+
+        ModelConfigOverrideEntity input = new ModelConfigOverrideEntity();
+        input.setProvider("openrouter");
+        input.setModelId("openrouter/auto");
+        input.setPriceInput(new BigDecimal("-1"));
+        input.setPriceOutput(new BigDecimal("-1"));
+
+        assertThatCode(() -> service.saveOverride(input)).doesNotThrowAnyException();
     }
 
     @Test

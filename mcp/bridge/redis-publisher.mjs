@@ -234,6 +234,10 @@ export class RedisPublisher {
             argsSummary: metadata.argsSummary,
             // application:acquire rides the publication id so the card can open the install modal.
             applicationId: metadata.applicationId,
+            // What the card names: which workflow and version is going live, which cron is
+            // being armed. Relayed opaquely - this hop never interprets it, so a new gated
+            // rule needs no change here. Absent for the rules that name nothing.
+            subject: metadata.subject,
           },
           timestamp: new Date().toISOString(),
         });

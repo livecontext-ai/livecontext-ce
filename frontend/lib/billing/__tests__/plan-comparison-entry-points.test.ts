@@ -5,8 +5,12 @@
  * being wired into every upsell in sight - the sidebar's plan name, the billing,
  * usage and storage pages, four modals, a locked-node marker in the builder -
  * which put it one stray click away on surfaces a reader passes through all day.
- * It now belongs where choosing a plan is the task: the pricing page, and the
- * public landing's pricing section.
+ * It now belongs where choosing a plan is the task, and nowhere else: the
+ * pricing page and the public landing's pricing section. It briefly gained a
+ * third entry point, the end of onboarding, which is the counter-example worth
+ * keeping: a brand-new account is not choosing a plan, so it is greeted by
+ * WelcomeGiftModal stating the two monthly pots instead of by a five-column
+ * matrix.
  *
  * That is a property of the whole tree, so no rendering test can see it: each
  * new entry point is one line in a file nobody else's suite reads. This walks
@@ -30,7 +34,7 @@ const ALLOWED = [
   'app/[locale]/_landing/PricingSection.tsx',
 ];
 
-/** Where the dialog itself is mounted. Both hosts serve an allowed opener. */
+/** Where the dialog itself is mounted. Every host serves an allowed opener. */
 const ALLOWED_HOSTS = [
   // Wraps the app tree, which is where the pricing page lives. Mounted at the
   // layout rather than in the page because the dialog listens on a window event.

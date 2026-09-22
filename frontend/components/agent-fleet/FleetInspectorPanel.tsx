@@ -409,7 +409,12 @@ export function AgentInspectorContent({
               const hasBudget = total != null;
               const pct = hasBudget && total > 0 ? Math.min(100, Math.round((consumed / total) * 100)) : 0;
               const reservedPct = hasBudget && total > 0 ? Math.min(100 - pct, Math.round((reserved / total) * 100)) : 0;
-              const over = hasBudget && (consumed + reserved) >= total;
+              // The SERVER verdict when it sent one. The arithmetic beside it is the
+              // stored counter, which is only zeroed when the agent next runs: a monthly
+              // agent that reached its cap last month still sums to over, and painting
+              // that bar red claims a stop that is not happening. Kept as the fallback
+              // so a payload without the verdict looks exactly as it did before.
+              const over = hasBudget && (agent.budgetBlocked ?? (consumed + reserved) >= total);
               const title = hasBudget
                 ? `${t('creditsUsed')}: ${formatCost(consumed, 4)} · ${t('creditsReservedLabel')}: ${formatCost(reserved, 4)} / ${formatCost(total, 4)}`
                 : `${t('creditsUsed')}: ${formatCost(consumed, 4)} · ${t('noLimit')}`;

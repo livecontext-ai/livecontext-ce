@@ -98,8 +98,12 @@
 
                 This must run unconditionally, not inside the `ce` profile: it is the CLOUD
                 build that needs protecting from the leftovers of a previous CE build.
-                Container builds always `clean`; a developer or a reused CI workspace does
-                not. Re-copying ~350 small SQL files each build is not measurable.
+                NOTHING else guarantees a clean target/ here. The image builds used to
+                pass `clean` and no longer do (their layer starts from a fresh COPY, and
+                .dockerignore excludes **/target/, so the goal was pure cost); a developer
+                or a reused CI workspace never did. This execution is now the only thing
+                standing between a CE build and the leftovers of a previous one, so do not
+                delete it. Re-copying ~350 small SQL files each build is not measurable.
             -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

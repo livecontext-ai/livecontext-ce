@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { StatusBadge, type StatusType } from '@/components/ui/StatusBadge';
 import { useStepData } from '@/app/workflows/builder/hooks/useStepData';
+import { useStepCompletionInvalidation } from '@/app/workflows/builder/hooks/useStepCompletionInvalidation';
 import type { DataSourceItemRow, ServerFilters } from '@/components/data-table/types';
 
 export interface WorkflowStepTableProps {
@@ -17,6 +18,9 @@ export interface WorkflowStepTableProps {
   jsonPath?: string;
   onNavigate?: (path: string) => void;
   showIdColumn?: boolean;
+  /** An enclosing run panel owns epoch selection when this is supplied (null means all). */
+  epoch?: number | null;
+  refreshVersion?: number;
 }
 
 const STATUS_OPTIONS: StatusType[] = [
@@ -71,22 +75,31 @@ export function WorkflowStepTable({
   stepAlias,
   jsonPath,
   onNavigate,
-  showIdColumn = true,
+  showIdColumn = !jsonPath,
+  epoch,
+  refreshVersion = 0,
 }: WorkflowStepTableProps) {
   const t = useTranslations('dataTable');
   const tCommon = useTranslations('common');
   const tRunSteps = useTranslations('workflow.runSteps');
+  const tLogs = useTranslations('workflow.logs');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusValue, setStatusValue] = useState<string>(ALL_STATUSES);
   const [epochValue, setEpochValue] = useState<string>(ALL_EPOCHS);
+  const [completionVersion, setCompletionVersion] = useState(0);
+  useStepCompletionInvalidation({
+    runId,
+    stepAlias,
+    onInvalidate: () => setCompletionVersion(value => value + 1),
+  });
 
   // Fetch step rows to derive the available epoch values for the filter Select.
   // useStepData is also used by useRunOutputData (inspector panel) for the
   // status filter dropdown, sharing the {@code ['step-data', ...]} cache key
   // - when both this table and the inspector are mounted on the same alias,
   // a single fetch satisfies both consumers.
-  const { stepData } = useStepData(runId, stepAlias);
+  const { stepData } = useStepData(runId, stepAlias, { enabled: epoch === undefined });
   // Most-recent epoch first - matches the inspector "Item N / N = latest"
   // navigator semantics, so the top of the dropdown is the freshest run.
   const availableEpochs = useMemo<number[]>(() => {
@@ -115,8 +128,8 @@ export function WorkflowStepTable({
 
   const serverFilters = useMemo<ServerFilters>(() => ({
     status: statusValue === ALL_STATUSES ? null : statusValue,
-    epoch: epochValue === ALL_EPOCHS ? null : Number(epochValue),
-  }), [statusValue, epochValue]);
+    epoch: epoch !== undefined ? epoch : epochValue === ALL_EPOCHS ? null : Number(epochValue),
+  }), [statusValue, epochValue, epoch]);
 
   const handleStatusChange = useCallback((next: string) => setStatusValue(next), []);
   const handleEpochChange = useCallback((next: string) => setEpochValue(next), []);
@@ -152,16 +165,16 @@ export function WorkflowStepTable({
             ))}
           </SelectContent>
         </Select>
-        <Select
+        {epoch === undefined && <Select
           value={epochValue}
           onValueChange={handleEpochChange}
           disabled={availableEpochs.length === 0}
         >
           <SelectTrigger
             className="w-full sm:w-36 flex-shrink-0 focus:ring-inset"
-            aria-label="Epoch"
+            aria-label={tLogs('epoch')}
           >
-            <SelectValue placeholder="Epoch" />
+            <SelectValue placeholder={tLogs('epoch')} />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_EPOCHS}>
@@ -169,14 +182,15 @@ export function WorkflowStepTable({
             </SelectItem>
             {availableEpochs.map((e) => (
               <SelectItem key={e} value={String(e)}>
-                <span className="text-sm font-medium">Epoch {e}</span>
+                <span className="text-sm font-medium">{tLogs('epochNumber', { number: e })}</span>
               </SelectItem>
             ))}
           </SelectContent>
-        </Select>
+        </Select>}
       </div>
       <div className="flex-1 min-h-0 overflow-hidden">
         <DataTable
+          key={JSON.stringify([jsonPath ?? '', refreshVersion, completionVersion])}
           dataSourceId={0}
           jsonPath={jsonPath}
           workflowContext={workflowContext}

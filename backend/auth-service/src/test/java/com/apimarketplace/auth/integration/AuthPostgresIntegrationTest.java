@@ -64,5 +64,6 @@ abstract class AuthPostgresIntegrationTest {
         // occasionally straddles the top of the hour and the real scheduler mutates a fixture
         // mid-assert. "-" is Spring's disabled marker.
         r.add("subscription.internal-renewal.cron", () -> "-");
+        r.add("subscription.yearly-credit-cycle.cron", () -> "-");
     }
 }

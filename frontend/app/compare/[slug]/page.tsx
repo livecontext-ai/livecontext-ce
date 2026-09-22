@@ -20,8 +20,11 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   if (!comparison) return {};
 
   const url = `${SITE_URL}/compare/${comparison.slug}`;
+  const title = comparison.metaTitle.includes('LiveContext')
+    ? comparison.metaTitle
+    : `${comparison.metaTitle} - LiveContext`;
   return {
-    title: comparison.metaTitle,
+    title: { absolute: title },
     description: comparison.metaDescription,
     alternates: { canonical: url },
     // Full openGraph block: Next.js metadata merging is shallow per top-level
@@ -29,7 +32,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     // layout's og:image and siteName on these share-critical pages.
     openGraph: {
       siteName: 'LiveContext',
-      title: `${comparison.metaTitle} - LiveContext`,
+      title,
       description: comparison.metaDescription,
       url,
       type: 'article',
@@ -41,6 +44,12 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
           alt: 'LiveContext: one message in, a working automation out.',
         },
       ],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title,
+      description: comparison.metaDescription,
+      images: ['/og-image.jpg'],
     },
     // Self-hosted deployments must never index marketing pages (same rule as
     // the landing page and /changelog).

@@ -46,8 +46,6 @@ public class CreditConsumptionClient {
     private static final long CACHE_TTL_SECONDS = 30;
     private static final int MAX_RETRIES = 3;
     private static final long RETRY_BASE_DELAY_MS = 1000;
-    private static final String HMAC_ALGO = "HmacSHA256";
-    private static final String SIGNATURE_PREFIX = "gw_";
     private static final String INTERNAL_PROVIDER_ID = "internal-credit-client";
 
     /**
@@ -59,10 +57,31 @@ public class CreditConsumptionClient {
      */
     public static final String SOURCE_TYPE_CHAT_CONVERSATION = "CHAT_CONVERSATION";
 
+    /**
+     * A CE install's LLM traffic relayed through cloud. Deliberately NOT funded by the
+     * FREE AI allowance (see {@code CreditService.AI_ALLOWANCE_SOURCE_TYPES}), which is
+     * exactly why a relay pre-flight must name it rather than gating as a chat turn.
+     */
+    public static final String SOURCE_TYPE_CE_LLM_RELAY = "CE_LLM_RELAY";
+
     private final RestTemplate restTemplate;
     private final String authServiceUrl;
     private final boolean enabled;
     private final String gatewaySecretKey;
+
+    /**
+     * Upper bound on {@link #creditCheckCache}.
+     *
+     * <p>The map is only ever written to, never swept: entries fall out of use after
+     * {@link #CACHE_TTL_SECONDS} but stay resident for the life of the process. Its
+     * keys were already high-cardinality (the chat-budget key carries the estimated
+     * token counts, which differ on every turn) and V494 added the model to the
+     * generic key as well, so on a busy pod it grows all day. The cap keeps that
+     * bounded; expired entries go first, and only if every remaining entry is still
+     * live does the whole map go, which costs one extra round trip per key and
+     * nothing else - the answers are re-fetchable by definition.
+     */
+    private static final int CACHE_MAX_ENTRIES = 10_000;
 
     private final ConcurrentHashMap<String, CachedCheck> creditCheckCache = new ConcurrentHashMap<>();
 
@@ -190,10 +209,22 @@ public class CreditConsumptionClient {
                                   String provider, String model,
                                   Integer promptTokens, Integer completionTokens,
                                   String errorReason, String organizationId) {
+        persistRejection(tenantId, sourceType, sourceId, provider, model,
+                promptTokens, completionTokens, errorReason, organizationId, null);
+    }
+
+    /**
+     * Explicit-org overload carrying the key route the debit was meant to run under, so a
+     * dead-letter replay bills an own-key turn its flat fee and not the token rate.
+     */
+    public void persistRejection(String tenantId, String sourceType, String sourceId,
+                                  String provider, String model,
+                                  Integer promptTokens, Integer completionTokens,
+                                  String errorReason, String organizationId, String keyRoute) {
         if (!enabled || deadLetterHandler == null) return;
         try {
             deadLetterHandler.persistFailedConsumption(tenantId, sourceType, sourceId,
-                    provider, model, promptTokens, completionTokens, errorReason, organizationId);
+                    provider, model, promptTokens, completionTokens, errorReason, organizationId, keyRoute);
             log.warn("Persisted credit rejection to dead-letter: tenant={}, source={}/{}, org={}, reason={}",
                     tenantId, sourceType, sourceId, organizationId, errorReason);
         } catch (Exception e) {
@@ -223,32 +254,70 @@ public class CreditConsumptionClient {
      * workflow-gate "allowed" must never be served back to a chat gate.
      */
     public boolean checkCredits(String userId, String sourceType) {
+        return checkCredits(userId, sourceType, null, null);
+    }
+
+    /**
+     * Model-aware variant (V494). A caller that knows which model the turn will run
+     * on MUST use it: a Free account's monthly AI allowance pays for chat and agent
+     * turns on the models opened to the free tier, and auth-service cannot count
+     * that allowance toward the gate without knowing the model. Omitting it refuses
+     * a turn the debit would have funded.
+     *
+     * <p>The model is part of the cache key, since the verdict now differs between
+     * two models for the same account and source type.
+     */
+    public boolean checkCredits(String userId, String sourceType, String provider, String model) {
         if (!enabled) return true;
         if (userId == null || userId.isBlank()) return true;
 
-        String url = authServiceUrl + "/api/credits/check"
-                + (sourceType != null && !sourceType.isBlank() ? "?sourceType=" + sourceType : "");
+        // URI TEMPLATE, not a hand-encoded string. RestTemplate expands the url through
+        // DefaultUriBuilderFactory, which encodes what it is given - so a value we had
+        // already percent-encoded came out encoded TWICE ("meta%2Fllama-3" became
+        // "meta%252Fllama-3"), and auth-service then looked up a model id that does not
+        // exist, failed closed, and refused a turn the allowance would have paid for.
+        // Exactly the divergence the model parameter was added to remove, on the ids
+        // most likely to need it (openrouter/z-ai style "vendor/model" names).
+        // Placeholders leave the single encoding pass to the one component that knows
+        // which characters are reserved where.
+        StringBuilder query = new StringBuilder();
+        Map<String, Object> uriVars = new HashMap<>();
+        if (sourceType != null && !sourceType.isBlank()) {
+            query.append(query.isEmpty() ? "?" : "&").append("sourceType={sourceType}");
+            uriVars.put("sourceType", sourceType);
+        }
+        if (provider != null && !provider.isBlank()) {
+            query.append(query.isEmpty() ? "?" : "&").append("provider={provider}");
+            uriVars.put("provider", provider);
+        }
+        if (model != null && !model.isBlank()) {
+            query.append(query.isEmpty() ? "?" : "&").append("model={model}");
+            uriVars.put("model", model);
+        }
+        String url = authServiceUrl + "/api/credits/check" + query;
         String cacheKey = scopedUserKey(userId)
-                + (sourceType != null && !sourceType.isBlank() ? ":" + sourceType : "");
+                + (sourceType != null && !sourceType.isBlank() ? ":" + sourceType : "")
+                + (provider != null && !provider.isBlank() ? ":" + provider : "")
+                + (model != null && !model.isBlank() ? ":" + model : "");
         HttpHeaders headers = userHeaders(userId, null);
 
         try {
             ResponseEntity<Map> response = restTemplate.exchange(
-                    url, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
+                    url, HttpMethod.GET, new HttpEntity<>(headers), Map.class, uriVars);
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 Object allowed = response.getBody().get("allowed");
                 boolean result = Boolean.TRUE.equals(allowed);
-                creditCheckCache.put(cacheKey, new CachedCheck(result, Instant.now()));
+                rememberCheck(cacheKey, result);
                 return result;
             }
             if (response.getStatusCode().value() == 402) {
-                creditCheckCache.put(cacheKey, new CachedCheck(false, Instant.now()));
+                rememberCheck(cacheKey, false);
                 return false;
             }
             return useCacheOrFailClosed(cacheKey, "unexpected status " + response.getStatusCode());
         } catch (org.springframework.web.client.HttpClientErrorException e) {
             if (e.getStatusCode().value() == 402) {
-                creditCheckCache.put(cacheKey, new CachedCheck(false, Instant.now()));
+                rememberCheck(cacheKey, false);
                 return false;
             }
             return useCacheOrFailClosed(cacheKey, e.getMessage());
@@ -274,8 +343,26 @@ public class CreditConsumptionClient {
      * rejection for "too expensive for this turn" does NOT block a subsequent
      * generic "balance &gt; 0" check (different questions, different answers).
      */
+    /**
+     * Back-compat overload: gates as {@code CHAT_CONVERSATION}. Callers that debit as
+     * something else MUST use the 6-arg form, or the gate answers about a different
+     * bucket set than the debit will draw (V494).
+     */
     public boolean checkChatBudget(String userId, String provider, String model,
-                                    int estimatedPromptTokens, int estimatedCompletionTokens) {
+                                   int estimatedPromptTokens, int estimatedCompletionTokens) {
+        return checkChatBudget(userId, provider, model,
+                estimatedPromptTokens, estimatedCompletionTokens, SOURCE_TYPE_CHAT_CONVERSATION);
+    }
+
+    /**
+     * @param sourceType what the caller will DEBIT this turn as. The gate scopes the
+     *                   balance by source type (the FREE AI allowance funds some LLM
+     *                   sources and not others), so passing anything but the real one
+     *                   asks about a bucket set the debit will not draw.
+     */
+    public boolean checkChatBudget(String userId, String provider, String model,
+                                    int estimatedPromptTokens, int estimatedCompletionTokens,
+                                    String sourceType) {
         if (!enabled) return true;
         if (userId == null || userId.isBlank()) return true;
         if (provider == null || provider.isBlank() || model == null || model.isBlank()) {
@@ -285,7 +372,7 @@ public class CreditConsumptionClient {
         }
 
         String cacheKey = chatBudgetCacheKey(userId, provider, model,
-                estimatedPromptTokens, estimatedCompletionTokens);
+                estimatedPromptTokens, estimatedCompletionTokens, sourceType);
         String url = authServiceUrl + "/api/credits/check-chat";
         HttpHeaders headers = userHeaders(userId, MediaType.APPLICATION_JSON);
 
@@ -294,6 +381,9 @@ public class CreditConsumptionClient {
         body.put("model", model);
         body.put("estimatedPromptTokens", estimatedPromptTokens);
         body.put("estimatedCompletionTokens", estimatedCompletionTokens);
+        if (sourceType != null && !sourceType.isBlank()) {
+            body.put("sourceType", sourceType);
+        }
 
         try {
             ResponseEntity<Map> response = restTemplate.exchange(
@@ -301,17 +391,17 @@ public class CreditConsumptionClient {
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 Object allowed = response.getBody().get("allowed");
                 boolean result = Boolean.TRUE.equals(allowed);
-                creditCheckCache.put(cacheKey, new CachedCheck(result, Instant.now()));
+                rememberCheck(cacheKey, result);
                 return result;
             }
             if (response.getStatusCode().value() == 402) {
-                creditCheckCache.put(cacheKey, new CachedCheck(false, Instant.now()));
+                rememberCheck(cacheKey, false);
                 return false;
             }
             return useCacheOrFailClosed(cacheKey, "unexpected status " + response.getStatusCode());
         } catch (org.springframework.web.client.HttpClientErrorException e) {
             if (e.getStatusCode().value() == 402) {
-                creditCheckCache.put(cacheKey, new CachedCheck(false, Instant.now()));
+                rememberCheck(cacheKey, false);
                 return false;
             }
             return useCacheOrFailClosed(cacheKey, e.getMessage());
@@ -323,12 +413,65 @@ public class CreditConsumptionClient {
     /**
      * Cache key for chat-budget checks - distinct namespace from generic
      * {@link #checkCredits} so the two questions don't poison each other's cache.
-     * Keyed on {@code (userId, provider, model, estPrompt, estCompletion)} so a
-     * cached answer is only served back for the same cost question.
+     * Keyed on {@code (userId, provider, model, estPrompt, estCompletion, sourceType)}
+     * so a cached answer is only served back for the same cost question. The source
+     * type is part of it because the answer genuinely differs by it: the FREE AI
+     * allowance funds a chat turn on an open model and not a CE relay turn on the same
+     * model, so one verdict must never be served for the other.
      */
     private static String chatBudgetCacheKey(String userId, String provider, String model,
-                                              int estPrompt, int estCompletion) {
-        return "chat:" + scopedUserKey(userId) + ":" + provider + ":" + model + ":" + estPrompt + ":" + estCompletion;
+                                              int estPrompt, int estCompletion, String sourceType) {
+        return "chat:" + scopedUserKey(userId) + ":" + provider + ":" + model
+                + ":" + estPrompt + ":" + estCompletion
+                + ":" + (sourceType == null || sourceType.isBlank() ? SOURCE_TYPE_CHAT_CONVERSATION : sourceType);
+    }
+
+    /** Stores a verdict, keeping the cache within {@link #CACHE_MAX_ENTRIES}. */
+    private void rememberCheck(String cacheKey, boolean allowed) {
+        if (creditCheckCache.size() >= CACHE_MAX_ENTRIES) {
+            creditCheckCache.values().removeIf(entry -> !entry.isValid());
+            if (creditCheckCache.size() >= CACHE_MAX_ENTRIES) {
+                // Evict the KEYS OF THE CALLER THAT FILLED IT, not the whole map.
+                //
+                // Key cardinality is driven by request content: the model is part of it
+                // (V494) and reaches this from a request body, so one authenticated user
+                // sending 10 000 distinct model strings inside the 30s TTL can push the
+                // cache to its cap. Clearing everything there would let that user flush
+                // every OTHER tenant's verdict, and the next auth-service blip would fail
+                // closed for all of them instead of riding out on cache. Dropping only
+                // this caller's own entries keeps the blast radius on whoever caused it.
+                String owner = ownerPrefix(cacheKey);
+                creditCheckCache.keySet().removeIf(k -> ownerPrefix(k).equals(owner));
+                if (creditCheckCache.size() >= CACHE_MAX_ENTRIES) {
+                    // Genuinely many distinct callers, all live: nothing better is
+                    // available without an age index, and the answers are re-fetchable
+                    // by definition (one extra round trip per key, once). Reaching here
+                    // takes 10 000 live entries spread across enough OWNERS that evicting
+                    // one owner's keys does not get under the cap, which is why the unit
+                    // test cannot drive it from a single caller.
+                    creditCheckCache.clear();
+                }
+            }
+        }
+        creditCheckCache.put(cacheKey, new CachedCheck(allowed, Instant.now()));
+    }
+
+    /**
+     * The "{@code <userId>|org:<orgId>}" head of a cache key, which is what identifies
+     * the caller an entry belongs to. Every key goes through {@link #scopedUserKey}, so
+     * the marker is always present - including on the "{@code chat:}"-prefixed keys,
+     * where it simply sits further in. A key without it would fall back to scanning from
+     * index 4, which is arbitrary rather than safe; it is unreachable today, and the day
+     * a second key shape appears this needs revisiting rather than inheriting.
+     */
+    private static String ownerPrefix(String cacheKey) {
+        int end = cacheKey.indexOf(":", cacheKey.indexOf("|org:") + 5);
+        return end < 0 ? cacheKey : cacheKey.substring(0, end);
+    }
+
+    /** Visible for tests: how many verdicts are currently held. */
+    int cachedCheckCount() {
+        return creditCheckCache.size();
     }
 
     private boolean useCacheOrFailClosed(String cacheKey, String errorReason) {
@@ -406,11 +549,90 @@ public class CreditConsumptionClient {
     }
 
     /**
+     * Spending power for LLM work: the wallet PLUS the monthly AI allowance (V494).
+     *
+     * <p>Deliberately a separate method rather than widening {@link #fetchBalance}.
+     * The allowance can only pay for agent/chat turns on a free-tier model, so folding
+     * it into the general figure hands a phantom budget to callers it can never fund:
+     * the orchestrator's workflow run budget would start a run on credits no
+     * WORKFLOW_NODE debit can draw (the run then dies mid-execution instead of being
+     * refused up front), and the image-generation pre-flight would pass a gate the
+     * debit refuses.
+     *
+     * <p>Use this ONLY from LLM budget guards. It is a safety net, not the authoritative
+     * gate - the pre-flight check and the debit both re-resolve - but it is model-aware:
+     * the allowance only funds the models an admin opened, so the server is asked what
+     * the pot is worth for THIS model rather than adding it blindly. Adding it blindly
+     * budgets an agent loop against money no debit on a closed model can draw, which is
+     * the same error as withholding it, pointing the other way.
+     *
+     * <p>The model-blind overload remains for callers that genuinely have no model; it
+     * reports the wallet alone, which is the pre-V494 answer and always safe.
+     */
+    public BigDecimal fetchLlmSpendableBalance(String userId) {
+        return fetchLlmSpendableBalance(userId, null, null);
+    }
+
+    public BigDecimal fetchLlmSpendableBalance(String userId, String provider, String model) {
+        if (!enabled || userId == null || userId.isBlank()) {
+            return new BigDecimal("999999999");
+        }
+        // ONE request, both keys. Calling fetchBalance and then re-fetching the same
+        // endpoint would double the round trip on a path that runs every few agent-loop
+        // iterations, and the two reads could land on different snapshots - so the two
+        // halves of one balance would not be the same balance.
+        boolean modelAware = provider != null && !provider.isBlank()
+                && model != null && !model.isBlank();
+        String url = authServiceUrl + "/api/credits/balance"
+                + (modelAware ? "?provider={provider}&model={model}" : "");
+        Map<String, Object> uriVars = modelAware
+                ? Map.of("provider", provider, "model", model)
+                : Map.of();
+        try {
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    url, HttpMethod.GET,
+                    new HttpEntity<>(userHeaders(userId, null)), Map.class, uriVars);
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                // The server answered the model-aware question: it already decided whether
+                // the allowance counts here, so take it verbatim.
+                if (response.getBody().get("llmSpendableBalance") instanceof Number spendable) {
+                    return new BigDecimal(spendable.toString());
+                }
+                if (response.getBody().get("balance") instanceof Number wallet) {
+                    BigDecimal total = new BigDecimal(wallet.toString());
+                    // No model to ask about (or an auth-service that predates the field):
+                    // the pot is added, which is the permissive direction and the one the
+                    // model-blind callers were written for.
+                    if (!modelAware && response.getBody().get("aiBalance") instanceof Number ai) {
+                        total = total.add(new BigDecimal(ai.toString()));
+                    }
+                    return total;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to fetch balance for user {}, returning ZERO (fail-closed): {}",
+                    userId, e.getMessage());
+        }
+        return BigDecimal.ZERO;
+    }
+
+    /**
      * Consume credits asynchronously with retry and dead-letter on permanent failure.
      * Retries up to 3 times with exponential backoff (1s, 2s, 4s).
      * On 402 (insufficient credits), does not retry.
      * After all retries fail, persists to dead-letter for later reconciliation.
      */
+    public void consumeCreditsAsync(String userId, String sourceType, String sourceId,
+                                     String provider, String model,
+                                     Integer promptTokens, Integer completionTokens,
+                                     String keyRoute) {
+        String capturedOrgId = TenantResolver.currentRequestOrganizationId();
+        TenantResolver.requireOrgId(capturedOrgId);
+        asyncSelf().consumeCreditsAsyncInternalAsync(userId, sourceType, sourceId, provider, model,
+                promptTokens, completionTokens, /* imageCount */ null, capturedOrgId, keyRoute);
+    }
+
+    /** Route-less form: see the overload above. */
     public void consumeCreditsAsync(String userId, String sourceType, String sourceId,
                                      String provider, String model,
                                      Integer promptTokens, Integer completionTokens) {
@@ -500,15 +722,25 @@ public class CreditConsumptionClient {
                                                   String provider, String model,
                                                   Integer promptTokens, Integer completionTokens,
                                                   Integer imageCount, String orgId) {
+        consumeCreditsAsyncInternalAsync(userId, sourceType, sourceId, provider, model,
+                promptTokens, completionTokens, imageCount, orgId, null);
+    }
+
+    /** Same, carrying the key route the debit is billed under (own-key turns: flat fee). */
+    @Async
+    public void consumeCreditsAsyncInternalAsync(String userId, String sourceType, String sourceId,
+                                                  String provider, String model,
+                                                  Integer promptTokens, Integer completionTokens,
+                                                  Integer imageCount, String orgId, String keyRoute) {
         TenantResolver.runWithOrgScope(orgId, () ->
                 consumeCreditsAsyncInternal(userId, sourceType, sourceId, provider, model,
-                        promptTokens, completionTokens, imageCount, orgId));
+                        promptTokens, completionTokens, imageCount, orgId, keyRoute));
     }
 
     private void consumeCreditsAsyncInternal(String userId, String sourceType, String sourceId,
                                               String provider, String model,
                                               Integer promptTokens, Integer completionTokens,
-                                              Integer imageCount, String orgId) {
+                                              Integer imageCount, String orgId, String keyRoute) {
         if (!enabled) return;
         if (userId == null || userId.isBlank()) return;
 
@@ -516,7 +748,8 @@ public class CreditConsumptionClient {
         for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
             try {
                 Map<String, Object> result = consumeCredits(userId, sourceType, sourceId,
-                        provider, model, promptTokens, completionTokens, imageCount);
+                        provider, model, promptTokens, completionTokens, imageCount,
+                        /* cacheTokens */ null, keyRoute);
                 if (Boolean.TRUE.equals(result.get("success"))) {
                     return;
                 }
@@ -548,7 +781,7 @@ public class CreditConsumptionClient {
         if (deadLetterHandler != null) {
             try {
                 deadLetterHandler.persistFailedConsumption(userId, sourceType, sourceId,
-                        provider, model, promptTokens, completionTokens, errorMsg, orgId);
+                        provider, model, promptTokens, completionTokens, errorMsg, orgId, keyRoute);
             } catch (Exception e) {
                 // Round-8 audit fix: include exception class + stack trace so a
                 // post-V263 DataIntegrityViolationException or a stray
@@ -608,6 +841,22 @@ public class CreditConsumptionClient {
                                                String provider, String model,
                                                Integer promptTokens, Integer completionTokens,
                                                Integer imageCount, LlmCacheTokens cacheTokens) {
+        return consumeCredits(userId, sourceType, sourceId, provider, model,
+                promptTokens, completionTokens, imageCount, cacheTokens, /* keyRoute */ null);
+    }
+
+    /**
+     * Full form. {@code keyRoute} is the route the execution was pinned to
+     * ({@code "OWN_KEY"} = the tenant's own provider key, billed a flat fee per turn;
+     * null or {@code "PLATFORM"} = token rate). The response carries {@code creditsUsed}
+     * (the debit) and {@code consumptionCredits} (what the turn consumed at the platform
+     * rate, what counters and budgets meter).
+     */
+    public Map<String, Object> consumeCredits(String userId, String sourceType, String sourceId,
+                                               String provider, String model,
+                                               Integer promptTokens, Integer completionTokens,
+                                               Integer imageCount, LlmCacheTokens cacheTokens,
+                                               String keyRoute) {
         if (!enabled) {
             return Map.of("success", true, "skipped", true, "reason", "credit consumption disabled");
         }
@@ -635,6 +884,9 @@ public class CreditConsumptionClient {
             if (cacheTokens.cacheReadTokens() != null) body.put("cacheReadTokens", cacheTokens.cacheReadTokens());
             if (cacheTokens.cachedTokens() != null) body.put("cachedTokens", cacheTokens.cachedTokens());
             if (cacheTokens.reasoningTokens() != null) body.put("reasoningTokens", cacheTokens.reasoningTokens());
+        }
+        if (keyRoute != null && !keyRoute.isBlank()) {
+            body.put("keyRoute", keyRoute);
         }
 
         try {
@@ -847,9 +1099,27 @@ public class CreditConsumptionClient {
                 rem);
     }
 
-    /** Post-flight commit. Returns the outcome enum name (COMMITTED, ALREADY_COMMITTED, RESERVATION_EXPIRED, COMMITTED_PARTIAL, COMMITTED_FLOORED). */
+    /**
+     * Outcome of a commit that never reached a ledger, because this deployment does not meter.
+     *
+     * <p>Distinct from every real outcome so that "did this charge anything" is answerable from the
+     * outcome alone, which is what the generation surfaces do before putting a price on screen.
+     */
+    public static final String BILLING_DISABLED = "BILLING_DISABLED";
+
+    /**
+     * Post-flight commit. Returns the outcome enum name (COMMITTED, ALREADY_COMMITTED,
+     * RESERVATION_EXPIRED, COMMITTED_PARTIAL, COMMITTED_FLOORED), or {@link #BILLING_DISABLED} when
+     * this deployment does not meter at all.
+     *
+     * <p>The disabled answer is deliberately NOT {@code COMMITTED}. Callers now read this outcome to
+     * decide whether an amount may be REPORTED as charged - written onto a generated asset, shown
+     * beside it - and "the ledger is switched off" is the one state where nothing was charged and
+     * every word for success is a lie. It was safe while nobody read the return value; the moment
+     * one did, an install with metering off would have started printing prices nobody paid.
+     */
     public String scopeCommit(String sourceId, BigDecimal actualAmount, String provider, String model) {
-        if (!enabled) return "COMMITTED";
+        if (!enabled) return BILLING_DISABLED;
         String url = authServiceUrl + "/api/credits/markup/scope-commit";
         HttpHeaders headers = userHeaders(null, MediaType.APPLICATION_JSON);
         Map<String, Object> body = new HashMap<>();
@@ -920,30 +1190,14 @@ public class CreditConsumptionClient {
      * argument, so there is nothing left to pass that could disagree with what
      * is sent - the bug cannot be written again here.
      */
+    /**
+     * Stamps the three gateway headers through the shared signer. The whole ritual lives there,
+     * including the blank-secret no-op and the header NAMES: a private copy of those beside a
+     * delegating signer is the drift this consolidation removes.
+     */
     private void applyGatewaySignature(HttpHeaders headers) {
-        if (gatewaySecretKey == null || gatewaySecretKey.isBlank()) {
-            return;
-        }
-        String timestamp = String.valueOf(System.currentTimeMillis());
-        String effectiveUserId = headers.getFirst("X-User-ID");
-        String organizationId = headers.getFirst("X-Organization-ID");
-        headers.set("X-Provider-ID", INTERNAL_PROVIDER_ID);
-        headers.set("X-Gateway-Timestamp", timestamp);
-        headers.set("X-Gateway-Secret", computeGatewaySignature(
-                INTERNAL_PROVIDER_ID, effectiveUserId, organizationId, timestamp));
+        com.apimarketplace.common.web.InternalGatewaySigner.stamp(
+                headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
     }
 
-    private String computeGatewaySignature(String providerId, String userId, String organizationId, String timestamp) {
-        String safeUser = userId != null ? userId : "";
-        String safeOrg = organizationId != null ? organizationId : "";
-        String data = providerId + "|" + safeUser + "|" + safeOrg + "|" + timestamp;
-        try {
-            Mac mac = Mac.getInstance(HMAC_ALGO);
-            mac.init(new SecretKeySpec(gatewaySecretKey.getBytes(StandardCharsets.UTF_8), HMAC_ALGO));
-            byte[] hash = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
-            return SIGNATURE_PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
-        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
-            throw new IllegalStateException("HmacSHA256 unavailable", e);
-        }
-    }
 }

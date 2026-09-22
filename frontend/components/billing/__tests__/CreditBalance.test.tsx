@@ -1,17 +1,19 @@
 /**
  * @vitest-environment jsdom
  *
- * Render tests for the credit-balance kit: the Balance panel (Total /
- * Remaining / gauge / optional Upgrade CTA) and the ring dial, in both the
- * ordinary "under allowance" state and the gold "over allowance" state.
+ * Render tests for the credit-balance kit: the Balance panel (Monthly grant /
+ * Remaining / optional Upgrade CTA), the ring dial, and the avatar ring's
+ * opening sweep - in both the ordinary "under allowance" state and the gold
+ * "over allowance" state.
  *
  * These assert what the maths tests cannot see: that the gold state actually
- * PAINTS gold and states the surplus, that each action appears only where a
- * caller wires it, and that the readout itself is the link to the usage page.
+ * PAINTS gold, that each action appears only where a caller wires it, that the
+ * readout itself is the link to the usage page, and that the ring draws itself
+ * rather than appearing already finished.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, cleanup, fireEvent, createEvent } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, createEvent, waitFor } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import messages from '../../../messages/en.json';
 
@@ -21,6 +23,16 @@ import messages from '../../../messages/en.json';
 // stub records the href it is handed, which is the half this component owns -
 // the locale prefix is the Link's own job.
 const linkProps = vi.hoisted(() => ({ last: null as Record<string, unknown> | null }));
+
+// The OS motion setting, made drivable. Mocked at the hook rather than through
+// window.matchMedia: the hook subscribes with useSyncExternalStore, so faking
+// the media query would also have to fake a subscription that re-renders, and
+// the thing under test here is the ring's response to the answer, not the
+// plumbing that fetches it (which has its own home in the changelog suite).
+const reducedMotion = vi.hoisted(() => ({ value: false }));
+vi.mock('@/hooks/usePrefersReducedMotion', () => ({
+  usePrefersReducedMotion: () => reducedMotion.value,
+}));
 vi.mock('@/i18n/navigation', () => ({
   Link: ({ children, href, ...rest }: any) => {
     linkProps.last = { href, ...rest };
@@ -32,7 +44,7 @@ vi.mock('@/i18n/navigation', () => ({
   },
 }));
 
-import { CreditAllowanceGauge, CreditBalancePanel, CreditRing, CreditRingBadge } from '../CreditBalance';
+import { CreditAvatarRing, CreditBalancePanel, CreditRing, CreditRingBadge } from '../CreditBalance';
 import { computeCreditGauge } from '@/lib/billing/credit-allowance';
 
 const withIntl = (ui: React.ReactElement) =>
@@ -42,10 +54,18 @@ const withIntl = (ui: React.ReactElement) =>
     </NextIntlClientProvider>,
   );
 
-/** The bar's fill element. Selected by testid, not by "has an inline width":
- *  the ring's wrapper carries one too (its pixel size). */
-const gaugeFill = (container: HTMLElement): HTMLElement | null =>
-  container.querySelector<HTMLElement>('[data-testid="balance-gauge-fill"]');
+/**
+ * The panel's dial is its header mini-ring, and the arc is the SECOND circle:
+ * the first is the track, which is drawn at full length in every state.
+ */
+const panelArc = (container: HTMLElement): SVGCircleElement | null =>
+  (container.querySelectorAll('circle')[1] as SVGCircleElement | undefined) ?? null;
+
+/** How far round the dial the arc is drawn, 0-1. */
+const arcFraction = (arc: SVGCircleElement): number => {
+  const [dash, circumference] = (arc.getAttribute('stroke-dasharray') || '').split(' ').map(Number);
+  return dash / circumference;
+};
 
 describe('CreditBalancePanel - under allowance', () => {
   afterEach(cleanup);
@@ -60,28 +80,35 @@ describe('CreditBalancePanel - under allowance', () => {
     expect(screen.getByTestId('balance-remaining').textContent).toBe('9,779');
   });
 
-  it('fills the gauge by the CONSUMED share, not the remaining one', () => {
-    // 9,779 of 10,000 left is 2% used - the bar must be nearly empty, which is
-    // the opposite of what filling by "remaining" would draw.
+  it('draws the dial by the CONSUMED share, not the remaining one', () => {
+    // 9,779 of 10,000 left is 2% used - the arc must be nearly absent, which is
+    // the opposite of what drawing by "remaining" would paint.
     const { container } = withIntl(
       <CreditBalancePanel balance={9_779} allowance={10_000} gauge={computeCreditGauge(9_779, 10_000)} />,
     );
-    expect(gaugeFill(container)?.style.width).toBe('2%');
+    expect(arcFraction(panelArc(container)!)).toBeCloseTo(0.02, 3);
   });
 
-  it('renders no over-allowance note while the wallet is within its grant', () => {
-    withIntl(
+  it('states NO plan percentage: that sentence lives on the wallet card now', () => {
+    // The panel used to carry a second bar under the figures with "X% of your
+    // plan used" written beneath it. A menu is a place people pass through, and
+    // it was saying the same thing three ways in 200px. Pinned as an ABSENCE,
+    // because the removal is the behaviour: re-adding the bar has to be a
+    // deliberate act that fails here first.
+    const { container } = withIntl(
       <CreditBalancePanel balance={9_779} allowance={10_000} gauge={computeCreditGauge(9_779, 10_000)} />,
     );
-    expect(screen.queryByText(/over your plan/i)).toBeNull();
+    expect(screen.queryByTestId('balance-gauge-fill')).toBeNull();
+    expect(screen.queryByTestId('balance-gauge-label')).toBeNull();
+    expect(container.textContent).not.toMatch(/% of your plan/i);
   });
 
-  it('hides Total and the gauge entirely when there is no allowance to gauge against', () => {
+  it('hides Total and the dial entirely when there is no allowance to gauge against', () => {
     const { container } = withIntl(
       <CreditBalancePanel balance={420} allowance={null} gauge={computeCreditGauge(420, null)} />,
     );
     expect(screen.queryByTestId('balance-total-label')).toBeNull();
-    expect(gaugeFill(container)).toBeNull();
+    expect(container.querySelectorAll('circle')).toHaveLength(0);
     // Remaining still shows: it is a fact about the wallet, not about a plan.
     expect(screen.getByTestId('balance-remaining').textContent).toBe('420');
   });
@@ -90,48 +117,77 @@ describe('CreditBalancePanel - under allowance', () => {
 describe('CreditBalancePanel - over allowance (gold)', () => {
   afterEach(cleanup);
 
-  it('states the real surplus percentage', () => {
+  it('paints the dial gold instead of ink', () => {
+    const { container } = withIntl(
+      <CreditBalancePanel balance={1_400} allowance={1_000} gauge={computeCreditGauge(1_400, 1_000)} />,
+    );
+    const arc = panelArc(container)!;
+    expect(arc.getAttribute('stroke')).toBe('var(--credit-gold-arc)');
+    // The ink class must be gone, or the gold would be drawn under a black arc.
+    expect(arc.getAttribute('class') ?? '').not.toContain('stroke-black');
+  });
+
+  it('leaves the dial ink while the wallet is inside its grant', () => {
+    // The counterpart of the case above: painting gold under the grant would
+    // announce a surplus that does not exist.
+    const { container } = withIntl(
+      <CreditBalancePanel balance={500} allowance={1_000} gauge={computeCreditGauge(500, 1_000)} />,
+    );
+    expect(panelArc(container)!.getAttribute('stroke')).toBeNull();
+    expect(panelArc(container)!.getAttribute('class') ?? '').toContain('stroke-black');
+  });
+
+  it('draws the dial by the SURPLUS above the grant, capped at the full circle', () => {
+    // 1,400 on a 1,000 grant is +40%, so the arc is 40% round; 35,000 is
+    // +3,400%, which a circle cannot draw and therefore pins at full.
+    const { container: small } = withIntl(
+      <CreditBalancePanel balance={1_400} allowance={1_000} gauge={computeCreditGauge(1_400, 1_000)} />,
+    );
+    expect(arcFraction(panelArc(small)!)).toBeCloseTo(0.4, 3);
+
+    cleanup();
+    const { container: huge } = withIntl(
+      <CreditBalancePanel balance={35_000} allowance={1_000} gauge={computeCreditGauge(35_000, 1_000)} />,
+    );
+    expect(arcFraction(panelArc(huge)!)).toBeCloseTo(1, 3);
+  });
+
+  it('marks the over state with a "+" glyph, not with the gold alone', () => {
+    // The panel's 22px dial is one of only two surfaces that render in
+    // production, and this glyph is the whole non-colour half of the signal: an
+    // exhausted wallet and a wallet at double its grant both fill the dial
+    // completely, so hue is the only other thing separating them. Passing
+    // `showLabel={false}` here - which is what it used to do - is a legibility
+    // regression that nothing else in this suite can see.
     withIntl(
       <CreditBalancePanel balance={1_400} allowance={1_000} gauge={computeCreditGauge(1_400, 1_000)} />,
     );
-    expect(screen.getByText('+40% over your plan')).toBeTruthy();
+    const glyph = screen.getByTestId('credit-ring-label');
+    expect(glyph.textContent).toBe('+');
+    // And it is inked with the per-theme token, not a literal: the bright metal
+    // that reads on the dark ground sits at 1.8:1 on white.
+    expect(glyph.style.color).toContain('--credit-gold-ink');
   });
 
-  it('removes the neutral track, so the gold is not laid over a grey bar', () => {
-    // The track is a separate span rendered only in the ink state. Leaving it in
-    // would put the gold fill on top of the ordinary grey, which is what the
-    // "whole bar reads as metal" intent exists to prevent - and the fill
-    // assertion below cannot see it.
-    const { container: gold } = withIntl(
-      <CreditBalancePanel balance={1_400} allowance={1_000} gauge={computeCreditGauge(1_400, 1_000)} />,
-    );
-    expect(gold.querySelectorAll('.bg-theme-tertiary')).toHaveLength(0);
-
-    cleanup();
-    const { container: ink } = withIntl(
+  it('draws NO glyph at that size while the wallet is inside its grant', () => {
+    // The asymmetry is deliberate. A percentage needs 26px to be legible and
+    // this dial is 22, so the ink state stays bare - the figures beside it are
+    // what carry the ordinary case.
+    withIntl(
       <CreditBalancePanel balance={500} allowance={1_000} gauge={computeCreditGauge(500, 1_000)} />,
     );
-    expect(ink.querySelectorAll('.bg-theme-tertiary')).toHaveLength(1);
+    expect(screen.queryByTestId('credit-ring-label')).toBeNull();
   });
 
-  it('paints the fill gold instead of ink', () => {
-    const { container } = withIntl(
+  it('spells no surplus sentence either: the figures are what carry it here', () => {
+    // "Monthly grant 1,000 / Remaining 1,400" already says the wallet is above
+    // its grant, without colour. The sentence itself is on the wallet card and
+    // in the ring's accessible name.
+    withIntl(
       <CreditBalancePanel balance={1_400} allowance={1_000} gauge={computeCreditGauge(1_400, 1_000)} />,
     );
-    const fill = gaugeFill(container)!;
-    expect(fill.style.background).toContain('--credit-gold-fill-from');
-    // The ink classes must be gone, or the gold would sit under a black bar.
-    expect(fill.className).not.toContain('bg-gray-900');
-  });
-
-  it('pins the fill at 100% for a huge surplus while still naming the true figure', () => {
-    const { container } = withIntl(
-      <CreditBalancePanel balance={35_000} allowance={1_000} gauge={computeCreditGauge(35_000, 1_000)} />,
-    );
-    expect(gaugeFill(container)?.style.width).toBe('100%');
-    // Grouped for the app locale: a bare "+3400%" is the number-formatting
-    // rule this repo applies to every displayed figure.
-    expect(screen.getByText('+3,400% over your plan')).toBeTruthy();
+    expect(screen.queryByText(/over your plan/i)).toBeNull();
+    expect(screen.getByTestId('balance-remaining').textContent).toBe('1,400');
   });
 });
 
@@ -164,9 +220,9 @@ describe('CreditBalancePanel - the readout IS the route to usage', () => {
     linkProps.last = null;
   });
 
-  // The panel used to end with a separate "View usage" link. The gauge is what
-  // a reader points at when they want to know where the credits went, so the
-  // figures and the gauge carry the navigation now and the extra link is gone.
+  // The panel used to end with a separate "View usage" link. The figures are
+  // what a reader points at when they want to know where the credits went, so
+  // they carry the navigation now and the extra link is gone.
 
   /** A selection that begins inside `node`, which is what a drag leaves behind. */
   const selectionStartingIn = (node: Node) =>
@@ -189,11 +245,11 @@ describe('CreditBalancePanel - the readout IS the route to usage', () => {
     return { onNavigate, readout: () => screen.getByTestId('balance-view-usage') };
   };
 
-  it('routes client-side when the gauge is clicked', () => {
+  it('routes client-side when a figure row is clicked', () => {
     const onNavigate = vi.fn();
     wired({ onNavigate });
 
-    const label = screen.getByTestId('balance-gauge-label');
+    const label = screen.getByTestId('balance-remaining-label');
     const click = createEvent.click(label, { bubbles: true });
     fireEvent(label, click);
 
@@ -294,12 +350,14 @@ describe('CreditBalancePanel - the readout IS the route to usage', () => {
     selection.mockRestore();
   });
 
-  it('wraps the figures AND the gauge, not just one of them', () => {
+  it('wraps BOTH figure rows, not just one of them', () => {
     // Clicking the number a reader is looking at has to work too - the whole
     // readout is the target, which is what makes it findable without a link.
+    // Both rows, because either one alone leaves the other a dead patch inside
+    // a rectangle that highlights on hover.
     const { readout } = wired();
     expect(readout().contains(screen.getByTestId('balance-remaining'))).toBe(true);
-    expect(readout().contains(screen.getByTestId('balance-gauge-fill'))).toBe(true);
+    expect(readout().contains(screen.getByTestId('balance-total-label'))).toBe(true);
   });
 
   it('leaves the Upgrade CTA OUTSIDE the readout, so one click cannot fire both', () => {
@@ -358,17 +416,17 @@ describe('CreditBalancePanel - the readout IS the route to usage', () => {
       </div>,
     );
 
-    screen.getByTestId('balance-gauge-label').click();
+    screen.getByTestId('balance-remaining-label').click();
     expect(onAncestorClick).not.toHaveBeenCalled();
   });
 
-  it('stays a link with no allowance, where there is no gauge to aim at', () => {
+  it('stays a link with no allowance, where there is no dial to aim at', () => {
     // A guest's wallet has no denominator, so nothing is drawn - the figures
     // still have to lead somewhere.
     const onNavigate = vi.fn();
     const { readout } = wired({ onNavigate, allowance: null, balance: 42_000 });
 
-    expect(screen.queryByTestId('balance-gauge-fill')).toBeNull();
+    expect(screen.queryByTestId('balance-total-label')).toBeNull();
     expect(readout().getAttribute('href')).toBe('/app/settings/quota');
     screen.getByTestId('balance-remaining').click();
     expect(onNavigate).toHaveBeenCalledTimes(1);
@@ -552,7 +610,6 @@ describe('CreditBalancePanel - exact amounts', () => {
     );
     expect(container.querySelectorAll('circle')).toHaveLength(0);
     expect(screen.queryByTestId('balance-total-label')).toBeNull();
-    expect(screen.queryByTestId('balance-gauge-fill')).toBeNull();
   });
 });
 
@@ -595,26 +652,10 @@ describe('CreditBalancePanel - the app locale, not the runner default', () => {
     expect(screen.getByText('980,4')).toBeTruthy();
   });
 
-  it('formats the surplus figure for the locale as well', () => {
-    withLocale('de',
-      <CreditBalancePanel balance={35_000} allowance={1_000} gauge={computeCreditGauge(35_000, 1_000)} />);
-
-    expect(screen.getByText('+3.400% over your plan')).toBeTruthy();
-  });
-});
-
-describe('CreditBalancePanel - a surplus too small to state', () => {
-  afterEach(cleanup);
-
-  it('says "just over" rather than "+0% over your plan"', () => {
-    // 1,001 of a 1,000 grant is genuinely over, but the rounded figure is 0.
-    // Printing "+0%" above an empty gold bar reads as a contradiction.
-    withIntl(
-      <CreditBalancePanel balance={1_001} allowance={1_000} gauge={computeCreditGauge(1_001, 1_000)} />,
-    );
-    expect(screen.getByText('Just over your plan')).toBeTruthy();
-    expect(screen.queryByText(/\+0%/)).toBeNull();
-  });
+  // The surplus SENTENCE moved out of this panel with the bar that carried it.
+  // Its locale handling and its "+0%" edge are now exercised where the sentence
+  // actually renders: the ring's accessible name (SidebarCreditBalance.test)
+  // and the wallet card (BalanceBreakdown.planPercent.test).
 });
 
 describe('CreditBalancePanel - bucket split edge', () => {
@@ -705,54 +746,6 @@ describe('CreditRing - the label has to fit the hole it sits in', () => {
   });
 });
 
-describe('CreditAllowanceGauge - the bar always says which quantity it shows', () => {
-  // The bar fills by credits CONSUMED and sits directly under a row reading
-  // "Remaining 9,779", so an unlabelled 2% bar reads as "almost nothing left".
-  // The sentence used to render only in the gold state, which left the ordinary
-  // case - every healthy account - with a bar and no way to read it. Removing
-  // the label again passed 221 tests, so it is pinned here explicitly.
-
-  it('names the consumed share under the plan', () => {
-    withIntl(<CreditAllowanceGauge gauge={computeCreditGauge(9_779, 10_000)} />);
-    expect(screen.getByTestId('balance-gauge-label').textContent).toBe('2% of your plan used');
-  });
-
-  it('names it at the empty end too', () => {
-    withIntl(<CreditAllowanceGauge gauge={computeCreditGauge(0, 1_000)} />);
-    expect(screen.getByTestId('balance-gauge-label').textContent).toBe('100% of your plan used');
-  });
-
-  it('switches to the surplus sentence above the plan', () => {
-    withIntl(<CreditAllowanceGauge gauge={computeCreditGauge(1_400, 1_000)} />);
-    expect(screen.getByTestId('balance-gauge-label').textContent).toBe('+40% over your plan');
-  });
-
-  it('says "just over" rather than "+0% over your plan"', () => {
-    withIntl(<CreditAllowanceGauge gauge={computeCreditGauge(1_001, 1_000)} />);
-    expect(screen.getByTestId('balance-gauge-label').textContent).toBe('Just over your plan');
-  });
-
-  it('inks the label gold ONLY above the plan', () => {
-    // Under the plan the label is ordinary text; painting it gold there would
-    // announce a surplus that does not exist.
-    withIntl(<CreditAllowanceGauge gauge={computeCreditGauge(1_400, 1_000)} />);
-    expect(screen.getByTestId('balance-gauge-label').style.color).toContain('--credit-gold-ink');
-
-    cleanup();
-    withIntl(<CreditAllowanceGauge gauge={computeCreditGauge(500, 1_000)} />);
-    expect(screen.getByTestId('balance-gauge-label').style.color).toBe('');
-  });
-
-  it('spells the surplus for the app locale', () => {
-    render(
-      <NextIntlClientProvider locale="de" messages={messages as Record<string, unknown>}>
-        <CreditAllowanceGauge gauge={computeCreditGauge(35_000, 1_000)} />
-      </NextIntlClientProvider>,
-    );
-    expect(screen.getByTestId('balance-gauge-label').textContent).toContain('3.400');
-  });
-});
-
 describe('CreditRing - the label never goes below a legible floor', () => {
   it('keeps the rail-sized gold "+" at 8px, not 7', () => {
     // 14 x 0.5 rounds to 7px, which is the exact size the sizing note rejects
@@ -831,18 +824,260 @@ describe('CreditBalancePanel - both rows behave the same under the same pressure
   });
 });
 
-describe('CreditAllowanceGauge - the label carries its own colour', () => {
-  it('sets an explicit colour class rather than inheriting one', () => {
-    // Both containers that mount this today set `text-theme-primary`, so
-    // inheritance looked fine - but the component is exported, and rendered in
-    // a container without one it drew dark-on-dark text in dark mode. Nothing
-    // in jsdom can see a colour, so the class itself is what gets pinned.
-    withIntl(<CreditAllowanceGauge gauge={computeCreditGauge(9_779, 10_000)} />);
-    expect(screen.getByTestId('balance-gauge-label').className).toContain('text-theme-');
+describe('CreditAvatarRing - it draws itself on arrival', () => {
+  afterEach(() => {
+    cleanup();
+    reducedMotion.value = false;
   });
 
-  it('lets the gold state override it, since inline colour beats a class', () => {
-    withIntl(<CreditAllowanceGauge gauge={computeCreditGauge(1_400, 1_000)} />);
-    expect(screen.getByTestId('balance-gauge-label').style.color).toContain('--credit-gold-ink');
+  const track = (container: HTMLElement) =>
+    container.querySelector('[data-testid="credit-avatar-ring-track"]') as SVGCircleElement;
+  const arc = (container: HTMLElement) =>
+    container.querySelector('[data-testid="credit-avatar-ring-arc"]') as SVGCircleElement;
+  const num = (el: SVGCircleElement, attr: string) => Number(el.getAttribute(attr));
+  const delayMs = (el: SVGCircleElement) => Number(/(\d+)ms\s*$/.exec(el.style.transition)?.[1]);
+  const durationMs = (el: SVGCircleElement) =>
+    Number(/stroke-dashoffset\s+(\d+)ms/.exec(el.style.transition)?.[1]);
+
+  it('starts at zero and only then travels to its position', async () => {
+    // The whole point: an arc caught mid-travel reads as a quantity being
+    // measured, where the same arc already at rest reads as a border. Rendering
+    // the final offset on the first pass would look identical in every OTHER
+    // assertion in this file, so it is pinned here.
+    //
+    // What this canNOT see is the two-frame wait. jsdom does not paint, so one
+    // requestAnimationFrame and two are indistinguishable to it while a browser
+    // tells them apart (a transition needs its starting value painted before the
+    // value changes, or it does not run at all). That mutation is caught by a
+    // source-shape assertion in credit-surface-contract.test.ts instead - stated
+    // plainly here so nobody reads this test as covering it.
+    const { container } = withIntl(<CreditAvatarRing percent={40} avatarSize={32} />);
+    const circle = arc(container);
+    const circumference = num(circle, 'stroke-dasharray');
+
+    // First paint: the offset hides the arc completely.
+    expect(num(circle, 'stroke-dashoffset')).toBeCloseTo(circumference, 5);
+
+    await waitFor(() => {
+      expect(num(arc(container), 'stroke-dashoffset')).toBeCloseTo(circumference * 0.6, 5);
+    });
+  });
+
+  it('draws the TRACK round the avatar first, which is the reveal', async () => {
+    // The arc measures credits CONSUMED, so a healthy wallet's arc is a couple
+    // of percent: sweeping it from zero travels two percent of a circle and
+    // nobody sees it. The full circle is what says "there is a gauge here", and
+    // it is the same length for every account. Dropping the track's own
+    // transition - the obvious "simplification", since the track has no value
+    // to show - is what makes the whole animation invisible to most users.
+    const { container } = withIntl(<CreditAvatarRing percent={2} avatarSize={32} />);
+
+    expect(num(track(container), 'stroke-dashoffset')).toBeCloseTo(
+      num(track(container), 'stroke-dasharray'),
+      5,
+    );
+    await waitFor(() => {
+      expect(num(track(container), 'stroke-dashoffset')).toBe(0);
+    });
+    // The offsets alone are identical with or without a transition, so without
+    // this line the "simplification" the comment warns about - dropping the
+    // track's own style - passes. It cost a mutation run to find that out.
+    expect(track(container).style.transition).toContain('stroke-dashoffset');
+  });
+
+  it('starts the arc just BEFORE the track lands, so the two read as one gesture', async () => {
+    // Overlapping is the difference between a dial appearing and then filling,
+    // and two animations queued back to back. Asserted as an ORDER rather than
+    // as literal numbers, so the timings stay tunable.
+    //
+    // Awaited, because the opening timings only exist while the reveal is
+    // running: the first frame carries no transition at all (nothing to travel
+    // from yet) and the settled state carries a different, undelayed one.
+    const { container } = withIntl(<CreditAvatarRing percent={40} avatarSize={32} />);
+    await waitFor(() => expect(delayMs(track(container))).toBeGreaterThan(0));
+    const trackEnds = delayMs(track(container)) + durationMs(track(container));
+
+    expect(delayMs(arc(container))).toBeGreaterThan(delayMs(track(container)));
+    expect(delayMs(arc(container))).toBeLessThan(trackEnds);
+  });
+
+  it('is over quickly enough to be an entrance, not a loading state', async () => {
+    // A reader arrives, looks at the sidebar, and the ring should already be
+    // settling. Past about a second and a half it stops reading as an entrance
+    // and starts reading as something still loading.
+    const { container } = withIntl(<CreditAvatarRing percent={40} avatarSize={32} />);
+    await waitFor(() => expect(delayMs(arc(container))).toBeGreaterThan(0));
+    expect(delayMs(arc(container)) + durationMs(arc(container))).toBeLessThanOrEqual(1_500);
+  });
+
+  it('moves the OFFSET, keeping the dash pattern the whole circle', () => {
+    // Animating `stroke-dasharray` instead means interpolating a two-value list,
+    // which engines do inconsistently. Pinned because swapping back to a
+    // `${dash} ${circumference}` pair still draws the right arc at rest, so
+    // nothing but this notices - until the transition stops working.
+    const { container } = withIntl(<CreditAvatarRing percent={40} avatarSize={32} />);
+    const circle = arc(container);
+    const radius = num(circle, 'r');
+
+    expect(num(circle, 'stroke-dasharray')).toBeCloseTo(2 * Math.PI * radius, 5);
+    expect(circle.getAttribute('stroke-dasharray')).not.toContain(' ');
+  });
+
+  it('carries a transition on the offset, which is what makes it travel', async () => {
+    const { container } = withIntl(<CreditAvatarRing percent={40} avatarSize={32} />);
+    await waitFor(() => {
+      expect(arc(container).style.transition).toContain('stroke-dashoffset');
+    });
+  });
+
+  it('reaches the same position with the transition dropped under reduced motion', async () => {
+    // Reduced motion removes the TRAVEL, never the answer: a reader with the
+    // setting on must still see how much of their plan is left, and must still
+    // get a complete track to read it against.
+    reducedMotion.value = true;
+    const { container } = withIntl(<CreditAvatarRing percent={40} avatarSize={32} />);
+
+    await waitFor(() => {
+      const circle = arc(container);
+      expect(num(circle, 'stroke-dashoffset')).toBeCloseTo(num(circle, 'stroke-dasharray') * 0.6, 5);
+    });
+    expect(num(track(container), 'stroke-dashoffset')).toBe(0);
+    expect(arc(container).style.transition).toBe('');
+    expect(track(container).style.transition).toBe('');
+  });
+
+  it('renders the SAME first frame either way, so hydration cannot disagree', () => {
+    // The reduced-motion answer is false on the server and true in that
+    // reader's browser, so branching the MARKUP on it would give React two
+    // different trees to reconcile. Only the transition may differ.
+    //
+    // Compared as WHOLE markup with the style attributes stripped, not one
+    // attribute on one element: a branch on the track's offset, on a class, on
+    // strokeLinecap or on whether the gradient is emitted would all be
+    // hydration mismatches too, and an offset-only check sees none of them.
+    const frame = (reduced: boolean) => {
+      reducedMotion.value = reduced;
+      const { container } = withIntl(<CreditAvatarRing percent={40} avatarSize={32} gold />);
+      const html = container.innerHTML.replace(/ style="[^"]*"/g, '');
+      cleanup();
+      return html;
+    };
+
+    // The gradient id is a useId, which differs per render by design.
+    const normalise = (html: string) => html.replace(/id="credit-gold-[^"]*"|#credit-gold-[^)]*/gi, 'ID');
+    expect(normalise(frame(true))).toBe(normalise(frame(false)));
+  });
+
+  it('draws nothing at all at 0%, rather than a round cap sitting on the track', async () => {
+    // AFTER the sweep, which is the whole assertion. Reading the offset
+    // synchronously would hold for every percentage alike - the ring starts
+    // fully retracted no matter what it is about to draw - so that version
+    // passed while the implementation drew a `Math.max(dash, 3)` stub, which is
+    // exactly the round cap the title says must not be there.
+    const { container: empty } = withIntl(<CreditAvatarRing percent={0} avatarSize={32} />);
+    await waitFor(() => {
+      expect(arc(empty).style.transition).not.toBe('');
+    });
+    expect(num(arc(empty), 'stroke-dashoffset')).toBeCloseTo(num(arc(empty), 'stroke-dasharray'), 5);
+
+    // Contrasted against a percentage that DOES draw, so "nothing is ever
+    // drawn" cannot pass this either.
+    cleanup();
+    const { container: some } = withIntl(<CreditAvatarRing percent={5} avatarSize={32} />);
+    await waitFor(() => {
+      expect(num(arc(some), 'stroke-dashoffset')).toBeLessThan(num(arc(some), 'stroke-dasharray'));
+    });
+  });
+
+  /**
+   * Wait until the reveal has handed over to the settled timings.
+   *
+   * The first version of the two tests below waited only for the reveal to
+   * START (two frames), which left both assertions running in the OPENING
+   * phase - so they observed the opening transition and a mutation that made
+   * the settled state jump outright passed them both. The hand-over is what
+   * has to be waited for.
+   */
+  const settled = async (container: HTMLElement) => {
+    // BOTH halves, because each phase fails exactly one of them: 'hidden'
+    // carries no transition at all, 'opening' carries one with a trailing
+    // delay, and only 'settled' has a transition with none. Waiting on the
+    // delay alone matched 'hidden' too and returned on the first frame.
+    await waitFor(
+      () => {
+        const transition = arc(container).style.transition;
+        expect(transition).toContain('stroke-dashoffset');
+        expect(transition).not.toMatch(/\d+ms\s*$/);
+      },
+      { timeout: 3_000 },
+    );
+  };
+
+  it('glides to a LATER balance instead of jumping to it', async () => {
+    // Credits are spent while the app is open, and a refetch on window focus
+    // brings the new figure in. Nothing remounts, so the ring has to carry the
+    // change itself, and it must still be a glide: a dial that teleports reads
+    // as a re-render, not as a number changing.
+    const { container, rerender } = withIntl(<CreditAvatarRing percent={20} avatarSize={32} />);
+    const C = num(arc(container), 'stroke-dasharray');
+    await settled(container);
+    expect(num(arc(container), 'stroke-dashoffset')).toBeCloseTo(C * 0.8, 5);
+
+    rerender(
+      <NextIntlClientProvider locale="en" messages={messages as Record<string, unknown>}>
+        <CreditAvatarRing percent={75} avatarSize={32} />
+      </NextIntlClientProvider>,
+    );
+
+    expect(num(arc(container), 'stroke-dashoffset')).toBeCloseTo(C * 0.25, 5);
+    // The assertion the earlier version missed: in the settled phase there IS
+    // still a transition. Dropping it here is a hard jump on every balance
+    // change for the rest of the session.
+    expect(arc(container).style.transition).toContain('stroke-dashoffset');
+    expect(durationMs(arc(container))).toBeGreaterThan(0);
+  });
+
+  it('drops the opening delay once the reveal is behind it', async () => {
+    // The opening stagger holds the arc back 620ms so it follows the track. Left
+    // in place afterwards, every later change to the balance would sit visibly
+    // motionless for two thirds of a second before acknowledging a number that
+    // had already changed.
+    const { container } = withIntl(<CreditAvatarRing percent={20} avatarSize={32} />);
+    await waitFor(() => expect(delayMs(arc(container))).toBeGreaterThan(0));
+    await settled(container);
+    expect(arc(container).style.transition).toContain('stroke-dashoffset');
+    expect(arc(container).style.transition).not.toMatch(/\d+ms\s*$/);
+  });
+
+  it('draws the answer with no travel at all when the reveal is already spent', async () => {
+    // `animate={false}` is how the sidebar says "this reader has seen it this
+    // visit". It must not retract first: a ring that empties itself and refills
+    // is worse than one that never moved.
+    const { container } = withIntl(<CreditAvatarRing percent={40} avatarSize={32} animate={false} />);
+
+    expect(num(arc(container), 'stroke-dashoffset')).toBeCloseTo(
+      num(arc(container), 'stroke-dasharray') * 0.6,
+      5,
+    );
+    expect(num(track(container), 'stroke-dashoffset')).toBe(0);
+    // And it stays put: no frame arrives later to start a sweep.
+    await waitFor(() => expect(arc(container).style.transition).not.toBe(''));
+    expect(delayMs(arc(container))).toBeNaN();
+  });
+
+  it('sweeps the gold arc too, which is the state worth noticing most', async () => {
+    const { container } = withIntl(<CreditAvatarRing percent={40} avatarSize={32} gold />);
+    expect(container.querySelector('linearGradient')).not.toBeNull();
+    await waitFor(() => {
+      const circle = arc(container);
+      expect(num(circle, 'stroke-dashoffset')).toBeCloseTo(num(circle, 'stroke-dasharray') * 0.6, 5);
+    });
+  });
+
+  it('clamps a percentage above 100 so the arc cannot wrap past full', async () => {
+    const { container } = withIntl(<CreditAvatarRing percent={340} avatarSize={32} />);
+    await waitFor(() => {
+      expect(num(arc(container), 'stroke-dashoffset')).toBeCloseTo(0, 5);
+    });
   });
 });

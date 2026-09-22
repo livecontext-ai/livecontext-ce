@@ -120,7 +120,8 @@ public class AttachmentService {
         for (AttachmentRef ref : refs) {
             try {
                 UUID storageId = UUID.fromString(ref.getStorageId());
-                Optional<byte[]> data = loadAttachmentBytes(storageId, tenantId, organizationId);
+                Optional<StorageEntity> entityOpt = resolveEntity(storageId, tenantId, organizationId);
+                Optional<byte[]> data = entityOpt.flatMap(this::readBytes);
 
                 if (data.isPresent()) {
                     byte[] bytes = data.get();
@@ -146,6 +147,7 @@ public class AttachmentService {
                         .data(bytes)
                         .fileName(ref.getFileName())
                         .extractedText(extractedText)
+                        .fileRef(entityOpt.map(entity -> buildFileRef(entity, storageId)).orElse(null))
                         .build());
 
                     log.debug("Loaded attachment: storageId={}, type={}, size={} bytes",
@@ -163,6 +165,30 @@ public class AttachmentService {
     }
 
     /**
+     * The canonical FileRef ({@code {_type:"file", path, name, mimeType, size, id}}) for a
+     * chat attachment, so an agent can pass it verbatim to a tool argument that expects a
+     * whole file object (e.g. {@code generation}'s {@code input_image}) - see
+     * {@link MessageAttachment#fileRef()}. Null when the row has no S3 key (a legacy
+     * DB-blob attachment from before the S3 migration): there is no durable, tenant-scoped
+     * key another tool could read the bytes from, so no FileRef is offered rather than one
+     * that would fail on first use.
+     */
+    private Map<String, Object> buildFileRef(StorageEntity entity, UUID storageId) {
+        String s3Key = entity.getS3Key();
+        if (s3Key == null || s3Key.isBlank()) {
+            return null;
+        }
+        Map<String, Object> fileRef = new LinkedHashMap<>();
+        fileRef.put("_type", "file");
+        fileRef.put("path", s3Key);
+        fileRef.put("name", entity.getFileName());
+        fileRef.put("mimeType", entity.getMimeType());
+        fileRef.put("size", entity.getSizeBytes());
+        fileRef.put("id", storageId.toString());
+        return fileRef;
+    }
+
+    /**
      * Get attachment with metadata for download/display.
      *
      * @param storageId The storage ID
@@ -174,9 +200,7 @@ public class AttachmentService {
     }
 
     public Optional<AttachmentData> getAttachmentWithMetadata(UUID storageId, String tenantId, String organizationId) {
-        var entityOpt = organizationId != null && !organizationId.isBlank()
-            ? storageService.getEntityByIdForScope(storageId, tenantId, organizationId)
-            : storageService.getEntityById(storageId, tenantId);
+        var entityOpt = resolveEntity(storageId, tenantId, organizationId);
         if (entityOpt.isEmpty()) {
             return Optional.empty();
         }
@@ -196,11 +220,16 @@ public class AttachmentService {
 
     // ========== Private methods ==========
 
-    private Optional<byte[]> loadAttachmentBytes(UUID storageId, String tenantId, String organizationId) {
-        Optional<StorageEntity> entityOpt = organizationId != null && !organizationId.isBlank()
+    /**
+     * The storage row behind an attachment's {@code storageId}, scoped to the active
+     * workspace when one is given. Shared by every caller that needs the row (bytes,
+     * metadata, or the FileRef in {@link #buildFileRef}) so the scope rule lives in
+     * exactly one place.
+     */
+    private Optional<StorageEntity> resolveEntity(UUID storageId, String tenantId, String organizationId) {
+        return organizationId != null && !organizationId.isBlank()
                 ? storageService.getEntityByIdForScope(storageId, tenantId, organizationId)
                 : storageService.getEntityById(storageId, tenantId);
-        return entityOpt.flatMap(this::readBytes);
     }
 
     /**

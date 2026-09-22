@@ -19,6 +19,7 @@ import { usePortalMenu } from '../hooks/usePortalMenu';
 import { findNodeClassById } from '../nodes/nodeClasses';
 import { PANEL_TAB_BY_TRIGGER_VARIANT, type TriggerButtonVariant } from './NodePlayButton';
 import type { BuilderNodeData } from '../types';
+import { useWorkflowPanelHostSafe } from '@/contexts/WorkflowPanelHostContext';
 
 /** Icon per trigger type, mirroring the trigger palette (the node play button
  * itself renders a plain Play for every variant, so this is a menu affordance,
@@ -67,6 +68,7 @@ export function CanvasRunTriggerButton({ nodes }: CanvasRunTriggerButtonProps) {
   const t = useTranslations('workflowBuilder.canvas');
   const ctx = useStepByStep();
   const { workflowId, runId, setViewingEpoch } = useWorkflowMode();
+  const panelHost = useWorkflowPanelHostSafe();
   // Anchored ABOVE the button: the toolbar sits at the bottom of the canvas.
   const { open, isVisible, toggle, close, triggerRef, menuRef, menuStyle } = usePortalMenu('above', TRIGGER_MENU_WIDTH);
 
@@ -104,7 +106,7 @@ export function CanvasRunTriggerButton({ nodes }: CanvasRunTriggerButtonProps) {
     // which cannot return the canvas to all epochs. Leaving this below the early
     // return meant a chat, form or webhook launched into whichever epoch the user
     // had focused, and the new one stayed hidden behind the selector.
-    selectAllEpochs(boundRunId(workflowId, runId), setViewingEpoch);
+    selectAllEpochs(boundRunId(workflowId, runId, panelHost?.runSurfaceId), setViewingEpoch);
     if (entry.panelTab) {
       // triggerId lets the panel select THIS trigger's tab; without it the
       // listeners fall back to the first trigger sharing the same type.
@@ -112,7 +114,7 @@ export function CanvasRunTriggerButton({ nodes }: CanvasRunTriggerButtonProps) {
       return;
     }
     void ctx?.executeStep(entry.stepId, undefined);
-  }, [ctx, workflowId, runId, setViewingEpoch, close]);
+  }, [ctx, workflowId, runId, panelHost?.runSurfaceId, setViewingEpoch, close]);
 
   // Nothing fireable (no trigger at all, or a terminal run where every trigger
   // is frozen) means no affordance: an enabled Play over an all-greyed menu is

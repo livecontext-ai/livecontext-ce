@@ -4,7 +4,23 @@ import React, { useEffect, useState } from 'react';
 import Script from 'next/script';
 import { useTranslations } from 'next-intl';
 
-const RECAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY ?? '';
+const RECAPTCHA_SITE_KEY = (process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY ?? '').trim();
+
+// A NEXT_PUBLIC_* var is baked at build time, so a blank key is a property of the
+// running bundle, not of this visit: the form can NEVER submit. Knowing that at
+// mount is what lets the page say so up front instead of accepting a ticket it
+// will drop. See `captcha_misconfigured` below for the server-side twin.
+//
+// This is deliberately also the CE state, and it is a DECISION, not a constraint:
+// app/api/runtime-config/route.ts exists precisely so one prebuilt image can be told
+// things at run time. That route is scoped to reachability (origins, URLs) and a site
+// key is not, so it stays a build arg. The asymmetry is the real reason: a self-hoster
+// CAN set RECAPTCHA_SECRET_KEY on their own auth-service, but cannot supply the site
+// key without rebuilding, and half a pair still refuses every submission. Announcing
+// that and pointing at the address the page already lists beats a form that accepts
+// messages and drops them. If self-hosted contact should work, that route is where it
+// belongs.
+const CAPTCHA_CONFIGURED = RECAPTCHA_SITE_KEY.length > 0;
 
 type Category = 'support' | 'bug' | 'security' | 'privacy' | 'press' | 'abuse' | 'other';
 
@@ -39,8 +55,11 @@ function friendlyError(
     case 'invalid_name': return t('errors.invalidName');
     case 'invalid_email': return t('errors.invalidEmail');
     case 'invalid_message': return t('errors.invalidMessage');
+    // Permanent: the server has no reCAPTCHA secret, so every retry fails the same
+    // way. Grouping it with the transient failures below sent visitors into an
+    // endless "try again in a moment" that could never succeed.
+    case 'captcha_misconfigured': return t('unavailable');
     case 'captcha_missing':
-    case 'captcha_misconfigured':
     case 'captcha_unavailable': return t('errors.captchaUnavailable');
     case 'captcha_rejected':
     case 'captcha_low_score': return t('errors.captchaRejected');
@@ -76,8 +95,8 @@ export default function ContactPage() {
   }, []);
 
   useEffect(() => {
-    if (!RECAPTCHA_SITE_KEY) {
-      console.warn('NEXT_PUBLIC_RECAPTCHA_SITE_KEY is not set - contact form will fail captcha.');
+    if (!CAPTCHA_CONFIGURED) {
+      console.warn('NEXT_PUBLIC_RECAPTCHA_SITE_KEY is not set - contact form is disabled.');
     }
   }, []);
 
@@ -85,6 +104,10 @@ export default function ContactPage() {
     e.preventDefault();
     if (status.kind === 'submitting') return;
 
+    if (!CAPTCHA_CONFIGURED) {
+      setStatus({ kind: 'error', message: t('unavailable') });
+      return;
+    }
     if (!recaptchaReady || !window.grecaptcha) {
       setStatus({ kind: 'error', message: t('errors.recaptchaLoading') });
       return;
@@ -92,9 +115,29 @@ export default function ContactPage() {
 
     setStatus({ kind: 'submitting' });
 
+    // Deliberately OUTSIDE the network try below. grecaptcha.execute() rejects on a
+    // captcha problem (invalid or unregistered site key, blocked widget), which the
+    // shared catch reported as "network error" - a message that tells the visitor to
+    // retry a request that was never sent and can never succeed.
+    let captchaToken: string;
     try {
-      const captchaToken = await window.grecaptcha.execute(RECAPTCHA_SITE_KEY, { action: 'contact' });
+      captchaToken = await window.grecaptcha.execute(RECAPTCHA_SITE_KEY, { action: 'contact' });
+    } catch (captchaError) {
+      console.error('reCAPTCHA execute failed', captchaError);
+      // Reported as retryable even though some causes are not (a key that is invalid,
+      // unregistered, or wrong-domain rejects forever). The client cannot tell those from
+      // a transient widget failure: execute() rejects the same way for all of them. The
+      // permanent cases the page CAN name - no key here, no secret on the server - are
+      // named, above and in friendlyError.
+      setStatus({ kind: 'error', message: t('errors.captchaUnavailable') });
+      return;
+    }
+    if (!captchaToken) {
+      setStatus({ kind: 'error', message: t('errors.captchaUnavailable') });
+      return;
+    }
 
+    try {
       const response = await fetch('/api/contact', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -121,13 +164,18 @@ export default function ContactPage() {
 
   return (
     <article className="space-y-6">
-      <Script
-        src={`https://www.google.com/recaptcha/api.js?render=${RECAPTCHA_SITE_KEY}`}
-        strategy="afterInteractive"
-        onLoad={() => {
-          if (window.grecaptcha) window.grecaptcha.ready(() => setRecaptchaReady(true));
-        }}
-      />
+      {/* Not loaded when the key is blank: api.js?render= still answers 200 and defines
+          window.grecaptcha, so the widget reported itself READY and only failed later,
+          inside execute(). Skipping it keeps the unconfigured state honest from mount. */}
+      {CAPTCHA_CONFIGURED && (
+        <Script
+          src={`https://www.google.com/recaptcha/api.js?render=${RECAPTCHA_SITE_KEY}`}
+          strategy="afterInteractive"
+          onLoad={() => {
+            if (window.grecaptcha) window.grecaptcha.ready(() => setRecaptchaReady(true));
+          }}
+        />
+      )}
 
       <header>
         <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>{t('title')}</h1>
@@ -140,6 +188,16 @@ export default function ContactPage() {
         className="rounded-lg p-5"
         style={{ border: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}
       >
+        {!CAPTCHA_CONFIGURED && (
+          <p
+            role="alert"
+            className="mb-4 rounded-md px-3 py-2 text-sm"
+            style={{ background: 'var(--bg-primary)', border: '1px solid #dc2626', color: '#dc2626' }}
+          >
+            {t('unavailable')}
+          </p>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="contact-name" className="block text-sm font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
@@ -214,7 +272,7 @@ export default function ContactPage() {
           <div className="pt-2">
             <button
               type="submit"
-              disabled={status.kind === 'submitting'}
+              disabled={status.kind === 'submitting' || !CAPTCHA_CONFIGURED}
               className="rounded-md px-4 py-2 text-sm font-semibold disabled:opacity-60"
               style={{ background: 'var(--accent-primary)', color: 'var(--accent-foreground)' }}
             >

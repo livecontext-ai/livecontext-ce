@@ -42,9 +42,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *       dimensions and the trigger never drops a legitimate write.</li>
  * </ul>
  *
- * <p>Skipped silently when Docker is unavailable (matches
- * {@link com.apimarketplace.orchestrator.services.state.patch.JsonbPatchPostgresIT}
- * pattern). CI runners with Docker exercise the full suite.
+ * <p>Skipped silently when Docker is unavailable, and therefore executed by NOTHING: the
+ * {@code arc-build} CI runners expose no Docker socket, and no {@code -Dtest} list names this
+ * class. It has not been converted yet.
+ * {@link com.apimarketplace.orchestrator.services.state.patch.JsonbPatchPostgresTest} used to
+ * have this same shape and no longer does - it takes the postgres service its CI step already
+ * runs, through {@code ScratchPostgres}, and FAILS rather than skipping when that is missing.
+ * Follow that pattern when converting this one; do not cite it as a precedent for skipping.
  *
  * <p>Why these tests live in {@code integration.optim} rather than
  * {@code integration.repository}: they bypass the JPA/Hibernate layer entirely

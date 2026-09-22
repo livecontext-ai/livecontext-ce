@@ -17,7 +17,12 @@ describe('/compare/[slug] metadata (cloud edition)', () => {
     for (const comparison of COMPARISONS) {
       const meta = await generateMetadata({ params: Promise.resolve({ slug: comparison.slug }) });
       expect(meta.alternates?.canonical).toBe(`${SITE}/compare/${comparison.slug}`);
-      expect(meta.title).toBe(comparison.metaTitle);
+      const title = (meta.title as { absolute: string }).absolute;
+      expect(title).toContain(comparison.metaTitle);
+      expect(title.match(/LiveContext/g)).toHaveLength(1);
+      expect(meta.openGraph?.title).toBe(title);
+      expect(meta.twitter?.title).toBe(title);
+      expect(meta.twitter?.description).toBe(comparison.metaDescription);
       expect(meta.description).toBe(comparison.metaDescription);
       // Cloud edition: indexable (no robots override).
       expect(meta.robots).toBeUndefined();

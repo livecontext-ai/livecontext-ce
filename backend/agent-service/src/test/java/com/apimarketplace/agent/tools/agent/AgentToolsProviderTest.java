@@ -199,7 +199,13 @@ class AgentToolsProviderTest {
             assertThat(tool.description())
                     .contains("'none'=no access")
                     .contains("'custom'=only the listed IDs")
-                    .contains("Omit to derive from the list");
+                    // The block must state that the derivation is CREATE-only. It used to say
+                    // "Omit to derive from the list" with no qualifier, which is false on update:
+                    // the stored grant is kept, so a list sent without its grant is discarded and
+                    // the call still answers OK. An agent that believed the old sentence silently
+                    // lost the ids it just granted.
+                    .contains("On CREATE, omitting it derives the grant from the list")
+                    .contains("On UPDATE the stored grant is KEPT");
         }
 
         @Test

@@ -804,6 +804,62 @@ class ApiConfigurationConverterTest {
         }
 
         @Test
+        @DisplayName("An auto-supplied header keeps defaultValue, isHidden and description through conversion")
+        void shouldCarryAutoSuppliedHeaderFieldsIntoThePayload() {
+            // This converter is the single point where these three survive into the payload
+            // ToolParameterService persists. Drop any of them and the header is either never
+            // sent (defaultValue is what applyHeaderParameters injects) or lands as a visible,
+            // undescribed required parameter an agent is asked to fill.
+            List<ApiConfigurationRequest.HeaderDto> headers = List.of(
+                new ApiConfigurationRequest.HeaderDto(
+                    "anthropic-version", "2023-06-01", true, "2023-06-01", null, null,
+                    "Required request header (auto-supplied).", true)
+            );
+
+            ApiConfigurationRequest.McpToolDto tool = new ApiConfigurationRequest.McpToolDto(
+                "tool-1", "Tool", "Desc", "/endpoint", "GET", "HTTP",
+                null, null, null, null, null, null, null,
+                headers, null, null, null, null,
+                null, null, null, null, null, null,
+                null, null, null, // executionSpec, outputSchema, executionMode
+                null, null, null, null  // synthesis, pagination, nextHint, requiredScopes
+            );
+
+            JsonNode header = converter.toJsonNode(createRequestWithTool(tool))
+                    .get("mcpTools").get(0).get("headers").get(0);
+
+            assertEquals("2023-06-01", header.get("defaultValue").asText(),
+                "defaultValue is what the runtime injects the header from");
+            assertTrue(header.get("isHidden").asBoolean(),
+                "the platform supplies the value, so the parameter must not be shown");
+            assertEquals("Required request header (auto-supplied).", header.get("description").asText());
+        }
+
+        @Test
+        @DisplayName("A header with no default keeps the payload free of the optional fields")
+        void shouldOmitOptionalHeaderFieldsWhenAbsent() {
+            List<ApiConfigurationRequest.HeaderDto> headers = List.of(
+                new ApiConfigurationRequest.HeaderDto("X-Plain", "v", false, null, null, null)
+            );
+
+            ApiConfigurationRequest.McpToolDto tool = new ApiConfigurationRequest.McpToolDto(
+                "tool-1", "Tool", "Desc", "/endpoint", "GET", "HTTP",
+                null, null, null, null, null, null, null,
+                headers, null, null, null, null,
+                null, null, null, null, null, null,
+                null, null, null,
+                null, null, null, null
+            );
+
+            JsonNode header = converter.toJsonNode(createRequestWithTool(tool))
+                    .get("mcpTools").get(0).get("headers").get(0);
+
+            assertFalse(header.has("defaultValue"), "no default declared, none emitted");
+            assertFalse(header.has("isHidden"), "absent stays absent rather than defaulting to false");
+            assertFalse(header.has("description"));
+        }
+
+        @Test
         @DisplayName("Should convert path parameters")
         void shouldConvertPathParameters() {
             List<ApiConfigurationRequest.PathParameterDto> pathParams = List.of(

@@ -115,7 +115,8 @@ class CatalogToolsProviderTest {
             List<String> names = provider.getTools().get(0).parameters().stream().map(p -> p.name()).toList();
             assertThat(names).containsExactlyInAnyOrder(
                     "action", "query", "api", "apis", "limit", "tool_id", "params",
-                    "expand", "max_items", "api_definition", "api_id", "topics");
+                    "expand", "max_items", "api_definition", "api_id", "topics",
+                    "credential_name");
         }
 
         @Test

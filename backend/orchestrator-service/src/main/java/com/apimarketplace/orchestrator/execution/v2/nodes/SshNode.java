@@ -110,6 +110,7 @@ public class SshNode extends BaseNode {
         resolvedParams.put("command", command);
         resolvedParams.put("timeout", timeout);
 
+
         logger.info("SSH node executing: nodeId={}, host={}, port={}, username={}, command={}, itemId={}",
             nodeId, host, port, username, command, context.itemId());
 

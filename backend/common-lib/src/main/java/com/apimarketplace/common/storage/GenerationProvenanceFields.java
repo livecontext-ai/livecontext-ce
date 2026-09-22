@@ -65,6 +65,20 @@ public final class GenerationProvenanceFields {
     /** The size the run was billed on, in {@link #BILLED_UNIT}. */
     public static final String BILLED_QUANTITY = "billedQuantity";
     public static final String BILLED_UNIT = "billedUnit";
+    /**
+     * Credits the platform actually charged for this generation, as the ledger committed them.
+     *
+     * <p>Written ONLY when the platform key paid and the charge was committed whole. A generation
+     * run on the reader's own key is charged by their provider, not here; one on an install that
+     * does not meter reaches no ledger at all; and both carry no amount. An absent amount must
+     * never be read as zero: the two mean opposite things, and printing "0 credits" over a
+     * generation somebody paid a provider for states the one thing this field exists to get right.
+     *
+     * <p>The number is the amount the reservation committed, not the seed rate and not a quote
+     * recomputed at read time: a rate can be republished between the generation and the reading,
+     * and the only figure worth showing next to an asset is the one that was actually taken.
+     */
+    public static final String BILLED_CREDITS = "billedCredits";
     /** When it was generated, ISO-8601. The row's own {@code created_at} agrees; this survives a copy. */
     public static final String AT = "at";
 

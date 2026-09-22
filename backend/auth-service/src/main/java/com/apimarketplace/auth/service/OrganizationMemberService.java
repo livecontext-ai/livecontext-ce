@@ -1,5 +1,8 @@
 package com.apimarketplace.auth.service;
 
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.auth.security.AuthTokenAtRestBackfill;
+
 import com.apimarketplace.auth.domain.*;
 import com.apimarketplace.auth.repository.*;
 import com.apimarketplace.common.web.AppEditionProvider;
@@ -48,6 +51,14 @@ public class OrganizationMemberService {
     private final OrganizationAuditService auditService;
     private final OrganizationInvitationMailer invitationMailer;
     private final AppEditionProvider editionProvider;
+
+    /**
+     * Re-attributes a transferred workspace to the new owner's storage pool. Optional and
+     * field-injected so the existing constructor and its tests stay as they are; null simply
+     * means no re-attribution, which is the behaviour that shipped before the shared pool.
+     */
+    @Autowired(required = false)
+    private PlanStorageQuotaSyncer planStorageQuotaSyncer;
     // Field-injected (optional) so the existing constructor + unit-test wiring are
     // untouched. When present, getOwnerPlan delegates to it (single source of truth);
     // when null (slim tests) it falls back to the local subscriptionRepository lookup.
@@ -78,6 +89,14 @@ public class OrganizationMemberService {
     // request reflects the new memberships list immediately (without waiting
     // up to 5min for the QuotaCacheService TTL).
     private final GatewayCacheClient gatewayCacheClient;
+
+    /**
+     * Read-only plaintext fallback for an invitation row still stored in clear (pre-2026-09-17) when its hash lookup misses.
+     * Optional so a unit test can build the service without a database; in a Spring context
+     * the component is always present (same package tree).
+     */
+    @Autowired(required = false)
+    private AuthTokenAtRestBackfill tokenBackfill;
 
     public OrganizationMemberService(OrganizationMemberRepository memberRepository,
                                      OrganizationInvitationRepository invitationRepository,
@@ -364,11 +383,17 @@ public class OrganizationMemberService {
                         "windowHours", 1));
     }
 
+    /** Hash lookup on the invitation token, healing a pre-hash row on a miss. */
+    private Optional<OrganizationInvitation> findInvitationByToken(String token) {
+        return TokenAtRest.lookup(token, invitationRepository::findByTokenHash,
+                t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(AuthTokenAtRestBackfill.INVITATION_TOKENS, t, invitationRepository::findLegacyPlaintext));
+    }
+
     /**
      * Accept an invitation by token.
      */
     public OrganizationInvitation acceptInvitation(String token, Long userId) {
-        OrganizationInvitation invitation = invitationRepository.findByToken(token)
+        OrganizationInvitation invitation = findInvitationByToken(token)
                 .orElseThrow(() -> new IllegalArgumentException("Invitation not found"));
 
         if (invitation.getStatus() != InvitationStatus.PENDING) {
@@ -694,6 +719,31 @@ public class OrganizationMemberService {
         bustGatewayCacheFor(currentOwner.getUser());
         bustGatewayCacheFor(newOwnerUser);
 
+        // Move the workspace into the NEW owner's storage pool. The allowance is shared per
+        // account, and the quota row carries the owner so the gate can sum an account's
+        // workspaces; leaving it behind would keep charging this workspace's bytes to the old
+        // owner's pool while the new owner stores in it for free. syncAfterCommit re-stamps and
+        // re-limits every workspace the new owner now owns, including this one.
+        //
+        // The UI keeps this transfer hidden (OrganizationDangerZone renders it behind `false &&`,
+        // pending Stripe subscription migration), but the REST endpoint is live, so the
+        // attribution cannot be left to the UI's restraint.
+        if (planStorageQuotaSyncer != null) {
+            subscriptionRepository.findActiveByUserId(newOwnerUserId)
+                    .map(Subscription::getPlan)
+                    .ifPresentOrElse(
+                            plan -> planStorageQuotaSyncer.syncAfterCommit(newOwnerUserId, plan),
+                            // No active subscription means no allowance to apply, so the row keeps
+                            // the previous owner's attribution and their pool keeps paying for a
+                            // workspace they no longer own. Said out loud rather than skipped in
+                            // silence: this is a real, if narrow, accounting drift and it resolves
+                            // itself the moment the new owner has a plan.
+                            () -> log.warn("Ownership of org {} moved to user {} who has no active "
+                                            + "subscription: storage stays attributed to the previous "
+                                            + "owner's pool until the new owner has a plan",
+                                    orgId, newOwnerUserId));
+        }
+
         auditService.record(orgId, currentOwnerUserId,
                 OrganizationAuditEvent.Type.OWNERSHIP_TRANSFERRED,
                 java.util.Map.of(
@@ -919,7 +969,7 @@ public class OrganizationMemberService {
         if (token == null || token.isBlank()) {
             return InvitationInfo.invalid();
         }
-        return invitationRepository.findByToken(token)
+        return findInvitationByToken(token)
                 .filter(inv -> inv.getStatus() == InvitationStatus.PENDING && !inv.isExpired())
                 .map(inv -> new InvitationInfo(
                         true,

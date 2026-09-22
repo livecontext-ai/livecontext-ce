@@ -602,6 +602,57 @@ class StepDataPersistenceServiceTest {
         }
 
         @Test
+        @DisplayName("Should persist a LOOP's condition, which had no enrichment case at all")
+        void shouldPersistLoopConditionFields() {
+            // The switch carried `case LOOP_CONTROLLER -> {} // Loop nodes no longer used`,
+            // a comment that was false. Every loop therefore reached the inspector with an
+            // empty Condition / Resolved / Result / Iteration set, read from metadata that
+            // nothing wrote.
+            WorkflowStepDataEntity entity = new WorkflowStepDataEntity();
+            Map<String, Object> output = new HashMap<>();
+            output.put("node_type", "LOOP");
+            output.put("condition_expression", "{{value}} > 10");
+            output.put("condition_resolved", "15 > 10");
+            output.put("condition_result", true);
+            output.put("loop_condition", "{{value}} > 10");
+            output.put("max_iterations", 5);
+            output.put("iteration", 2);
+            output.put("evaluations", List.of(Map.of("branch", "body", "selected", true)));
+            StepExecutionResult result = new StepExecutionResult(
+                    "test-step", NodeStatus.COMPLETED, "Success", output, 0L, null
+            );
+
+            service.enrichEntityWithNodeTypeFields(entity, "core:repeat", result);
+
+            assertEquals("{{value}} > 10", entity.getConditionExpression());
+            assertTrue(entity.getConditionResult());
+            assertEquals(2, entity.getLoopIteration());
+            assertEquals("15 > 10", entity.getMetadata().get("condition_resolved"));
+            assertEquals(5, entity.getMetadata().get("max_iterations"));
+            assertNotNull(entity.getMetadata().get("evaluations"));
+        }
+
+        @Test
+        @DisplayName("Should read a SWITCH's evaluations, the key SwitchNode actually emits")
+        void shouldReadSwitchEvaluationsNotCases() {
+            // This read output.get("cases"). SwitchNode has only ever emitted
+            // `evaluations`, so the inspector's Cases column was empty on every switch.
+            WorkflowStepDataEntity entity = new WorkflowStepDataEntity();
+            Map<String, Object> output = new HashMap<>();
+            output.put("node_type", "SWITCH");
+            output.put("selected_case", "case_1");
+            output.put("evaluations", List.of(Map.of("branch", "case_1", "selected", true)));
+            StepExecutionResult result = new StepExecutionResult(
+                    "test-step", NodeStatus.COMPLETED, "Success", output, 0L, null
+            );
+
+            service.enrichEntityWithNodeTypeFields(entity, "core:route", result);
+
+            assertNotNull(entity.getMetadata().get("evaluations"),
+                    "the switch cases must reach metadata under the key the node emits");
+        }
+
+        @Test
         @DisplayName("Should derive selected_branch from OPTION selected_choice_index for split routing")
         void shouldDeriveSelectedBranchFromOptionChoiceIndexForSplitRouting() {
             WorkflowStepDataEntity entity = new WorkflowStepDataEntity();

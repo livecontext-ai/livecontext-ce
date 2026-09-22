@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.config;
 
+import java.util.Optional;
 import com.apimarketplace.common.storage.StorageUsageDto;
 import com.apimarketplace.common.web.OrgContextHeaderForwarder;
 import org.slf4j.Logger;
@@ -37,15 +38,21 @@ public class ConversationStorageClient {
         return baseUrl;
     }
 
-    public StorageUsageDto getStorageUsage(String tenantId) {
+    /**
+     * Empty when conversation-service could not be measured, which is NOT the same as a
+     * tenant measuring zero. The single caller writes this through an absolute set, so
+     * returning {@code zero()} on a failed call silently erased the previous value; a
+     * missing measurement must leave the stored figure alone until the next run.
+     */
+    public Optional<StorageUsageDto> getStorageUsage(String tenantId) {
         String url = baseUrl + "/api/internal/conversation/storage/usage";
         try {
             ResponseEntity<StorageUsageDto> response = restTemplate.exchange(
                     url, HttpMethod.GET, new HttpEntity<>(buildHeaders(tenantId)), StorageUsageDto.class);
-            return response.getBody() != null ? response.getBody() : StorageUsageDto.zero();
+            return Optional.ofNullable(response.getBody());
         } catch (Exception e) {
             log.warn("Failed to get conversation storage usage for tenant {}: {}", tenantId, e.getMessage());
-            return StorageUsageDto.zero();
+            return Optional.empty();
         }
     }
 

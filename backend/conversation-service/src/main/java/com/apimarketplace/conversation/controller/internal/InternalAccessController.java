@@ -95,10 +95,12 @@ public class InternalAccessController {
         // created by agent-service/orchestrator only exist in Redis and are invisible to
         // StreamTTLService - if the producer pod dies, the partial content is silently lost.
         // Best-effort: a DB hiccup must not fail the registration (Redis is the live path).
-        // Note: StreamService.createStream first stops any existing ACTIVE streams for the
-        // conversation. This is the assumed invariant "one active stream per conversation":
-        // if two executions overlap on the same conversation, the most recent registration
-        // wins and the previous stream's DB row is stopped.
+        // Note: StreamService.createStream is idempotent on streamId - re-registering a stream
+        // that already exists returns the existing row and writes nothing. For a NEW stream it
+        // first stops any other ACTIVE stream on the conversation, the assumed invariant being
+        // "one active stream per conversation": if two executions overlap on the same
+        // conversation, the most recent registration wins and the previous stream's DB row is
+        // stopped.
         try {
             streamService.createStream(conversationId, streamId, ownerUserId != null ? ownerUserId : "system");
         } catch (Exception e) {

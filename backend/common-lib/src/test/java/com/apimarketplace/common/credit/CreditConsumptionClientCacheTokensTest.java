@@ -50,6 +50,34 @@ class CreditConsumptionClientCacheTokensTest {
     }
 
     @Test
+    @DisplayName("consumeCredits posts the key route when given, and omits it otherwise (pre-V506 wire shape)")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void consumeCreditsPostsKeyRoute() {
+        CreditConsumptionClient client = clientWithMockRestTemplate();
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity(Map.of("success", true), HttpStatus.OK));
+
+        client.consumeCredits("42", "AGENT_EXECUTION", "exec-1", "openai", "gpt-4", 100, 50,
+                null, new LlmCacheTokens(0, 0, 0, 0), "OWN_KEY");
+
+        assertThat(capturedBody()).containsEntry("keyRoute", "OWN_KEY");
+    }
+
+    @Test
+    @DisplayName("the 9-arg overload sends no key route (null and blank are both omitted)")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void legacyOverloadSendsNoKeyRoute() {
+        CreditConsumptionClient client = clientWithMockRestTemplate();
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity(Map.of("success", true), HttpStatus.OK));
+
+        client.consumeCredits("42", "AGENT_EXECUTION", "exec-1", "openai", "gpt-4", 100, 50,
+                null, new LlmCacheTokens(0, 0, 0, 0));
+
+        assertThat(capturedBody()).doesNotContainKey("keyRoute");
+    }
+
+    @Test
     @DisplayName("consumeCredits posts cache write/read, cached and reasoning counters when provided")
     @SuppressWarnings({"rawtypes", "unchecked"})
     void consumeCreditsPostsCacheCounters() {
@@ -104,5 +132,64 @@ class CreditConsumptionClientCacheTokensTest {
         Map<String, Object> body = capturedBody();
         assertThat(body)
                 .doesNotContainKeys("cacheCreationTokens", "cacheReadTokens", "cachedTokens", "reasoningTokens");
+    }
+
+    @Test
+    @DisplayName("persistRejection hands the key route to the dead-letter handler, so the replay bills the turn the way the first attempt meant to")
+    void persistRejectionCarriesTheKeyRoute() {
+        CreditConsumptionClient client = clientWithMockRestTemplate();
+        CreditDeadLetterHandler handler = org.mockito.Mockito.mock(CreditDeadLetterHandler.class);
+        ReflectionTestUtils.setField(client, "deadLetterHandler", handler);
+
+        client.persistRejection("42", "AGENT_EXECUTION", "exec-1", "openai", "gpt-4", 100, 50,
+                "402 Insufficient credits", "org-1", "OWN_KEY");
+
+        verify(handler).persistFailedConsumption("42", "AGENT_EXECUTION", "exec-1", "openai", "gpt-4",
+                100, 50, "402 Insufficient credits", "org-1", "OWN_KEY");
+    }
+
+    @Test
+    @DisplayName("the route-less persistRejection overloads still reach the handler, with no route (pre-V506 callers)")
+    void persistRejectionWithoutRouteStillReachesTheHandler() {
+        CreditConsumptionClient client = clientWithMockRestTemplate();
+        CreditDeadLetterHandler handler = org.mockito.Mockito.mock(CreditDeadLetterHandler.class);
+        ReflectionTestUtils.setField(client, "deadLetterHandler", handler);
+
+        client.persistRejection("42", "AGENT_EXECUTION", "exec-1", "openai", "gpt-4", 100, 50,
+                "Non-2xx: 503", "org-1");
+
+        verify(handler).persistFailedConsumption("42", "AGENT_EXECUTION", "exec-1", "openai", "gpt-4",
+                100, 50, "Non-2xx: 503", "org-1", null);
+    }
+
+    @Test
+    @DisplayName("the async retry path posts the key route with every attempt, so a delayed own-key debit is still the flat fee")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void asyncRetryPathPostsTheKeyRoute() {
+        CreditConsumptionClient client = clientWithMockRestTemplate();
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(new ResponseEntity(Map.of("success", true), HttpStatus.OK));
+
+        client.consumeCreditsAsyncInternalAsync("42", "AGENT_EXECUTION", "exec-1", "openai", "gpt-4",
+                100, 50, null, "org-1", "OWN_KEY");
+
+        assertThat(capturedBody()).containsEntry("keyRoute", "OWN_KEY");
+    }
+
+    @Test
+    @DisplayName("when every async attempt fails, the dead-letter entry keeps the key route (the replay is the last chance to bill it right)")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void exhaustedAsyncRetriesDeadLetterWithTheKeyRoute() {
+        CreditConsumptionClient client = clientWithMockRestTemplate();
+        CreditDeadLetterHandler handler = org.mockito.Mockito.mock(CreditDeadLetterHandler.class);
+        ReflectionTestUtils.setField(client, "deadLetterHandler", handler);
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenThrow(new RuntimeException("auth-service down"));
+
+        client.consumeCreditsAsyncInternalAsync("42", "AGENT_EXECUTION", "exec-1", "openai", "gpt-4",
+                100, 50, null, "org-1", "OWN_KEY");
+
+        verify(handler).persistFailedConsumption(eq("42"), eq("AGENT_EXECUTION"), eq("exec-1"), eq("openai"), eq("gpt-4"),
+                eq(100), eq(50), any(), eq("org-1"), eq("OWN_KEY"));
     }
 }

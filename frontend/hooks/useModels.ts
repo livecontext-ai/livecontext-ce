@@ -2,14 +2,20 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { apiClient } from '@/lib/api';
+import { clearCategoryModelsCache } from '@/hooks/useCategoryModels';
 import { useOptionalAuth } from '@/lib/providers/smart-providers';
 
 /**
  * Capabilities a model exposes. A model with no {@code capabilities}
  * field is treated as {@code ['chat']} by {@link modelHasCapability}.
  * Image-generation models declare {@code ['image']} (no chat fallback).
+ *
+ * {@code 'decision'} is a model that returns a TYPED DECISION instead of text
+ * (a choice among declared options, with a probability each). It cannot hold a
+ * conversation, so it never carries {@code 'chat'} as well: the two are
+ * alternatives, and a surface that accepts both asks for both.
  */
-export type ModelCapability = 'chat' | 'image';
+export type ModelCapability = 'chat' | 'image' | 'decision';
 
 export interface AIModel {
   id: string;
@@ -53,6 +59,15 @@ export interface AIModel {
   rateLimitTpmPerTenant?: number | null;
   rateLimitRpmPerTenant?: number | null;
   providerKind?: 'cloud' | 'byok' | 'bridge';
+  /**
+   * V494 - a cloud admin opened this model to the free tier, so a Free account's
+   * monthly AI allowance can pay for a chat or agent turn on it. CE answers FALSE
+   * rather than omitting it (it runs the same migration; only a cloud admin can set
+   * it true), and an older catalogue payload omits it entirely. Both read as "not on
+   * the free tier": the safe direction, since it only ever withholds a benefit rather
+   * than promising one.
+   */
+  freeTierEnabled?: boolean;
   /** ISO-8601 instant. When set, model is end-of-life; UI should warn. */
   deprecatedAt?: string;
   /** ISO date (YYYY-MM-DD) - provider-published EOL date. */
@@ -85,16 +100,47 @@ export const IMAGE_MODEL_IDS: ReadonlySet<string> = new Set([
   'gemini-3-pro-image',
 ]);
 
+/**
+ * What the backend's {@code mode} column means in capability terms.
+ *
+ * <p>Preferred over {@link IMAGE_MODEL_IDS} because it is the catalogue's own answer
+ * rather than a list this file has to keep in step with the backend by hand: the
+ * provider declares it and the migration writes it. A mode this map does not know is
+ * deliberately absent, so such a model falls through to the chat default rather than
+ * disappearing from every picker the day a new one is added.
+ */
+const MODE_CAPABILITIES: Readonly<Record<string, ModelCapability>> = {
+  chat: 'chat',
+  image: 'image',
+  decision: 'decision',
+};
+
 /** Tag every model with a default capability list when the backend doesn't supply one. */
 function deriveCapabilities(model: AIModel): ModelCapability[] {
   if (model.capabilities && model.capabilities.length > 0) return model.capabilities;
+  const fromMode = model.mode ? MODE_CAPABILITIES[model.mode] : undefined;
+  if (fromMode) return [fromMode];
   if (IMAGE_MODEL_IDS.has(model.id)) return ['image'];
   return ['chat'];
 }
 
-/** True iff the model supports the requested capability. */
-export function modelHasCapability(model: AIModel, capability: ModelCapability): boolean {
-  return deriveCapabilities(model).includes(capability);
+/**
+ * True iff the model supports the requested capability, or any of them when given a
+ * list.
+ *
+ * <p>A list is how a surface says it accepts more than one KIND of model. The classify
+ * node is the case that needs it: the same node runs on a chat model or on a decision
+ * model, so its picker asks for {@code ['chat', 'decision']} and shows both families,
+ * while the chat picker asks for {@code 'chat'} alone and shows neither decision models
+ * nor image ones.
+ */
+export function modelHasCapability(
+  model: AIModel,
+  capability: ModelCapability | readonly ModelCapability[],
+): boolean {
+  const derived = deriveCapabilities(model);
+  const wanted = Array.isArray(capability) ? capability : [capability as ModelCapability];
+  return wanted.some(c => derived.includes(c));
 }
 
 /**
@@ -152,11 +198,20 @@ let cacheTimestamp: number = 0;
 let modelsRequest: Promise<ModelsData> | null = null;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-/** Clear the models cache so the next useModels() call refetches from the server. */
+/**
+ * Clear the models cache so the next useModels() call refetches from the server.
+ *
+ * <p>Clears the PER-CATEGORY cache too. Every caller of this function - linking a cloud
+ * account, saving a provider key, enabling a model, finishing CE setup - is saying the
+ * catalogue changed, and that is equally true of a slice fetched by category. Leaving the
+ * second cache out would have refreshed the chat list while a classify picker went on
+ * offering whatever it read before the key existed, for the life of the page.
+ */
 export function clearModelsCache() {
   modelsCache = null;
   cacheTimestamp = 0;
   modelsRequest = null;
+  clearCategoryModelsCache();
 }
 
 export function useModels(): UseModelsResult {
@@ -286,9 +341,23 @@ async function getModelsOnce(force: boolean): Promise<ModelsData> {
 }
 
 /**
- * Pure role filter behind {@link useVisibleModels} - extracted so it can be
- * unit-tested without a React context. Admins get {@code base} unchanged;
- * everyone else loses CLI-bridge models (and any provider left empty).
+ * Pure visibility filter behind {@link useVisibleModels} - extracted so it can be unit-tested
+ * without a React context. Drops CLI-bridge models for a non-admin, and any provider left empty
+ * by that; an admin keeps the whole catalogue in every edition.
+ *
+ * <p>The role is the only input, on purpose. On a self-hosted install a non-admin is
+ * dispatch-blocked from the CLI anyway, so a picker that offers them one only produces a 403. On
+ * the hosted product the four CLIs share ONE operator subscription, so a bridge there is an
+ * administrator's choice: hidden from everyone else whatever the access policy says (an admin can
+ * widen it to all users, and the hosted product must not reopen on that), shown to an admin, whose
+ * dispatch the backend still gates. The backend agrees on every surface an agent reads
+ * (help_models, the save guard) and on the anonymous catalogue.
+ *
+ * <p>No exemption parameter, deliberately. The surfaces that ADMINISTER the bridges rather than
+ * consume them - {@code ModelExecutionLinksPanel}, which points a billed pair at a CLI, and
+ * {@code AddModelDialog} - read the raw {@link useModels} and never pass through here, so they
+ * keep the full catalogue for free. That is also why the backend filters only the ANONYMOUS
+ * response: filtering the authenticated one would empty those panels whatever this hook does.
  */
 export function filterVisibleModels(base: UseModelsResult, isAdmin: boolean): UseModelsResult {
   if (isAdmin) return base;
@@ -303,11 +372,13 @@ export function filterVisibleModels(base: UseModelsResult, isAdmin: boolean): Us
  * Role-aware view of {@link useModels} for the model-PICKER surfaces.
  *
  * <p>Hides CLI-bridge models (claude-code/codex/gemini-cli/mistral-vibe) from
- * non-admin users - they are dispatch-blocked from them anyway (admin's shared
- * subscription), so offering them in a picker only leads to a 403 at run time.
- * Admins see the full catalog unchanged. The platform default and the
- * module-level cache/accessors are left untouched (a non-admin never has a
- * bridge model selected, and resolution helpers must stay role-agnostic).
+ * non-admin users on EVERY deployment - they are dispatch-blocked from them anyway
+ * (the operator's shared subscription), so offering them in a picker only leads to
+ * a 403 at run time. An admin keeps the full catalog on every deployment: on managed
+ * cloud a bridge is theirs to pick (and the backend still gates the dispatch), on a
+ * self-hosted install, enterprise tier included, that CLI is their own. The platform
+ * default and the module-level cache/accessors are left untouched (resolution helpers
+ * must stay role-agnostic).
  *
  * <p>Uses {@link useOptionalAuth} (non-throwing) so a picker rendered without
  * the auth provider - or in a test - degrades to the safe "non-admin" view

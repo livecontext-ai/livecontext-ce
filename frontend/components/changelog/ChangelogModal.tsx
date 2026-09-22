@@ -6,15 +6,22 @@ import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { useChangelog } from '@/hooks/useChangelog';
+import { APP_SUGGESTIONS_FLAG, WELCOME_GIFT_FLAG } from '@/lib/onboarding/welcomeGiftHandoff';
 import ChangelogMediaView from './ChangelogMediaView';
 
 /**
  * Onboarding modals already queued in this session. The hook keeps the panel quiet until
- * onboarding is COMPLETE, which covers the flow itself; these flags cover the few seconds after
- * it, while the welcome-gift and suggested-apps modals are still waiting to show. Between them,
- * a first run is never interrupted by a release note.
+ * onboarding is COMPLETE, which covers the flow itself; these flags cover the minutes after it,
+ * while the welcome gift and the suggested-applications modal are still waiting to show.
+ * Between them, a first run is never interrupted by a release note.
+ *
+ * <p>Both names are IMPORTED rather than spelled out. The gift's was spelled out once, and when
+ * the modal that writes it was replaced the literal here went stale in silence: half this list
+ * guarded a modal nobody could arm any more. Onboarding writes its two flags in separate `try`
+ * blocks on purpose, so a tab that refuses one write and accepts the other is a real state, and in
+ * that state a dead literal lets this panel open on top of the modal it exists to stay behind.
  */
-const ONBOARDING_FLAGS = ['lc_show_welcome_gift', 'lc_show_app_suggestions'];
+const ONBOARDING_FLAGS = [WELCOME_GIFT_FLAG, APP_SUGGESTIONS_FLAG];
 
 /** Long enough for the app shell to settle, short enough to still read as part of arriving. */
 const AUTO_OPEN_DELAY_MS = 1200;
@@ -34,8 +41,8 @@ export default function ChangelogModal() {
   const t = useTranslations('changelog');
   const { entry, isAvailable, decision, markSeen } = useChangelog();
   const [open, setOpen] = useState(false);
-  // Read at mount, before onboarding consumes its own flags: by the time this panel would open,
-  // the gift modal has already removed them from sessionStorage.
+  // Read at mount, before the onboarding modals consume their own flags: by the time this panel
+  // would open, they may already have removed them from sessionStorage.
   const [onboardingInFlight] = useState(hasOnboardingFlag);
 
   // An account that never lacked what the entry announces is acknowledged without ever being
@@ -88,7 +95,20 @@ export default function ChangelogModal() {
           </div>
         </div>
 
-        <div className="space-y-4 p-6">
+        {/*
+          The middle row is the one that gives. DialogContent caps at max-h-[90vh], and this
+          panel passes `overflow-hidden` (it has to: the media is flush to the rounded corners
+          and would otherwise square them off), which twMerge-overrides the base
+          `overflow-y-auto`. Without a scroll region of its own, anything past the cap is
+          clipped with no way to reach it, and the footer is the LAST thing in the box: the
+          dismiss button and the "see all updates" link are what a short window eats first.
+          Escape and the corner close button still work, so the panel never traps anyone,
+          but a reader who never sees the footer does not know the archive exists.
+          `min-h-0` is what lets a grid row shrink below its content so `overflow-y-auto` has
+          something to do. Measured: at a 640px-tall viewport the German, French and Portuguese
+          entries overflow the cap by 17px.
+        */}
+        <div className="min-h-0 overflow-y-auto space-y-4 p-6">
           {entry.media && <ChangelogMediaView media={entry.media} alt={t('latest.mediaAlt')} />}
           <DialogDescription className="text-sm leading-6 text-theme-secondary">
             {t('latest.body')}

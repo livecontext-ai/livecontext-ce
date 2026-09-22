@@ -1,5 +1,10 @@
 package com.apimarketplace.agent.webhook;
 
+
+import org.springframework.beans.factory.annotation.Autowired;
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.agent.security.AgentTokenAtRestBackfill;
+
 import com.apimarketplace.agent.domain.AgentWebhookTokenEntity;
 import com.apimarketplace.agent.repository.AgentWebhookTokenRepository;
 import com.apimarketplace.common.security.CredentialEncryptionService;
@@ -32,6 +37,14 @@ public class AgentWebhookTokenService {
 
     private final AgentWebhookTokenRepository repository;
     private final CredentialEncryptionService encryptionService;
+
+    /**
+     * Read-only plaintext fallback for a webhook row still stored in clear (pre-2026-09-17) when its hash lookup misses.
+     * Optional so a unit test can build the service without a database; in a Spring context
+     * the component is always present (same package tree).
+     */
+    @Autowired(required = false)
+    private AgentTokenAtRestBackfill tokenBackfill;
 
     public AgentWebhookTokenService(AgentWebhookTokenRepository repository,
                                     CredentialEncryptionService encryptionService) {
@@ -111,7 +124,8 @@ public class AgentWebhookTokenService {
         if (token == null || token.isBlank()) {
             return Optional.empty();
         }
-        return repository.findByToken(token);
+        return TokenAtRest.lookup(token, repository::findByTokenHash,
+                t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(AgentTokenAtRestBackfill.WEBHOOK_TOKENS, t, repository::findLegacyPlaintext));
     }
 
     /**
@@ -121,7 +135,8 @@ public class AgentWebhookTokenService {
         if (token == null || token.isBlank()) {
             return Optional.empty();
         }
-        return repository.findActiveByToken(token);
+        return TokenAtRest.lookup(token, repository::findActiveByTokenHash,
+                t -> tokenBackfill == null ? Optional.empty() : tokenBackfill.findLegacy(AgentTokenAtRestBackfill.WEBHOOK_TOKENS, t, t2 -> repository.findLegacyPlaintext(t2).filter(e -> Boolean.TRUE.equals(e.getIsActive()))));
     }
 
     /**

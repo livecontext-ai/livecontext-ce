@@ -125,6 +125,49 @@ conversation:
     # Default output-token budget for general chat; clamped at runtime to the
     # resolved model's real ceiling (MaxTokensClamp) so it never 400s a low-cap model.
     max-tokens: 16000
+  # COLD-summary compaction. Defaults live in CompactionDefaultsConfig; the
+  # block is spelled out here so the knobs are discoverable, and so a per-env
+  # override is a one-line edit.
+  #
+  # trigger picks the ONE condition that fires the summariser. The modes are
+  # alternative answers to "is it time?", never independent switches:
+  #   turns          cadence only (default, pre-2026-09 behaviour). Counts turns,
+  #                  so a conversation of huge turns waits exactly as long as one
+  #                  of tiny turns; between two summaries COLD can grow without
+  #                  bound and every turn in between re-sends it in full.
+  #   size           COLD GROWTH only. Fires as soon as the COLD zone has grown
+  #                  by size-trigger-cold-tokens since the last summary. Beware:
+  #                  a long conversation of small turns may never reach it, and
+  #                  then no envelope is ever written, so the agent keeps no
+  #                  recall past hot-warm-turn-window.
+  #   size-or-turns  whichever comes first. Recommended for token-heavy agent
+  #                  workloads: growth reacts in token terms instead of turn
+  #                  terms, the cadence still guarantees a quiet conversation
+  #                  eventually gets an envelope.
+  #
+  # What growth can see: the COLD zone excludes the last hot-warm-turn-window
+  # messages, so a large tool result is HOT on the turn it lands and reaches
+  # this trigger only once it has aged out of that window. "Growth" means "a
+  # lot has aged into COLD", which is what the summariser can act on.
+  #
+  # A cadence set explicitly on an agent or a conversation is never voided by
+  # size mode: that scope is resolved to size-or-turns instead.
+  #
+  # The COLD size GATE (ColdSummaryGate.thresholdFor) is not one of these modes
+  # and is never bypassed: it is a credit floor that keeps the summariser off a
+  # zone too small for a summary to be worth its own tokens.
+  compaction:
+    trigger: ${CONVERSATION_COMPACTION_TRIGGER:turns}
+    cadence-turns: ${CONVERSATION_COMPACTION_CADENCE_TURNS:5}
+    # Growth threshold in COLD tokens, compared against what arrived SINCE the
+    # last summary (not the absolute COLD size: messages survive summarisation,
+    # so an absolute test would stay true for ever and fire every turn).
+    # Ignored in turns mode. A value below the 2000-token credit floor is raised
+    # to it at startup, with a WARN. The reason is the aging rate, not the floor:
+    # roughly one message ages out of the HOT+WARM window per turn, so a threshold
+    # below one message's token count is met on nearly every turn. The clamp
+    # reduces that, it does not remove it.
+    size-trigger-cold-tokens: ${CONVERSATION_COMPACTION_SIZE_TRIGGER_COLD_TOKENS:32000}
   service:
     url: ${CONVERSATION_SERVICE_URL:http://localhost:8087}
   bridge:
@@ -238,3 +281,11 @@ streaming:
     requests-per-second: 10
     burst-capacity: 20
 
+
+# Token-at-rest material (share/link tokens are AES-encrypted + HMAC-hashed in the DB).
+# Same variables as every other service; outside Kubernetes a blank value falls back to
+# ephemeral in-memory material (dev only), inside Kubernetes a blank value refuses to boot.
+credential:
+  encryption:
+    password: ${CREDENTIAL_ENCRYPTION_PASSWORD:}
+    salt: ${CREDENTIAL_ENCRYPTION_SALT:}

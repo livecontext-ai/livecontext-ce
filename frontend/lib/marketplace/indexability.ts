@@ -6,7 +6,7 @@ import type { PublicPublicationSummary } from './publicPublications';
  * Not every published listing deserves to be in the index. A page whose whole
  * content is a title and a one-line description is "thin content": Google
  * demotes it, and enough of them drag down the ranking of the entire domain,
- * including the pages that already perform (the landing, /compare, the blog).
+ * including the pages that already perform (the landing, /compare, the docs).
  * Listings that fail this gate are still fully reachable and rendered, they
  * just carry `noindex` and stay out of the sitemap.
  *

@@ -408,6 +408,52 @@ class DataInputNodeTest {
         }
     }
 
+    @Nested
+    @DisplayName("what the Params column says an item held")
+    class ReportedItemValues {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> paramsOf(NodeExecutionResult result) {
+            return (Map<String, Object>) result.output().get("resolved_params");
+        }
+
+        @Test
+        @DisplayName("an item that resolved to NOTHING reads the same in the panel as in the output")
+        void agreesWithTheOutputOnAnItemThatResolvedToNothing() {
+            // The node resolved every item TWICE: once for its output, once for this map,
+            // through resolvers that disagree exactly here. The output renders an absent
+            // value as "", resolveTemplateString fell back to the raw template - so one
+            // item, in one execution, read as an empty string in one column and as
+            // `{{trigger:start.missing}}` in the other, and neither said which was true.
+            when(mockTemplateAdapter.resolveTemplates(any(), any()))
+                .thenReturn(new HashMap<>());
+            DataInputNode node = new DataInputNode("core:inputs", List.of(
+                new Core.DataInputItem("item_1", "question", "text", "{{trigger:start.missing}}", null)));
+            node.setTemplateAdapter(mockTemplateAdapter);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals(result.output().get("question"), paramsOf(result).get("question"),
+                "the panel and the output describe one item one way");
+        }
+
+        @Test
+        @DisplayName("an item that resolved reports the value the node produced, not a second resolution of it")
+        void reportsTheValueTheNodeProduced() {
+            Map<String, Object> resolved = new HashMap<>();
+            resolved.put("__expr__", "Analyse this document");
+            when(mockTemplateAdapter.resolveTemplates(any(), any())).thenReturn(resolved);
+            DataInputNode node = new DataInputNode("core:inputs", List.of(
+                new Core.DataInputItem("item_1", "question", "text", "{{trigger:start.query}}", null)));
+            node.setTemplateAdapter(mockTemplateAdapter);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals("Analyse this document", paramsOf(result).get("question"));
+            assertEquals(result.output().get("question"), paramsOf(result).get("question"));
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Helper methods
     // ═══════════════════════════════════════════════════════════════════════════

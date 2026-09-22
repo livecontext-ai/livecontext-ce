@@ -80,6 +80,23 @@ class ProviderLlmJsonInvokerTest {
     }
 
     @Test
+    @DisplayName("The pinned key route rides on the CompletionRequest; the unpinned overload leaves it null")
+    void keyRouteRidesOnTheRequest() {
+        when(factory.getProvider("anthropic")).thenReturn(provider);
+        when(provider.complete(any())).thenReturn(CompletionResponse.text("{}"));
+
+        invoker.invokeWithUsage("anthropic", "claude-sonnet-4-6", "s", "u", "tenant-42",
+            com.apimarketplace.agent.domain.KeyRoute.OWN_KEY);
+        invoker.invokeWithUsage("anthropic", "claude-sonnet-4-6", "s", "u", "tenant-42");
+
+        ArgumentCaptor<CompletionRequest> captor = ArgumentCaptor.forClass(CompletionRequest.class);
+        org.mockito.Mockito.verify(provider, org.mockito.Mockito.times(2)).complete(captor.capture());
+        assertThat(captor.getAllValues().get(0).keyRoute()).isEqualTo(com.apimarketplace.agent.domain.KeyRoute.OWN_KEY);
+        assertThat(captor.getAllValues().get(0).tenantId()).isEqualTo("tenant-42");
+        assertThat(captor.getAllValues().get(1).keyRoute()).isNull();
+    }
+
+    @Test
     @DisplayName("Tenant-less overload leaves tenantId null")
     void tenantlessOverloadPassesNull() {
         when(factory.getProvider("anthropic")).thenReturn(provider);

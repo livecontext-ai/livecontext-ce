@@ -183,6 +183,28 @@ class OAuthUserProcessorTest {
     class UpdateExistingUserTests {
 
         @Test
+        @DisplayName("a returning social sign-in advances the authentication instant, not only last-seen")
+        void advancesTheAuthenticationInstant() {
+            OAuthProfile profile = createProfile("google", "existing-id", "existing@example.com");
+            User existingUser = createExistingUser(1L, "existing-id");
+            java.time.LocalDateTime seededAtUpgrade = java.time.LocalDateTime.of(2026, 1, 1, 0, 0);
+            existingUser.setLastAuthenticatedAt(seededAtUpgrade);
+
+            when(userRepository.findByProviderId("existing-id")).thenReturn(Optional.of(existingUser));
+            when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+            User result = processor.upsertUser(profile);
+
+            // This is the fourth of the four sign-in sites, and the only one with no token to
+            // read an auth_time from: direct social login does not go through Keycloak. Writing
+            // only last_login_at would leave last_authenticated_at frozen at whatever the
+            // migration seeded on upgrade day, under a column comment promising it only ever
+            // moves forward, and every social account would carry a quietly wrong value.
+            assertThat(result.getLastAuthenticatedAt()).isAfter(seededAtUpgrade);
+            assertThat(result.getLastAuthenticatedAt()).isEqualTo(result.getLastLoginAt());
+        }
+
+        @Test
         @DisplayName("should find existing user by providerId")
         void shouldFindExistingUserByProviderId() {
             OAuthProfile profile = createProfile("google", "existing-id", "existing@example.com");

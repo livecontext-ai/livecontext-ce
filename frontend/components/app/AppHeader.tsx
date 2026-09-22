@@ -622,7 +622,7 @@ export function AppHeader() {
               id: tabId,
               label: title || 'Workflow Run',
               icon: <Play className="w-4 h-4" />,
-              content: <WorkflowBuilderPanelContent workflowId={id} runId={eventRunId} readOnly={false} />,
+              content: <WorkflowBuilderPanelContent workflowId={id} runId={eventRunId} readOnly={false} hostTabId={tabId} />,
               preferredWidth: 0.45,
               keepMounted: true,
             });
@@ -728,6 +728,7 @@ export function AppHeader() {
       hideModelSelector={isMessagesPage}
       agentSlotLoading={isDmThreadOpen && !dmPeer}
       agentSlotNonInteractive={!!dmPeer}
+      agentSlotUserId={dmPeer ? dmPeer.userId : null}
       dashboardBreadcrumbItems={breadcrumbItems}
       showProfileView={showProfileView}
       isWorkflowExpanded={false}

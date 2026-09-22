@@ -18,6 +18,7 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -172,6 +173,20 @@ class QuotaServiceTest {
     @Nested
     @DisplayName("updateUsage")
     class UpdateUsageTests {
+
+        @Test
+        @DisplayName("REGRESSION GUARD: a negative breakdown total is clamped for the tenant gauge too")
+        void updateUsageClampsNegativeTotal() {
+            TenantStorageQuota q = createQuota(1000L, 500L);
+            when(quotaRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(q));
+            when(breakdownService.getTotalUsage(TENANT_ID)).thenReturn(-1L);
+
+            quotaService.updateUsage(TENANT_ID);
+
+            ArgumentCaptor<TenantStorageQuota> cap = ArgumentCaptor.forClass(TenantStorageQuota.class);
+            verify(quotaRepository).save(cap.capture());
+            assertThat(cap.getValue().getUsedBytes()).isZero();
+        }
 
         @Test
         @DisplayName("should update usage from breakdown service (not storageRepository)")
@@ -545,7 +560,7 @@ class QuotaServiceTest {
         private static final String ORG_ID = "org-42";
 
         @Test
-        @DisplayName("updateOrganizationUsage reads SUM(size_bytes) from storage and saves it")
+        @DisplayName("updateOrganizationUsage reads a fresh SUM over storage.storage")
         void updateOrgUsageReadsStorageRepo() {
             OrganizationStorageQuota q = createOrgQuota(1000L, 0L);
             when(orgQuotaRepository.findByOrganizationId(ORG_ID)).thenReturn(Optional.of(q));
@@ -556,8 +571,32 @@ class QuotaServiceTest {
             ArgumentCaptor<OrganizationStorageQuota> cap = ArgumentCaptor.forClass(OrganizationStorageQuota.class);
             verify(orgQuotaRepository).save(cap.capture());
             assertThat(cap.getValue().getUsedBytes()).isEqualTo(777L);
-            // Org usage MUST NOT route through tenant breakdown service (separate scope).
+            // Org usage MUST NOT route through the tenant breakdown (separate scope).
             verify(breakdownService, never()).getTotalUsage(anyString());
+        }
+
+        @Test
+        @DisplayName("DESIGN GUARD: the org gauge never derives from the breakdown ledger")
+        void updateOrgUsageDoesNotReadTheBreakdownLedger() {
+            // Not a past defect: this guards a direction that was tried during this change and
+            // reverted, so it passes against the old code too. Deriving the gauge from the
+            // categories is tempting, because the page draws it above a bar built from them and
+            // the two should add up. It is wrong here: this value is also
+            // the write gate, read with no refresh, and the ledger can be INCOMPLETE in ways a
+            // direct sum cannot. An organization that has never been reconciled has rows for
+            // almost none of its categories, so the next save would write one file's size over a
+            // correct total and hand the workspace its entire cap, in HTTP 200, with no log.
+            // Production 2026-09-18: 31 organizations held ACTIVE rows and no breakdown row.
+            OrganizationStorageQuota q = createOrgQuota(1_000_000L, 0L);
+            when(orgQuotaRepository.findByOrganizationId(ORG_ID)).thenReturn(Optional.of(q));
+            when(storageRepository.calculateOrganizationUsage(ORG_ID)).thenReturn(500_000L);
+
+            quotaService.updateOrganizationUsage(ORG_ID);
+
+            ArgumentCaptor<OrganizationStorageQuota> cap = ArgumentCaptor.forClass(OrganizationStorageQuota.class);
+            verify(orgQuotaRepository).save(cap.capture());
+            assertThat(cap.getValue().getUsedBytes()).isEqualTo(500_000L);
+            verifyNoInteractions(breakdownService);
         }
 
         @Test
@@ -573,6 +612,236 @@ class QuotaServiceTest {
             assertThat(cap.getValue().getMaxBytes()).isEqualTo(10_000L);
             assertThat(cap.getValue().getSoftLimitBytes()).isEqualTo(8_000L);
             assertThat(cap.getValue().getHardLimitBytes()).isEqualTo(10_000L);
+        }
+    }
+
+    /**
+     * The shared pool: a plan's allowance belongs to the ACCOUNT, and every workspace it owns
+     * draws from the same pot. The behaviour that matters most here is the one a customer feels:
+     * once the pot is full, EVERY workspace of that account refuses writes, including one that
+     * has stored nothing itself.
+     */
+    @Nested
+    @DisplayName("checkOrganizationQuota - allowance shared across an account's workspaces")
+    class AccountPoolTests {
+
+        private OrganizationStorageQuota ownedBy(String accountId, long maxBytes, long ownUsedBytes) {
+            OrganizationStorageQuota q = new OrganizationStorageQuota("org-42", maxBytes);
+            q.setUsedBytes(ownUsedBytes);
+            q.setAccountId(accountId);
+            when(orgQuotaRepository.findByOrganizationId("org-42")).thenReturn(Optional.of(q));
+            // The account's rows agree by default; the tests that care about them disagreeing
+            // override this with the freshest ceiling they want resolved.
+            lenient().when(orgQuotaRepository.currentCeilingForAccount(accountId))
+                    .thenReturn(Optional.of(maxBytes));
+            return q;
+        }
+
+        @Test
+        @DisplayName("an empty workspace is refused when the account's OTHER workspaces filled the pool")
+        void emptyWorkspaceBlockedByItsSiblings() {
+            // This workspace holds nothing; the account as a whole is at its 100-byte ceiling.
+            ownedBy("acct-1", 100L, 0L);
+            when(orgQuotaRepository.sumUsedBytesForAccount("acct-1")).thenReturn(100L);
+
+            assertThat(quotaService.checkOrganizationQuota("org-42", 1L))
+                    .isEqualTo(QuotaStatus.HARD_LIMIT_REACHED);
+        }
+
+        @Test
+        @DisplayName("measured against the account total, not the workspace's own usage")
+        void measuresTheAccountTotal() {
+            ownedBy("acct-1", 100L, 10L);
+            when(orgQuotaRepository.sumUsedBytesForAccount("acct-1")).thenReturn(90L);
+
+            // Room for 10 more across the account, so 10 fits and 11 does not - even though this
+            // workspace alone has used only 10 of 100.
+            assertThat(quotaService.checkOrganizationQuota("org-42", 10L)).isEqualTo(QuotaStatus.OK);
+            assertThat(quotaService.checkOrganizationQuota("org-42", 11L))
+                    .isEqualTo(QuotaStatus.HARD_LIMIT_REACHED);
+        }
+
+        @Test
+        @DisplayName("room in the pool is allowed")
+        void allowsWhenPoolHasRoom() {
+            ownedBy("acct-1", 100L, 10L);
+            when(orgQuotaRepository.sumUsedBytesForAccount("acct-1")).thenReturn(20L);
+
+            assertThat(quotaService.checkOrganizationQuota("org-42", 50L)).isEqualTo(QuotaStatus.OK);
+        }
+
+        @Test
+        @DisplayName("an over-full pool refuses even a single byte")
+        void overFullPoolRefusesOneByte() {
+            ownedBy("acct-1", 100L, 50L);
+            when(orgQuotaRepository.sumUsedBytesForAccount("acct-1")).thenReturn(150L);
+
+            assertThat(quotaService.checkOrganizationQuota("org-42", 1L))
+                    .isEqualTo(QuotaStatus.HARD_LIMIT_REACHED);
+        }
+
+        @Test
+        @DisplayName("no account attributed -> falls back to this workspace alone, never blocks wrongly")
+        void unattributedFallsBackToPerWorkspace() {
+            // The safety property of the rollout: a row the migration or auth-service has not
+            // stamped keeps its pre-change behaviour instead of failing closed.
+            OrganizationStorageQuota q = new OrganizationStorageQuota("org-42", 100L);
+            q.setUsedBytes(10L);
+            q.setAccountId(null);
+            when(orgQuotaRepository.findByOrganizationId("org-42")).thenReturn(Optional.of(q));
+
+            assertThat(quotaService.checkOrganizationQuota("org-42", 50L)).isEqualTo(QuotaStatus.OK);
+            verify(orgQuotaRepository, never()).sumUsedBytesForAccount(anyString());
+        }
+
+        @Test
+        @DisplayName("a stale FREE-default row cannot shrink the pool and block a paying account")
+        void staleRowCannotShrinkTheCeiling() {
+            // A row materialised by the lazy default path, or one whose syncer write failed and
+            // was swallowed, still holds 100 MB. Measuring the ACCOUNT's 21 GB against that row
+            // would refuse a TEAM customer at 100 MB. The ceiling is the account's largest.
+            OrganizationStorageQuota stale = new OrganizationStorageQuota("org-42", 104_857_600L);
+            stale.setUsedBytes(0L);
+            stale.setAccountId("acct-1");
+            when(orgQuotaRepository.findByOrganizationId("org-42")).thenReturn(Optional.of(stale));
+            // A sibling row was written more recently and carries the real TEAM allowance.
+            when(orgQuotaRepository.currentCeilingForAccount("acct-1"))
+                    .thenReturn(Optional.of(107_374_182_400L));
+            when(orgQuotaRepository.sumUsedBytesForAccount("acct-1")).thenReturn(22_548_578_304L); // 21 GB
+
+            assertThat(quotaService.checkOrganizationQuota("org-42", 1_048_576L)).isEqualTo(QuotaStatus.OK);
+        }
+
+        @Test
+        @DisplayName("a downgrade BINDS: the freshest row's smaller ceiling wins over a stale larger sibling")
+        void downgradeBindsAcrossTheAccount() {
+            // The mirror image of the test above, and the reason the ceiling is resolved by
+            // recency rather than by taking the maximum: with MAX, one row left un-downgraded
+            // would keep the old allowance alive for every workspace of the account.
+            OrganizationStorageQuota row = new OrganizationStorageQuota("org-42", 107_374_182_400L);
+            row.setUsedBytes(0L);
+            row.setAccountId("acct-1");
+            when(orgQuotaRepository.findByOrganizationId("org-42")).thenReturn(Optional.of(row));
+            when(orgQuotaRepository.currentCeilingForAccount("acct-1"))
+                    .thenReturn(Optional.of(1_073_741_824L)); // downgraded to 1 GB
+            when(orgQuotaRepository.sumUsedBytesForAccount("acct-1")).thenReturn(2_147_483_648L); // 2 GB
+
+            assertThat(quotaService.checkOrganizationQuota("org-42", 1L))
+                    .isEqualTo(QuotaStatus.HARD_LIMIT_REACHED);
+        }
+
+        @Test
+        @DisplayName("the pool reports the ENFORCED ceiling, so a page cannot pair the total with another one")
+        void poolCarriesTheEnforcedCeiling() {
+            // An earlier round returned only the total and let the caller supply a ceiling from
+            // the workspace's own row, which showed a red "full" bar over uploads the gate
+            // accepted. Total and ceiling now travel together.
+            OrganizationStorageQuota stale = new OrganizationStorageQuota("org-42", 104_857_600L);
+            stale.setUsedBytes(0L);
+            stale.setAccountId("acct-1");
+            when(orgQuotaRepository.findByOrganizationId("org-42")).thenReturn(Optional.of(stale));
+            when(orgQuotaRepository.currentCeilingForAccount("acct-1"))
+                    .thenReturn(Optional.of(107_374_182_400L));
+            when(orgQuotaRepository.sumUsedBytesForAccount("acct-1")).thenReturn(22_548_578_304L);
+
+            var pool = quotaService.getAccountPool("org-42");
+
+            assertThat(pool).isNotNull();
+            assertThat(pool.maxBytes()).isEqualTo(107_374_182_400L);
+            assertThat(pool.usedBytes()).isEqualTo(22_548_578_304L);
+            assertThat(pool.accountId()).isEqualTo("acct-1");
+        }
+
+        @Test
+        @DisplayName("writing limits stamps the owning account on the row")
+        void updateStampsTheAccount() {
+            OrganizationStorageQuota row = new OrganizationStorageQuota("org-42", 100L);
+            when(orgQuotaRepository.findByOrganizationId("org-42")).thenReturn(Optional.of(row));
+
+            quotaService.updateOrganizationLimits("org-42", 107_374_182_400L, 0.8, "acct-7");
+
+            ArgumentCaptor<OrganizationStorageQuota> saved =
+                    ArgumentCaptor.forClass(OrganizationStorageQuota.class);
+            verify(orgQuotaRepository).save(saved.capture());
+            assertThat(saved.getValue().getAccountId()).isEqualTo("acct-7");
+            assertThat(saved.getValue().getMaxBytes()).isEqualTo(107_374_182_400L);
+        }
+
+        @Test
+        @DisplayName("writing limits ADVANCES the allowance clock the account's ceiling is ordered by")
+        void updateAdvancesTheAllowanceClock() {
+            // Without this the clock would be write-once at row creation, and "freshest
+            // allowance" would quietly degenerate into "newest workspace" forever: a lazily
+            // created stale row is by construction newer than the correctly synced one, so the
+            // account's ceiling would settle on 100 MB with no code path able to move it.
+            OrganizationStorageQuota row = new OrganizationStorageQuota("org-42", 100L);
+            Instant before = row.getLimitsUpdatedAt();
+            when(orgQuotaRepository.findByOrganizationId("org-42")).thenReturn(Optional.of(row));
+
+            quotaService.updateOrganizationLimits("org-42", 107_374_182_400L, 0.8, "acct-7");
+
+            ArgumentCaptor<OrganizationStorageQuota> saved =
+                    ArgumentCaptor.forClass(OrganizationStorageQuota.class);
+            verify(orgQuotaRepository).save(saved.capture());
+            assertThat(saved.getValue().getLimitsUpdatedAt()).isAfterOrEqualTo(before);
+            assertThat(saved.getValue().getLimitsUpdatedAt()).isEqualTo(saved.getValue().getUpdatedAt());
+        }
+
+        @Test
+        @DisplayName("a USAGE write leaves the allowance clock alone")
+        void usageWriteDoesNotTouchTheAllowanceClock() {
+            // The whole reason the column exists: updatedAt moves on every upload, and if the
+            // ceiling were ordered by that, one write into a stale workspace would drop the
+            // account's ceiling to that row's value and refuse every workspace at once.
+            OrganizationStorageQuota row = new OrganizationStorageQuota("org-42", 100L);
+            Instant allowanceClock = row.getLimitsUpdatedAt();
+            when(orgQuotaRepository.findByOrganizationId("org-42")).thenReturn(Optional.of(row));
+            when(storageRepository.calculateOrganizationUsage("org-42")).thenReturn(4_096L);
+
+            quotaService.updateOrganizationUsage("org-42");
+
+            ArgumentCaptor<OrganizationStorageQuota> saved =
+                    ArgumentCaptor.forClass(OrganizationStorageQuota.class);
+            verify(orgQuotaRepository).save(saved.capture());
+            assertThat(saved.getValue().getLimitsUpdatedAt()).isEqualTo(allowanceClock);
+        }
+
+        @Test
+        @DisplayName("a null account on a write LEAVES the existing attribution, it does not clear it")
+        void nullAccountPreservesAttribution() {
+            // Otherwise any caller that does not know the owner would silently pull a workspace
+            // out of its account's pool and hand it a private allowance again.
+            OrganizationStorageQuota row = new OrganizationStorageQuota("org-42", 100L);
+            row.setAccountId("acct-1");
+            when(orgQuotaRepository.findByOrganizationId("org-42")).thenReturn(Optional.of(row));
+
+            quotaService.updateOrganizationLimits("org-42", 200L, 0.8, null);
+
+            ArgumentCaptor<OrganizationStorageQuota> saved =
+                    ArgumentCaptor.forClass(OrganizationStorageQuota.class);
+            verify(orgQuotaRepository).save(saved.capture());
+            assertThat(saved.getValue().getAccountId()).isEqualTo("acct-1");
+        }
+
+        @Test
+        @DisplayName("getAccountUsedBytes reads without creating a row, so it is safe in a read-only tx")
+        void accountUsedBytesDoesNotCreate() {
+            when(orgQuotaRepository.findByOrganizationId("org-missing")).thenReturn(Optional.empty());
+
+            assertThat(quotaService.getAccountUsedBytes("org-missing")).isNull();
+            verify(orgQuotaRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("a blank account id is treated as unattributed, not as an account named ''")
+        void blankAccountFallsBack() {
+            OrganizationStorageQuota q = new OrganizationStorageQuota("org-42", 100L);
+            q.setUsedBytes(10L);
+            q.setAccountId("   ");
+            when(orgQuotaRepository.findByOrganizationId("org-42")).thenReturn(Optional.of(q));
+
+            assertThat(quotaService.checkOrganizationQuota("org-42", 50L)).isEqualTo(QuotaStatus.OK);
+            verify(orgQuotaRepository, never()).sumUsedBytesForAccount(anyString());
         }
     }
 

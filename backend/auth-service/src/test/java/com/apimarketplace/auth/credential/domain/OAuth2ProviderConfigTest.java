@@ -394,6 +394,229 @@ class OAuth2ProviderConfigTest {
     }
 
     @Test
+    @DisplayName("parses the Slack user-scope family and splits the scope list by membership")
+    void parsesUserScopeFamily() throws Exception {
+        JsonNode node = json.readTree("""
+                {
+                  "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+                  "tokenUrl": "https://slack.com/api/oauth.v2.access",
+                  "scopes": ["chat:write", "search:read", "channels:read"],
+                  "userScopeParam": "user_scope",
+                  "userScopes": ["search:read", "stars:read"]
+                }
+                """);
+
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(node);
+
+        assertThat(cfg).isNotNull();
+        assertThat(cfg.userScopes().param()).isEqualTo("user_scope");
+        // Split by membership, so only the family members actually being requested move over:
+        // "stars:read" is declared but not requested here and must appear in neither list.
+        assertThat(cfg.primaryScopes()).containsExactly("chat:write", "channels:read");
+        assertThat(cfg.requestedUserScopes()).containsExactly("search:read");
+        // joinedScopes stays the record of everything requested, both families together.
+        assertThat(cfg.joinedScopes()).isEqualTo("chat:write search:read channels:read");
+    }
+
+    @Test
+    @DisplayName("userScopes with no userScopeParam DROPS its members from the request, parsed from JSON like production does")
+    void userScopesWithoutParamAreDroppedNotFallenBack() throws Exception {
+        // The path that matters: fromJson is what every production config goes through, seed and
+        // signed catalog bundle alike. Collapsing to NONE here would put "search:read" back into
+        // the `scope` parameter, which is the shape that made Slack refuse every installation.
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                {
+                  "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+                  "tokenUrl": "https://slack.com/api/oauth.v2.access",
+                  "scopes": ["chat:write", "search:read"],
+                  "userScopes": ["search:read"]
+                }
+                """));
+
+        assertThat(cfg).isNotNull();
+        assertThat(cfg.primaryScopes())
+                .as("a declared member never falls back into the bot parameter")
+                .containsExactly("chat:write");
+        assertThat(cfg.requestedUserScopes())
+                .as("and there is no parameter to send it through")
+                .isEmpty();
+        assertThat(cfg.unroutableUserScopes())
+                .as("so the drop is reported instead of being silent")
+                .containsExactly("search:read");
+    }
+
+    @Test
+    @DisplayName("userScopeParam with no members parses to NONE: nothing to route, behaviour unchanged")
+    void userScopeParamWithoutMembersIsNone() throws Exception {
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                {
+                  "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+                  "tokenUrl": "https://slack.com/api/oauth.v2.access",
+                  "scopes": ["chat:write", "search:read"],
+                  "userScopeParam": "user_scope"
+                }
+                """));
+
+        assertThat(cfg).isNotNull();
+        assertThat(cfg.userScopes()).isEqualTo(OAuth2ProviderConfig.UserScopeConfig.NONE);
+        assertThat(cfg.primaryScopes()).containsExactly("chat:write", "search:read");
+        assertThat(cfg.requestedUserScopes()).isEmpty();
+        assertThat(cfg.unroutableUserScopes()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a non-array userScopes does not route, and its members are dropped rather than left in scope")
+    void userScopesAsAStringDoesNotRouteAndIsNotFallenBackEither() throws Exception {
+        // `scopes` tolerates a legacy space-delimited string; validate_apis.py refuses it for
+        // userScopes, so routing it here would make the two layers disagree on what a valid seed
+        // is. But simply ignoring the declaration would put "search:read" back in the bot
+        // parameter, which is the outage shape - and the seed validator cannot protect the
+        // catalog-bundle path. So: not routed, and not fallen back either.
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                {
+                  "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+                  "tokenUrl": "https://slack.com/api/oauth.v2.access",
+                  "scopes": ["chat:write", "search:read"],
+                  "userScopeParam": "user_scope",
+                  "userScopes": "search:read"
+                }
+                """));
+
+        assertThat(cfg).isNotNull();
+        assertThat(cfg.primaryScopes()).containsExactly("chat:write");
+        assertThat(cfg.requestedUserScopes()).isEmpty();
+        assertThat(cfg.unroutableUserScopes()).containsExactly("search:read");
+    }
+
+    @Test
+    @DisplayName("a blank userScopeParam drops the members too, parsed from JSON like production does")
+    void blankUserScopeParamDropsMembersThroughFromJson() throws Exception {
+        // The hand-built record covers a null param; this covers the shape a seed can actually
+        // contain. textOrNull collapses a blank to null, so the two must agree.
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                {
+                  "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+                  "tokenUrl": "https://slack.com/api/oauth.v2.access",
+                  "scopes": ["chat:write", "search:read"],
+                  "userScopeParam": "   ",
+                  "userScopes": ["search:read"]
+                }
+                """));
+
+        assertThat(cfg).isNotNull();
+        assertThat(cfg.primaryScopes()).containsExactly("chat:write");
+        assertThat(cfg.requestedUserScopes()).isEmpty();
+        assertThat(cfg.unroutableUserScopes()).containsExactly("search:read");
+    }
+
+    @Test
+    @DisplayName("an empty userScopes array is no family at all: every scope stays in the bot parameter")
+    void emptyUserScopesArrayIsNone() throws Exception {
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                {
+                  "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+                  "tokenUrl": "https://slack.com/api/oauth.v2.access",
+                  "scopes": ["chat:write", "search:read"],
+                  "userScopeParam": "user_scope",
+                  "userScopes": []
+                }
+                """));
+
+        assertThat(cfg).isNotNull();
+        assertThat(cfg.userScopes()).isEqualTo(OAuth2ProviderConfig.UserScopeConfig.NONE);
+        assertThat(cfg.primaryScopes()).containsExactly("chat:write", "search:read");
+        assertThat(cfg.unroutableUserScopes()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("non-string entries in userScopes become phantom members that route nothing, and never leak a real one")
+    void nonStringUserScopeEntriesAreHarmlessPhantoms() throws Exception {
+        // Jackson coerces rather than skipping, so 42 arrives as the member "42". The validator
+        // refuses the shape; what matters here is that the coercion cannot push a REAL member back
+        // into the bot parameter, which is the only outcome that would break a connect.
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                {
+                  "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+                  "tokenUrl": "https://slack.com/api/oauth.v2.access",
+                  "scopes": ["chat:write", "search:read"],
+                  "userScopeParam": "user_scope",
+                  "userScopes": ["search:read", 42, null]
+                }
+                """));
+
+        assertThat(cfg).isNotNull();
+        assertThat(cfg.primaryScopes()).containsExactly("chat:write");
+        assertThat(cfg.requestedUserScopes()).containsExactly("search:read");
+        assertThat(cfg.userScopes().scopes()).contains("42");
+    }
+
+    @Test
+    @DisplayName("a userScopes shape with no readable member is the one case that cannot fail closed, and it is inert")
+    void userScopesWithNoReadableMemberIsInert() throws Exception {
+        // An object or a number identifies no scope, so there is nothing to hold out of `scope`:
+        // this shape necessarily behaves as if no family were declared. Pinned so the limit is a
+        // known boundary rather than a surprise, and so the seed validator stays the only guard.
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                {
+                  "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+                  "tokenUrl": "https://slack.com/api/oauth.v2.access",
+                  "scopes": ["chat:write", "search:read"],
+                  "userScopeParam": "user_scope",
+                  "userScopes": {"search": "read"}
+                }
+                """));
+
+        assertThat(cfg).isNotNull();
+        assertThat(cfg.userScopes()).isEqualTo(OAuth2ProviderConfig.UserScopeConfig.NONE);
+        assertThat(cfg.primaryScopes()).containsExactly("chat:write", "search:read");
+        assertThat(cfg.unroutableUserScopes()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a provider declaring no family keeps every scope in the primary list")
+    void absentUserScopeFamilyIsANoOp() throws Exception {
+        JsonNode node = json.readTree("""
+                {
+                  "authorizationUrl": "https://example.com/a",
+                  "tokenUrl": "https://example.com/t",
+                  "scopes": ["read", "write"]
+                }
+                """);
+
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(node);
+
+        assertThat(cfg).isNotNull();
+        assertThat(cfg.userScopes()).isEqualTo(OAuth2ProviderConfig.UserScopeConfig.NONE);
+        assertThat(cfg.primaryScopes()).isEqualTo(cfg.scopes());
+        assertThat(cfg.joinedPrimaryScopes()).isEqualTo(cfg.joinedScopes());
+    }
+
+    @Test
+    @DisplayName("withScopes and withUrls carry the user-scope family through (BYOK widening must not lose the routing)")
+    void copyHelpersPreserveUserScopeFamily() throws Exception {
+        JsonNode node = json.readTree("""
+                {
+                  "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+                  "tokenUrl": "https://slack.com/api/oauth.v2.access",
+                  "scopes": ["chat:write"],
+                  "userScopeParam": "user_scope",
+                  "userScopes": ["search:read"]
+                }
+                """);
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(node);
+
+        // This is exactly the BYOK path: OAuth2Service widens the scope list to
+        // scopes + byokOnlyScopes. If the family were dropped here, "search:read" would land
+        // back in the plain `scope` parameter and Slack would refuse the install.
+        OAuth2ProviderConfig widened = cfg.withScopes(java.util.List.of("chat:write", "search:read"));
+        assertThat(widened.requestedUserScopes()).containsExactly("search:read");
+        assertThat(widened.primaryScopes()).containsExactly("chat:write");
+
+        OAuth2ProviderConfig rehosted = widened.withUrls("https://slack.com/oauth/v2/authorize", null);
+        assertThat(rehosted.userScopes()).isEqualTo(widened.userScopes());
+    }
+
+    @Test
     @DisplayName("parses longLivedExchange and refresh.accessTokenGrant (Meta family)")
     void metaAccessTokenGrantBlocks() throws Exception {
         JsonNode node = json.readTree("""

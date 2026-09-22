@@ -13,7 +13,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.math.BigDecimal;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -51,7 +54,7 @@ class TenantBudgetGuardTest {
     @Test
     @DisplayName("denies when tenant balance is zero")
     void zeroBalance() {
-        when(creditClient.fetchBalance("tenant-1")).thenReturn(BigDecimal.ZERO);
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any())).thenReturn(BigDecimal.ZERO);
 
         TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, CHEAP_RATES);
         GuardResult result = guard.check(ctx("tenant-1", 1, 0, 0));
@@ -64,7 +67,7 @@ class TenantBudgetGuardTest {
     @Test
     @DisplayName("allows when tenant balance covers projected cost")
     void allowsWhenAffordable() {
-        when(creditClient.fetchBalance("tenant-1")).thenReturn(new BigDecimal("100"));
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any())).thenReturn(new BigDecimal("100"));
 
         TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, CHEAP_RATES);
         GuardResult result = guard.check(ctx("tenant-1", 1, 0, 0));
@@ -75,7 +78,7 @@ class TenantBudgetGuardTest {
     @Test
     @DisplayName("denies when projected total cost exceeds balance")
     void deniesWhenProjectionExceedsBalance() {
-        when(creditClient.fetchBalance("tenant-1")).thenReturn(new BigDecimal("0.10"));
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any())).thenReturn(new BigDecimal("0.10"));
 
         TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, CHEAP_RATES);
         // After 5 iters of 50000 prompt / 25000 completion total:
@@ -89,26 +92,57 @@ class TenantBudgetGuardTest {
     @Test
     @DisplayName("caches balance across iterations")
     void cachesBalance() {
-        when(creditClient.fetchBalance("tenant-1")).thenReturn(new BigDecimal("100"));
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any())).thenReturn(new BigDecimal("100"));
 
         TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, CHEAP_RATES);
         for (int i = 1; i <= 4; i++) {
             assertThat(guard.check(ctx("tenant-1", i, 100, 50)).proceed()).isTrue();
         }
         // First call hits the client; subsequent 3 hit the cache.
-        verify(creditClient, times(1)).fetchBalance("tenant-1");
+        verify(creditClient, times(1)).fetchLlmSpendableBalance(eq("tenant-1"), any(), any());
     }
 
     @Test
     @DisplayName("refreshes balance after the configured number of iterations")
     void refreshesBalance() {
-        when(creditClient.fetchBalance("tenant-1")).thenReturn(new BigDecimal("100"));
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any())).thenReturn(new BigDecimal("100"));
 
         TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, CHEAP_RATES);
         for (int i = 1; i <= 8; i++) {
             guard.check(ctx("tenant-1", i, 100, 50));
         }
         // First call + one refresh after 5 iterations = 2 calls.
-        verify(creditClient, times(2)).fetchBalance(anyString());
+        verify(creditClient, times(2)).fetchLlmSpendableBalance(anyString(), any(), any());
+    }
+    @Test
+    @DisplayName("budgets the FREE AI allowance, not only the wallet (V494)")
+    void budgetsTheAiAllowance() {
+        // The two balances differ for exactly one kind of account: a FREE one, whose
+        // AI allowance is a separate pot that only LLM work may draw on. This guard
+        // sits on that path, so it asks for the SPENDABLE balance. Asking for the
+        // plain one would stop a free agent at an empty wallet while the pot paying
+        // for it was still full, which is the whole point of the pot.
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any())).thenReturn(new BigDecimal("100"));
+
+        TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, CHEAP_RATES);
+
+        assertThat(guard.check(ctx("tenant-1", 1, 100, 50)).proceed()).isTrue();
+        verify(creditClient, never()).fetchBalance(anyString());
+    }
+    @Test
+    @DisplayName("asks about the model it is RUNNING, so a closed model is not budgeted against the pot")
+    void asksAboutTheModelItIsRunning() {
+        // The allowance only funds the models an admin opened. Asking model-blind would
+        // quote a pot no debit on THIS model can draw, and budget the loop against money
+        // it cannot spend - the same error as withholding it, pointing the other way.
+        // The server decides (the free-tier flag lives in the billing mirror); the guard's
+        // job is to say which model it is asking about.
+        when(creditClient.fetchLlmSpendableBalance(eq("tenant-1"), any(), any()))
+                .thenReturn(new BigDecimal("100"));
+
+        TenantBudgetGuard guard = new TenantBudgetGuard(creditClient, CHEAP_RATES);
+        guard.check(ctx("tenant-1", 1, 100, 50));
+
+        verify(creditClient).fetchLlmSpendableBalance("tenant-1", "openai", "gpt-test");
     }
 }

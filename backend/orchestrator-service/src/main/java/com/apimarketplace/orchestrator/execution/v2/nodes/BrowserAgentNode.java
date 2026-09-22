@@ -10,6 +10,7 @@ import com.apimarketplace.orchestrator.domain.execution.SignalConfig;
 import com.apimarketplace.orchestrator.domain.execution.SignalType;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.execution.v2.services.UnifiedSignalService;
 import com.apimarketplace.orchestrator.tools.websearch.BrowserAgentModule;
 import com.apimarketplace.orchestrator.tools.websearch.CeBrowseRelayRequest;
@@ -270,7 +271,12 @@ public class BrowserAgentNode extends BaseNode {
             signalService.registerSignal(
                 runId, itemId, nodeId, dagTriggerId, epoch,
                 SignalType.BROWSER_USER_TAKEOVER, signalConfig, null);
-            logger.info("Browser agent yielded to user takeover: nodeId={}, sessionId={}", nodeId, sessionId);
+            // The session id is withheld, not printed. ReportedParams says in as many words
+            // that a session id IS the session - step 3b exists to mask it on the row - and
+            // printing it here put the same value in logs/orchestrator-service.log. The node
+            // id is what identifies this yield in the log; the session id never was.
+            logger.info("Browser agent yielded to user takeover: nodeId={}, sessionId={}",
+                nodeId, ReportedParams.WITHHELD_CREDENTIAL);
             return NodeExecutionResult.awaitingSignal(nodeId, SignalType.BROWSER_USER_TAKEOVER, enrichedOutput);
         }
 
@@ -438,7 +444,9 @@ public class BrowserAgentNode extends BaseNode {
         // Spec contract - see BrowserAgentNodeSpec. Default node_type so split-context
         // routing works even when the runner forgot the field.
         out.putIfAbsent("node_type", "BROWSER_AGENT");
-        out.put("resolved_params", resolvedParams);
+        // Masked and bounded: this map is built from the plan entry, whose `llm` block
+        // carries an api_key and whose `session` holds a saved browser session (cookies).
+        out.put("resolved_params", ReportedParams.forReport(resolvedParams));
         out.put("item_index", context.itemIndex());
         out.put("itemIndex", context.itemIndex());
         out.put("item_id", context.itemId());
@@ -457,7 +465,9 @@ public class BrowserAgentNode extends BaseNode {
         out.put("item_index", context.itemIndex());
         out.put("itemIndex", context.itemIndex());
         out.put("item_id", context.itemId());
-        out.put("resolved_params", resolvedParams);
+        // Masked and bounded: this map is built from the plan entry, whose `llm` block
+        // carries an api_key and whose `session` holds a saved browser session (cookies).
+        out.put("resolved_params", ReportedParams.forReport(resolvedParams));
         if (errorMessage != null) {
             out.put("error", errorMessage);
         }
@@ -509,6 +519,8 @@ public class BrowserAgentNode extends BaseNode {
             String canonicalStop = mapStopReason(rawStop, success);
             req.setStopReason(canonicalStop);
             req.setStatus(success ? "COMPLETED" : "FAILED");
+            // Whose key the runner was handed; the module surfaces it on its result.
+            req.setKeyRoute(stringField(rawOutput, BrowserAgentModule.KEY_ROUTE_KEY));
 
             // Steps → iterations. One iteration per browser step.
             List<Map<String, Object>> steps = listOfMaps(rawOutput, "steps");
@@ -586,22 +598,42 @@ public class BrowserAgentNode extends BaseNode {
             // discounts the cache_read portion of tokens_in. Until then,
             // tokens_in bills at full input rate (bounded over-bill on
             // cache-heavy turns, recoverable via reconciliation).
+            // That shape matches NEITHER billing convention as-is, so it is converted
+            // into the billed provider's one below. Reported verbatim, an
+            // Anthropic-billed session paid for its cached tokens twice (once at full
+            // input rate inside tokens_in, once again on the cache line) and an
+            // OpenAI-billed one never got the discount at all, because that family
+            // reads cachedTokens while this path filled cacheReadTokens.
+            // One lookup, used both to convert the counts below and to stamp the row's
+            // provider further down: the two MUST be the same identity, and reading the
+            // block twice made that agreement a coincidence rather than a property.
+            Map<String, Object> llmConfig = mapField(nodeConfig, "llm");
+            String billedProvider = llmConfig != null ? stringField(llmConfig, "provider") : null;
             Map<String, Object> cost = mapField(rawOutput, "cost");
             if (cost != null) {
                 long tokensIn = longField(cost, "tokens_in");
                 long tokensOut = longField(cost, "tokens_out");
                 long cacheRead = longField(cost, "cache_read_tokens");
                 long cacheCreation = longField(cost, "cache_creation_tokens");
+                var counts = com.apimarketplace.agent.domain.TokenUsageConventions
+                        .fromPromptIncludingCacheReads(tokensIn, cacheRead, cacheCreation, billedProvider);
                 if (tokensIn > 0 || tokensOut > 0) {
-                    req.setPromptTokens(tokensIn);
+                    req.setPromptTokens(counts.promptTokens());
                     req.setCompletionTokens(tokensOut);
-                    req.setTotalTokens(tokensIn + tokensOut);
+                    // prompt + completion, the same rule every provider and
+                    // TokenUsageConventions use, so a row's three numbers agree with each
+                    // other. For an Anthropic-billed row that leaves the cache outside the
+                    // total exactly as the Anthropic API reports it.
+                    req.setTotalTokens(counts.promptTokens() + tokensOut);
                 }
-                if (cacheRead > 0) {
-                    req.setCacheReadTokens(cacheRead);
+                if (counts.cacheReadTokens() > 0) {
+                    req.setCacheReadTokens(counts.cacheReadTokens());
                 }
-                if (cacheCreation > 0) {
-                    req.setCacheCreationTokens(cacheCreation);
+                if (counts.cachedTokens() > 0) {
+                    req.setCachedTokens(counts.cachedTokens());
+                }
+                if (counts.cacheCreationTokens() > 0) {
+                    req.setCacheCreationTokens(counts.cacheCreationTokens());
                 }
                 // browser_seconds is always populated and worth recording so
                 // the per-tenant breakdown can show real wall-clock cost.
@@ -612,10 +644,9 @@ public class BrowserAgentNode extends BaseNode {
             }
 
             // Carry the LLM block back into the snapshot so the audit row records
-            // which model the agent used.
-            Map<String, Object> llmConfig = mapField(nodeConfig, "llm");
+            // which model the agent used - the same block the conversion above read.
             if (llmConfig != null) {
-                req.setProvider(stringField(llmConfig, "provider"));
+                req.setProvider(billedProvider);
                 req.setModel(stringField(llmConfig, "model"));
             }
 

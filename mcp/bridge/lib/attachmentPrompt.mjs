@@ -146,12 +146,28 @@ export function buildAttachmentPrompt(prompt, attachments, opts = {}) {
   }
 
   let inlinedBytes = 0;
+  const fileRefNotes = [];
   for (const att of attachments) {
     const fileName = att.fileName || `attachment_${readableFilePaths.length + inlinedTexts.length}`;
     // On-disk name is sanitized to a single path segment; the original fileName is
     // still used for display/relabeling (attachmentPathToName value, inlined text).
     const diskName = safeAttachmentName(fileName, readableFilePaths.length + inlinedTexts.length);
     const mimeType = att.mimeType || '';
+
+    // Independent of whether the bytes below get inlined or written for Read: a FileRef
+    // (set only when conversation-service resolved this attachment from a durable, tenant-
+    // scoped S3 object - see MessageAttachment#fileRef() on the Java side) is what a tool
+    // argument that expects "the whole file object" (e.g. generation's input_image) needs.
+    // The disk path written below is local to this bridge host and means nothing to the
+    // platform's own tools, so without this note the CLI agent can Read/see an attachment
+    // but never reference it in a tool call.
+    if (att.fileRef && typeof att.fileRef === 'object') {
+      fileRefNotes.push(
+        `Attached file "${fileName}" is also available as a file object you can pass ` +
+        `VERBATIM to a tool argument that expects one (e.g. generation's input_image/` +
+        `input_audio/input_video), instead of a path or URL: ${JSON.stringify(att.fileRef)}`
+      );
+    }
 
     const inlineText = resolveInlineText(att);
     if (inlineText != null) {
@@ -186,6 +202,9 @@ export function buildAttachmentPrompt(prompt, attachments, opts = {}) {
   }
   for (const t of inlinedTexts) {
     parts.push(`--- Attached file: ${t.fileName} (${t.mimeType}) ---\n${t.content}\n--- End of ${t.fileName} ---`);
+  }
+  if (fileRefNotes.length > 0) {
+    parts.push(fileRefNotes.join('\n\n'));
   }
 
   const finalPrompt = parts.length > 0 ? parts.join('\n\n') + '\n\n' + prompt : prompt;

@@ -15,7 +15,12 @@ vi.mock('next-intl', () => ({
   useLocale: () => 'en',
 }));
 vi.mock('@/hooks/useGenerationOptions', () => ({ useGenerationOptions: () => ({}) }));
-vi.mock('@/lib/generation/price', () => ({ describeQuotedPrice: () => 'about 60 credits' }));
+vi.mock('@/lib/generation/price', () => ({
+  describeQuotedPrice: () => 'about 60 credits',
+  // The composer also states WHY a price is not the published rate, and formats the factor.
+  describePriceFactors: () => '',
+  formatCredits: (value: number) => String(value),
+}));
 vi.mock('@/hooks/useGenerationQuote', () => ({
   useGenerationQuote: () => ({
     quote: { integrationName: 'seedance', available: true, hasPricing: true, platformCredentialId: 7 },
@@ -94,6 +99,10 @@ function renderComposer(width: number) {
       onSelectModel={vi.fn()}
       onSubmit={vi.fn(async () => true)}
       modeSwitch={<button type="button">mode-switch</button>}
+      // Rendered by every studio layout and never folded, so it is part of the row's budget at
+      // every width this suite measures. Left out, these tests would keep passing while the
+      // control they were written to protect was pushed off the end of a phone.
+      lookSwitch={<button type="button">look-switch</button>}
     />,
   );
 }
@@ -120,6 +129,9 @@ describe('StudioComposer - the button row on a narrow composer', () => {
 
     expect(screen.getByText('mode-switch')).toBeInTheDocument();
     expect(screen.getByTitle('composer.send')).toBeInTheDocument();
+    // The look switch joined the row later and never folds either, so it is held to the same
+    // promise: a control added to a row already over budget is how the next one gets clipped.
+    expect(screen.getByText('look-switch')).toBeInTheDocument();
   });
 
   it('moves the parameters behind ONE trigger instead of squeezing them', () => {

@@ -24,11 +24,29 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
   'wait': {
     duration: 'Duration (ms)',
   },
+  'user_approval': {
+    // The third parking node. Its only step row is written when the signal resolves, and
+    // these are the keys it now reports there: which roles could approve, how many were
+    // needed, how long it had, who it was delegated to and what the run did next. An
+    // approval that sat unanswered, or was answered by an unexpected person, cannot be
+    // explained without them.
+    approverRoles: 'Approver Roles',
+    requiredApprovals: 'Required Approvals',
+    timeoutMs: 'Timeout (ms)',
+    contextTemplate: 'Context',
+    delegation: 'Delegation',
+    continuationMode: 'On Approval',
+  },
   'loop': {
     loopCondition: 'Condition',
     maxIterations: 'Max Iterations',
     strategy: 'Strategy',
     list: 'Items',
+    // Only on the row a terminated loop leaves behind: the condition as it read on
+    // the iteration that ended the loop. `loopCondition` stays the CONFIGURED
+    // expression there, because that row is written after the loop stopped and
+    // re-resolving then would read a context the loop no longer runs in.
+    lastConditionResolved: 'Condition (last evaluated)',
   },
   'while-group': {
     condition: 'Condition',
@@ -36,9 +54,16 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
   },
   'split': {
     list: 'Items',
+    // What the `list` expression evaluated to, described rather than copied (the
+    // data itself is the node's own output). On a split that spawned nothing this
+    // is the row that says whether the array was empty or whether the reference
+    // pointed at a wrapper object the split could not iterate.
+    listResolved: 'Items (resolved)',
     itemCount: 'Item Count',
     maxItems: 'Max Items',
     splitStrategy: 'Strategy',
+    // Reported on the failure path only, beside the configuration that failed.
+    error: 'Error',
   },
   'aggregate': {
     fields: 'Collected Fields',
@@ -54,7 +79,7 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
   'switch': {
     switchExpression: 'Expression',
     resolved_value: 'Resolved Value',
-    switchCases: 'Cases',
+    // Beyond these, one key per CASE under its own label -> humanizeKey.
   },
   'filter': {
     input: 'Input',
@@ -89,7 +114,7 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
     reason: 'Reason',
   },
   'fork': {
-    forkOutputs: 'Branches',
+    // One key per BRANCH under its own label -> humanizeKey.
   },
   'response': {
     message: 'Message',
@@ -131,9 +156,15 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
     voice: 'Voice',
     language: 'Language',
     seed: 'Seed',
-    input_image: 'Reference Image',
-    input_audio: 'Reference Audio',
-    input_video: 'Reference Video',
+    // Named by what the file IS to the model, which is also what the inspector and the
+    // studio call these. "Reference Image" over a slot the model treats as a first frame
+    // is the same mislabelling the forms were fixed for, one surface later.
+    input_image: 'Input Image',
+    input_audio: 'Input Audio',
+    input_video: 'Input Video',
+    first_frame_image: 'First Frame',
+    last_frame_image: 'Last Frame',
+    reference_image: 'Reference Images',
     credential_source: 'Credential Source',
   },
   'media': {
@@ -184,7 +215,15 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
   // choice labels read as themselves, which is the right rendering anyway.
   'sftp': {
     localContentSize: 'Upload size (chars)',
+    credentialId: 'Credential',
   },
+  'ssh': {
+    credentialId: 'Credential',
+  },
+  'database': {
+    credentialId: 'Credential',
+  },
+
   'respond_to_webhook': {
     statusCode: 'Status Code',
     contentType: 'Content Type',
@@ -194,6 +233,11 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
   'send_email': {
     smtpHost: 'SMTP Host',
     smtpPort: 'SMTP Port',
+    smtpUsername: 'SMTP User',
+    smtpUseTls: 'Use TLS',
+    ccEmail: 'CC',
+    bccEmail: 'BCC',
+    credentialId: 'Credential',
     toEmail: 'To',
     subject: 'Subject',
     isHtml: 'HTML',
@@ -209,6 +253,7 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
     references: 'References',
   },
   'email_inbox': {
+    credentialId: 'Credential',
     folder: 'Folder',
     unreadOnly: 'Unread only',
     flaggedOnly: 'Flagged only',
@@ -452,6 +497,12 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
     orderBy: 'Order By',
     trigger: 'Trigger Data',
     steps: 'Step Data',
+    // The list-expression strategy, used when the node reads its rows from an
+    // expression rather than from the table. `list` is the expression as written;
+    // `listResolved` is what it evaluated to, or the reason it was not evaluated.
+    list: 'Items',
+    listResolved: 'Items (resolved)',
+    maxItems: 'Max Items',
   },
   'list-rows': {
     dataSourceId: 'Table',
@@ -461,6 +512,30 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
     orderBy: 'Order By',
     trigger: 'Trigger Data',
     steps: 'Step Data',
+  },
+
+  // ============================================================================
+  // INTERFACE
+  // ============================================================================
+  'interface': {
+    interfaceId: 'Interface',
+    actions: 'Actions',
+    // One entry per template variable: the expression it is wired to, what it held
+    // when the node ran, and whether that was measured at all. An interface that
+    // renders an empty screen is read here.
+    variableMapping: 'Variables',
+    variableMappingError: 'Variables not read',
+    isEntryInterface: 'Entry Interface',
+    generateScreenshot: 'Screenshot',
+    exposeRenderedSource: 'Expose Rendered Source',
+    generatePdf: 'PDF',
+    pdfFormat: 'PDF Format',
+    pdfLandscape: 'PDF Landscape',
+    generateVideo: 'Video',
+    videoPreset: 'Video Preset',
+    videoMaxDurationSeconds: 'Video Max Duration (s)',
+    videoMode: 'Video Mode',
+    videoFps: 'Video FPS',
   },
 
   // ============================================================================
@@ -475,6 +550,27 @@ export const inputLabelRegistry: Partial<Record<InspectorNodeType, Record<string
 };
 
 /**
+ * Keys the reporting gate itself can add to ANY node's params, so they belong to no
+ * node type and are read before the per-type registry.
+ *
+ * `paramsTruncated` is the only one: `ReportedParams.forReport` bounds the WHOLE map and
+ * says under this key how many entries it dropped. Left to humanizeKey it reads "Params
+ * Truncated" among the real parameters, as if the node had a parameter by that name.
+ */
+const CROSS_NODE_INPUT_LABELS: Record<string, string> = {
+  paramsTruncated: 'Truncated',
+  // The signal bookkeeping a PARKED node's row carries beside its own parameters
+  // (SignalResumeService.buildSignalInputData). It belongs to no node type either: an
+  // interface, an approval and a wait all get these five when their signal resolves, and
+  // without a label they render as the humanised raw key this registry exists to replace.
+  signal_type: 'Signal',
+  signal_config: 'Signal Configuration',
+  item_id: 'Item',
+  trigger_id: 'Trigger',
+  epoch: 'Epoch',
+};
+
+/**
  * Get the label for an input data key, given the node type.
  * Falls back to humanizeKey() if no static mapping exists.
  */
@@ -482,6 +578,10 @@ export function getInputLabel(
   nodeType: InspectorNodeType,
   key: string,
 ): string {
+  const crossNode = CROSS_NODE_INPUT_LABELS[key];
+  if (crossNode) {
+    return crossNode;
+  }
   const labels = inputLabelRegistry[nodeType];
   if (labels && labels[key]) {
     return labels[key];

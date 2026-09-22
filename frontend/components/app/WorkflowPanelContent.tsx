@@ -17,9 +17,12 @@ import { usePathname } from '@/i18n/navigation';
 import { ChatCore } from '@/components/chat/ChatCore';
 import { WelcomeTitle } from '@/app/shared/components';
 import { ModelSelectorDropdown, PROVIDER_ICON_MAP } from '@/components/chat/ModelSelectorDropdown';
+import { modelFilterLabelsFrom } from '@/components/chat/modelFilterLabels';
 import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { UpgradeRequiredNotice } from '@/components/billing/UpgradeRequiredBadge';
+import { ComposerFreeTierBadge } from '@/components/billing/FreeTierBadge';
 import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
+import { resolveFreeTierPreferredModel } from '@/lib/hooks/usePreferFreeTierModel';
 import { TriggerTabContent } from '@/components/chat/TriggerTabContent';
 import { type ApplicationConfig, type ApplicationTemplateSource } from '@/components/chat/ApplicationTabContent';
 import { ApplicationCarousel } from '@/components/chat/ApplicationCarousel';
@@ -64,6 +67,14 @@ import {
   type OpenRunPanelDetail,
   type RunPanelData,
 } from '@/components/workflow/run-panel/runPanelBus';
+import { WorkflowLogsPanelContent } from '@/components/workflow/WorkflowLogsPanelContent';
+import {
+  clearPendingWorkflowPanelLogs,
+  consumePendingWorkflowPanelLogs,
+  WORKFLOW_PANEL_OPEN_LOGS_EVENT,
+  type WorkflowLogsNavigationTarget,
+} from '@/lib/sidePanel/workflowLogsNavigation';
+import { WorkflowPanelHostProvider } from '@/contexts/WorkflowPanelHostContext';
 
 // ── Constants ──
 
@@ -72,6 +83,8 @@ const APP_TAB_ID = '__application__';
 export const WORKFLOW_TAB_ID = '__workflow__';
 /** Run history + epochs + steps of the current run (run mode). */
 export const RUN_TAB_ID = '__run__';
+/** Logs of the bound run, with navigation back to its Run sub-tab. */
+export const LOGS_TAB_ID = '__logs__';
 /** Node palette (edit mode) - the former floating "Add node" panel. */
 export const NODE_CREATOR_TAB_ID = '__add_node__';
 /** Configuration of the node selected on the canvas - the docked inspector. */
@@ -166,6 +179,7 @@ if (typeof window !== 'undefined') {
         cacheByWorkflow.clear();
         pendingActivateTabByWorkflow.clear();
         clearRunPanelCache();
+        clearPendingWorkflowPanelLogs();
         // The "user picked this run's epoch" flags are keyed by run id and would
         // otherwise survive the switch (and grow unbounded across a long session).
         resetEpochSelectionState();
@@ -176,7 +190,7 @@ if (typeof window !== 'undefined') {
 
 // ── Inner content (rendered inside WorkflowModeProvider) ──
 
-function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, isPreviewOnly = false, allowRunHistory: allowRunHistoryProp, runSurfaceId, applicationFirst = false, initialApplicationConfigs, applicationTemplateSource, canEditWorkflow = true }: { workflowId: string; runId?: string; workflowCanvasSlot?: React.ReactNode; isPreviewOnly?: boolean; allowRunHistory?: boolean; runSurfaceId?: string; applicationFirst?: boolean; initialApplicationConfigs?: ApplicationConfig[]; applicationTemplateSource?: ApplicationTemplateSource; canEditWorkflow?: boolean }) {
+function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, isPreviewOnly = false, allowRunHistory: allowRunHistoryProp, runSurfaceId, hostTabId, applicationFirst = false, initialApplicationConfigs, applicationTemplateSource, canEditWorkflow = true }: { workflowId: string; runId?: string; workflowCanvasSlot?: React.ReactNode; isPreviewOnly?: boolean; allowRunHistory?: boolean; runSurfaceId?: string; hostTabId?: string; applicationFirst?: boolean; initialApplicationConfigs?: ApplicationConfig[]; applicationTemplateSource?: ApplicationTemplateSource; canEditWorkflow?: boolean }) {
   const t = useTranslations();
   const pathname = usePathname();
 
@@ -187,14 +201,22 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   const modelsResolvedEmpty = !modelsLoading && !modelsError;
   // Asked once for the whole menu: the answer is about the account, not
   // about any one model.
-  const { blocked: creditsCannotPay } = useMonthlyCreditsCannotPay();
+  const { blocked: creditsCannotPay, blockedForModel, freeTierForModel, prefersFreeTierModels, verdictReady } =
+    useMonthlyCreditsCannotPay();
   const appContext = useUnifiedAppSafe();
   const setSelectedModel = appContext?.setSelectedModel ?? ((_: SelectedModel) => {});
   const appSelectedModel: SelectedModel = appContext?.state.selectedModel ?? EMPTY_SELECTED_MODEL;
 
+  // V494: a free-tier account opens on a model its allowance covers, when one
+  // exists. Without this the composer opens on the admin's global #1 and the very
+  // first turn of a fresh signup can be refused - the moment the allowance is for.
   const defaultAIModel: AIModel | undefined = useMemo(
-    () => (defaultModel ? models.find(m => m.id === defaultModel) : undefined) ?? models[0],
-    [models, defaultModel],
+    () => resolveFreeTierPreferredModel(
+      models,
+      (defaultModel ? models.find(m => m.id === defaultModel) : undefined) ?? models[0],
+      prefersFreeTierModels,
+    ),
+    [models, defaultModel, prefersFreeTierModels],
   );
   const effectiveDefault: SelectedModel = useMemo(
     () => (defaultAIModel ? selectedModelFromAIModel(defaultAIModel) : getEffectiveDefaultSelectedModel()),
@@ -205,10 +227,16 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
 
   useEffect(() => {
     if (!appContext || isValidModel || !effectiveDefault.id) return;
+    // V494: wait for the plan verdict before WRITING. prefersFreeTierModels is false
+    // while the balance request is in flight, which is indistinguishable from a paid
+    // account - and if the models land first, this effect pins the catalogue default,
+    // isValidModel flips true, and the free-tier answer arriving a tick later never
+    // applies. The selection is persisted, so that wrong default is permanent.
+    if (!verdictReady) return;
     if (!selectedModelEquals(appSelectedModel, effectiveDefault)) {
       setSelectedModel(effectiveDefault);
     }
-  }, [isValidModel, effectiveDefault, appSelectedModel, setSelectedModel, appContext]);
+  }, [isValidModel, effectiveDefault, appSelectedModel, setSelectedModel, appContext, verdictReady]);
 
   const [showModelSelector, setShowModelSelector] = useState(false);
 
@@ -238,9 +266,14 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       setSelectedModel={setSelectedModel}
       changeModelTitle={t('actions.changeModel')}
       noModelsLabel={modelsResolvedEmpty ? t('aiProviders.noProviderCta.noModels') : undefined}
+      filterLabels={modelFilterLabelsFrom(t)}
       emptyState={modelsResolvedEmpty ? <NoProviderCta variant="menu" /> : undefined}
       upgradeRequired={creditsCannotPay}
+      blockedForModel={blockedForModel}
+      freeTierForModel={freeTierForModel}
+      prefersFreeTierModels={prefersFreeTierModels}
       upgradeNotice={<UpgradeRequiredNotice blocked={creditsCannotPay} />}
+      freeTierBadge={<ComposerFreeTierBadge />}
     />
   );
 
@@ -303,7 +336,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   // tree - chat included - on each tick. The Run tab subscribes separately for
   // the full snapshot, and only while it is mounted.
   const [runData, setRunData] = useState(() => {
-    const cached = getCachedRunPanelData(workflowId);
+    const cached = getCachedRunPanelData(workflowId, runSurfaceId);
     return { runId: cached.runId, hasRunInfo: !!cached.runInfo, isPreviewOnly: cached.isPreviewOnly };
   });
   useEffect(() => {
@@ -316,9 +349,9 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
           : { runId: data.runId, hasRunInfo: !!data.runInfo, isPreviewOnly: data.isPreviewOnly }
       ));
     };
-    adopt(getCachedRunPanelData(workflowId));
-    return subscribeRunPanelData(workflowId, adopt);
-  }, [workflowId]);
+    adopt(getCachedRunPanelData(workflowId, runSurfaceId));
+    return subscribeRunPanelData(workflowId, adopt, runSurfaceId);
+  }, [workflowId, runSurfaceId]);
 
   // ── Run ID the sub-tabs render against ──
   // The CANVAS's own run wins: it is the run actually bound, whether it came from
@@ -488,7 +521,6 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   // back up to the list of runs it came from. Preview is never negotiable.
   const allowRunHistory = (allowRunHistoryProp ?? !hasWorkflowSlot) && !isPreviewOnly;
 
-  const hasExtraTabs = visibleTriggerConfigs.length > 0 || showAppTab || hasWorkflowSlot || showRunTab || showNodeCreatorTab || showInspectorTab;
   /**
    * Tab to show when nothing else applies: the Application on a panel opened on
    * an application, the canvas when this panel hosts one, else the AI chat.
@@ -498,6 +530,54 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
     ? APP_TAB_ID
     : (hasWorkflowSlot ? WORKFLOW_TAB_ID : CHAT_TAB_ID);
   const [activeTabId, setActiveTabId] = useState(defaultTabId);
+  const [logsTarget, setLogsTarget] = useState<WorkflowLogsNavigationTarget | null>(null);
+  const showLogsTab = (showRunTab && !!currentRunId) || !!logsTarget;
+  const hasExtraTabs = visibleTriggerConfigs.length > 0 || showAppTab || hasWorkflowSlot || showRunTab || showLogsTab || showNodeCreatorTab || showInspectorTab;
+
+  useEffect(() => {
+    setLogsTarget((target) => (
+      target
+        && target.targetTabId === hostTabId
+        && target.workflowId === workflowId
+        && target.runId === currentRunId
+        ? target
+        : null
+    ));
+  }, [currentRunId, hostTabId, workflowId]);
+
+  const selectPanelTab = useCallback((tabId: string) => {
+    setActiveTabId(tabId);
+  }, []);
+
+  const openRunLogs = useCallback(() => {
+    if (!currentRunId) return;
+    setLogsTarget({ targetTabId: hostTabId ?? '', workflowId, runId: currentRunId });
+    setActiveTabId(LOGS_TAB_ID);
+  }, [currentRunId, hostTabId, workflowId]);
+
+  // Logs have their own sub-tab, scoped to the run. Requests target one outer
+  // workflow tab so several mounted workflows cannot steal each other's view.
+  useEffect(() => {
+    if (!hostTabId) return;
+
+    const showLogs = (target: WorkflowLogsNavigationTarget) => {
+      if (target.targetTabId !== hostTabId || target.workflowId !== workflowId) return;
+      setActiveTabId(LOGS_TAB_ID);
+      setLogsTarget(target);
+    };
+    const handleOpenLogs = (event: CustomEvent<WorkflowLogsNavigationTarget>) => {
+      if (event.detail.targetTabId === hostTabId) {
+        consumePendingWorkflowPanelLogs(hostTabId);
+      }
+      showLogs(event.detail);
+    };
+
+    window.addEventListener(WORKFLOW_PANEL_OPEN_LOGS_EVENT, handleOpenLogs as EventListener);
+    const pending = consumePendingWorkflowPanelLogs(hostTabId);
+    if (pending) showLogs(pending);
+
+    return () => window.removeEventListener(WORKFLOW_PANEL_OPEN_LOGS_EVENT, handleOpenLogs as EventListener);
+  }, [hostTabId, workflowId]);
   /** Which level the Run tab should show (history vs run detail). */
   const [runViewRequest, setRunViewRequest] = useState<{ view: RunPanelView; seq: number } | null>(
     () => {
@@ -559,14 +639,17 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       (activeTabId === WORKFLOW_TAB_ID && hasWorkflowSlot) ||
       (activeTabId === APP_TAB_ID && applicationConfigs.length > 0) ||
       (activeTabId === RUN_TAB_ID && showRunTab) ||
+      (activeTabId === LOGS_TAB_ID && !!logsTarget) ||
       (activeTabId === NODE_CREATOR_TAB_ID && showNodeCreatorTab) ||
       (activeTabId === INSPECTOR_TAB_ID && showInspectorTab);
     if (!isActiveTabAvailable) {
       // An application-first panel whose interfaces have not arrived yet keeps
       // waiting on the Application tab rather than flashing the canvas.
-      setActiveTabId(applicationFirst && hasWorkflowSlot ? APP_TAB_ID : defaultTabId);
+      setActiveTabId(activeTabId === LOGS_TAB_ID && showRunTab
+        ? RUN_TAB_ID
+        : applicationFirst && hasWorkflowSlot ? APP_TAB_ID : defaultTabId);
     }
-  }, [triggerConfigs, applicationConfigs.length, activeTabId, hasWorkflowSlot, showRunTab, showNodeCreatorTab, showInspectorTab, applicationFirst, defaultTabId]);
+  }, [triggerConfigs, applicationConfigs.length, activeTabId, hasWorkflowSlot, showRunTab, showNodeCreatorTab, showInspectorTab, applicationFirst, defaultTabId, logsTarget]);
 
   // Consume pending tab activation (set before panel was opened)
   useEffect(() => {
@@ -590,11 +673,11 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   useEffect(() => {
     const handleOpenTriggerTab = (event: CustomEvent<OpenTriggerTabDetail>) => {
       const match = findTriggerTabConfig(triggerConfigs, event.detail);
-      if (match) setActiveTabId(match.triggerId);
+      if (match) selectPanelTab(match.triggerId);
     };
     window.addEventListener(OPEN_TRIGGER_TAB_EVENT, handleOpenTriggerTab as EventListener);
     return () => window.removeEventListener(OPEN_TRIGGER_TAB_EVENT, handleOpenTriggerTab as EventListener);
-  }, [triggerConfigs]);
+  }, [selectPanelTab, triggerConfigs]);
 
   // Listen for application tab open requests from node clicks → open Application tab + navigate carousel.
   // Works even when a workflow canvas slot is mounted: switching to APP_TAB_ID hides the
@@ -604,13 +687,13 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
     const handleOpenApplicationTab = (event: CustomEvent<{ interfaceId: string }>) => {
       if (applicationConfigs.some(c => c.interfaceId === event.detail.interfaceId)) {
         setIsAppTabDismissed(false);
-        setActiveTabId(APP_TAB_ID);
+        selectPanelTab(APP_TAB_ID);
         setTargetInterfaceId(event.detail.interfaceId);
       }
     };
     window.addEventListener('workflowOpenApplicationTab', handleOpenApplicationTab as EventListener);
     return () => window.removeEventListener('workflowOpenApplicationTab', handleOpenApplicationTab as EventListener);
-  }, [applicationConfigs]);
+  }, [applicationConfigs, selectPanelTab]);
 
   // Listen for external tab activation (e.g. toggle button in ApplicationDetailView)
   useEffect(() => {
@@ -620,11 +703,11 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       // honouring it would move the reader off their tab for a commit before the
       // availability effect took it back.
       if (event.detail.tabId === NODE_CREATOR_TAB_ID && !showNodeCreatorTab) return;
-      setActiveTabId(event.detail.tabId);
+      selectPanelTab(event.detail.tabId);
     };
     window.addEventListener('workflowPanelActivateTab', handler as EventListener);
     return () => window.removeEventListener('workflowPanelActivateTab', handler as EventListener);
-  }, [workflowId, showNodeCreatorTab]);
+  }, [workflowId, showNodeCreatorTab, selectPanelTab]);
 
   // Listen for "open the Run tab" requests (canvas history button, version chip).
   // Scoped by workflowId so a sub-workflow tab and the main panel never steal
@@ -634,7 +717,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       const detail = (event as CustomEvent<OpenRunPanelDetail>).detail ?? {};
       if (detail.workflowId && detail.workflowId !== workflowId) return;
       setRunViewRequest(prev => ({ view: detail.view ?? 'run', seq: (prev?.seq ?? 0) + 1 }));
-      setActiveTabId(RUN_TAB_ID);
+      selectPanelTab(RUN_TAB_ID);
       // Handled live, so drop it from the bus too: the mount-time consume never
       // runs for a panel that is ALREADY mounted, and a request left behind is
       // replayed on the next remount - the level the user asked for one
@@ -643,7 +726,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
     };
     window.addEventListener(OPEN_RUN_PANEL_EVENT, handler);
     return () => window.removeEventListener(OPEN_RUN_PANEL_EVENT, handler);
-  }, [workflowId]);
+  }, [workflowId, selectPanelTab]);
 
   // Same for the canvas "+" - and it needs its own listener for the same reason
   // the Run tab does: when the panel is ALREADY open on this tab, the page-level
@@ -657,11 +740,11 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       // tab, so a "+" the panel cannot honour would still take the reader off
       // whatever tab they were on and drop them at the canvas.
       if (!showNodeCreatorTab) return;
-      setActiveTabId(NODE_CREATOR_TAB_ID);
+      selectPanelTab(NODE_CREATOR_TAB_ID);
     };
     window.addEventListener(OPEN_NODE_CREATOR_EVENT, handler);
     return () => window.removeEventListener(OPEN_NODE_CREATOR_EVENT, handler);
-  }, [workflowId, showNodeCreatorTab]);
+  }, [workflowId, showNodeCreatorTab, selectPanelTab]);
 
   // Selecting a node on the canvas focuses the Inspector sub-tab. Same listener
   // rationale as the two above: with the panel already open on this tab, the
@@ -690,8 +773,8 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   useEffect(() => {
     if (inspectorFocusRequest === 0 || !showInspectorTab) return;
     setInspectorFocusRequest(0);
-    setActiveTabId(INSPECTOR_TAB_ID);
-  }, [inspectorFocusRequest, showInspectorTab]);
+    selectPanelTab(INSPECTOR_TAB_ID);
+  }, [inspectorFocusRequest, showInspectorTab, selectPanelTab]);
 
 
   // ── Terminal run status check ──
@@ -757,7 +840,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
         const normalizedTarget = normalizeLabel(targetLabel);
         const target = applicationConfigs.find(c => normalizeLabel(c.label) === normalizedTarget);
         if (target) {
-          setActiveTabId(APP_TAB_ID);
+          selectPanelTab(APP_TAB_ID);
           setTargetInterfaceId(target.interfaceId);
           return;
         }
@@ -769,7 +852,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
     window.dispatchEvent(new CustomEvent('workflowApplicationActionRequest', {
       detail: { triggerRef, data, workflowId },
     }));
-  }, [applicationConfigs, workflowId]);
+  }, [applicationConfigs, workflowId, selectPanelTab]);
 
   // ── Suggestion prompt from canvas ──
   const [suggestionPrompt, setSuggestionPrompt] = useState<string | null>(null);
@@ -814,6 +897,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
     + (hasWorkflowSlot ? 1 : 0)
     + (showAppTab ? 1 : 0)
     + (showRunTab ? 1 : 0)
+    + (showLogsTab ? 1 : 0)
     + (showNodeCreatorTab ? 1 : 0)
     + (showInspectorTab ? 1 : 0);
   // `hasExtraTabs` implies at least one extra tab, so tabCount is always >= 2 here:
@@ -830,7 +914,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
    * transitions and focus ring from one place, instead of each tab bar carrying
    * its own copy of the active/inactive pattern.
    */
-  const focusWorkflowTab = useCallback(() => setActiveTabId(WORKFLOW_TAB_ID), []);
+  const focusWorkflowTab = useCallback(() => selectPanelTab(WORKFLOW_TAB_ID), [selectPanelTab]);
 
   const subTabClass = (isActive: boolean) => cn(
     panelTabClass(isActive, 'sm'),
@@ -885,7 +969,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   // Given the run this PANEL resolved, like its two sibling surfaces do. Reading
   // the bus alone leaves the control absent on a /run/<id> deep link until the
   // canvas publishes, and targets the bus' run if the panel ever shows another.
-  const runActions = useRunActions(workflowId, currentRunId);
+  const runActions = useRunActions(workflowId, currentRunId, runSurfaceId);
   const canMutate = useCanMutateInCurrentOrg();
   // Same exclusion the application controls make, and for the same reason: the
   // gateway's share allow-list does not cover stopping a run, so a visitor's
@@ -912,7 +996,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
           aria-pressed={activeTabId === CHAT_TAB_ID}
           data-testid="panel-sub-tab"
           data-active={activeTabId === CHAT_TAB_ID ? 'true' : undefined}
-          onClick={() => setActiveTabId(CHAT_TAB_ID)}
+          onClick={() => selectPanelTab(CHAT_TAB_ID)}
           className={subTabClass(activeTabId === CHAT_TAB_ID)}
         >
           <Sparkles className="w-3.5 h-3.5 shrink-0" />
@@ -926,7 +1010,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
             aria-pressed={activeTabId === WORKFLOW_TAB_ID}
             data-testid="panel-sub-tab"
             data-active={activeTabId === WORKFLOW_TAB_ID ? 'true' : undefined}
-            onClick={() => setActiveTabId(WORKFLOW_TAB_ID)}
+            onClick={() => selectPanelTab(WORKFLOW_TAB_ID)}
             className={subTabClass(activeTabId === WORKFLOW_TAB_ID)}
           >
             <Workflow className="w-3.5 h-3.5 shrink-0" />
@@ -942,11 +1026,26 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
             aria-pressed={activeTabId === RUN_TAB_ID}
             data-testid="panel-sub-tab"
             data-active={activeTabId === RUN_TAB_ID ? 'true' : undefined}
-            onClick={() => setActiveTabId(RUN_TAB_ID)}
+            onClick={() => selectPanelTab(RUN_TAB_ID)}
             className={subTabClass(activeTabId === RUN_TAB_ID)}
           >
             <Play className="w-3.5 h-3.5 shrink-0" />
             {t('sidePanel.runTab')}
+          </button>
+        )}
+
+        {showLogsTab && (
+          <button
+            type="button"
+            data-logs-tab-button
+            aria-pressed={activeTabId === LOGS_TAB_ID}
+            data-testid="panel-sub-tab"
+            data-active={activeTabId === LOGS_TAB_ID ? 'true' : undefined}
+            onClick={() => logsTarget ? selectPanelTab(LOGS_TAB_ID) : openRunLogs()}
+            className={subTabClass(activeTabId === LOGS_TAB_ID)}
+          >
+            <FileText className="w-3.5 h-3.5 shrink-0" />
+            {t('actions.logs')}
           </button>
         )}
 
@@ -958,7 +1057,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
             aria-pressed={activeTabId === NODE_CREATOR_TAB_ID}
             data-testid="panel-sub-tab"
             data-active={activeTabId === NODE_CREATOR_TAB_ID ? 'true' : undefined}
-            onClick={() => setActiveTabId(NODE_CREATOR_TAB_ID)}
+            onClick={() => selectPanelTab(NODE_CREATOR_TAB_ID)}
             className={subTabClass(activeTabId === NODE_CREATOR_TAB_ID)}
           >
             <Plus className="w-3.5 h-3.5 shrink-0" />
@@ -976,7 +1075,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
             aria-pressed={activeTabId === INSPECTOR_TAB_ID}
             data-testid="panel-sub-tab"
             data-active={activeTabId === INSPECTOR_TAB_ID ? 'true' : undefined}
-            onClick={() => setActiveTabId(INSPECTOR_TAB_ID)}
+            onClick={() => selectPanelTab(INSPECTOR_TAB_ID)}
             className={subTabClass(activeTabId === INSPECTOR_TAB_ID)}
           >
             <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" />
@@ -997,7 +1096,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
               aria-pressed={isActive}
               data-testid="panel-sub-tab"
               data-active={isActive ? 'true' : undefined}
-              onClick={() => setActiveTabId(config.triggerId)}
+              onClick={() => selectPanelTab(config.triggerId)}
               className={cn(
                 panelTabClass(isActive, 'sm'),
                 "flex-shrink-0"
@@ -1039,7 +1138,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
             aria-pressed={activeTabId === APP_TAB_ID}
             data-testid="panel-sub-tab"
             data-active={activeTabId === APP_TAB_ID ? 'true' : undefined}
-            onClick={() => setActiveTabId(APP_TAB_ID)}
+            onClick={() => selectPanelTab(APP_TAB_ID)}
             className={subTabClass(activeTabId === APP_TAB_ID)}
           >
             <AppWindow className="w-3.5 h-3.5 shrink-0" />
@@ -1092,7 +1191,15 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   // ── Content rendering ──
   const renderContent = () => (
     <>
-      {activeTabId === CHAT_TAB_ID ? (
+      {activeTabId === LOGS_TAB_ID && logsTarget ? (
+        <WorkflowLogsPanelContent
+          key={`${logsTarget.workflowId}:${logsTarget.runId}:${logsTarget.initialStepAlias ?? 'all-steps'}`}
+          workflowId={logsTarget.workflowId}
+          runId={logsTarget.runId}
+          initialStepAlias={logsTarget.initialStepAlias}
+          onBack={() => selectPanelTab(RUN_TAB_ID)}
+        />
+      ) : activeTabId === CHAT_TAB_ID ? (
         <ChatCore
           conversationId={conversationId}
           messages={messages}
@@ -1114,6 +1221,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
           configs={applicationConfigs}
           runId={currentRunId}
           workflowId={workflowId}
+          runSurfaceId={runSurfaceId}
           onAction={handleApplicationAction}
           targetInterfaceId={targetInterfaceId}
           onTargetConsumed={clearCarouselTarget}
@@ -1134,6 +1242,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
           /* Only when there IS a canvas sub-tab to go back to: without a slot the
              Workflow tab does not exist and the button would lead nowhere. */
           onBackToWorkflow={hasWorkflowSlot ? focusWorkflowTab : undefined}
+          onOpenLogs={currentRunId ? openRunLogs : undefined}
         />
       ) : /* Both event listeners refuse the palette themselves; the pending-tab handoff
              above does not, and it lands straight in `activeTabId` - the availability
@@ -1229,6 +1338,8 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
 interface WorkflowPanelContentProps {
   workflowId: string;
   runId?: string;
+  /** Outer side-panel tab hosting this workflow hierarchy. */
+  hostTabId?: string;
   /** Explicit preview-only flag - required because SidePanel renders outside WorkflowModeProvider */
   isPreviewOnly?: boolean;
   /** Workflow canvas ReactNode - rendered as an always-mounted sub-tab (replaces Application carousel tab) */
@@ -1281,7 +1392,7 @@ interface WorkflowPanelContentProps {
   canEditWorkflow?: boolean;
 }
 
-export function WorkflowPanelContent({ workflowId, runId, isPreviewOnly: isPreviewOnlyProp, workflowCanvasSlot, allowRunHistory, runSurfaceId, applicationFirst, initialApplicationConfigs, applicationTemplateSource, canEditWorkflow }: WorkflowPanelContentProps) {
+export function WorkflowPanelContent({ workflowId, runId, hostTabId, isPreviewOnly: isPreviewOnlyProp, workflowCanvasSlot, allowRunHistory, runSurfaceId, applicationFirst, initialApplicationConfigs, applicationTemplateSource, canEditWorkflow }: WorkflowPanelContentProps) {
   // Try parent context first, then fall back to explicit prop.
   // SidePanel lives in AppLayout (outside WorkflowModeProvider), so the prop is needed for marketplace preview.
   const { isPreviewOnly: isPreviewFromContext, workflowId: parentWorkflowId } = useWorkflowMode();
@@ -1291,12 +1402,18 @@ export function WorkflowPanelContent({ workflowId, runId, isPreviewOnly: isPrevi
   // reuse it so viewingEpoch and other state are shared with the canvas/RunInfo.
   // Only create a new provider when rendered outside (e.g. SidePanel in AppLayout).
   if (parentWorkflowId) {
-    return <WorkflowPanelInner workflowId={workflowId} runId={runId} workflowCanvasSlot={workflowCanvasSlot} isPreviewOnly={isPreview} allowRunHistory={allowRunHistory} runSurfaceId={runSurfaceId} applicationFirst={applicationFirst} initialApplicationConfigs={initialApplicationConfigs} applicationTemplateSource={applicationTemplateSource} canEditWorkflow={canEditWorkflow} />;
+    return (
+      <WorkflowPanelHostProvider workflowId={workflowId} hostTabId={hostTabId} runSurfaceId={runSurfaceId}>
+        <WorkflowPanelInner workflowId={workflowId} runId={runId} workflowCanvasSlot={workflowCanvasSlot} isPreviewOnly={isPreview} allowRunHistory={allowRunHistory} runSurfaceId={runSurfaceId} hostTabId={hostTabId} applicationFirst={applicationFirst} initialApplicationConfigs={initialApplicationConfigs} applicationTemplateSource={applicationTemplateSource} canEditWorkflow={canEditWorkflow} />
+      </WorkflowPanelHostProvider>
+    );
   }
 
   return (
-    <WorkflowModeProvider workflowId={workflowId} initialRunId={runId} readOnly={isPreview}>
-      <WorkflowPanelInner workflowId={workflowId} runId={runId} workflowCanvasSlot={workflowCanvasSlot} isPreviewOnly={isPreview} allowRunHistory={allowRunHistory} runSurfaceId={runSurfaceId} applicationFirst={applicationFirst} initialApplicationConfigs={initialApplicationConfigs} applicationTemplateSource={applicationTemplateSource} canEditWorkflow={canEditWorkflow} />
-    </WorkflowModeProvider>
+    <WorkflowPanelHostProvider workflowId={workflowId} hostTabId={hostTabId} runSurfaceId={runSurfaceId}>
+      <WorkflowModeProvider workflowId={workflowId} initialRunId={runId} readOnly={isPreview}>
+        <WorkflowPanelInner workflowId={workflowId} runId={runId} workflowCanvasSlot={workflowCanvasSlot} isPreviewOnly={isPreview} allowRunHistory={allowRunHistory} runSurfaceId={runSurfaceId} hostTabId={hostTabId} applicationFirst={applicationFirst} initialApplicationConfigs={initialApplicationConfigs} applicationTemplateSource={applicationTemplateSource} canEditWorkflow={canEditWorkflow} />
+      </WorkflowModeProvider>
+    </WorkflowPanelHostProvider>
   );
 }

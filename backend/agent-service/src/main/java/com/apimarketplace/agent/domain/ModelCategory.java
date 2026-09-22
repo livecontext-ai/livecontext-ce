@@ -12,7 +12,10 @@ import java.util.regex.Pattern;
  * <p>Forward-extensibility examples (none of them implemented):
  * {@code file_processing}, {@code embedding}, {@code transcription}.
  *
- * <p><b>Only {@code chat} and {@code browser_agent} have a screen.</b> The five
+ * <p><b>Only {@code chat} and {@code browser_agent} have an admin screen.</b>
+ * {@code classification} has none yet: it exists so the eligibility rule can keep decision
+ * models out of the conversational surfaces and give the classify node's picker something
+ * to ask for. The five
  * {@code <format>_generation} constants are kept because rows were written
  * under them and callers may still ask for them, but nothing offers them any
  * more: a generation model has no ranking to give (the caller names its model,
@@ -29,6 +32,7 @@ public enum ModelCategory {
 
     CHAT("chat"),
     BROWSER_AGENT("browser_agent"),
+    CLASSIFICATION("classification"),
     IMAGE_GENERATION("image_generation"),
     VIDEO_GENERATION("video_generation"),
     AUDIO_GENERATION("audio_generation"),
@@ -47,6 +51,34 @@ public enum ModelCategory {
      * the class javadoc for why none of them has a screen.
      */
     public static final String GENERATION_SUFFIX = "_generation";
+
+    /**
+     * The {@code mode} carried by a model that returns a TYPED DECISION rather than
+     * text: a choice among declared options, a score, a boolean, each with calibrated
+     * probabilities. TypeSafe's Jev is the first.
+     *
+     * <p><b>This constant is the cloisonnement, and it is load-bearing.</b> A decision
+     * model cannot hold a conversation, cannot call a tool and cannot emit a token of
+     * prose, so an Agent node or a chat pointed at one is not degraded, it is broken.
+     * {@link #acceptsMode} admits {@code chat} and {@code browser_agent} only for
+     * {@code mode IS NULL OR mode = 'chat'}, and {@code ModelCatalogService} resolves
+     * the category-less global path (the chat picker, the flat model list, the default
+     * model pick) as {@code chat}.
+     *
+     * <p><b>It only works because the mode reaches BOTH halves of the catalog.</b> That
+     * catalog is assembled from database rows, which carry a {@code mode} column, and from
+     * YAML-declared models, which carry whatever {@code LLMProvider.getModelMode} reports.
+     * Dropping the database override from the overlay is NOT enough on its own: the YAML
+     * model survives it and stays in the picker. So this value has to be written in the
+     * migration AND declared by the provider, and it is the same spelling in both because
+     * it is defined once, in {@link com.apimarketplace.agent.provider.LLMProvider}.
+     *
+     * <p>The mode says what the MODEL is; {@link #CLASSIFICATION} says which SURFACE
+     * offers it. They are deliberately two words: a future guardrail surface would
+     * accept this same mode under a category of its own.
+     */
+    public static final String DECISION_MODE =
+            com.apimarketplace.agent.provider.LLMProvider.MODE_DECISION;
 
     private static final Pattern SHAPE = Pattern.compile("^[a-z][a-z0-9_]*$");
 
@@ -107,6 +139,13 @@ public enum ModelCategory {
      *       {@code mode='video'}, derived from the name rather than listed
      *       here. Adding a format is a constant in this enum and nothing
      *       else.</li>
+     *   <li>{@code classification} → only {@code mode = 'decision'} rows. Chat
+     *       models are NOT admitted here even though the Classify NODE runs on
+     *       either engine: this category answers "which decision models does the
+     *       platform expose", and the node's picker unions that answer with the
+     *       chat list rather than replacing it. Without this branch the clause
+     *       below would let every chat model through, which is the trap a new
+     *       category walks into.</li>
      *   <li>Unknown / future categories → permissive (returns true) so a new
      *       category can ship its own seed without a code change here.</li>
      * </ul>
@@ -118,6 +157,9 @@ public enum ModelCategory {
         if (category == null) return true;
         if (CHAT.key.equals(category) || BROWSER_AGENT.key.equals(category)) {
             return mode == null || "chat".equals(mode);
+        }
+        if (CLASSIFICATION.key.equals(category)) {
+            return DECISION_MODE.equals(mode);
         }
         String generationMode = modeForGenerationCategory(category);
         if (generationMode != null) {

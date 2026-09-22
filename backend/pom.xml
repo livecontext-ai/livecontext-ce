@@ -12,7 +12,7 @@
 
     <licenses>
         <license>
-            <name>GNU Affero General Public License v3.0 only</name>
+            <name>LiveContext Sustainable Use License 1.0</name>
             <url>https://github.com/livecontext-ai/livecontext-ce/blob/main/LICENSE</url>
             <distribution>repo</distribution>
         </license>
@@ -82,6 +82,7 @@
     </dependencyManagement>
 
     <modules>
+        <module>test-support</module>
         <module>common-lib</module>
         <module>agent-common</module>
         <module>shared-agent-lib</module>

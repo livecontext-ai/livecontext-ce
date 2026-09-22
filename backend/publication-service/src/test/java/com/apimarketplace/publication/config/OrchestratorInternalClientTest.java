@@ -8,8 +8,10 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -191,5 +193,42 @@ class OrchestratorInternalClientTest {
 
         assertThat(snapshots).containsKey("iface-1");
         server.verify();
+    }
+
+    @Test
+    @DisplayName("getExistingWorkflowIds skips a null id instead of throwing on it")
+    void getExistingWorkflowIdsSkipsNullEntries() {
+        // Regression for the nightly PublicationCleanupService crash: a HashSet built from a
+        // nullable workflow_id column can legitimately contain a null, and UUID::toString on
+        // it threw an NPE from OUTSIDE the try block below - so the caller's whole scheduled
+        // job died rather than degrading. The null must simply not reach the query string.
+        UUID real = UUID.randomUUID();
+        Set<UUID> withNull = new LinkedHashSet<>();
+        withNull.add(real);
+        withNull.add(null);
+
+        server.expect(requestTo(BASE_URL + "/api/internal/publication-support/workflows/exists?ids=" + real))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("[\"" + real + "\"]", MediaType.APPLICATION_JSON));
+
+        Set<UUID> existing = client.getExistingWorkflowIds(withNull);
+
+        assertThat(existing).containsExactly(real);
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("getExistingWorkflowIds makes no call when every id is null")
+    void getExistingWorkflowIdsMakesNoCallWhenAllNull() {
+        // An all-null set carries no question to ask. Calling with an empty ids= would make
+        // orchestrator answer for "no ids", and the fail-safe below would then hand back the
+        // null-bearing input - so return the empty set directly instead.
+        Set<UUID> allNull = new LinkedHashSet<>();
+        allNull.add(null);
+
+        Set<UUID> existing = client.getExistingWorkflowIds(allNull);
+
+        assertThat(existing).isEmpty();
+        server.verify(); // no request expected, and none must have been made
     }
 }

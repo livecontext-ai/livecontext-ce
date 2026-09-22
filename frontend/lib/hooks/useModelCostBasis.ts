@@ -27,6 +27,15 @@ import type { ModelCostBasis } from '@/lib/billing/model-cost-estimate';
  * nothing to estimate. The endpoint answers `enabled: false` for the same
  * reason; the edition is checked here too so a self-hosted install makes no
  * request at all.
+ *
+ * <p><b>The own-key block is not filtered here.</b> Whether the caller may run on
+ * their own key is a PLAN answer, and this hook held a client-side copy of it
+ * until 2026-09-18. That copy reported UNLOCKED while the plan map was loading and
+ * again when the request for it failed, which is the right default for drawing a
+ * padlock and the wrong one for quoting a price: a FREE account would have been
+ * shown the flat fee for a route the run pins to the platform key. The server now
+ * applies the gate against the same table the run reads, so the block arriving IS
+ * the answer, and there is no second opinion to diverge from it.
  */
 export function useModelCostBasis(options: { enabled?: boolean } = {}): {
   basis: ModelCostBasis | null;

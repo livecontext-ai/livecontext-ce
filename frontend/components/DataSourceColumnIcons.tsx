@@ -5,6 +5,7 @@ import { COLUMN_TYPE_META } from '@/components/data-table/visualHelpers';
 import { nodeIconBoxRadiusClass } from '@/app/workflows/builder/components/nodes/shared';
 import type { ColumnVisualType } from '@/types/data-sources';
 import type { DataSource } from '@/lib/api';
+import { buildColumnOrderRank, columnPathOf } from '@/utils/columnSpec';
 
 /**
  * Columns that exist in `mapping_spec` for bookkeeping but are not user-facing
@@ -37,13 +38,17 @@ export interface DataSourceColumnHeader {
 }
 
 /** Per-column spec entry as stored in `mapping_spec` (label may be nested under `display`). */
-type ColumnSpec = { type?: string; label?: string; display?: { label?: string } } | undefined;
+type ColumnSpec = { type?: string; label?: string; path?: string; display?: { label?: string } } | undefined;
 
 /**
  * The user-facing columns of a DataSource in saved order, system columns
  * excluded. Reads snake_case first (the backend's @JsonProperty names) and
- * falls back to camelCase; respects `column_order` when its fields line up
- * with the spec keys. Shared by {@link getDataSourceColumns} and
+ * falls back to camelCase; respects `column_order` through the shared
+ * {@link buildColumnOrderRank}, asked about the same FIELD the data grid asks
+ * about (the column's mapping-spec path), so the two can never rank one column
+ * differently. Columns the order does not name are appended here, where the
+ * grid instead leaves them in place; a card is a preview strip with no lanes to
+ * displace. Shared by {@link getDataSourceColumns} and
  * {@link getDataSourceColumnHeaders} so both see identical ordering.
  */
 function orderedColumnEntries(
@@ -54,17 +59,11 @@ function orderedColumnEntries(
 
   let entries = Object.entries(spec).filter(([key]) => !SYSTEM_COLUMNS.has(key));
 
-  if (order.length > 0) {
-    const rank = new Map<string, number>();
-    order.forEach((o, i) => {
-      const field = String((o.field ?? o.name ?? '') as string).replace(/^data\./, '');
-      if (field && !rank.has(field)) rank.set(field, i);
-    });
-    entries = entries.slice().sort((a, b) => {
-      const ra = rank.has(a[0]) ? (rank.get(a[0]) as number) : Number.MAX_SAFE_INTEGER;
-      const rb = rank.has(b[0]) ? (rank.get(b[0]) as number) : Number.MAX_SAFE_INTEGER;
-      return ra - rb;
-    });
+  const rank = buildColumnOrderRank(order);
+  if (rank.size > 0) {
+    const rankOf = ([key, value]: [string, ColumnSpec]) =>
+      rank.of(columnPathOf(key, value?.path)) ?? Number.MAX_SAFE_INTEGER;
+    entries = entries.slice().sort((a, b) => rankOf(a) - rankOf(b));
   }
 
   return entries;

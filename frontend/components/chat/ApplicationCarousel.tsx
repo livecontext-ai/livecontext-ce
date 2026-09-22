@@ -14,6 +14,8 @@ interface ApplicationCarouselProps {
   configs: ApplicationConfig[];
   runId: string | null;
   workflowId?: string;
+  /** Run-panel bus surface paired with this application. */
+  runSurfaceId?: string;
   onAction: (triggerRef: string, data: Record<string, unknown>) => void;
   /** External request to navigate to a specific interfaceId */
   targetInterfaceId?: string | null;
@@ -59,6 +61,7 @@ export function ApplicationCarousel({
   configs,
   runId,
   workflowId,
+  runSurfaceId,
   onAction,
   targetInterfaceId,
   onTargetConsumed,
@@ -279,6 +282,7 @@ export function ApplicationCarousel({
             config={currentConfig}
             runId={runId}
             workflowId={workflowId}
+            runSurfaceId={runSurfaceId}
             onAction={onAction}
             carouselControls={carouselControls}
             isExpanded={isExpanded}

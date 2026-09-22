@@ -4,6 +4,8 @@
  * All conversation API calls go through unifiedApiService.
  */
 
+import type { ToolAuthorizationSubject } from '@/contexts/StreamingContext';
+
 /** One persisted approval/authorization card awaiting the user (see Conversation.pendingActions). */
 export interface PendingActionEntry {
   tool_call?: any;
@@ -28,6 +30,8 @@ export interface PendingActionEntry {
   tool_call_id?: string;
   args_summary?: string;
   application_id?: string; // publication id for application:acquire (reopen install modal on reload)
+  /** What the card is about (workflow + version, or the cron being armed), so a reload still names it. */
+  subject?: ToolAuthorizationSubject;
   // Question card (waiting_for === 'user_question'): the questions the ask_user call showed
   questions?: Array<{
     header: string;
@@ -192,7 +196,11 @@ export interface ConversationResponse {
   content: Conversation[];
   totalElements: number;
   totalPages: number;
+  page: number;
   size: number;
+  first: boolean;
+  last: boolean;
   hasNext: boolean;
   hasPrevious: boolean;
+  numberOfElements: number;
 }

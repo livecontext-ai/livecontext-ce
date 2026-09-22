@@ -151,4 +151,21 @@ public class UserCredentialService {
         }
         return credentialClient.getCredentialIdentities(userId);
     }
+
+    /**
+     * The same identities, distinguishing "the account holds none" from "the listing
+     * could not be read".
+     *
+     * <p>{@link #listIdentities} flattens both to an empty list, which is right for
+     * matching a credential and wrong for describing what the account holds: a caller
+     * that reports the empty case to a person would tell them to connect a service they
+     * may already have connected.
+     */
+    public java.util.Optional<java.util.List<com.apimarketplace.credential.client.dto.CredentialIdentityDto>>
+            tryListIdentities(String userId) {
+        if (credentialClient == null) {
+            return java.util.Optional.empty();
+        }
+        return credentialClient.tryGetCredentialIdentities(userId);
+    }
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useSyncExternalStore } from 'react';
+import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 import type { ChangelogMedia } from '@/lib/changelog/latestEntry';
 
 /**
@@ -68,44 +68,5 @@ export default function ChangelogMediaView({ media, alt }: { media: ChangelogMed
       style={{ aspectRatio: ratio }}
       className="w-full rounded-lg border border-theme object-cover"
     />
-  );
-}
-
-const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
-
-/** Null when the browser has no matchMedia (jsdom, older embedded webviews). */
-function motionQuery(): MediaQueryList | null {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return null;
-  return window.matchMedia(REDUCED_MOTION_QUERY);
-}
-
-function subscribe(onChange: () => void): () => void {
-  const query = motionQuery();
-  if (!query) return () => {};
-  // addListener is the pre-Safari-14 spelling; both are handled because a self-hosted install is
-  // opened with whatever browser its users have, not only the ones we test.
-  if (typeof query.addEventListener === 'function') {
-    query.addEventListener('change', onChange);
-    return () => query.removeEventListener('change', onChange);
-  }
-  if (typeof query.addListener === 'function') {
-    query.addListener(onChange);
-    return () => query.removeListener(onChange);
-  }
-  return () => {};
-}
-
-/**
- * Tracks the OS "reduce motion" setting, including a change made while the panel is open.
- *
- * Subscribed rather than read into state in an effect: the value is external browser state, so
- * useSyncExternalStore reads it during render (no first paint with the wrong value, no cascading
- * re-render). The server snapshot is false, which is also what a browser without matchMedia gets.
- */
-function usePrefersReducedMotion(): boolean {
-  return useSyncExternalStore(
-    subscribe,
-    () => motionQuery()?.matches ?? false,
-    () => false,
   );
 }

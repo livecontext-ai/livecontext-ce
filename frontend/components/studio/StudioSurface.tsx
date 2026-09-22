@@ -10,16 +10,22 @@ import { useGenerationModels } from '@/hooks/useGenerationModels';
 import { useStudioTurn } from '@/hooks/useStudioTurn';
 import { buildStudioTurns } from '@/lib/generation/studioThread';
 import { pickDefaultModel } from '@/lib/generation/defaultModel';
-import { takeStudioRecipe } from '@/lib/generation/studioHandoff';
+import { takeStudioRecipe, recipeToRequest } from '@/lib/generation/studioHandoff';
 import { STUDIO_MESSAGE_TYPE, generationWasCharged, type StudioRequestEnvelope } from '@/lib/generation/studioMessage';
 import type { GenerationModel } from '@/lib/api/orchestrator/generation.service';
 import { StudioComposer } from '@/components/studio/StudioComposer';
+import { StudioLookSwitch } from '@/components/studio/StudioLookSwitch';
+import { StudioLookProvider, studioLookClass, useStudioLook } from '@/hooks/useStudioLook';
 import { useMobileDetection } from '@/hooks/useMobileDetection';
 import { StudioTurnCard } from '@/components/studio/StudioTurnCard';
 import { StudioApps } from '@/components/studio/StudioApps';
+import { GenerationHistoryList } from '@/components/generation/GenerationHistoryList';
 import { StudioDynamicTitle } from '@/components/studio/StudioDynamicTitle';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { HomeModeSwitch } from '@/components/chat/HomeModeSwitch';
+import { useSidePanelSafe } from '@/contexts/SidePanelContext';
+import { openFilesPanel } from '@/lib/sidePanel/openFilesPanel';
+import type { GenerationHistoryEntry } from '@/lib/api/storage-api';
 
 /**
  * The studio: a composer, and the thread of what has been made with it.
@@ -50,7 +56,30 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const canGenerate = useCanMutateInCurrentOrg();
+  // Safe, not required: this surface renders in tests and in any host that has no panel,
+  // and a thrown context here would take the whole studio down to open a file.
+  const sidePanel = useSidePanelSafe();
   const { models, availability, isLoading: modelsLoading } = useGenerationModels(canGenerate);
+
+  /**
+   * The ground this surface draws itself on, and the one visual decision the studio makes for
+   * itself rather than inheriting.
+   *
+   * <p>Applied as a class on the surface's own root, which REDEFINES the app's colour tokens for
+   * everything inside it. That is what makes the treatment one block of CSS instead of a second
+   * styling of every control in here: the composer, the pickers, the turn cards and the history all
+   * read the same tokens they already read.
+   *
+   * <p>The ground is painted only when the studio look is chosen. On the app's own theme the class
+   * is empty and the surface stays exactly as transparent as it was, so a reader who never touches
+   * the switch sees no change at all - which is what makes this an offer rather than a redecoration.
+   *
+   * <p>One spelling, from `studioLookClass`, which carries the ground as well as the tokens. The
+   * provider beside it is for the menus: a popover renders in a portal on the document, so it
+   * cannot inherit any of this and has to be handed it through React instead.
+   */
+  const [look, setLook] = useStudioLook();
+  const lookClass = studioLookClass(look);
 
   const [selectedModel, setSelectedModel] = React.useState<GenerationModel | null>(null);
   // A prompt handed back by "reuse", consumed once by the composer.
@@ -72,6 +101,9 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
   // 640px = Tailwind's `sm`, the width the chat home changes shape at.
   const isNarrowViewport = useMobileDetection(640);
   const [credentialSource, setCredentialSource] = React.useState<'platform' | 'user'>('platform');
+  // The composer's place on the page, so a recipe picked from the history further down can bring
+  // the reader back to the box it just filled. Only the empty desktop layout attaches it.
+  const composerAnchorRef = React.useRef<HTMLDivElement | null>(null);
   const [credentialId, setCredentialId] = React.useState<number | null>(null);
 
   /**
@@ -173,8 +205,8 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
     if (!lastModelId) return;
     adoptedRef.current = conversationId;
     const match = models.find((model) => model.model === lastModelId);
-    if (match) setSelectedModel(match);
-  }, [conversationId, models, turns]);
+    if (match) handleSelectModel(match);
+  }, [conversationId, models, turns, handleSelectModel]);
 
   // A recipe handed over from wherever the asset was shown (Files, a turn card elsewhere). Read
   // once, on mount, and cleared by the read: a recipe left in flight would refill the composer days
@@ -294,12 +326,12 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
 
   const handleReuse = React.useCallback((request: StudioRequestEnvelope) => {
     const match = models.find((model) => model.model === request.model);
-    if (match) setSelectedModel(match);
+    if (match) handleSelectModel(match);
     // Repeating a turn repeats WHO PAID for it. Without this, a turn run on the reader's own key
     // comes back on the platform's, which is a second change they did not ask for.
     if (request.credentialSource) setCredentialSource(request.credentialSource);
     setReused(request);
-  }, [models]);
+  }, [models, handleSelectModel]);
 
   // Apply the handed-over recipe once the catalogue can answer which model it names. A recipe whose
   // model has since been retired still loads its words and settings, on whichever model is
@@ -313,6 +345,84 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
   const handleOpenInFiles = React.useCallback((fileId: string) => {
     router.push(`/app/files?fileId=${encodeURIComponent(fileId)}`);
   }, [router]);
+
+  /**
+   * Show a past generation, without leaving the studio.
+   *
+   * <p>Pressing one of your own results used to navigate to the Files page: the thread, the
+   * composer and whatever was half-typed in it were replaced by a file browser, and the way
+   * back was the browser's back button. The asset is the thing being looked at, not a reason
+   * to change screens, so it opens in the right-hand panel beside the studio instead.
+   *
+   * <p>Through the canonical {@code openFilesPanel}, so this is the same tab, the same detail
+   * view and the same back-chevron-to-the-list as every other file surface in the app - and
+   * the metadata travels with it, because a detail view given a bare id draws the placeholder
+   * until it has fetched the type back.
+   *
+   * <p>The navigation stays as the fallback for a host with no panel: an asset that cannot be
+   * shown beside the studio must still be reachable.
+   */
+  const handleOpenAsset = React.useCallback((entry: GenerationHistoryEntry) => {
+    if (!sidePanel) {
+      handleOpenInFiles(entry.id);
+      return;
+    }
+    openFilesPanel(sidePanel, {
+      id: entry.id,
+      path: entry.s3Key ?? undefined,
+      name: entry.fileName ?? undefined,
+      mimeType: entry.mimeType ?? undefined,
+      size: entry.sizeBytes ?? undefined,
+      createdAt: entry.createdAt,
+    });
+  }, [sidePanel, handleOpenInFiles]);
+
+  /**
+   * Load a past generation back into the composer.
+   *
+   * <p>Through the SAME mapping the studio already uses for a recipe handed over from another
+   * screen, so a card in the history and a file arriving from Files fill the composer identically.
+   * A recipe with no model id is dropped rather than half-applied: the model is what a replay RUNS,
+   * and filling the words in over whatever happens to be selected would submit them to a different
+   * model than the one that made the asset the reader clicked.
+   */
+  const handleReuseRecipe = React.useCallback((provenance: Parameters<typeof recipeToRequest>[0]) => {
+    const request = recipeToRequest(provenance);
+    if (!request) return;
+    handleReuse(request);
+    // Bring the composer back into view.
+    //
+    // On the desktop empty layout the composer is anchored high and the history sits below the
+    // applications row, so pressing Modify at the bottom of the page fills a box the reader cannot
+    // see: the press looks like it did nothing, and the obvious next move is to press it again. The
+    // narrow layout pins the composer to the bottom and the thread layout keeps it under the
+    // thread, so the anchor is only rendered where the problem exists and this is a no-op elsewhere.
+    //
+    // Guarded on the method, not just on the node: jsdom does not implement scrollIntoView, and an
+    // unguarded call takes down every test that renders this surface.
+    const anchor = composerAnchorRef.current;
+    if (anchor && typeof anchor.scrollIntoView === 'function') {
+      anchor.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [handleReuse]);
+
+  /**
+   * What this workspace has already generated, under the applications row.
+   *
+   * <p>Shown on an empty studio only, exactly where the applications row is and for the same
+   * reason: once a thread exists the reader is working, and their own results are the page. It
+   * hides itself entirely when nothing has been generated yet, so a fresh install shows no empty
+   * shelf.
+   */
+  const generationHistory = (
+    <GenerationHistoryList
+      className="w-full max-w-6xl mx-auto px-6 pb-6"
+      heading={t('history.title')}
+      hideWhenEmpty
+      onOpen={handleOpenAsset}
+      onReuse={(entry) => handleReuseRecipe(entry.provenance)}
+    />
+  );
 
   const hasThread = turns.length > 0 || !!pendingRequest;
 
@@ -339,6 +449,10 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
       reuse={reused}
       onReuseConsumed={() => setReused(null)}
       autoFocus={!hasThread}
+      // The ground this surface draws itself on. Rendered by the composer because the composer is
+      // the one element every studio layout has; the preference itself lives here, beside the
+      // wrapper that carries it.
+      lookSwitch={<StudioLookSwitch look={look} onChange={setLook} />}
       // Offered only on a studio that has nothing open yet. Once a thread exists its kind is fixed
       // - the server refuses a change - so a switch here would offer something that cannot happen
       // to THIS conversation; leaving means starting a new one.
@@ -383,96 +497,109 @@ export function StudioSurface({ conversationId = null }: StudioSurfaceProps) {
      * 640px is Tailwind's `sm`, the width the chat splits on, so both change shape together. */
     if (isNarrowViewport) {
       return (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 overflow-y-auto py-4">
-            {/* The chat's mobile welcome, same `pt-8` and `mb-4`. */}
-            <div className="pt-8 shrink-0 px-2">
-              <div className="text-center max-w-md mx-auto mb-4">
-                <StudioDynamicTitle />
+        <StudioLookProvider value={look}>
+          <div className={`flex min-h-0 flex-1 flex-col ${lookClass}`}>
+            <div className="min-h-0 flex-1 overflow-y-auto py-4">
+              {/* The chat's mobile welcome, same `pt-8` and `mb-4`. */}
+              <div className="pt-8 shrink-0 px-2">
+                <div className="text-center max-w-md mx-auto mb-4">
+                  <StudioDynamicTitle />
+                </div>
               </div>
+              <div className="pb-6">
+                <StudioApps />
+              </div>
+              {generationHistory}
             </div>
-            <div className="pb-6">
-              <StudioApps />
-            </div>
+            {/* OUTSIDE the scroller, which is what pins it to the bottom. */}
+            {composer}
           </div>
-          {/* OUTSIDE the scroller, which is what pins it to the bottom. */}
-          {composer}
-        </div>
+        </StudioLookProvider>
       );
     }
 
     return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto py-4">
-        {/* The SAME anchor as the chat home (pt-[22vh]), so flipping the mode switch does not move
-            the composer under the reader's cursor. The two surfaces are one page with two
-            composers; a different offset would make the switch feel like a page load. */}
-        {/* The chat home's wrapper, copied structure for structure - the same 22vh anchor, the same
-            max-w-4xl/px-2 outer, the same max-w-3xl/p-4 around the composer itself. Matching only
-            the anchor was not enough: the chat nests the composer one padding deeper, so the studio
-            drew it a row higher and flipping the switch moved the box under the reader's cursor. */}
-        <div className="pt-[22vh] shrink-0 mx-auto max-w-4xl px-2 w-full">
-          <div className="text-center max-w-md mx-auto mb-8">
-            <StudioDynamicTitle />
-          </div>
-          <div className="w-full relative">
-            <div className="relative flex items-end justify-center">
-              <div className="max-w-3xl w-full">
-                <div className="p-4">{composer}</div>
+      <StudioLookProvider value={look}>
+        <div className={`flex min-h-0 flex-1 flex-col overflow-y-auto py-4 ${lookClass}`}>
+          {/* The SAME anchor as the chat home (pt-[22vh]), so flipping the mode switch does not move
+              the composer under the reader's cursor. The two surfaces are one page with two
+              composers; a different offset would make the switch feel like a page load. */}
+          {/* The chat home's wrapper, copied structure for structure - the same 22vh anchor, the same
+              max-w-4xl/px-2 outer, the same max-w-3xl/p-4 around the composer itself. Matching only
+              the anchor was not enough: the chat nests the composer one padding deeper, so the studio
+              drew it a row higher and flipping the switch moved the box under the reader's cursor. */}
+          <div className="pt-[22vh] shrink-0 mx-auto max-w-4xl px-2 w-full">
+            <div className="text-center max-w-md mx-auto mb-8">
+              <StudioDynamicTitle />
+            </div>
+            <div className="w-full relative">
+              <div className="relative flex items-end justify-center">
+                <div className="max-w-3xl w-full">
+                  <div className="p-4" ref={composerAnchorRef}>{composer}</div>
+                </div>
               </div>
             </div>
           </div>
+          {/* The studio's own applications, under the composer on a studio with nothing open yet.
+              Once a thread exists the reader is working, and a marketplace row under their results is
+              in the way; the sidebar and the marketplace are how they get back to the apps. */}
+          <div className="pb-6">
+            <StudioApps />
+          </div>
+          {/* The reader's own past work, in the applications row's own gutter so the two read as one
+              column rather than two panels of different widths. The spacing travels WITH the list
+              rather than wrapping it: the list renders nothing at all on an install that has
+              generated nothing, and a wrapper would leave its padding behind as a gap under the
+              applications row. */}
+          {generationHistory}
         </div>
-        {/* The studio's own applications, under the composer on a studio with nothing open yet.
-            Once a thread exists the reader is working, and a marketplace row under their results is
-            in the way; the sidebar and the marketplace are how they get back to the apps. */}
-        <div className="pb-6">
-          <StudioApps />
-        </div>
-      </div>
+      </StudioLookProvider>
     );
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-3xl px-4 py-6">
-          {messagesLoading && !hasThread && (
-            <div className="flex items-center justify-center gap-2 py-12 text-sm text-theme-muted">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {t('thread.loading')}
-            </div>
-          )}
-
-          <div className="space-y-4">
-            {turns.map((turn) => (
-              <StudioTurnCard
-                key={turn.id}
-                request={turn.request}
-                result={turn.result}
-                iconSlug={iconByModel.get(turn.request.model) ?? null}
-                onReuse={handleReuse}
-                onOpenInFiles={handleOpenInFiles}
-              />
-            ))}
-            {/* The turn in flight, drawn from what was submitted rather than read back. It is
-                replaced by the real pair when the answer lands and the thread refreshes. */}
-            {pendingRequest && (
-              <StudioTurnCard
-                key="studio-turn-pending"
-                request={pendingRequest}
-                isRunning
-                iconSlug={iconByModel.get(pendingRequest.model) ?? null}
-              />
+    <StudioLookProvider value={look}>
+      <div className={`flex min-h-0 flex-1 flex-col ${lookClass}`}>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto w-full max-w-3xl px-4 py-6">
+            {messagesLoading && !hasThread && (
+              <div className="flex items-center justify-center gap-2 py-12 text-sm text-theme-muted">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t('thread.loading')}
+              </div>
             )}
+
+            <div className="space-y-4">
+              {turns.map((turn) => (
+                <StudioTurnCard
+                  key={turn.id}
+                  request={turn.request}
+                  result={turn.result}
+                  iconSlug={iconByModel.get(turn.request.model) ?? null}
+                  onReuse={handleReuse}
+                  onOpenInFiles={handleOpenInFiles}
+                />
+              ))}
+              {/* The turn in flight, drawn from what was submitted rather than read back. It is
+                  replaced by the real pair when the answer lands and the thread refreshes. */}
+              {pendingRequest && (
+                <StudioTurnCard
+                  key="studio-turn-pending"
+                  request={pendingRequest}
+                  isRunning
+                  iconSlug={iconByModel.get(pendingRequest.model) ?? null}
+                />
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="mx-auto w-full max-w-3xl flex-shrink-0 px-4 pb-4">
-        {composer}
-      </div>
+        <div className="mx-auto w-full max-w-3xl flex-shrink-0 px-4 pb-4">
+          {composer}
+        </div>
 
-    </div>
+      </div>
+    </StudioLookProvider>
   );
 }
 

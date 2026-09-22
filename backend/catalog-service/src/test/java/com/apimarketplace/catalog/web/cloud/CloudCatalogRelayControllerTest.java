@@ -288,13 +288,13 @@ class CloudCatalogRelayControllerTest {
         @DisplayName("requires authentication and an active link, like execute")
         void requiresAuthAndLink() {
             ResponseEntity<Map<String, Object>> unauthenticated =
-                    controller.platformInfo(null, INSTALL_ID, "openweather", null, null, null);
+                    controller.platformInfo(null, INSTALL_ID, "openweather", null, null, null, null);
             assertThat(unauthenticated.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 
             when(authClient.userOwnsActiveCeLink(String.valueOf(CLOUD_USER_ID), INSTALL_ID))
                     .thenReturn(false);
             ResponseEntity<Map<String, Object>> unlinked =
-                    controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "openweather", null, null, null);
+                    controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "openweather", null, null, null, null);
             assertThat(unlinked.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
             verifyNoInteractions(relayService);
         }
@@ -306,7 +306,7 @@ class CloudCatalogRelayControllerTest {
             when(relayService.tryAcquire(INSTALL_ID)).thenReturn(false);
 
             ResponseEntity<Map<String, Object>> response =
-                    controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "openweather", null, null, null);
+                    controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "openweather", null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
             assertThat(response.getBody()).isEqualTo(Map.of("error", "RATE_LIMITED"));
@@ -319,11 +319,11 @@ class CloudCatalogRelayControllerTest {
             stubActiveLink();
             stubSubscription(new CeLinkEntitlementsResult("FREE", false));
             when(relayService.tryAcquire(INSTALL_ID)).thenReturn(true);
-            when(relayService.platformInfo("openweather", null, null, null))
+            when(relayService.platformInfo("openweather", null, null, null, null))
                     .thenReturn(new PlatformInfo("openweather", true, 77L, true, "0.25", true));
 
             ResponseEntity<Map<String, Object>> response =
-                    controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "openweather", null, null, null);
+                    controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "openweather", null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody())
@@ -337,16 +337,139 @@ class CloudCatalogRelayControllerTest {
         }
 
         @Test
+        @DisplayName("an absurd price factor is DROPPED, so the install sees the published rate")
+        void anAbsurdFactorIsDroppedRatherThanRefused() {
+            // Dropped, not refused. This door only READS: a malformed factor must leave the
+            // install showing the published rate, which is the true price of a call carrying no
+            // surcharge, rather than turning a price panel into an error nobody can act on. And
+            // unsanitised, a non-positive value reached the auth leg, which answers 400 - an error
+            // on a read, for a value the executing leg would simply have ignored.
+            stubActiveLink();
+            stubSubscription(new CeLinkEntitlementsResult("PRO", true));
+            when(relayService.tryAcquire(INSTALL_ID)).thenReturn(true);
+            when(relayService.platformInfo(anyString(), any(), any(), any(), any()))
+                    .thenReturn(new PlatformInfo("seedance", true, 7L, true, "100", true));
+
+            ResponseEntity<Map<String, Object>> response = controller.platformInfo(
+                    CLOUD_USER_ID, INSTALL_ID, "seedance", null, "seedance-2.0",
+                    new BigDecimal("10"), new BigDecimal("-3"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            // The SIZE still travels. Only the factor was dropped, so the quote is the one this
+            // path resolved before factors existed rather than no quote at all.
+            verify(relayService).platformInfo(
+                    "seedance", null, "seedance-2.0", new BigDecimal("10"), null);
+        }
+
+        @Test
+        @DisplayName("a factor above the descriptor ceiling is dropped for the same reason")
+        void aFactorAboveTheCeilingIsDropped() {
+            // The ceiling is the descriptor parser's own, and the parser enforces it on all of a
+            // model's modifiers TOGETHER, so a factor above it cannot have come from any seed this
+            // platform accepts. Quoting it would show an install an amount no descriptor here can
+            // produce.
+            stubActiveLink();
+            stubSubscription(new CeLinkEntitlementsResult("PRO", true));
+            when(relayService.tryAcquire(INSTALL_ID)).thenReturn(true);
+            when(relayService.platformInfo(anyString(), any(), any(), any(), any()))
+                    .thenReturn(new PlatformInfo("seedance", true, 7L, true, "100", true));
+
+            controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "seedance", null, "seedance-2.0",
+                    null, new BigDecimal("101"));
+
+            verify(relayService).platformInfo("seedance", null, "seedance-2.0", null, null);
+        }
+
+        @Test
+        @DisplayName("ECHOES the factor it quoted with, which a self-hosted reader has no other way to learn")
+        void theQuotedFactorIsEchoedBack() {
+            // Every other quote door echoes it, and the surfaces gate their entire explanation on
+            // that echo: the badge, the "includes Resolution x2" sentence, the note in the
+            // parameters menu. This door did not, so on a linked self-hosted install the factor was
+            // applied and charged while the reader watched the price change with nothing saying
+            // why - the failure this feature exists to remove, surviving on the one edition that
+            // cannot read the cloud's logs.
+            stubActiveLink();
+            stubSubscription(new CeLinkEntitlementsResult("PRO", true));
+            when(relayService.tryAcquire(INSTALL_ID)).thenReturn(true);
+            when(relayService.platformInfo(anyString(), any(), any(), any(), any()))
+                    .thenReturn(new PlatformInfo("seedance", true, 7L, true, "240", true));
+
+            ResponseEntity<Map<String, Object>> response = controller.platformInfo(
+                    CLOUD_USER_ID, INSTALL_ID, "seedance", null, "seedance-2.0",
+                    new BigDecimal("10"), new BigDecimal("1.2"));
+
+            assertThat(response.getBody()).containsEntry("priceMultiplier", new BigDecimal("1.2"));
+        }
+
+        @Test
+        @DisplayName("echoes NOTHING for a call at the published rate, so no badge is drawn for a x1")
+        void noFactorIsEchoedAtTheBaseRate() {
+            stubActiveLink();
+            stubSubscription(new CeLinkEntitlementsResult("PRO", true));
+            when(relayService.tryAcquire(INSTALL_ID)).thenReturn(true);
+            when(relayService.platformInfo(anyString(), any(), any(), any(), any()))
+                    .thenReturn(new PlatformInfo("seedance", true, 7L, true, "200", true));
+
+            ResponseEntity<Map<String, Object>> plain = controller.platformInfo(
+                    CLOUD_USER_ID, INSTALL_ID, "seedance", null, "seedance-2.0",
+                    new BigDecimal("10"), null);
+            ResponseEntity<Map<String, Object>> one = controller.platformInfo(
+                    CLOUD_USER_ID, INSTALL_ID, "seedance", null, "seedance-2.0",
+                    new BigDecimal("10"), BigDecimal.ONE);
+
+            assertThat(plain.getBody()).doesNotContainKey("priceMultiplier");
+            assertThat(one.getBody()).doesNotContainKey("priceMultiplier");
+        }
+
+        @Test
+        @DisplayName("echoes what it USED, not what it was asked: an absurd factor is not reflected")
+        void anAbsurdFactorIsNotEchoed() {
+            // The echo has to describe the quote, or a surface would explain a surcharge the
+            // amount beside it does not contain - the same lie the badge's own gate prevents.
+            stubActiveLink();
+            stubSubscription(new CeLinkEntitlementsResult("PRO", true));
+            when(relayService.tryAcquire(INSTALL_ID)).thenReturn(true);
+            when(relayService.platformInfo(anyString(), any(), any(), any(), any()))
+                    .thenReturn(new PlatformInfo("seedance", true, 7L, true, "200", true));
+
+            ResponseEntity<Map<String, Object>> response = controller.platformInfo(
+                    CLOUD_USER_ID, INSTALL_ID, "seedance", null, "seedance-2.0",
+                    new BigDecimal("10"), new BigDecimal("1000000"));
+
+            assertThat(response.getBody()).doesNotContainKey("priceMultiplier");
+        }
+
+        @Test
+        @DisplayName("a factor a descriptor CAN produce is passed through untouched")
+        void anOrdinaryFactorSurvives() {
+            // The other half, and the one that pays: sanitising must not become discarding. A
+            // relayed 1080p render quoted without its factor states one amount and is billed
+            // another, which is the disagreement this whole parameter exists to remove.
+            stubActiveLink();
+            stubSubscription(new CeLinkEntitlementsResult("PRO", true));
+            when(relayService.tryAcquire(INSTALL_ID)).thenReturn(true);
+            when(relayService.platformInfo(anyString(), any(), any(), any(), any()))
+                    .thenReturn(new PlatformInfo("seedance", true, 7L, true, "240", true));
+
+            controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "seedance", null, "seedance-2.0",
+                    new BigDecimal("10"), new BigDecimal("1.2"));
+
+            verify(relayService).platformInfo(
+                    "seedance", null, "seedance-2.0", new BigDecimal("10"), new BigDecimal("1.2"));
+        }
+
+        @Test
         @DisplayName("unknown integration returns the available=false shape with null fields, never 404")
         void unknownIntegrationIs200Unavailable() {
             stubActiveLink();
             stubSubscription(new CeLinkEntitlementsResult("PRO", true));
             when(relayService.tryAcquire(INSTALL_ID)).thenReturn(true);
-            when(relayService.platformInfo("nope", null, null, null))
+            when(relayService.platformInfo("nope", null, null, null, null))
                     .thenReturn(new PlatformInfo("nope", false, null, false, null, false));
 
             ResponseEntity<Map<String, Object>> response =
-                    controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "nope", null, null, null);
+                    controller.platformInfo(CLOUD_USER_ID, INSTALL_ID, "nope", null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody())

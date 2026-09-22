@@ -59,6 +59,11 @@ vi.mock('@/lib/api/orchestrator/agenda.service', () => ({
   // error PATH throw, which is the one path this file needs to reach.
   agendaFailureOf: () => ({}),
 }));
+// The agenda's mutations ask for the bell's automation rows again, since pausing a schedule or
+// moving an occurrence changes what the bell lists as armed. The real hook reaches for a
+// QueryClient this suite has no provider for; the ask itself is pinned by the call-site guard
+// in lib/api/orchestrator/__tests__/automationRowMutations.callSites.test.ts.
+vi.mock('@/hooks/useHomeStatus', () => ({ useRefreshHomeStatus: () => () => {} }));
 vi.mock('@/hooks/useAgendaPreferences', () => ({
   ALL_RESOURCE_TYPES: ['WORKFLOW', 'APPLICATION', 'AGENT'],
   useAgendaPreferences: () => ({

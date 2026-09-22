@@ -10,8 +10,8 @@
  * rendered, and broke `next build`'s type check (TS2304). This pins the fix: an
  * expanded, content-less tool activity renders the fallback without throwing.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { cleanup, render } from '@testing-library/react';
 import * as React from 'react';
 
 // Passthrough translator: returns the key, so the rendered fallback is the
@@ -30,11 +30,14 @@ vi.mock('@/hooks/useStableGroupedActivities', () => ({
 }));
 vi.mock('@/lib/utils/activityGrouping', () => ({
   isGroupedTool: () => false,
-  getToolDescription: () => 'Ran a tool',
+  getToolDescription: (name: string) => name,
   getToolIconType: () => 'code',
 }));
 vi.mock('@/lib/api', () => ({
   apiClient: { get: async () => ({ content: '' }) },
+}));
+vi.mock('@/lib/hooks/useResourceQuery', () => ({
+  useResourceQuery: () => ({ data: undefined, isLoading: false, error: null }),
 }));
 vi.mock('next/image', () => ({ default: () => null }));
 // Heavy presentational children that never render on the no-content path. Stub
@@ -48,6 +51,8 @@ vi.mock('@/components/MarkdownRender', () => ({ default: () => null }));
 vi.mock('@/components/agents', () => ({ AvatarDisplay: () => null }));
 
 import { ActivityFeed, type ToolActivity } from '../ActivityFeed';
+
+afterEach(cleanup);
 
 describe('ActivityFeed TimelineItem no-content fallback', () => {
   it('renders the tool no-content fallback for an expanded, content-less tool (regression: t was out of scope)', () => {

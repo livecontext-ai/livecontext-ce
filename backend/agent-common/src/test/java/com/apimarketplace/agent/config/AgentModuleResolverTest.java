@@ -97,4 +97,49 @@ class AgentModuleResolverTest {
             assertThat(AgentModuleResolver.isResourceAccessible(config, "applications")).isFalse();
         }
     }
+
+    @Test
+    @DisplayName("mode=none honours webSearch=false instead of re-enabling the module")
+    void modeNoneHonoursWebSearchToggle() {
+        // Regression: the mode=none branch added web_search unconditionally. Chat survived it
+        // because AgentContextBuilder filters the tool a second time, but AgentNode (workflow
+        // agents), SubAgentExecutionHandler and CliAgentService call this resolver with no second
+        // filter, and WebSearchToolsProvider.execute has no permission check of its own. So an
+        // agent configured mode='none', webSearch=false received a working web_search tool.
+        Map<String, Object> cfg = new java.util.HashMap<>();
+        cfg.put("mode", "none");
+        cfg.put("webSearch", false);
+
+        assertThat(AgentModuleResolver.resolveEnabledModules(cfg)).doesNotContain("web_search");
+    }
+
+    @Test
+    @DisplayName("mode=none keeps web_search when the toggle is absent or true (opt-OUT semantics)")
+    void modeNoneKeepsWebSearchWhenNotDisabled() {
+        Map<String, Object> absent = new java.util.HashMap<>();
+        absent.put("mode", "none");
+        assertThat(AgentModuleResolver.resolveEnabledModules(absent)).contains("web_search");
+
+        Map<String, Object> explicitlyTrue = new java.util.HashMap<>();
+        explicitlyTrue.put("mode", "none");
+        explicitlyTrue.put("webSearch", true);
+        assertThat(AgentModuleResolver.resolveEnabledModules(explicitlyTrue)).contains("web_search");
+    }
+
+    @Test
+    @DisplayName("mode=none still blocks catalog and still keeps the internal resource modules")
+    void modeNoneKeepsItsDocumentedIntent() {
+        // The families stay unconditional on purpose: that is this branch's documented intent
+        // ("only MCP/catalog tools blocked; internal tools stay enabled"), and their execution is
+        // closed anyway because the credentials carry an empty allow-list. Pinned so the
+        // web_search fix above is not widened into a behaviour change nobody asked for.
+        Map<String, Object> cfg = new java.util.HashMap<>();
+        cfg.put("mode", "none");
+        cfg.put("webSearch", false);
+
+        assertThat(AgentModuleResolver.resolveEnabledModules(cfg))
+                .doesNotContain("catalog")
+                .contains("table", "interface", "agent", "skill", "memory", "workflow", "application", "files");
+    }
+
 }

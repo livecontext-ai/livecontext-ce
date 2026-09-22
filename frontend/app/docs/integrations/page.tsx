@@ -1,11 +1,12 @@
 import { Plug, Bot, Workflow, Server } from 'lucide-react';
+import { CATALOG_INTEGRATIONS_CLAIM } from '@/lib/integrations/integrationCount';
 import { docsMetadata } from '../_meta';
 import { DocsHero, DocsProse, DocsTable, Callout, CodeBlock, CardGrid, Card, Steps, Step } from '../_components';
 
 export const metadata = docsMetadata({
   title: 'Integrations',
   description:
-    'Connect external tools in LiveContext: the ~700+ pre-built integrations, how tools and reusable credentials work, OAuth (platform-shared vs bring-your-own, PKCE, scope preflight, auto-refresh), custom private APIs, sending files to a tool, and connecting external MCP clients to your own registry.',
+    `Connect external tools in LiveContext: the ${CATALOG_INTEGRATIONS_CLAIM} pre-built integrations, how tools and reusable credentials work, OAuth (platform-shared vs bring-your-own, PKCE, scope preflight, auto-refresh), custom private APIs, sending files to a tool, and connecting external MCP clients to your own registry.`,
   path: '/docs/integrations',
 });
 
@@ -15,7 +16,7 @@ export default function IntegrationsPage() {
       <DocsHero
         eyebrow="Data"
         title="Integrations"
-        lead="LiveContext ships a catalog of ~700+ pre-built third-party API integrations. Every endpoint of every integration is exposed as exactly one tool - connect a service once, then drop its tools into any workflow or give them to an agent."
+        lead={`LiveContext ships a catalog of ${CATALOG_INTEGRATIONS_CLAIM} pre-built third-party API integrations. Every endpoint of every integration is exposed as exactly one tool - connect a service once, then drop its tools into any workflow or give them to an agent.`}
       />
 
       <DocsProse>

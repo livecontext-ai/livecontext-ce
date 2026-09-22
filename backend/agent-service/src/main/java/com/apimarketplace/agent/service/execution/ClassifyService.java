@@ -4,13 +4,18 @@ import com.apimarketplace.agent.bridge.BridgeAccessDeniedException;
 import com.apimarketplace.agent.client.dto.execution.ClassifyRequestDto;
 import com.apimarketplace.agent.client.dto.execution.ClassifyResponseDto;
 import com.apimarketplace.agent.client.dto.execution.ConversationMessageDto;
+import com.apimarketplace.agent.domain.KeyRoute;
 import com.apimarketplace.agent.domain.Message;
+import com.apimarketplace.agent.domain.TokenUsageConventions;
 import com.apimarketplace.agent.domain.UsageInfo;
 import com.apimarketplace.agent.loop.AgentLoopContext;
 import com.apimarketplace.agent.loop.AgentLoopResult;
 import com.apimarketplace.agent.loop.AgentLoopService;
 import com.apimarketplace.agent.loop.CallPurpose;
+import com.apimarketplace.agent.loop.GuardResult;
+import com.apimarketplace.agent.loop.IterationContext;
 import com.apimarketplace.agent.loop.PreIterationGuard;
+import com.apimarketplace.agent.provider.TypeSafeDecisionProvider;
 import com.apimarketplace.agent.service.budget.GuardChainFactory;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -62,6 +67,23 @@ public class ClassifyService {
     private final BridgeLoopDispatcher bridgeDispatcher;
     private final com.apimarketplace.agent.service.ModelCatalogService modelCatalogService;
     private final ExecutionLinkRouter executionLinkRouter;
+    private final TypeSafeSystemOneClient typeSafeClient;
+
+    /**
+     * Pins whose API key the classification runs on (see {@link KeyRouteResolver}).
+     * Field-injected and optional so the positional constructor stays test-friendly;
+     * absent, the context is unpinned (user-first by tenant, the pre-pin behaviour).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private KeyRouteResolver keyRouteResolver;
+
+    /**
+     * Optional Prometheus metrics sink, field-injected so existing positional-constructor
+     * tests are unaffected. Only consulted by the execution-link bridge-failure fallback
+     * below, to keep a silent-by-design recovery visible to operators.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.agent.metrics.AgentPrometheusMetrics prometheusMetrics;
 
     /**
      * Activity source reported for link resolution. Classify requests are produced by
@@ -90,11 +112,27 @@ public class ClassifyService {
         String userPrompt = buildPrompt(request);
 
         try {
+            // The decision engine may serve a plan that named only a model, in which case
+            // the catalogue could not normalise a provider and left it null. Settle the
+            // BILLED provider before the guard is built: its cost calculator is resolved
+            // from the pair it is given, so a null there would price the run against a
+            // model with no provider while the guard is then asked about the real one.
+            boolean decision = typeSafeClient.serves(providerName, request.model());
+            String billedProvider = decision ? TypeSafeDecisionProvider.PROVIDER_NAME : providerName;
+
             // The budget guard prices the BILLED pair: a link changes where the run
             // executes, never what the user is charged.
             PreIterationGuard guard = guardChainFactory.forAgent(
                 request.tenantId(), request.agentEntityId(),
-                providerName, request.model());
+                billedProvider, request.model());
+
+            // Decision engine. Branches BEFORE the execution link on purpose: a link moves
+            // a run between things that speak the same protocol, and a decision model
+            // speaks none of it. Linking one to a chat provider, or the reverse, could only
+            // produce a call the target cannot answer, so there is nothing here to route.
+            if (decision) {
+                return classifyWithDecisionModel(request, billedProvider, guard, startTime);
+            }
 
             // Model execution link: the billed pair may have to run on another target
             // (a CLI bridge, or another API provider). Without this the node would call
@@ -107,32 +145,10 @@ public class ClassifyService {
 
             boolean useBridge = bridgeDispatcher.shouldDispatch(execProvider);
 
-            AgentLoopContext context = AgentLoopContext.builder()
-                .provider(execProvider)
-                .model(execModel)
-                .systemPrompt(SYSTEM_PROMPT)
-                .userPrompt(userPrompt)
-                .tools(null)
-                .autoDiscoverTools(false)
-                .maxIterations(1)
-                .temperature(request.temperature() != null ? request.temperature() : 0.1)
-                .maxTokens(request.maxTokens() != null ? request.maxTokens() : 500)
-                .tenantId(request.tenantId())
-                .userRoles(userRoles)
-                .agentId(request.agentEntityId())
-                .preIterationGuard(guard)
-                // EVERY bridge run of this node enters restricted "API mode", linked or
-                // not: an empty cwd and none of the CLI's native tools. A single-shot
-                // judge that must answer with one JSON object has no use for a source
-                // checkout, and without the marker the CLI keeps the repo cwd plus the
-                // repo/shell MCP tools, which run arbitrary commands in that checkout.
-                // On the direct-API path this node has no tools at all, so restricting is
-                // what makes the two transports agree.
-                .credentials(useBridge
-                    ? Map.of(ExecutionLinkRouter.RESTRICTED_TOOLSET_KEY, (Object) Boolean.TRUE)
-                    : null)
-                .purpose(CallPurpose.CLASSIFY)
-                .build();
+            AgentLoopContext context = buildContext(execProvider, execModel, userPrompt, request,
+                userRoles, guard, useBridge);
+            // The route the turn is billed under: the pin of this context, or of the fallback below.
+            KeyRoute executedRoute = context.keyRoute();
 
             log.info("Executing classify via {}: billed={}/{}, exec={}/{}, linked={}, categories={}",
                 useBridge ? "bridge" : "agent loop",
@@ -140,8 +156,37 @@ public class ClassifyService {
                 request.categories() != null ? request.categories().size() : 0);
 
             AgentLoopResult result = useBridge
-                ? bridgeDispatcher.execute(context)
+                // route != null: the link sent us here, so the caller never chose this CLI.
+                ? bridgeDispatcher.execute(context, route != null)
                 : agentLoopService.execute(context, null);
+            // Which provider PRODUCED the counts - not which one is billed. The two differ
+            // under a link, and the bridge-failure fallback below can move it again.
+            String usageReportedBy = execProvider;
+
+            // This node is single-shot (maxIterations=1) and never streams: a classify verdict
+            // is only consumed by the workflow after the FULL call returns, so nothing has ever
+            // been shown to anyone when the bridge attempt fails. Unlike the streaming agent
+            // path, no "was anything already visible" check is needed - ANY bridge failure on a
+            // linked run is safe to retry invisibly on the billed pair's direct API.
+            // No cancellation check here, and that is load-bearing rather than an oversight:
+            // BridgeLoopDispatcher.buildRequest sends this dispatch with a null streamChannelId,
+            // so the bridge's cancel poller has no key to read and STOPPED_BY_USER cannot reach
+            // this branch. Wire a stream or run id into that request - an obvious future
+            // improvement - and this retry starts re-running, and re-billing, turns a user
+            // cancelled: add the same !wasCancelledByUser() guard the two agent paths carry.
+            if (useBridge && route != null && !result.success()) {
+                if (prometheusMetrics != null) {
+                    prometheusMetrics.recordExecutionLinkFallback(providerName, request.model(), execProvider);
+                }
+                log.warn("[EXECUTION_LINK_FALLBACK] classify bridge dispatch failed (exec={}/{}: {}); "
+                        + "retrying on billed pair {}/{}",
+                    execProvider, execModel, result.error(), providerName, request.model());
+                AgentLoopContext directContext = buildContext(providerName, request.model(), userPrompt,
+                    request, userRoles, guard, false);
+                result = agentLoopService.execute(directContext, null);
+                executedRoute = directContext.keyRoute();
+                usageReportedBy = providerName;
+            }
 
             // Re-stamp the BILLED model ONLY when a link moved the run, mirroring the
             // agent path (which relabels solely on a link). Do not read this as cosmetic:
@@ -150,9 +195,19 @@ public class ClassifyService {
             // node config - so without the re-stamp a linked run would be charged as the
             // execution target. An UNLINKED bridge run keeps reporting the model id the CLI
             // returned, exactly as before.
-            return parseResponse(result, System.currentTimeMillis() - startTime, providerName,
+            // Re-expressed in the BILLED provider's convention, and the cache counters
+            // travel with it. A Claude Code bridge folds the cache into its prompt total and
+            // the Anthropic API counts it beside, so a linked run reported verbatim charged
+            // the whole context at full input rate: 6.1x its cost, measured. Converting
+            // alone would have been worse - with nowhere to put the cache it would have left
+            // the bill entirely - which is why the response DTO now carries cacheUsage and
+            // AgentNode bills from it.
+            UsageInfo billedUsage = TokenUsageConventions.toBilledConvention(
+                result.usage(), usageReportedBy, providerName);
+            return parseResponse(result, billedUsage, System.currentTimeMillis() - startTime, providerName,
                 route != null ? request.model() : null,
-                SYSTEM_PROMPT, userPrompt, result.conversationHistory());
+                SYSTEM_PROMPT, userPrompt, result.conversationHistory())
+                .withKeyRoute(executedRoute != null ? executedRoute.name() : null);
 
         } catch (BridgeAccessDeniedException e) {
             // Propagate so GlobalExceptionHandler maps reason → 403/429. Must come
@@ -168,6 +223,89 @@ public class ClassifyService {
                 System.currentTimeMillis() - startTime, providerName, null, 0, 0, 0,
                 null, null, userPrompt);
         }
+    }
+
+    /**
+     * Builds the single-shot classify context for either the primary attempt (on
+     * {@code provider}/{@code model} = the execution pair) or the execution-link
+     * bridge-failure fallback retry (on {@code provider}/{@code model} = the billed pair,
+     * {@code useBridge=false} so no restricted-toolset marker travels into a direct-API call).
+     */
+    private AgentLoopContext buildContext(String provider, String model, String userPrompt,
+                                          ClassifyRequestDto request, String userRoles,
+                                          PreIterationGuard guard, boolean useBridge) {
+        return AgentLoopContext.builder()
+            .provider(provider)
+            .model(model)
+            .systemPrompt(SYSTEM_PROMPT)
+            .userPrompt(userPrompt)
+            .tools(null)
+            .autoDiscoverTools(false)
+            .maxIterations(1)
+            // Observability only: context use is reported as a share of THIS model's
+            // window. Resolved on the execution pair, which is the one that can overflow.
+            .contextWindow(modelCatalogService.resolveContextWindow(provider, model))
+            .temperature(request.temperature() != null ? request.temperature() : 0.1)
+            .maxTokens(request.maxTokens() != null ? request.maxTokens() : 500)
+            .tenantId(request.tenantId())
+            // A bridge holds no API key: pinned PLATFORM. Otherwise resolved once for the
+            // execution provider, like every other dequeued execution kind.
+            .keyRoute(useBridge ? KeyRoute.PLATFORM
+                : keyRouteResolver != null ? keyRouteResolver.resolve(request.tenantId(), provider) : null)
+            .userRoles(userRoles)
+            .agentId(request.agentEntityId())
+            .preIterationGuard(guard)
+            // EVERY bridge run of this node enters restricted "API mode", linked or
+            // not: an empty cwd and none of the CLI's native tools. A single-shot
+            // judge that must answer with one JSON object has no use for a source
+            // checkout, and without the marker the CLI keeps the repo cwd plus the
+            // repo/shell MCP tools, which run arbitrary commands in that checkout.
+            // On the direct-API path this node has no tools at all, so restricting is
+            // what makes the two transports agree.
+            .credentials(useBridge
+                ? Map.of(ExecutionLinkRouter.RESTRICTED_TOOLSET_KEY, (Object) Boolean.TRUE)
+                : null)
+            .purpose(CallPurpose.CLASSIFY)
+            .build();
+    }
+
+    /**
+     * Classify on a decision model, with the same budget gate the loop applies.
+     *
+     * <p>The guard is checked once, by hand, because there is no loop to check it in: one
+     * call, one answer. Skipping it would have been easy to justify (a classification on
+     * this engine costs a fraction of a credit) and wrong for the reason budget gates
+     * exist at all, which is that a workflow can run a node thousands of times. A tenant
+     * out of credits must be refused here exactly as it is refused on the LLM path.
+     */
+    private ClassifyResponseDto classifyWithDecisionModel(ClassifyRequestDto request,
+                                                           String providerName,
+                                                           PreIterationGuard guard,
+                                                           long startTime) {
+        if (!typeSafeClient.isConfigured()) {
+            return new ClassifyResponseDto(false, null, 0, null,
+                "No API key is configured for the '" + providerName + "' decision provider; "
+                + "an administrator must set one, or this node can run on a chat model instead",
+                System.currentTimeMillis() - startTime, providerName, request.model(),
+                0, 0, 0, null, null, null);
+        }
+
+        GuardResult verdict = guard.check(new IterationContext(
+            request.tenantId(), request.agentEntityId(), providerName, request.model(),
+            1, 0, 0L, 0L, 0L));
+        if (verdict != null && !verdict.proceed()) {
+            log.warn("Classify denied before dispatch: provider={}, model={}, reason={}",
+                providerName, request.model(), verdict.denialReason());
+            return new ClassifyResponseDto(false, null, 0, null,
+                verdict.denialReason() != null ? verdict.denialReason() : "Budget guard denied the call",
+                System.currentTimeMillis() - startTime, providerName, request.model(),
+                0, 0, 0, null, null, null);
+        }
+
+        log.info("Executing classify via decision model: provider={}, model={}, categories={}",
+            providerName, request.model(),
+            request.categories() != null ? request.categories().size() : 0);
+        return typeSafeClient.classify(request, providerName, startTime);
     }
 
     private String buildPrompt(ClassifyRequestDto request) {
@@ -198,12 +336,12 @@ public class ClassifyService {
      *                    rather than the execution target. {@code null} on an unlinked run,
      *                    which keeps the identity the loop reported.
      */
-    private ClassifyResponseDto parseResponse(AgentLoopResult result, long duration, String provider,
+    private ClassifyResponseDto parseResponse(AgentLoopResult result, UsageInfo usage, long duration,
+                                                String provider,
                                                 String billedModel,
                                                 String systemPrompt, String userPrompt,
                                                 List<Message> conversationHistory) {
         String content = result.content();
-        UsageInfo usage = result.usage();
         int tokensUsed = usage != null ? usage.getTotal() : 0;
         int promptTokens = usage != null && usage.promptTokens() != null ? usage.promptTokens() : 0;
         int completionTokens = usage != null && usage.completionTokens() != null ? usage.completionTokens() : 0;
@@ -213,13 +351,13 @@ public class ClassifyService {
         if (!result.success()) {
             return new ClassifyResponseDto(false, null, 0, null,
                 result.error(), duration, provider, model, tokensUsed, promptTokens, completionTokens,
-                systemPrompt, messages, userPrompt);
+                systemPrompt, messages, userPrompt, usage);
         }
 
         if (content == null || content.isBlank()) {
             return new ClassifyResponseDto(false, null, 0, null,
                 "Empty response from LLM", duration, provider, model, tokensUsed, promptTokens, completionTokens,
-                systemPrompt, messages, userPrompt);
+                systemPrompt, messages, userPrompt, usage);
         }
         try {
             String jsonContent = LlmJsonExtractor.extractJson(content);
@@ -230,17 +368,17 @@ public class ClassifyService {
             if (selectedCategory == null || selectedCategory.isBlank()) {
                 return new ClassifyResponseDto(false, null, 0, null,
                     "No category selected in response", duration, provider, model,
-                    tokensUsed, promptTokens, completionTokens, systemPrompt, messages, userPrompt);
+                    tokensUsed, promptTokens, completionTokens, systemPrompt, messages, userPrompt, usage);
             }
             double confidence = confidenceNum != null ? confidenceNum.doubleValue() : 0.5;
             confidence = Math.max(0.0, Math.min(1.0, confidence));
             return new ClassifyResponseDto(true, selectedCategory, confidence, reasoning,
                 null, duration, provider, model, tokensUsed, promptTokens, completionTokens,
-                systemPrompt, messages, userPrompt);
+                systemPrompt, messages, userPrompt, usage);
         } catch (Exception e) {
             log.warn("Failed to parse classify response as JSON, trying plain text: {}", e.getMessage());
             return parseFromPlainText(content, duration, provider, model,
-                tokensUsed, promptTokens, completionTokens, systemPrompt, userPrompt, messages);
+                tokensUsed, promptTokens, completionTokens, systemPrompt, userPrompt, messages, usage);
         }
     }
 
@@ -249,7 +387,8 @@ public class ClassifyService {
                                                      int tokensUsed, int promptTokens,
                                                      int completionTokens,
                                                      String systemPrompt, String userPrompt,
-                                                     List<ConversationMessageDto> messages) {
+                                                     List<ConversationMessageDto> messages,
+                                                     UsageInfo usage) {
         Pattern pattern = Pattern.compile(
             "(?:category|selected|classification)[:\\s]+[\"']?([\\w\\s-]+)[\"']?",
             Pattern.CASE_INSENSITIVE);
@@ -258,11 +397,11 @@ public class ClassifyService {
             String category = matcher.group(1).trim();
             return new ClassifyResponseDto(true, category, 0.5,
                 "Extracted from plain text response", null, duration, provider, model,
-                tokensUsed, promptTokens, completionTokens, systemPrompt, messages, userPrompt);
+                tokensUsed, promptTokens, completionTokens, systemPrompt, messages, userPrompt, usage);
         }
         return new ClassifyResponseDto(false, null, 0, null,
             "Could not parse classification response", duration, provider, model,
-            tokensUsed, promptTokens, completionTokens, systemPrompt, messages, userPrompt);
+            tokensUsed, promptTokens, completionTokens, systemPrompt, messages, userPrompt, usage);
     }
 
     /**

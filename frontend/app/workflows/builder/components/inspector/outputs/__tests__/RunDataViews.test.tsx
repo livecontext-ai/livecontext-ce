@@ -145,4 +145,35 @@ describe('JsonTableView column cap', () => {
     render(<JsonTableView data={rows} />);
     expect(screen.getByText(`tableColumnsTruncated:${MAX_TABLE_COLUMNS},3`)).toBeTruthy();
   });
+
+describe('JsonTableView field selection', () => {
+  // These are the tests whose absence let the field selector ship as dead code:
+  // both callers were pre-unwrapping the payload, so the label and the selector
+  // could never render, and every existing case passed an already-picked array.
+  it('names the field it is laying out, so the table never silently disagrees with the tree', () => {
+    render(<JsonTableView data={{ items: [{ a: 1 }], count: 1 }} />);
+
+    expect(screen.getByTestId('run-data-table-field').textContent).toBe('items');
+    expect(screen.getByTestId('run-data-table-view')).toBeTruthy();
+  });
+
+  it('offers a selector when several fields qualify, and lays out the chosen one', () => {
+    render(<JsonTableView data={{ items: [{ a: 1 }], errors: [{ code: 'X' }] }} />);
+
+    const select = screen.getByTestId('run-data-table-field') as HTMLSelectElement;
+    expect(select.tagName).toBe('SELECT');
+    expect([...select.options].map((o) => o.value)).toEqual(['items', 'errors']);
+    // Default is the first field, and the table shows ITS columns.
+    expect(screen.getByText('a')).toBeTruthy();
+
+    fireEvent.change(select, { target: { value: 'errors' } });
+    expect(screen.getByText('code')).toBeTruthy();
+  });
+
+  it('names no field when the payload IS the rows, because nothing was picked', () => {
+    render(<JsonTableView data={[{ a: 1 }]} />);
+    expect(screen.queryByTestId('run-data-table-field')).toBeNull();
+    expect(screen.getByTestId('run-data-table-view')).toBeTruthy();
+  });
+});
 });

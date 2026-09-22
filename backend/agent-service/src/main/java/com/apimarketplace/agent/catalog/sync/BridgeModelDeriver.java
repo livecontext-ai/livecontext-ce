@@ -59,14 +59,6 @@ import java.util.*;
 @Component
 public class BridgeModelDeriver {
 
-    /** Maps each bridge provider to its underlying cloud provider in LiteLLM. */
-    static final Map<String, String> BRIDGE_TO_CLOUD = Map.of(
-            "claude-code",  "anthropic",
-            "codex",        "openai",
-            "gemini-cli",   "google",
-            "mistral-vibe", "mistral"
-    );
-
     /**
      * Derive bridge rows from a parsed LiteLLM model list. Each returned
      * map has the same shape as the parser outputs (compatible with
@@ -104,7 +96,7 @@ public class BridgeModelDeriver {
         // (mistral-vibe config aliases; gpt-5.3-codex is mode=responses).
         for (var entry : BridgeAllowlist.MODELS.entrySet()) {
             String bridge = entry.getKey();
-            String cloudProvider = BRIDGE_TO_CLOUD.get(bridge);
+            String cloudProvider = BridgeAllowlist.BRIDGE_TO_CLOUD_PROVIDER.get(bridge);
             if (cloudProvider == null) continue;
 
             for (String bridgeModelId : entry.getValue()) {
@@ -131,7 +123,7 @@ public class BridgeModelDeriver {
         // so it never enters this loop.
         for (var entry : BridgeAllowlist.DISCOVERY_PATTERNS.entrySet()) {
             String bridge = entry.getKey();
-            String cloudProvider = BRIDGE_TO_CLOUD.get(bridge);
+            String cloudProvider = BridgeAllowlist.BRIDGE_TO_CLOUD_PROVIDER.get(bridge);
             if (cloudProvider == null) continue;
 
             for (Map<String, Object> cloud : liteLlmCloudModels) {

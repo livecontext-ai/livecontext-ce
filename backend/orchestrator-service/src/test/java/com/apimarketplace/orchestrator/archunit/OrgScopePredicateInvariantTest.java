@@ -127,6 +127,19 @@ class OrgScopePredicateInvariantTest {
             // ChatDispatchService#dispatchToWorkflow. Same documented false-positive
             // category as the endpoint auto-create entries above.
             "ChatDispatchService#sendMessage",
+            // Same class, same shape, same category: both hand the endpoint's tenant and org
+            // to endpointScopedHeaders(), which PROPAGATES that scope downstream as X-User-ID
+            // and X-Organization-ID on a call to conversation-service. Nothing is compared and
+            // nothing is decided here; the workspace match for this path is
+            // ScopeGuard.crossResourceMatches in #dispatchToWorkflow, and conversation-service
+            // applies its own scope to the headers it receives.
+            //
+            // They were introduced by 08c1d98030 (2026-09-19) and the gate did not catch them
+            // then for a reason worth writing down: Maven is fail-fast per module, and
+            // publication-service was failing Rule 1 earlier in the same job, so the build
+            // never reached orchestrator-service. Fixing that one is what revealed these two.
+            "ChatDispatchService#createConversation",
+            "ChatDispatchService#getHistory",
 
             // Runtime dispatch: reads run scope to re-bind worker ThreadLocals,
             // label metrics, and enforce production-run metadata; upstream callers

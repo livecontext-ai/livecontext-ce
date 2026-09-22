@@ -56,8 +56,10 @@ public class AvatarGenerationService {
 
     /**
      * Model execution links (CLOUD only): a billed {@code (provider, model)} pair may
-     * EXECUTE on a different API target - same contract as the json-completion
-     * endpoint. Optional: null in CE / feature off, the resolved pair runs verbatim.
+     * EXECUTE on a different API target. Optional: null in CE / feature off, the resolved
+     * pair runs verbatim. This is the API-only variant of the link contract: unlike the
+     * loop-shaped callers (and json-completion since it took the bridge path) an avatar
+     * completion cannot be served by a CLI, so a bridge target falls back to the utility model.
      */
     @Autowired(required = false)
     private com.apimarketplace.agent.service.ModelExecutionLinkService executionLinkService;
@@ -127,6 +129,15 @@ public class AvatarGenerationService {
     }
 
     private String generateOnce(String provider, String model, String user, String tenantId) {
+        // NOT billed, and that is a pricing decision rather than an oversight - said here
+        // because the COLD summariser sat on this same invoker discarding its usage and
+        // charged nothing for months, which looked exactly like this line.
+        //
+        // Everything needed is on hand (provider, model, tenant) and invokeWithUsage would
+        // report the counts. What is missing is a source type: CreditController's allow-list
+        // rejects an unknown one outright, so billing an avatar means deciding that
+        // generating one costs credits and giving it a ledger line of its own. Until someone
+        // decides that, a one-off UI action stays free on purpose.
         String raw = jsonInvoker.invoke(provider, model, SYSTEM_PROMPT, user, tenantId);
         try {
             return sanitizer.sanitize(extractSvg(raw));

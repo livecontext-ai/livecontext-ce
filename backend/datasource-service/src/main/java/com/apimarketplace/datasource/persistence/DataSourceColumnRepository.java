@@ -107,6 +107,15 @@ public class DataSourceColumnRepository {
      * Save column order for a DataSource.
      */
     public boolean saveColumnOrder(Long dataSourceId, String tenantId, List<Map<String, Object>> columnOrder) {
+        return writeColumnOrder(dataSourceId, tenantId, columnOrder);
+    }
+
+    /**
+     * Write the array back verbatim. Takes a wildcard list because the rename
+     * rewrites entries in place and carries through anything it did not
+     * recognise, rather than dropping what it could not bind to a Map.
+     */
+    private boolean writeColumnOrder(Long dataSourceId, String tenantId, List<?> columnOrder) {
         try {
             String sql = """
                 UPDATE data_sources
@@ -126,6 +135,13 @@ public class DataSourceColumnRepository {
     /**
      * Append a column to the end of column_order.
      * Reads current order, finds max position, appends at max+1.
+     *
+     * <p>Read-modify-write without a row lock, so a column order saved between the
+     * two is overwritten. Deliberately left as-is, and shared with
+     * {@link #renameInColumnOrder}: both are best-effort, the window is one
+     * in-memory loop, and what is lost is a column position rather than data.
+     * Closing it means locking in BOTH, never one - this is the more exposed of
+     * the two, because a CRUD batch calls it once per added column in a loop.
      */
     public void appendToColumnOrder(Long dataSourceId, String tenantId, String columnName) {
         try {
@@ -336,7 +352,148 @@ public class DataSourceColumnRepository {
             tenantId
         );
 
+        renameInColumnOrder(dataSourceId, tenantId, oldKey, newKey);
+
         return affectedRows;
+    }
+
+    /**
+     * Rename a column's entry inside column_order, so it keeps its position.
+     *
+     * Without this the entry is orphaned under the old name and the column
+     * becomes one the saved order does not name, which drops it wherever the
+     * mapping_spec key order happens to put it. That order is JSONB's, by key
+     * length then bytes, so a short new name jumps to the front of the table:
+     * renaming a column silently moved it.
+     *
+     * Both spellings are rewritten because both writers of this array are in
+     * play: the grid saves the rendered field ({@code data.<name>}) and
+     * {@link #appendToColumnOrder} writes the bare name, so a table that has
+     * seen a drag AND an added column carries one of each.
+     *
+     * Best-effort, like the append: where a column sits must never decide
+     * whether renaming it succeeded.
+     */
+    private void renameInColumnOrder(Long dataSourceId, String tenantId, String oldKey, String newKey) {
+        if (oldKey == null || oldKey.equals(newKey)) {
+            // The bare RENAME op does not guard this the way updateColumnDisplay does,
+            // and rewriting an identical array is a wasted UPDATE on a hot column.
+            return;
+        }
+        try {
+            String readSql = "SELECT column_order FROM data_sources WHERE id = ? AND tenant_id = ?";
+            String currentJson = jdbcTemplate.queryForObject(readSql, String.class, dataSourceId, tenantId);
+            if (currentJson == null || currentJson.isBlank() || currentJson.equals("[]")) {
+                return;
+            }
+
+            // Bound as Object, not Map: one element that is not an object must not
+            // cost the whole position fix, the way a List<Map> bind would.
+            List<Object> existing = objectMapper.readValue(currentJson,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, Object.class));
+
+            String oldPath = "data." + oldKey;
+            String newPath = "data." + newKey;
+
+            // Columns already named by OTHER entries, compared on the bare name so a
+            // `data.b` entry and a bare `b` entry count as the same column. Comparing
+            // raw spellings instead would miss the likely collision, since a table
+            // that has seen a drag AND an added column carries one of each.
+            //
+            // Renaming onto one of them leaves a single column: the surviving entry
+            // keeps its slot and the renamed column's entry is dropped rather than
+            // duplicated, because a duplicate is persisted forever and copied verbatim
+            // into every snapshot and clone. Note this settles the POSITION only: the
+            // rename's own SQL gives the survivor the SOURCE column's values, type and
+            // label, so the target's content is gone either way.
+            Set<String> takenByOthers = new HashSet<>();
+            for (Object raw : existing) {
+                String field = entryField(raw);
+                if (field == null || field.equals(oldKey) || field.equals(oldPath)) {
+                    continue;
+                }
+                takenByOthers.add(bareColumnName(field));
+            }
+
+            List<Object> updated = new java.util.ArrayList<>(existing.size());
+            Set<String> emitted = new HashSet<>();
+            boolean changed = false;
+
+            for (Object raw : existing) {
+                String field = entryField(raw);
+                String renamed = null;
+                if (field != null) {
+                    if (field.equals(oldKey)) {
+                        renamed = newKey;
+                    } else if (field.equals(oldPath)) {
+                        renamed = newPath;
+                    }
+                }
+
+                if (renamed == null) {
+                    updated.add(raw);
+                    continue;
+                }
+
+                changed = true;
+                // `emitted` is keyed on the bare name too, so an array holding BOTH
+                // spellings of the renamed column collapses to one entry.
+                if (takenByOthers.contains(newKey) || !emitted.add(newKey)) {
+                    continue;
+                }
+
+                Map<String, Object> copy = new LinkedHashMap<>();
+                ((Map<?, ?>) raw).forEach((key, value) -> copy.put(String.valueOf(key), value));
+                // Write every name key the entry already carries, so it cannot come
+                // back holding two names that disagree, and add `field` only when it
+                // carried neither under that spelling.
+                boolean rewrote = false;
+                if (copy.containsKey("field")) {
+                    copy.put("field", renamed);
+                    rewrote = true;
+                }
+                if (copy.containsKey("name")) {
+                    copy.put("name", renamed);
+                    rewrote = true;
+                }
+                if (!rewrote) {
+                    copy.put("field", renamed);
+                }
+                updated.add(copy);
+            }
+
+            if (changed) {
+                writeColumnOrder(dataSourceId, tenantId, updated);
+                logger.debug("Renamed column '{}' to '{}' in column_order", oldKey, newKey);
+            }
+        } catch (Exception e) {
+            logger.warn("Could not rename column '{}' in column_order: {}", oldKey, e.getMessage());
+        }
+    }
+
+    /** The column a stored spelling names: `data.price` and `price` are one column. */
+    private static String bareColumnName(String field) {
+        return field.startsWith("data.") ? field.substring("data.".length()) : field;
+    }
+
+    /**
+     * The column an entry names, read the way the frontend reads it: `field`,
+     * then the legacy `name`, and nothing at all for anything else. Both halves
+     * of this contract have to agree about what an entry is.
+     */
+    private static String entryField(Object raw) {
+        if (!(raw instanceof Map<?, ?> map)) {
+            return null;
+        }
+        Object value = map.get("field");
+        if (value == null) {
+            value = map.get("name");
+        }
+        if (!(value instanceof String text)) {
+            return null;
+        }
+        String trimmed = text.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     /**

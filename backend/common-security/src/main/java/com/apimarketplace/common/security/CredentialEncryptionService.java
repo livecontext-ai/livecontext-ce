@@ -16,7 +16,6 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Service for encrypting/decrypting sensitive credential data.
@@ -51,16 +50,20 @@ public class CredentialEncryptionService {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     /**
-     * Known sensitive field names that should be encrypted in JSONB maps.
+     * Which keys of a JSONB map hold a secret is decided by {@link SensitiveFieldDetector}: a
+     * shape rule (secret / token / key / password tokens, minus descriptor suffixes) that is a
+     * strict superset of the 15-name allow-list this class used until 2026-09-17. That list
+     * missed every custom-auth field the catalogue writes ({@code secret_access_key},
+     * {@code private_key}, {@code api_secret}, ...), which therefore reached the database in
+     * clear. See the detector for the rules and the production keys the test pins.
      */
-    private static final Set<String> SENSITIVE_FIELDS = Set.of(
-            "access_token", "refresh_token", "client_secret", "oauth_client_secret",
-            "api_key", "apiKey", "password", "secret", "secretKey", "bearer_token",
-            "token", "connectionString", "basicPassword", "authHeaderValue", "jwtSecretKey"
-    );
+    public static boolean isSensitiveField(String key) {
+        return SensitiveFieldDetector.isSensitive(key);
+    }
 
     private final TextEncryptor encryptor;
     private final String password;
+    private final boolean ephemeralMaterial;
 
     /**
      * Creates the encryption service with the provided password and salt.
@@ -84,6 +87,7 @@ public class CredentialEncryptionService {
         ResolvedEncryptionMaterial material = resolveEncryptionMaterial(password, salt);
         this.encryptor = Encryptors.text(material.password(), material.salt());
         this.password = material.password();
+        this.ephemeralMaterial = material.ephemeral();
         log.info("CredentialEncryptionService initialized");
     }
 
@@ -102,12 +106,12 @@ public class CredentialEncryptionService {
         boolean unsafePassword = isUnsafePassword(password);
         boolean unsafeSalt = isUnsafeSalt(salt);
         if (!unsafePassword && !unsafeSalt) {
-            return new ResolvedEncryptionMaterial(password, salt);
+            return new ResolvedEncryptionMaterial(password, salt, false);
         }
         String resolvedPassword = unsafePassword ? generateEphemeralPassword() : password;
         String resolvedSalt = unsafeSalt ? generateEphemeralSalt() : salt;
         log.warn("credential.encryption.password/salt missing or unsafe; using ephemeral in-memory encryption material for this process");
-        return new ResolvedEncryptionMaterial(resolvedPassword, resolvedSalt);
+        return new ResolvedEncryptionMaterial(resolvedPassword, resolvedSalt, true);
     }
 
     private static String generateEphemeralPassword() {
@@ -122,7 +126,18 @@ public class CredentialEncryptionService {
         return HexFormat.of().formatHex(bytes);
     }
 
-    private record ResolvedEncryptionMaterial(String password, String salt) {}
+    private record ResolvedEncryptionMaterial(String password, String salt, boolean ephemeral) {}
+
+    /**
+     * True when no usable password/salt was configured and this process runs on random material
+     * that dies with it (a dev laptop without the env vars). Anything that REWRITES stored data
+     * under the current key must refuse in that state: a row encrypted with an ephemeral key is
+     * unreadable after the next restart, which would turn a startup sweep into data loss. New
+     * writes still encrypt (same behaviour credentials have always had in that mode).
+     */
+    public boolean isUsingEphemeralMaterial() {
+        return ephemeralMaterial;
+    }
 
     /**
      * Encrypt a plaintext value.
@@ -200,7 +215,7 @@ public class CredentialEncryptionService {
         if (data == null) return null;
         Map<String, Object> result = new LinkedHashMap<>(data);
         for (var entry : result.entrySet()) {
-            if (SENSITIVE_FIELDS.contains(entry.getKey()) && entry.getValue() instanceof String s) {
+            if (isSensitiveField(entry.getKey()) && entry.getValue() instanceof String s) {
                 result.put(entry.getKey(), encrypt(s));
             }
         }
@@ -219,11 +234,31 @@ public class CredentialEncryptionService {
         if (data == null) return null;
         Map<String, Object> result = new LinkedHashMap<>(data);
         for (var entry : result.entrySet()) {
-            if (SENSITIVE_FIELDS.contains(entry.getKey()) && entry.getValue() instanceof String s) {
+            if (isSensitiveField(entry.getKey()) && entry.getValue() instanceof String s) {
                 result.put(entry.getKey(), decrypt(s));
             }
         }
         return result;
+    }
+
+    /**
+     * True when at least one sensitive string in the map is stored in clear (no
+     * {@value #ENCRYPTED_PREFIX} prefix). This is what the startup sweeps
+     * ({@code SensitiveJsonbBackfill}) test before rewriting a row, so a row that is already
+     * fully encrypted is never touched (no {@code updated_at} bump, no re-encryption churn).
+     *
+     * @param data a raw map as read from the database
+     * @return true if a rewrite through {@link #encryptSensitiveFields(Map)} would change it
+     */
+    public boolean hasPlaintextSensitiveField(Map<String, Object> data) {
+        if (data == null) return false;
+        for (var entry : data.entrySet()) {
+            if (isSensitiveField(entry.getKey()) && entry.getValue() instanceof String s
+                    && !s.isBlank() && !isEncrypted(s)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

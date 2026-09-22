@@ -172,6 +172,74 @@ public class CredentialRepository {
     }
 
     /**
+     * The {@code llm_<provider>} integrations whose SAVED KEY would serve this tenant's next
+     * call, in ONE query. Mirrors, deliberately literally, the predicate the resolver applies
+     * per provider ({@code LlmCredentialRepository.resolveUserKey}): the DEFAULT credential of
+     * the integration, not in {@code proxy} mode, carrying a non-blank {@code api_key}. The
+     * key column is read only to test emptiness and is never decrypted here.
+     *
+     * <p>Feeds the model picker, which must quote the flat own-key fee exactly where the
+     * ledger will charge it. Answering per provider instead would be one round trip per model
+     * in the menu, and answering from a looser predicate would quote a price that does not
+     * happen.
+     *
+     * <p>Two deliberate details keep the mirror close. The mode test lower-cases and ignores
+     * surrounding whitespace, because the resolver compares with {@code equalsIgnoreCase} on a
+     * trimmed value, so a row storing {@code "Proxy"} or {@code "\tproxy"} runs on the PLATFORM
+     * key and must not be quoted as own-key. The key test asks for one non-whitespace character
+     * for the same reason: the resolver rejects a blank key with {@code isBlank()}, and a
+     * whitespace-only value reaches the column verbatim because the encryptor passes blank
+     * input through unchanged. One gap remains, and is accepted: Postgres {@code \s} is the six
+     * ASCII space characters, while {@code String.trim()} strips everything up to U+0020, so a
+     * key or mode padded with a C0 control other than those six still reads differently on the
+     * two sides. Nothing in the product can write one.
+     *
+     * <p>Scoped by {@code tenant_id} like the FIRST branch of the lookup it mirrors, NOT by
+     * workspace. That is the cross-workspace gap documented in BYOK_CLOUD_SPEC 4.1. One
+     * divergence remains on purpose: the lookup has a SECOND branch, an organization-scoped
+     * fallback, so a tenant with no personal key of their own can still run on a key shared
+     * with their workspace. This query does not see it, and the picker therefore stays silent
+     * and quotes the platform estimate for that case. That is the SAFE direction (an estimate
+     * above the fee rather than a fee below the real charge), and closing it properly belongs
+     * with the workspace scoping above, not here.
+     */
+    public List<String> findUsableLlmIntegrations(String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) {
+            return List.of();
+        }
+        return jdbc.queryForList("""
+                SELECT LOWER(integration) FROM auth.credentials
+                WHERE tenant_id = ?
+                  AND LOWER(integration) LIKE 'llm\\_%'
+                  AND is_default = TRUE
+                  AND LOWER(COALESCE(credential_data->>'mode', 'no_proxy')) !~ '^\\s*proxy\\s*$'
+                  AND COALESCE(credential_data->>'api_key', '') ~ '\\S'
+                """, String.class, tenantId);
+    }
+
+    /**
+     * Flip the route of an {@code llm_<provider>} credential: {@code credential_data.mode}
+     * becomes {@code no_proxy} (the user's key serves) or {@code proxy} (the platform key
+     * serves). ONE key of the JSONB is rewritten in place; the encrypted {@code api_key}
+     * next to it is never read, decrypted or re-encrypted, which is why this does not go
+     * through {@code save()}. Scoped by workspace like {@link #updateName}, and refused on
+     * anything that is not an LLM key, so a stray id cannot grow a {@code mode} field.
+     *
+     * @return rows updated (0 when the id no longer exists, is out of scope, or is not an LLM key)
+     */
+    public int updateLlmMode(Long id, String organizationId, String mode) {
+        if (id == null || mode == null || organizationId == null || organizationId.isBlank()) {
+            return 0;
+        }
+        return jdbc.update("""
+                UPDATE auth.credentials
+                SET credential_data = jsonb_set(COALESCE(credential_data, '{}'::jsonb), '{mode}', to_jsonb(?::text), true),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND organization_id = ? AND integration LIKE 'llm\\_%'
+                """, mode, id, organizationId);
+    }
+
+    /**
      * The {@code integration} of every OTHER credential of the same owner already carrying this
      * name, compared TRIMMED and CASE-INSENSITIVELY (not the exact {@code name = ?} of
      * {@link #findAllByTenantIdAndName}; see below for why), in the order that method would
@@ -556,8 +624,35 @@ public class CredentialRepository {
      *
      * @return the number of deleted rows
      */
-    public int deleteByIntegration(String integration) {
-        String sql = "DELETE FROM auth.credentials WHERE integration = ?";
+    /**
+     * Mark every usable credential of an integration as needing re-authentication, WITHOUT deleting
+     * anything.
+     *
+     * <p>This replaces a {@code DELETE FROM auth.credentials WHERE integration = ?}, which ran across
+     * every tenant with no backup and no confirmation whenever a seed's auth type changed during a
+     * catalog re-import. A user lost a credential that way. Most of what is stored here cannot be
+     * re-obtained by the person who lost it: an OAuth refresh token is revoked once deleted, and an
+     * API key is usually displayed exactly once, at creation.
+     *
+     * <p>{@code needs_reauth} is the state the OAuth refresh pipeline already uses for "only the user
+     * can fix this", every read path already excludes it ({@code status = 'active'} /
+     * {@code IN ('active','expiring')}), the frontend already explains it and the agent-facing tool
+     * documentation already describes it. So marking stops the credential being USED, which is the
+     * whole legitimate need, while {@code credential_data} stays untouched and the user recovers by
+     * confirming rather than by finding the secret again.
+     *
+     * <p>Rows already terminal ({@code error}, {@code needs_reauth}) are left alone, so this is
+     * idempotent and the returned count is what actually transitioned.
+     *
+     * @return the number of credentials moved into {@code needs_reauth}
+     */
+    public int markNeedsReauthByIntegration(String integration) {
+        String sql = """
+            UPDATE auth.credentials
+               SET status = 'needs_reauth', updated_at = CURRENT_TIMESTAMP
+             WHERE integration = ?
+               AND status IN ('active', 'expiring')
+            """;
         return jdbc.update(sql, integration);
     }
 

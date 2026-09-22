@@ -1,18 +1,20 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useId, useRef, useMemo, useCallback } from 'react';
 import { useTranslations } from 'next-intl';
 import { useExpandedState } from '@/hooks/useExpandedState';
 import Image from 'next/image';
 import { Check, StopCircle, AlertCircle, PauseCircle, ChevronDown, ChevronRight, Table, Monitor, Workflow, Bot, Search, HelpCircle, KeyRound, ListChecks, Eye, Code, Plug, Play, Pencil, FolderOpen, Terminal, FileText, Globe, Loader2 } from 'lucide-react';
 import { AvatarDisplay } from '@/components/agents';
 import { GroupedToolCard } from './GroupedToolCard';
+import { StepHistoryToggle, VISIBLE_STEPS } from './StepHistoryToggle';
 import { TasksPreviewBlock } from './TasksPreviewBlock';
 import { AskUserAnsweredBlock, parseAskUserQuestions } from './AskUserAnsweredBlock';
 import DiffView from './DiffView';
 import GitStatusView from './GitStatusView';
 import MarkdownRender from '@/components/MarkdownRender';
 import { apiClient } from '@/lib/api';
+import { useResourceQuery } from '@/lib/hooks/useResourceQuery';
 import { isGroupedTool, getToolDescription, getToolIconType } from '@/lib/utils/activityGrouping';
 import { useStableGroupedActivities } from '@/hooks/useStableGroupedActivities';
 import type { ToolActivity, ToolVisualization } from '@/contexts/StreamingContext';
@@ -87,9 +89,18 @@ function isSystemError(activity: ToolActivity): boolean {
 
 
 export function ActivityFeed({ activities, className = '', thinkingMessage: externalThinkingMessage, isStreaming = false, storedReasoningDurationMs, awaitingApproval = false }: ActivityFeedProps) {
-  // Start collapsed by default (for history on refresh), expand during streaming or awaiting approval
+  const t = useTranslations('chat.activityFeed');
+  // Collapsed by default (stored history on refresh); streaming / awaiting
+  // approval opens it, exactly as before the bounded-viewport experiment.
   const [isExpanded, setIsExpanded] = useState(isStreaming || awaitingApproval);
-  const [showOldThinking, setShowOldThinking] = useState(false);
+  // Older steps stay behind one inline row until the reader asks for them.
+  const [showOlderSteps, setShowOlderSteps] = useState(false);
+  // A collapse the reader performed themselves outranks the auto-expand below,
+  // until the next turn clears the feed. Without it, the feed springs back open
+  // the moment a pending call resolves.
+  const userCollapsedRef = useRef(false);
+  const headerRef = useRef<HTMLButtonElement>(null);
+  const timelineId = useId();
   const [duration, setDuration] = useState<number | null>(null);
   const prevHasPendingRef = useRef(false);
   const startTimeRef = useRef<number | null>(null);
@@ -114,7 +125,7 @@ export function ActivityFeed({ activities, className = '', thinkingMessage: exte
 
   // Auto-expand when streaming starts, awaiting approval, or has pending activities
   useEffect(() => {
-    if (isStreaming || hasPending || awaitingApproval) {
+    if ((isStreaming || hasPending || awaitingApproval) && !userCollapsedRef.current) {
       setIsExpanded(true);
     }
   }, [isStreaming, hasPending, awaitingApproval]);
@@ -139,11 +150,15 @@ export function ActivityFeed({ activities, className = '', thinkingMessage: exte
     prevHasPendingRef.current = hasPending && !isTerminated;
   }, [hasPending, hasStopTool, hasErrorTool]);
 
-  // Reset when activities cleared
+  // Reset when activities cleared. Every piece of per-turn reader state belongs
+  // here: a revealed history or a deliberate collapse must not outlive the turn
+  // it was about.
   useEffect(() => {
     if (activities.length === 0) {
       setDuration(null);
       startTimeRef.current = null;
+      setShowOlderSteps(false);
+      userCollapsedRef.current = false;
     }
   }, [activities.length]);
 
@@ -193,8 +208,29 @@ export function ActivityFeed({ activities, className = '', thinkingMessage: exte
     ?? (totalDurationMs !== null && totalDurationMs > 0 ? Math.max(0, Math.round(totalDurationMs / 1000)) : null);
 
   const handleToggle = () => {
+    userCollapsedRef.current = isExpanded;
     setIsExpanded(!isExpanded);
   };
+
+  // The Done row sits INSIDE the region it collapses, so activating it destroys
+  // the focused element. Hand focus back to the header, which is the same
+  // control by another name, instead of dropping it on the document body.
+  const collapseFromDone = () => {
+    handleToggle();
+    headerRef.current?.focus();
+  };
+
+  // The rendered slice, derived once: the indicators below have to reason about
+  // what is actually on screen, not about the whole list.
+  const hiddenCount = showOlderSteps ? 0 : Math.max(0, groupedActivities.length - VISIBLE_STEPS);
+  const visibleItems = groupedActivities.slice(hiddenCount);
+  // A pending call that the cap hid carries no dot of its own, so the standalone
+  // one below is the only live cue left. A grouped step counts as visible: its
+  // header shows the spinner and the pending count.
+  const hasVisiblePendingRow = visibleItems.some(item =>
+    isGroupedTool(item)
+      ? item.calls.some(call => call.status === 'pending')
+      : item.status === 'pending');
 
   // Don't render if no activities and no thinking message
   if (activities.length === 0 && !externalThinkingMessage) {
@@ -214,24 +250,28 @@ export function ActivityFeed({ activities, className = '', thinkingMessage: exte
   };
 
   return (
-    <div className={`group/feed ${className}`}>
+    <div className={`group/feed w-full min-w-0 max-w-full ${className}`}>
       {/* Header */}
       <button
+        type="button"
+        ref={headerRef}
         onClick={handleToggle}
-        className="flex items-center gap-2 text-base text-theme-muted hover:text-theme-secondary transition-colors mb-3"
+        aria-expanded={isExpanded}
+        aria-controls={isExpanded ? timelineId : undefined}
+        className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-theme-muted hover:text-theme-secondary transition-colors mb-3"
       >
         {/* Once a terminal marker (_system_stop / _system_error) lands, the
             shimmer must give way to the static "Reasoning for …" label -
             otherwise the user sees the "Stopped" indicator below AND a still-
             running "Thinking…" shimmer above, which contradicts the stop. */}
         {hasPending && !hasStopTool && !hasErrorTool ? (
-          <span className="font-medium shimmer-text">Thinking...</span>
+          <span className="font-medium shimmer-text">{t('thinking')}</span>
         ) : (
           <span className="font-medium text-slate-600 dark:text-slate-300">
-            Reasoning for {formatDuration(displayDuration ?? 0)}
+            {t('duration', { duration: formatDuration(displayDuration ?? 0) })}
           </span>
         )}
-        <div className="opacity-0 group-hover/feed:opacity-100 transition-opacity">
+        <div className="shrink-0 opacity-0 group-hover/feed:opacity-100 group-focus-within/feed:opacity-100 [@media(pointer:coarse)]:opacity-100 transition-opacity">
           {isExpanded ? (
             <ChevronDown className="h-4 w-4" />
           ) : (
@@ -240,152 +280,122 @@ export function ActivityFeed({ activities, className = '', thinkingMessage: exte
         </div>
       </button>
 
-      {/* Timeline content */}
-      <div className="relative flex flex-col">
-        {isExpanded && (
-          <>
-            {/* Grouped tools (not pending, not _system_stop) - includes _thinking */}
-            {(() => {
-              // Step 1: filter pending items (existing logic)
-              const filteredItems = groupedActivities.filter(item => {
-                if (isGroupedTool(item)) {
-                  if (item.toolName === '_thinking') return true;
-                  if (item.toolName === 'agent' && item.calls?.some(c => c.subAgent)) return true;
-                  return item.overallStatus !== 'pending' || item.calls?.some(c => c.status !== 'pending');
-                }
-                if (item.toolName === '_thinking') return true;
-                if (item.toolName === 'agent' && item.subAgent) return true;
-                return item.status !== 'pending';
-              });
+      {/* Timeline content - unmounted while collapsed, so a stored conversation
+          stays one line per message and pays nothing to render its tools. */}
+      {isExpanded && (
+        <div
+          id={timelineId}
+          role="region"
+          aria-label={t('timeline')}
+          className="relative flex min-w-0 flex-col [overflow-wrap:anywhere]"
+        >
+          {/* All tool states stay visible, including a pending call, but only
+              the most recent VISIBLE_STEPS of them: everything older sits
+              behind one row, live feed and stored history alike. */}
+          {groupedActivities.length > VISIBLE_STEPS && (
+            <StepHistoryToggle
+              hiddenCount={hiddenCount}
+              onToggle={() => setShowOlderSteps(!showOlderSteps)}
+              testId="step-history-toggle"
+            />
+          )}
+          {visibleItems.map(item => (
+            isGroupedTool(item)
+              ? <GroupedToolCard key={item.id} group={item} isStreaming={isStreaming} />
+              : <TimelineItem key={item.id} activity={item} showLine={true} isStreaming={isStreaming} />
+          ))}
 
-              // Step 2: during streaming, keep only the last VISIBLE_LIMIT items
-              // Everything older is hidden behind "Show more"
-              const VISIBLE_LIMIT = 4;
-              const shouldTruncate = isStreaming && !showOldThinking && filteredItems.length > VISIBLE_LIMIT;
-              const hiddenCount = shouldTruncate ? filteredItems.length - VISIBLE_LIMIT : 0;
-              const startIdx = shouldTruncate ? hiddenCount : 0;
+          {/* Pending indicator - blue pulsing dot when the stream is still working
+              and no VISIBLE row already carries one (an external thinking
+              message, or a pending call the step cap hid). */}
+          {hasPending && !hasStopTool && !hasErrorTool && !hasAwaitingApprovalTool && !hasVisiblePendingRow && regularActivities.length > 0 && (
+            <div className="relative flex gap-2 pl-[7px] mb-3">
+              <div className="absolute left-[2.5px] top-[-12px] h-[18px] w-px bg-slate-200 dark:bg-slate-700" />
+              <div className="absolute left-0 top-[6px] h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+            </div>
+          )}
 
-              // Step 3: render
-              const elements: React.ReactNode[] = [];
-
-              // "Show more" button for hidden items
-              if (hiddenCount > 0) {
-                elements.push(
-                  <div key="__show-old-items" className="relative flex gap-2 pl-[7px] mb-3">
-                    <div className="absolute left-0 top-[6px] h-1.5 w-1.5 rounded-full bg-slate-400 dark:bg-slate-500" />
-                    <div className="absolute left-[2.5px] top-[14px] bottom-[-12px] w-px bg-slate-200 dark:bg-slate-700" />
-                    <div className="flex-1 ml-3">
-                      <button
-                        onClick={() => setShowOldThinking(true)}
-                        className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 flex items-center gap-1"
-                      >
-                        <ChevronRight className="h-3 w-3" />
-                        <span>Show {hiddenCount} previous {hiddenCount > 1 ? 'steps' : 'step'}</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              }
-
-              // Render visible items
-              for (let i = startIdx; i < filteredItems.length; i++) {
-                const item = filteredItems[i];
-                if (isGroupedTool(item)) {
-                  elements.push(<GroupedToolCard key={item.id} group={item} isStreaming={isStreaming} />);
-                } else {
-                  elements.push(
-                    <TimelineItem
-                      key={item.id}
-                      activity={item}
-                      showLine={true}
-                      isStreaming={isStreaming}
-                    />
-                  );
-                }
-              }
-
-              return elements;
-            })()}
-
-            {/* Pending indicator - blue pulsing dot when tools are pending */}
-            {hasPending && !hasStopTool && !hasErrorTool && !hasAwaitingApprovalTool && regularActivities.filter(a => a.status !== 'pending').length > 0 && (
-              <div className="relative flex gap-2 pl-[7px] mb-3">
-                <div className="absolute left-[2.5px] top-[-12px] h-[18px] w-px bg-slate-200 dark:bg-slate-700" />
-                <div className="absolute left-0 top-[6px] h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
-              </div>
-            )}
-
-            {/* Awaiting approval indicator - amber pause icon when stream is paused for user action */}
-            {hasAwaitingApprovalTool && (
-              <div className="relative flex gap-2 pl-[7px] mb-3">
-                {regularActivities.length > 0 && (
-                  <div className="absolute left-[2.5px] top-[-12px] h-[14px] w-px bg-slate-200 dark:bg-slate-700" />
-                )}
-                <div className="absolute left-[-3px] top-[2px]">
-                  <PauseCircle className="h-4 w-4 text-amber-500" />
-                </div>
-                <div className="flex-1 ml-3">
-                  <div className="text-base leading-5 font-medium shimmer-text-amber">
-                    Awaiting approval
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Stopped indicator - rendered when _system_stop tool is present */}
-            {hasStopTool && (
-              <div className="relative flex gap-2 pl-[7px] mb-3">
-                {regularActivities.length > 0 && (
-                  <div className="absolute left-[2.5px] top-[-12px] h-[14px] w-px bg-slate-200 dark:bg-slate-700" />
-                )}
-                <div className="absolute left-[-3px] top-[2px]">
-                  <StopCircle className="h-4 w-4 text-red-500" />
-                </div>
-                <div className="flex-1 ml-3">
-                  <div className="text-base leading-5 text-red-600 dark:text-red-400">
-                    Stopped
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Error indicator - rendered when _system_error tool is present */}
-            {hasErrorTool && (
-              <div className="relative flex gap-2 pl-[7px] mb-3">
-                {regularActivities.length > 0 && (
-                  <div className="absolute left-[2.5px] top-[-12px] h-[14px] w-px bg-slate-200 dark:bg-slate-700" />
-                )}
-                <div className="absolute left-[-3px] top-[2px]">
-                  <AlertCircle className="h-4 w-4 text-red-500" />
-                </div>
-                <div className="flex-1 ml-3">
-                  <div className="text-base leading-5 text-red-600 dark:text-red-400">
-                    Error{errorActivity?.error ? `: ${errorActivity.error}` : ''}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Done indicator - only when complete (no pending, no stop, no error, no awaiting approval) */}
-            {!hasPending && !hasStopTool && !hasErrorTool && !hasAwaitingApprovalTool && regularActivities.length > 0 && (
-              <div
-                className="relative flex gap-2 pl-[7px] mb-3 cursor-pointer"
-                onClick={handleToggle}
-              >
+          {/* Awaiting approval indicator - amber pause icon when stream is paused for user action */}
+          {hasAwaitingApprovalTool && (
+            <div className="relative flex gap-2 pl-[7px] mb-3">
+              {regularActivities.length > 0 && (
                 <div className="absolute left-[2.5px] top-[-12px] h-[14px] w-px bg-slate-200 dark:bg-slate-700" />
-                <div className="absolute left-[-3px] top-[2px]">
-                  <Check className="h-4 w-4 text-slate-500 dark:text-slate-400" />
-                </div>
-                <div className="flex-1 ml-3">
-                  <div className="text-base text-slate-700 dark:text-slate-200 leading-5">
-                    Done
-                  </div>
+              )}
+              <div className="absolute left-[-3px] top-[2px]">
+                <PauseCircle className="h-4 w-4 text-amber-500" />
+              </div>
+              <div className="flex-1 ml-3">
+                <div className="text-sm leading-5 font-medium shimmer-text-amber">
+                  {t('awaitingApproval')}
                 </div>
               </div>
-            )}
-          </>
-        )}
-      </div>
+            </div>
+          )}
+
+          {/* Stopped indicator - rendered when _system_stop tool is present */}
+          {hasStopTool && (
+            <div className="relative flex gap-2 pl-[7px] mb-3">
+              {regularActivities.length > 0 && (
+                <div className="absolute left-[2.5px] top-[-12px] h-[14px] w-px bg-slate-200 dark:bg-slate-700" />
+              )}
+              <div className="absolute left-[-3px] top-[2px]">
+                <StopCircle className="h-4 w-4 text-red-500" />
+              </div>
+              <div className="flex-1 ml-3">
+                <div className="text-sm leading-5 text-red-600 dark:text-red-400">
+                  {t('stopped')}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Error indicator - rendered when _system_error tool is present */}
+          {hasErrorTool && (
+            <div className="relative flex gap-2 pl-[7px] mb-3">
+              {regularActivities.length > 0 && (
+                <div className="absolute left-[2.5px] top-[-12px] h-[14px] w-px bg-slate-200 dark:bg-slate-700" />
+              )}
+              <div className="absolute left-[-3px] top-[2px]">
+                <AlertCircle className="h-4 w-4 text-red-500" />
+              </div>
+              <div className="flex-1 ml-3">
+                <div className="text-sm leading-5 text-red-600 dark:text-red-400">
+                  {t('error')}{errorActivity?.error ? `: ${errorActivity.error}` : ''}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Done indicator - only when complete (no pending, no stop, no error, no awaiting approval) */}
+          {!hasPending && !hasStopTool && !hasErrorTool && !hasAwaitingApprovalTool && regularActivities.length > 0 && (
+            <div
+              className="relative flex gap-2 pl-[7px] mb-3 cursor-pointer"
+              role="button"
+              tabIndex={0}
+              aria-label={t('collapse')}
+              onClick={collapseFromDone}
+              onKeyDown={event => {
+                // A click handler with no key handler is a control a keyboard
+                // cannot reach.
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  collapseFromDone();
+                }
+              }}
+            >
+              <div className="absolute left-[2.5px] top-[-12px] h-[14px] w-px bg-slate-200 dark:bg-slate-700" />
+              <div className="absolute left-[-3px] top-[2px]">
+                <Check className="h-4 w-4 text-slate-500 dark:text-slate-400" />
+              </div>
+              <div className="flex-1 ml-3">
+                <div className="text-sm text-slate-700 dark:text-slate-200 leading-5">
+                  {t('done')}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -413,12 +423,37 @@ function TimelineItem({ activity, showLine, isStreaming = false }: TimelineItemP
   const t = useTranslations('chat');
   // Pass toolName to check against TOOLS_EXPANDED_BY_DEFAULT allowlist
   const [isExpanded, toggleExpanded] = useExpandedState(activity.id, isStreaming, activity.toolName);
-  const [fetchedResult, setFetchedResult] = useState<string | null>(null);
-  const [isLoadingResult, setIsLoadingResult] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [showFullThinking, setShowFullThinking] = useState(false);
+  const thinkingRef = useRef<HTMLDivElement>(null);
+  const [thinkingOverflows, setThinkingOverflows] = useState(false);
 
   // Check if this is a thinking tool (from thinking models like Gemini 2.5+/3, o1)
   const isThinking = isThinkingTool(activity);
+
+  // Whether the clamp actually hides anything is a question about LAYOUT, not
+  // about character count: a 700-character paragraph can wrap to four lines, and
+  // a length threshold would offer a "Show more" that visibly does nothing.
+  const measureThinking = useCallback(() => {
+    const el = thinkingRef.current;
+    if (!el || showFullThinking) return;
+    setThinkingOverflows(el.scrollHeight > el.clientHeight + 1);
+  }, [showFullThinking]);
+
+  // The chat pane changes width when the side panel opens, which changes the
+  // answer. The subscription deliberately does NOT depend on the message: that
+  // text grows one streamed chunk at a time, and re-creating the observer per
+  // chunk would churn the hottest render path in the chat.
+  useLayoutEffect(() => {
+    const el = thinkingRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measureThinking);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [measureThinking]);
+
+  // A clamped box stops growing at six lines, so the observer alone can never
+  // see the overflow start: the message itself has to trigger a measurement.
+  useLayoutEffect(measureThinking, [measureThinking, activity.thinkingMessage]);
 
   // Get user-friendly description of the tool action
   const description = getToolDescription(activity.toolName, activity.arguments, activity.visualization, activity.result);
@@ -428,6 +463,22 @@ function TimelineItem({ activity, showLine, isStreaming = false }: TimelineItemP
   const isError = activity.status === 'error' || !!activity.error;
   const tasksData = activity.tasksData;
   const hasResult = activity.result || activity.resultId;
+
+  // Fetch result via React Query, the same way a grouped call row does it. The
+  // load is driven by the EXPANDED STATE, not by the click that produced it:
+  // `useExpandedState` persists a row's expanded flag across unmounts
+  // (module-level) while a fetched body would not survive one, so a row the
+  // reader opened, then collapsed the feed on, used to come back expanded and
+  // EMPTY - rendering the "no content" fallback over a result that exists.
+  // useResourceQuery also caches, so re-opening the feed does not re-request.
+  const { data: fetchedResult, isLoading: isLoadingResult, error: loadError } = useResourceQuery<FullToolResult, string>({
+    queryKey: ['tool-result', activity.resultId || activity.toolId || ''],
+    queryFn: () => activity.resultId
+      ? apiClient.get<FullToolResult>(`/tool-results/${activity.resultId}`)
+      : apiClient.get<FullToolResult>(`/tool-results/by-tool-call/${activity.toolId}`),
+    enabled: isExpanded && !!hasResult && !activity.result && !!(activity.resultId || activity.toolId),
+    select: (data) => data.content || '',
+  });
 
   // For catalog: use displayToolName and iconSlug from result metadata
   const hasApiIcon = !!activity.iconSlug;
@@ -440,33 +491,9 @@ function TimelineItem({ activity, showLine, isStreaming = false }: TimelineItemP
     ? activity.displayToolName.replace(/_/g, ' ')
     : description || formatToolName(activity.toolName);
 
-  // Fetch result content when expanding (on demand)
-  const handleToggle = useCallback(async () => {
-    const willExpand = !isExpanded;
+  const handleToggle = useCallback(() => {
     toggleExpanded();
-
-    // Load result content when expanding (if not already loaded)
-    if (willExpand && hasResult && !activity.result && !fetchedResult) {
-      if (activity.resultId || activity.toolId) {
-        setIsLoadingResult(true);
-        setLoadError(null);
-        try {
-          let response: FullToolResult;
-          if (activity.resultId) {
-            response = await apiClient.get<FullToolResult>(`/tool-results/${activity.resultId}`);
-          } else {
-            response = await apiClient.get<FullToolResult>(`/tool-results/by-tool-call/${activity.toolId}`);
-          }
-          setFetchedResult(response.content || '');
-        } catch (err) {
-          console.error('Failed to load result:', err);
-          setLoadError('Failed to load result');
-        } finally {
-          setIsLoadingResult(false);
-        }
-      }
-    }
-  }, [isExpanded, toggleExpanded, hasResult, activity.result, activity.resultId, activity.toolId, fetchedResult]);
+  }, [toggleExpanded]);
 
   const displayContent = activity.result || fetchedResult;
 
@@ -482,16 +509,34 @@ function TimelineItem({ activity, showLine, isStreaming = false }: TimelineItemP
           <div className="absolute left-[2.5px] top-[14px] bottom-[-12px] w-px bg-slate-200 dark:bg-slate-700" />
         )}
 
-        <div className="flex-1 ml-3">
+        <div className="flex-1 min-w-0 ml-3">
           {activity.thinkingTitle && (
             <div className="text-sm text-slate-600 dark:text-slate-400 mb-0.5">
               {activity.thinkingTitle}
             </div>
           )}
           {activity.thinkingMessage && (
-            <div className="text-sm text-slate-500 dark:text-slate-400 whitespace-pre-wrap">
-              {activity.thinkingMessage}
-            </div>
+            <>
+              <div
+                ref={thinkingRef}
+                className={`text-sm text-slate-500 dark:text-slate-400 whitespace-pre-wrap ${showFullThinking ? '' : 'line-clamp-6'}`}
+              >
+                {activity.thinkingMessage}
+              </div>
+              {/* A single reasoning block can be thousands of characters, so it
+                  is clamped - but never behind a one-way door, and the control
+                  appears only when the clamp really hides something. */}
+              {(thinkingOverflows || showFullThinking) && (
+                <button
+                  type="button"
+                  aria-expanded={showFullThinking}
+                  onClick={() => setShowFullThinking(!showFullThinking)}
+                  className="mt-0.5 text-sm text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                >
+                  {t(showFullThinking ? 'activityFeed.showLess' : 'activityFeed.showMore')}
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -620,7 +665,7 @@ function TimelineItem({ activity, showLine, isStreaming = false }: TimelineItemP
             {isLoadingResult ? (
               <LoadingSkeleton />
             ) : loadError ? (
-              <div className="text-sm text-red-500">{loadError}</div>
+              <div className="text-sm text-red-500">{t('tool.loadFailed')}</div>
             ) : displayContent ? (
               <div className="text-sm">
                 <MarkdownRender text={formatResultForMarkdown(displayContent)} />

@@ -134,6 +134,10 @@ class GenerationInputResolverTest {
         void writesBase64AndMime() {
             when(storage.download(anyString(), anyString())).thenReturn(PNG);
             Map<String, Object> req = request("contents[0].parts[1].inlineData.data", fileRef());
+            // The text part the image sits AFTER. Every real call has one (a prompt is required of
+            // every model), and without it parts[0] is an empty element the dispatcher drops.
+            GenerationRequestBuilder.setByPath(req, "contents[0].parts[0].text", "a cat",
+                    new java.util.ArrayList<>());
 
             GenerationInputResolver.Prepared prepared =
                     resolver.prepare(BASE64_WITH_MIME, req, "tenant-1");
@@ -409,6 +413,10 @@ class GenerationInputResolverTest {
         void oneFileCarriesItsElementFields() {
             when(storage.download(anyString(), anyString())).thenReturn(PNG);
             Map<String, Object> req = request("content[1].image_url.url", fileRef());
+            // The element this endpoint's own constants always fill. Built by hand, this request
+            // would otherwise carry an empty content[0], which no real call ever has and which the
+            // dispatcher now drops - taking the images' indices with it.
+            GenerationRequestBuilder.setByPath(req, "content[0].type", "text", new java.util.ArrayList<>());
 
             GenerationInputResolver.Prepared prepared = resolver.prepare(OBJECT_ELEMENTS, req, "tenant-1");
 
@@ -427,6 +435,8 @@ class GenerationInputResolverTest {
             when(storage.download(anyString(), anyString())).thenReturn(PNG);
             Map<String, Object> req = request("content[1].image_url.url",
                     java.util.List.of(fileRef(), fileRef(), fileRef()));
+            // See above: the text element every real call carries.
+            GenerationRequestBuilder.setByPath(req, "content[0].type", "text", new java.util.ArrayList<>());
 
             GenerationInputResolver.Prepared prepared = resolver.prepare(OBJECT_ELEMENTS, req, "tenant-1");
 
@@ -484,6 +494,86 @@ class GenerationInputResolverTest {
 
             assertThat(prepared.ok()).isFalse();
             assertThat(String.join(" ", prepared.errors())).contains("at most 4");
+        }
+    }
+
+    @Nested
+    @DisplayName("one array, one element per slot")
+    class SharedArraySlots {
+
+        /** Seedance's shape: the prompt and every image live in the same `content` array. */
+        private static final GenerationSpec SHARED = spec("""
+                {
+                  "kind": "video", "assetPath": "content.video_url",
+                  "paramMap": {
+                    "prompt": "content[0].text",
+                    "first_frame_image": {
+                      "path": "content[1].image_url.url", "encoding": "data_url", "role": "first_frame",
+                      "itemConstants": { "content[1].type": "image_url", "content[1].role": "first_frame" }
+                    },
+                    "reference_image": {
+                      "path": "content[3].image_url.url", "encoding": "data_url", "role": "reference",
+                      "maxItems": 2,
+                      "itemConstants": { "content[3].type": "image_url", "content[3].role": "reference_image" }
+                    }
+                  },
+                  "constants": { "content[0].type": "text" },
+                  "models": [{
+                    "id": "s-1",
+                    "capabilities": ["prompt", "first_frame_image", "reference_image"],
+                    "price": { "unit": "call", "baseCredits": 10 }
+                  }]
+                }
+                """);
+
+        @Test
+        @DisplayName("a reference sent with no first frame leaves no empty item where the frame would have gone")
+        void noHoleWhereTheUnusedSlotWas() {
+            when(storage.download(anyString(), anyString())).thenReturn(PNG);
+            GenerationRequestBuilder.Built built = GenerationRequestBuilder.build(
+                    SHARED, SHARED.models().get(0),
+                    Map.of("prompt", "a market at dawn", "reference_image", java.util.List.of(fileRef())));
+            assertThat(built.errors()).isEmpty();
+
+            GenerationInputResolver.Prepared prepared =
+                    resolver.prepare(SHARED, built.params(), "tenant-1");
+
+            assertThat(prepared.ok()).isTrue();
+            @SuppressWarnings("unchecked")
+            java.util.List<Object> content = (java.util.List<Object>) built.params().get("content");
+            // The text, then the reference: content[1] and content[2] were only
+            // ever scaffolding for a slot nobody filled.
+            assertThat(content).hasSize(2);
+            assertThat(GenerationRequestBuilder.getByPath(built.params(), "content[1].role"))
+                    .isEqualTo("reference_image");
+            assertThat((String) GenerationRequestBuilder.getByPath(built.params(), "content[1].image_url.url"))
+                    .startsWith("data:image/png;base64,");
+        }
+
+        @Test
+        @DisplayName("both slots filled keep both elements, each beside the role that names it")
+        void keepsEveryFilledSlot() {
+            when(storage.download(anyString(), anyString())).thenReturn(PNG);
+            GenerationRequestBuilder.Built built = GenerationRequestBuilder.build(
+                    SHARED, SHARED.models().get(0),
+                    Map.of("prompt", "a market at dawn",
+                            "first_frame_image", fileRef(),
+                            "reference_image", java.util.List.of(fileRef(), fileRef())));
+            assertThat(built.errors()).isEmpty();
+
+            GenerationInputResolver.Prepared prepared =
+                    resolver.prepare(SHARED, built.params(), "tenant-1");
+
+            assertThat(prepared.ok()).isTrue();
+            @SuppressWarnings("unchecked")
+            java.util.List<Object> content = (java.util.List<Object>) built.params().get("content");
+            assertThat(content).hasSize(4);
+            assertThat(GenerationRequestBuilder.getByPath(built.params(), "content[1].role"))
+                    .isEqualTo("first_frame");
+            assertThat(GenerationRequestBuilder.getByPath(built.params(), "content[2].role"))
+                    .isEqualTo("reference_image");
+            assertThat(GenerationRequestBuilder.getByPath(built.params(), "content[3].role"))
+                    .isEqualTo("reference_image");
         }
     }
 }

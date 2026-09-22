@@ -848,4 +848,123 @@ class DataSourceRowModuleTest {
             verify(crudExecutorService).execute(any(CrudRequest.class), eq(TENANT), isNull());
         }
     }
+
+    // ==================== coercion warnings on a SUCCESSFUL write ====================
+
+    /**
+     * A write can succeed and still not have stored what the caller wrote: the column type accepts
+     * the value in a degraded form rather than refusing it. The service reports each one; this tool
+     * used to answer a flat "Successfully inserted N rows" and drop them, so the caller was told it
+     * had succeeded and only discovered the truth by looking at the table.
+     *
+     * <p>The case that produced this: a media cell written as a hand-rebuilt reference with a path
+     * but no id and no url. The platform diagnosed it exactly - "it cannot be displayed" - and the
+     * caller was never shown that sentence.
+     */
+    @Nested
+    @DisplayName("coercion warnings")
+    class CoercionWarningTests {
+
+        private static final String WARNING =
+                "video: File reference has no id and no URL - it cannot be displayed (storage key: 1/wf/clip.mp4)";
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> dataOf(ToolExecutionResult result) {
+            return (Map<String, Object>) result.data();
+        }
+
+        @Test
+        @DisplayName("insert_rows returns the warning the write produced, in warnings AND in the message")
+        void insertSurfacesWarnings() {
+            CrudResult result = CrudResult.success(CrudOperation.CREATE_ROW, "OK",
+                    CrudResult.ResultData.forCreate(List.of(7L), List.of(WARNING)));
+            when(crudExecutorService.execute(any(CrudRequest.class), eq(TENANT), any())).thenReturn(result);
+
+            Optional<ToolExecutionResult> res = module.execute("insert_rows",
+                    Map.of("table_id", 3, "rows", List.of(Map.of("video", "x"))), TENANT, ctxWithOrg(ORG));
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isTrue();
+            Map<String, Object> data = dataOf(res.get());
+            assertThat(data.get("warnings"))
+                    .as("the warning the service produced must reach the caller")
+                    .isEqualTo(List.of(WARNING));
+            assertThat((String) data.get("message"))
+                    .as("a caller that reads only the message must still be told to look")
+                    .contains("Successfully inserted")
+                    .contains("1 note")
+                    .contains("read 'warnings'");
+            assertThat((String) data.get("message"))
+                    .as("most warnings are normalisations, so the message must not order a rewrite")
+                    .doesNotContain("fix");
+        }
+
+        @Test
+        @DisplayName("update_rows surfaces its warnings the same way")
+        void updateSurfacesWarnings() {
+            CrudResult result = CrudResult.success(CrudOperation.UPDATE_ROW, "OK",
+                    CrudResult.ResultData.forUpdate(1, List.of(WARNING)));
+            when(crudExecutorService.execute(any(CrudRequest.class), eq(TENANT), any())).thenReturn(result);
+
+            Optional<ToolExecutionResult> res = module.execute("update_rows",
+                    Map.of("table_id", 3,
+                           "where", Map.of("column", "id", "operator", "=", "value", "7"),
+                           "set", Map.of("video", "x")), TENANT, ctxWithOrg(ORG));
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isTrue();
+            Map<String, Object> data = dataOf(res.get());
+            assertThat(data.get("warnings")).isEqualTo(List.of(WARNING));
+            assertThat((String) data.get("message")).contains("Successfully updated").contains("1 note");
+            assertThat(data)
+                    .as("rewriting the response map must not drop the keys it already carried")
+                    .containsKeys("datasourceId", "updatedColumns", "affectedRows", "status", "marker");
+        }
+
+        @Test
+        @DisplayName("Several warnings are all returned, and the message counts them in the plural")
+        void severalWarningsAreAllReturned() {
+            List<String> both = List.of(WARNING, "price: Coercion error: not a number");
+            CrudResult result = CrudResult.success(CrudOperation.CREATE_ROW, "OK",
+                    CrudResult.ResultData.forCreate(List.of(7L), both));
+            when(crudExecutorService.execute(any(CrudRequest.class), eq(TENANT), any())).thenReturn(result);
+
+            Optional<ToolExecutionResult> res = module.execute("insert_rows",
+                    Map.of("table_id", 3, "rows", List.of(Map.of("video", "x"))), TENANT, ctxWithOrg(ORG));
+
+            Map<String, Object> data = dataOf(res.get());
+            assertThat(data.get("warnings")).isEqualTo(both);
+            assertThat((String) data.get("message")).contains("2 notes");
+        }
+
+        @Test
+        @DisplayName("A clean write says nothing about warnings and carries no such field")
+        void cleanWriteHasNoWarningsField() {
+            CrudResult result = CrudResult.success(CrudOperation.CREATE_ROW, "OK",
+                    CrudResult.ResultData.forCreate(List.of(7L), List.of()));
+            when(crudExecutorService.execute(any(CrudRequest.class), eq(TENANT), any())).thenReturn(result);
+
+            Optional<ToolExecutionResult> res = module.execute("insert_rows",
+                    Map.of("table_id", 3, "rows", List.of(Map.of("name", "Alice"))), TENANT, ctxWithOrg(ORG));
+
+            Map<String, Object> data = dataOf(res.get());
+            assertThat(data).doesNotContainKey("warnings");
+            assertThat((String) data.get("message"))
+                    .isEqualTo("Successfully inserted 1 rows into table 3.");
+        }
+
+        @Test
+        @DisplayName("A result carrying no warnings list at all is tolerated, not dereferenced")
+        void nullWarningsListIsTolerated() {
+            CrudResult result = CrudResult.success(CrudOperation.CREATE_ROW, "OK",
+                    CrudResult.ResultData.forCreate(List.of(7L), null));
+            when(crudExecutorService.execute(any(CrudRequest.class), eq(TENANT), any())).thenReturn(result);
+
+            Optional<ToolExecutionResult> res = module.execute("insert_rows",
+                    Map.of("table_id", 3, "rows", List.of(Map.of("name", "Alice"))), TENANT, ctxWithOrg(ORG));
+
+            assertThat(res.get().success()).isTrue();
+            assertThat(dataOf(res.get())).doesNotContainKey("warnings");
+        }
+    }
 }

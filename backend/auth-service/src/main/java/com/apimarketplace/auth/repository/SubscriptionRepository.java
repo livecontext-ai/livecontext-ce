@@ -180,4 +180,27 @@ public interface SubscriptionRepository extends JpaRepository<Subscription, Long
              AND s.currentPeriodEnd <= :now
            """)
     List<Subscription> findExpiredInternalSubscriptions(@Param("now") LocalDateTime now);
+
+    /**
+     * Yearly Stripe subscriptions that may be due a MONTHLY credit cycle (V498).
+     *
+     * <p>Deliberately not filtered on "due": the due cycle is {@code currentPeriodStart + N
+     * months}, which JPQL cannot express without drift, so
+     * {@code CreditAttributionService.attributeMonthlyCreditCycle} decides it in Java from
+     * {@code creditCycleIndex}. The set is small (every yearly paying customer) and the pass is
+     * hourly; if it ever grows, a {@code credit_cycle_end} column maintained alongside the
+     * index is the index-friendly form. {@code active} only, never {@code trialing} or
+     * {@code past_due}: the monthly re-grant is what the customer paid twelve months of up
+     * front, and neither of those states has.
+     */
+    @Query("""
+           SELECT s FROM Subscription s
+           JOIN FETCH s.billingCustomer bc
+           JOIN FETCH bc.user
+           JOIN FETCH s.plan p
+           WHERE s.provider = 'stripe'
+             AND s.cadence = 'yearly'
+             AND s.status = 'active'
+           """)
+    List<Subscription> findActiveYearlyStripeSubscriptions();
 }

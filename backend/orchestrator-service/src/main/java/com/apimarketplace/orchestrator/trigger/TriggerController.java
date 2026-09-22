@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import com.apimarketplace.orchestrator.services.failure.UserActionableFailure;
 
 /**
  * Controller for triggering reusable triggers (manual, chat, datasource).
@@ -399,8 +400,16 @@ public class TriggerController {
                     TriggerResponse.success(runId, triggerId, type, result.epoch(), result.message(), result.readySteps())
                 );
             } else {
-                logger.error("[TriggerController] Trigger {} execution failed for run {}: {}",
-                            triggerId, runId, result.message());
+                // creditAwareFailure on the very next line maps this same message to 402, so
+                // the code already knows it is a refusal; logging it at ERROR first undid the
+                // level the relay had just chosen.
+                if (UserActionableFailure.isUserActionable(result.message())) {
+                    logger.warn("[TriggerController] Trigger {} refused for run {}: {}",
+                                triggerId, runId, result.message());
+                } else {
+                    logger.error("[TriggerController] Trigger {} execution failed for run {}: {}",
+                                triggerId, runId, result.message());
+                }
                 return creditAwareFailure(runId, result.message());
             }
         } catch (Exception e) {
@@ -575,8 +584,13 @@ public class TriggerController {
                     TriggerResponse.success(runId, triggerId, triggerType, result.epoch(), result.message(), result.readySteps())
                 );
             } else {
-                logger.error("[TriggerController] {} trigger execution failed for run {}: {}",
-                            triggerType, runId, result.message());
+                if (UserActionableFailure.isUserActionable(result.message())) {
+                    logger.warn("[TriggerController] {} trigger refused for run {}: {}",
+                                triggerType, runId, result.message());
+                } else {
+                    logger.error("[TriggerController] {} trigger execution failed for run {}: {}",
+                                triggerType, runId, result.message());
+                }
                 return creditAwareFailure(runId, result.message());
             }
         } catch (Exception e) {

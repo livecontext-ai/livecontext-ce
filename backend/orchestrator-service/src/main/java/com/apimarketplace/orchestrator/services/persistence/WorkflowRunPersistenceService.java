@@ -99,7 +99,7 @@ public class WorkflowRunPersistenceService {
                 // causes negative drift because state_snapshot grows during execution).
                 // TODO(storage-drift): together with the asymmetry at StateSnapshotService:2133
                 // and WorkflowManagementService:707, this leaves drift that
-                // StorageReconciliationService.refreshExecutionData has to mask inline on
+                // StorageReconciliationService.refreshTenantBreakdown has to mask inline on
                 // every GET /storage/{quota,breakdown}. Fixing at source = removing that
                 // workaround.
 

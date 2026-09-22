@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -121,8 +122,10 @@ public class CompareDatasetsNode extends BaseNode {
             result.put("item_id", context.itemId());
             inputData.put("inputACount", datasetA.size());
             inputData.put("inputBCount", datasetB.size());
-            inputData.put("inputA", datasetA);
-            inputData.put("inputB", datasetB);
+            // Bounded: both datasets in full were copied onto the step row. The counts
+            // above already answer "how many", and the data itself is the node's output.
+            inputData.put("inputA", ReportedParams.reportValue(datasetA));
+            inputData.put("inputB", ReportedParams.reportValue(datasetB));
             inputData.put("matchFields", matchFields);
             inputData.put("returnMatched", config.returnMatched());
             inputData.put("returnOnlyA", config.returnOnlyA());

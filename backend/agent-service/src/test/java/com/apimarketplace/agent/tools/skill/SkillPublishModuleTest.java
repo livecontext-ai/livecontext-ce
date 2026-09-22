@@ -140,4 +140,32 @@ class SkillPublishModuleTest {
             verify(publicationClient, never()).unpublishResource(any(), any(), any(), any());
         }
     }
+
+    @Nested
+    @DisplayName("access mode gate")
+    class AccessModeGate {
+
+        @Test
+        @DisplayName("read-mode denies publish and unpublish, and never reaches publication-service")
+        void readModeDeniesPublishing() {
+            // Regression: this module was ungated. Skills have no grant axis, so skillAccessMode
+            // is the ONLY gate on the family and a read-only agent could publish any of the
+            // workspace's skills to the marketplace with an HTTP 200 and no log line.
+            ToolExecutionContext readCtx = new ToolExecutionContext(TENANT,
+                    Map.of("skillAccessMode", "read"), java.util.Map.of(), java.util.Set.of(),
+                    null, null, TEST_ORG_ID, null);
+
+            for (String action : java.util.List.of("publish", "unpublish")) {
+                java.util.Optional<ToolExecutionResult> res = module.execute(
+                        action, Map.of("skill_id", SKILL_ID.toString(),
+                                "interface_id", INTERFACE_ID.toString()), TENANT, readCtx);
+
+                assertThat(res).as("action %s must be handled", action).isPresent();
+                assertThat(res.get().success()).as("action %s must be denied", action).isFalse();
+                assertThat(res.get().error()).contains("read-only");
+            }
+            org.mockito.Mockito.verifyNoInteractions(publicationClient);
+        }
+    }
+
 }

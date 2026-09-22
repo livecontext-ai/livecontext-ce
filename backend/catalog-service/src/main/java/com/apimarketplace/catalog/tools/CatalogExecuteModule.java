@@ -6,11 +6,15 @@ import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.agent.tools.common.ToolModule;
+import com.apimarketplace.catalog.service.credential.EndpointCredentialCapabilityService;
+import com.apimarketplace.catalog.service.credential.IntegrationNames;
+import com.apimarketplace.catalog.service.credential.PlatformTenant;
 import com.apimarketplace.catalog.util.CredentialTypeNormalizer;
 import com.apimarketplace.credential.client.CredentialClient;
 import com.apimarketplace.credential.client.dto.CredentialSummaryDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
@@ -18,6 +22,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
+import java.util.regex.Pattern;
 
 /**
  * Module handling catalog tool execution.
@@ -35,6 +40,9 @@ public class CatalogExecuteModule implements ToolModule {
     private int serverPort;
 
     private static final Set<String> HANDLED_ACTIONS = Set.of("execute", "call");
+
+    /** Where the platform's own keys live, as the executor resolves them. */
+    private static final String PLATFORM_TENANT_ID = PlatformTenant.ID;
 
     /**
      * Top-level keys of the {@code catalog} tool call that are control/shaping
@@ -79,6 +87,27 @@ public class CatalogExecuteModule implements ToolModule {
      * never a provider parameter, so it must never reach the upstream request.
      */
     public static final String CREDENTIAL_ID_KEY = "credential_id";
+
+    /**
+     * WHICH of the caller's own accounts runs the call, named rather than numbered.
+     *
+     * <p>The id beside it is not something a chat agent can learn: ids reach this
+     * module through the execution context, which tool arguments never touch. A NAME
+     * is different - it is in every credential listing the agent already reads, so it
+     * is the only handle it can actually hold. Without it an agent that could SEE that
+     * the default account lacks a scope, and that another account has it, still had no
+     * way to run on the other one.
+     *
+     * <p>Forwarded as the run-time selection the catalog already implements
+     * ({@code selectedCredentialName} + {@code credentialSelectionStrict}), so an
+     * unmatched name REFUSES instead of quietly running on the default account. That
+     * strictness is the point: a silent substitution here would run against an account
+     * the caller did not choose and report success.
+     *
+     * <p>A control key like the two above: it names an account, never a provider
+     * parameter, so it must never reach the upstream request.
+     */
+    public static final String CREDENTIAL_NAME_KEY = "credential_name";
 
     /**
      * Where a pinned credential id is read FROM: the execution context, not the
@@ -140,12 +169,50 @@ public class CatalogExecuteModule implements ToolModule {
     /** @see #CREDENTIALS_REQUIRED_CODE */
     public static final String TOOL_CALL_FAILED_CODE = "TOOL_CALL_FAILED";
 
+    /**
+     * The provider refused an authenticated call, and the account this call used is
+     * the reason why.
+     *
+     * <p>Distinct from {@link #CREDENTIALS_REQUIRED_CODE} because the remedy is the
+     * opposite one. That code means no usable key reached the provider, and its
+     * answer is "connect one". This code means a key DID reach the provider and was
+     * refused for what it was granted, so "connect one" is the single step that
+     * changes nothing. A caller branches on the code before it reads a word of the
+     * sentence, and the two situations must not share one.
+     */
+    public static final String CREDENTIALS_INSUFFICIENT_CODE = "CREDENTIALS_INSUFFICIENT";
+
+    /**
+     * The upstream code for "the account named for this run could not be used".
+     *
+     * <p>Matched instead of the bare HTTP status it arrives with. That route answers 422
+     * from one place today, so keying on the status alone would be right by coincidence,
+     * and the next refusal to use it would inherit advice about an argument its caller
+     * never sent. The body already says which refusal it is.
+     */
+    private static final String CREDENTIAL_SELECTION_UNRESOLVED =
+            com.apimarketplace.catalog.service.exception.CredentialSelectionException.ERROR_CODE;
+
     private static final Set<String> RESERVED_EXECUTE_KEYS = Set.of(
             "action", "tool_id", "params", "parameters", "input", "inputs",
             "expand", "max_items", "topics", "query", "api", "apis", "limit",
             "api_definition", "api_id", CREDENTIAL_SOURCE_KEY, CREDENTIAL_ID_KEY,
+            CREDENTIAL_NAME_KEY,
             // V428 generation context: pricing metadata, never tool inputs.
             GENERATION_MODEL_KEY, GENERATION_QUANTITY_KEY);
+
+    /**
+     * Says which of the caller's accounts could run an endpoint, and what to do when
+     * none can. Setter-injected so the hand-built modules in the unit tests keep
+     * compiling and a slice without the bean refuses exactly as it refused before:
+     * the capability sharpens a refusal, it never creates one.
+     */
+    private EndpointCredentialCapabilityService credentialCapability;
+
+    @Autowired(required = false)
+    public void setCredentialCapability(EndpointCredentialCapabilityService credentialCapability) {
+        this.credentialCapability = credentialCapability;
+    }
 
     public CatalogExecuteModule(ObjectMapper objectMapper, CredentialClient credentialClient) {
         this.restTemplate = new RestTemplate();
@@ -219,7 +286,24 @@ public class CatalogExecuteModule implements ToolModule {
      *        ten second clip ten times the per-image rate with nothing able to
      *        notice.
      */
-    public record GenerationBilling(String modelId, java.math.BigDecimal quantity, String quantityUnit) {}
+    /**
+     * @param priceMultiplier what the caller's CHOICES do to the price of this
+     *        call, from the model's declared modifiers (a 1080p render, a
+     *        reference image the provider charges to read). Separate from
+     *        {@code quantity} because it is a different question: the quantity
+     *        is how big the call is, this is what that size costs. Never null
+     *        and never below zero at the point it is sent; 1 means the call
+     *        sits exactly at the published rate, which is what every model
+     *        without modifiers reports.
+     */
+    public record GenerationBilling(String modelId, java.math.BigDecimal quantity, String quantityUnit,
+                                     java.math.BigDecimal priceMultiplier) {
+
+        /** The shape callers spoke before price modifiers existed: a call at the published rate. */
+        public GenerationBilling(String modelId, java.math.BigDecimal quantity, String quantityUnit) {
+            this(modelId, quantity, quantityUnit, java.math.BigDecimal.ONE);
+        }
+    }
 
     @SuppressWarnings("unchecked")
     private ToolExecutionResult executeCatalogExecute(Map<String, Object> parameters,
@@ -228,6 +312,10 @@ public class CatalogExecuteModule implements ToolModule {
         String toolId = (String) parameters.get("tool_id");
         if (toolId == null || toolId.isBlank()) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "tool_id is required");
+        }
+        ToolExecutionResult malformedId = checkToolIdShape(toolId);
+        if (malformedId != null) {
+            return malformedId;
         }
 
         // Resolve the tool's call parameters. The agent MAY nest them under the
@@ -254,8 +342,13 @@ public class CatalogExecuteModule implements ToolModule {
             return restrictionCheck;
         }
 
-        ToolExecutionResult approvalCheck =
-                checkServiceApproval(toolId, context, normalizedCredentialSource(parameters));
+        ToolExecutionResult choiceConflict = checkCredentialChoice(parameters);
+        if (choiceConflict != null) {
+            return choiceConflict;
+        }
+
+        ToolExecutionResult approvalCheck = checkServiceApproval(toolId, context,
+                normalizedCredentialSource(parameters), chosenCredentialName(parameters) != null);
         if (approvalCheck != null) {
             return approvalCheck;
         }
@@ -308,6 +401,15 @@ public class CatalogExecuteModule implements ToolModule {
                 if (billing.quantityUnit() != null && !billing.quantityUnit().isBlank()) {
                     headers.set("X-Lc-Generation-Unit", billing.quantityUnit());
                 }
+                // What the call's own choices do to the price. Sent only when
+                // it actually changes something, so an ordinary generation's
+                // request looks exactly as it did before modifiers existed and
+                // the absent header keeps meaning "at the published rate".
+                if (billing.priceMultiplier() != null
+                        && billing.priceMultiplier().compareTo(java.math.BigDecimal.ONE) != 0) {
+                    headers.set("X-Lc-Generation-Multiplier",
+                            billing.priceMultiplier().toPlainString());
+                }
             }
 
             Map<String, Object> requestBody = new LinkedHashMap<>();
@@ -355,12 +457,20 @@ public class CatalogExecuteModule implements ToolModule {
                 // taken and committed; a refusal never reaches this branch, it
                 // arrives as the 402 handled in handleHttpClientError.
                 // Scope context is propagated via X-Lc-Billing-Scope-* headers above.
-                return handleSuccessResponse(response.getBody(), toolId, credentialSource);
+                String chosenName = chosenCredentialName(parameters);
+                // An account can also be chosen WITHOUT a name: a numeric credential_name is
+                // an id, and a pinned credential comes from the context. The capability
+                // listing keys its accounts by name only, so neither can be matched against
+                // it - and a gap on some other account is then not evidence about this call.
+                boolean chosenById = normalizedCredentialId(chosenName) != null
+                        || pinnedUserCredentialId(parameters, context) != null;
+                return handleSuccessResponse(response.getBody(), toolId, credentialSource,
+                        chosenById ? null : chosenName, chosenById, context);
             } else if (response.getStatusCode() == HttpStatus.UNAUTHORIZED ||
                        response.getStatusCode() == HttpStatus.FORBIDDEN) {
                 return credentialsRequired(
                     toolId, Map.of(), extractMetadataFromResponse(response.getBody()),
-                    credentialSource);
+                    credentialSource, context);
             } else {
                 Map<String, Object> errorMetadata = extractMetadataFromResponse(response.getBody());
                 return ToolExecutionResult.failure(
@@ -383,9 +493,14 @@ public class CatalogExecuteModule implements ToolModule {
             // the log line above) while the caller gets a sentence.
             return ToolExecutionResult.failure(
                 ToolErrorCode.EXECUTION_FAILED,
-                TOOL_CALL_FAILED_CODE + ": this call could not be completed, so nothing ran and nothing "
-                    + "was charged. Nothing in the call itself causes this. Send it once more, and if it "
-                    + "fails the same way report it to the account owner rather than retrying further.",
+                // Deliberately says nothing about WHERE it failed. This catch also covers a body
+                // that could not be read AFTER the provider answered, where the call may well
+                // have had its effect, so telling a caller the provider never answered would
+                // invite a duplicate send. One retry at most, and then a person.
+                TOOL_CALL_FAILED_CODE + ": this call could not be completed and nothing was charged, "
+                    + "but whether it took effect is unknown, so treat a repeat as a possible "
+                    + "duplicate. Send it once more at most; if it fails the same way, report it to "
+                    + "the account's owner rather than retrying further.",
                 e.getMessage() == null ? Map.of() : Map.of("failureDetail", e.getMessage())
             );
         }
@@ -422,18 +537,34 @@ public class CatalogExecuteModule implements ToolModule {
     private ToolExecutionResult credentialsRequired(String toolId,
                                                      Map<String, Object> upstreamResult,
                                                      Map<String, Object> upstreamMetadata,
-                                                     String requestedSource) {
+                                                     String requestedSource,
+                                                     ToolExecutionContext context) {
         String integration = firstNonBlank(
                 text(upstreamResult, "credential_name"),
                 text(upstreamMetadata, "iconSlug"));
         String service = integration == null ? "provider" : integration.toLowerCase(Locale.ROOT);
         String display = displayName(integration);
 
+        // What the caller could have read BEFORE calling: which of its accounts could run
+        // this endpoint, and whether a standard connection could ever grant what it needs.
+        // Consulted here because the remedy below used to be written without it, and got
+        // it wrong in the one case that costs the most: an endpoint whose scope a standard
+        // connection can never grant was answered with "add your key to this account",
+        // which is precisely the step that does not work.
+        Map<String, Object> capability = credentialCapability(toolId, integration, context);
+        String capabilityRemedy = capability == null ? null : text(capability, "remedy");
+
         String remedy;
-        if ("platform".equals(requestedSource)) {
+        if (capabilityRemedy != null) {
+            // The capability knows the account inventory; these branches only know which
+            // pool was asked for. Where it has something to say, it says the more specific
+            // thing, including the one answer none of the branches below can reach: another
+            // of the caller's own accounts CAN run this, name it.
+            remedy = "this call could not run and nothing was charged. " + capabilityRemedy;
+        } else if ("platform".equals(requestedSource)) {
             remedy = "this call asked for the platform's " + display + " key and this platform has none "
                     + "configured, so it could not run and nothing was charged. Run it on your own "
-                    + display + " key instead (credential_source='user'), or ask the account owner to "
+                    + display + " key instead (credential_source='user'), or ask the account's owner to "
                     + "configure the platform key.";
         } else if ("user".equals(requestedSource)) {
             remedy = "this call asked for your own " + display + " key and this account has none "
@@ -459,6 +590,14 @@ public class CatalogExecuteModule implements ToolModule {
         if (credentialType != null) {
             metadata.put("credential", Map.of("type", credentialType));
         }
+        if (capability != null) {
+            // The structured half of what the sentence says, in the SAME shape the tool
+            // contract publishes it, so a caller that reads one can read the other without
+            // a second vocabulary. Under its OWN key: `credential` carries the catalog raw
+            // credential type and an interface already matches on that exact string, so
+            // replacing it with the normalised one would break a reader to add a field.
+            metadata.put("credentialCapability", capability);
+        }
         // Which pool was asked for. Two different remedies hang off it, so an
         // interface that wants to offer one has to be able to tell them apart
         // without re-reading the sentence.
@@ -477,6 +616,239 @@ public class CatalogExecuteModule implements ToolModule {
                 ToolErrorCode.CREDENTIALS_REQUIRED,
                 CREDENTIALS_REQUIRED_CODE + ": " + remedy,
                 metadata);
+    }
+
+    /**
+     * What this caller could do about the endpoint credential, or null when nothing
+     * could be resolved.
+     *
+     * <p>Costs one loopback read of the tool contract, paid only on a path that has
+     * already failed. Fail-open in every direction: no bean, no integration, no
+     * contract, any exception - the refusal falls back to the sentence it had before,
+     * which is still true, just less specific.
+     */
+    private Map<String, Object> credentialCapability(String toolId, String integration,
+                                                      ToolExecutionContext context) {
+        if (credentialCapability == null || integration == null || integration.isBlank()
+                || context == null || context.tenantId() == null) {
+            return null;
+        }
+        try {
+            Map<String, Object> info = fetchToolInfo(toolId, context);
+            if (info == null) {
+                return null;
+            }
+            // The contract's own integration name wins over the one the upstream refusal
+            // carried. Four places now ask this question and they must ask it about the
+            // same string, or they answer about different accounts; integrationName is the
+            // one the executor resolves credentials by.
+            String keyedOn = firstNonBlank(
+                    info.get("integrationName") == null ? null : info.get("integrationName").toString(),
+                    integration);
+            Map<String, Object> requirement = CredentialTypeNormalizer.buildRequirement(info);
+            Map<String, Object> enriched = credentialCapability.describe(
+                    requirement, keyedOn, requiredScopesOf(info), context.tenantId());
+            return enriched == requirement ? null : enriched;
+        } catch (Exception e) {
+            log.debug("Credential capability unavailable for tool {}: {}", toolId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** The endpoint declared OAuth scopes as read off its contract, never null. */
+    private static List<String> requiredScopesOf(Map<String, Object> info) {
+        Object scopes = info == null ? null : info.get("requiredScopes");
+        if (!(scopes instanceof List<?> list)) {
+            return List.of();
+        }
+        return list.stream().filter(String.class::isInstance).map(String.class::cast).toList();
+    }
+
+    /**
+     * The tool contract, fetched over loopback with the caller's own headers.
+     *
+     * <p>One reader for the two places that need it - the pre-flight credential gate and
+     * the refusal - because they answer the same caller about the same endpoint and must
+     * not disagree about what it requires.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> fetchToolInfo(String toolId, ToolExecutionContext context) {
+        try {
+            String url = "http://localhost:" + serverPort + "/api/catalog/tools/" + toolId + "/info";
+            HttpHeaders headers = CatalogToolHeaderSupport.jsonHeaders(
+                    context == null ? null : context.tenantId(), context);
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    url, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
+            if (response.getStatusCode() != HttpStatus.OK || response.getBody() == null) {
+                return null;
+            }
+            return response.getBody();
+        } catch (Exception e) {
+            log.debug("Tool contract unavailable for {}: {}", toolId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Whether a scope gap can actually explain THIS call's refusal.
+     *
+     * <p>A scope gap somewhere in the tenant is not evidence about the key that was sent.
+     * Two refusals reach the same 403 and neither is about scopes:
+     *
+     * <ul>
+     *   <li>The call used the PLATFORM pool. Those keys are the platform's own, so a user
+     *       account short of a scope says nothing about them, and telling the agent to
+     *       re-authorise its Gmail account cannot lift a plan or quota refusal.</li>
+     *   <li>The call NAMED an account. Only that account's scopes are in play: if it is
+     *       fine and a sibling is short, the remedy computed from the sibling reads
+     *       {@code Run it with credential_name="A"}, naming the account the call just
+     *       used, which invites an identical retry.</li>
+     * </ul>
+     *
+     * <p>Both then fall through to {@code UPSTREAM_REJECTED}, which carries the provider's
+     * own sentence and says retrying unchanged is refused the same way. That is the honest
+     * answer when the cause is not visible from here.
+     */
+    private static boolean scopeGapExplainsThisCall(Map<String, Object> capability,
+                                                    String requestedCredentialSource,
+                                                    String chosenCredentialName,
+                                                    boolean accountChosenById) {
+        if ("platform".equals(requestedCredentialSource)) {
+            return false;
+        }
+        if (accountChosenById) {
+            // The listing carries no ids, so the account that ran this call cannot be picked
+            // out of it. Saying nothing is the honest answer; blaming whichever account
+            // happens to be short would name an account the caller never used.
+            return false;
+        }
+        if (chosenCredentialName != null) {
+            return accountMissesAScope(capability, chosenCredentialName, false);
+        }
+        // Nothing was chosen, so the DEFAULT account ran it, and only its gap is evidence.
+        // Falling back to "any" when no entry declares itself the default keeps the branch
+        // working on a listing that does not say (an older capability, or a single account).
+        if (anyAccountDeclaresItselfDefault(capability)) {
+            return accountMissesAScope(capability, null, true);
+        }
+        return accountMissesAScope(capability, null, false);
+    }
+
+    /**
+     * The scope gap of ONE account, or of any of them.
+     *
+     * <p>Name matching is trimmed and case-insensitive, matching the layer directly below:
+     * the catalog resolves {@code credential_name} that way, so a call that ran fine as
+     * {@code "jaden"} against the account {@code "Jaden"} must not then lose its remedy here
+     * on a capitalisation the selection itself ignored.
+     */
+    private static boolean accountMissesAScope(Map<String, Object> capability,
+                                               String name, boolean defaultOnly) {
+        Object accounts = capability == null ? null : capability.get("accounts");
+        if (!(accounts instanceof List<?> list)) {
+            return false;
+        }
+        for (Object account : list) {
+            if (!(account instanceof Map<?, ?> map)) {
+                continue;
+            }
+            if (name != null && !matchesName(name, map.get("name"))) {
+                continue;
+            }
+            if (defaultOnly && !Boolean.TRUE.equals(map.get("isDefault"))) {
+                continue;
+            }
+            if (map.get("missingScopes") instanceof List<?> missing && !missing.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean matchesName(String chosen, Object accountName) {
+        return accountName != null
+                && chosen.trim().equalsIgnoreCase(String.valueOf(accountName).trim());
+    }
+
+    private static boolean anyAccountDeclaresItselfDefault(Map<String, Object> capability) {
+        Object accounts = capability == null ? null : capability.get("accounts");
+        if (!(accounts instanceof List<?> list)) {
+            return false;
+        }
+        for (Object account : list) {
+            if (account instanceof Map<?, ?> map && Boolean.TRUE.equals(map.get("isDefault"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * A catalog id, as {@code catalog(action='search')} hands it back: lowercase hex only.
+     *
+     * <p>Not {@code a-fA-F}. The resolver matches lowercase, so an uppercase UUID passed this
+     * gate and then failed to resolve, which put the call back in the generic catch this whole
+     * check exists to keep it out of. Refused here instead, with the sentence that fixes it:
+     * pass the id as search returned it.
+     */
+    private static final Pattern TOOL_UUID = Pattern.compile(
+            "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+
+    /**
+     * A catalog slug. Kebab-case is not a convention here, it is the whole set: all
+     * 32719 tool slugs and all 991 api slugs in production match this, none carries an
+     * underscore, a dot, a colon or a slash. So a value outside it cannot name a tool,
+     * and saying so costs one retry instead of a silent dead end.
+     */
+    private static final Pattern TOOL_SLUG = Pattern.compile("^[a-z0-9]+(?:-[a-z0-9]+)*$");
+
+    /**
+     * Refuses a {@code tool_id} that cannot name a tool, or null when it might.
+     *
+     * <p>Shape only. Whether the tool EXISTS is the resolver's answer and stays there;
+     * this rejects the values that never reach a resolver at all, which used to leave
+     * the call in the generic {@code catch} below and be reported as
+     * {@code TOOL_CALL_FAILED: Nothing in the call itself causes this. Send it once
+     * more, and if it fails the same way report it to the account's owner}. Every
+     * clause of that was wrong for this cause: the call is the only thing that causes
+     * it, resending is futile, and the owner has nothing to fix. A caller that read it
+     * did the honest thing and filed the tool as broken.
+     *
+     * <p>The value that produced it is worth keeping in mind, because it is the one an
+     * agent forms naturally: {@code catalog(action='search')} answers with
+     * {@code {"id": "<uuid>", "name": "get_updates", "provider": "Telegram"}}, three
+     * different APIs publish a tool named {@code get_updates}, and the caller composed
+     * {@code telegram:get_updates} out of the two fields that were readable as a name.
+     * Only {@code id} identifies one tool, so that is what the sentence points at.
+     */
+    private static ToolExecutionResult checkToolIdShape(String toolId) {
+        // Checked RAW, deliberately not trimmed: the caller concatenates this exact value
+        // into the execute URL, so accepting " <uuid> " here would pass the gate and fail
+        // one hop later with a message about something else. Surrounding whitespace is a
+        // malformed id like any other, and saying so costs one retry.
+        String value = toolId;
+        if (TOOL_UUID.matcher(value).matches() || TOOL_SLUG.matcher(value).matches()) {
+            return null;
+        }
+        // api-slug/tool-slug, the shape a workflow step sends.
+        int slash = value.indexOf('/');
+        if (slash > 0 && value.indexOf('/', slash + 1) < 0
+                && TOOL_SLUG.matcher(value.substring(0, slash)).matches()
+                && TOOL_SLUG.matcher(value.substring(slash + 1)).matches()) {
+            return null;
+        }
+        // Said before the general rule: a caller that joined a provider to a tool name
+        // is one edit away, and naming that edit is worth more than restating the rule.
+        String separator = value.contains(":") ? ":" : (value.contains(".") ? "." : null);
+        String guess = separator == null ? ""
+                : " A provider and a tool name joined by '" + separator + "' is not an id, and "
+                        + "several APIs publish a tool of the same name.";
+        return ToolExecutionResult.failure(
+                ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "tool_id '" + toolId + "' cannot name a tool, so nothing ran and nothing was "
+                        + "charged." + guess + " Pass the `id` field of the tool as "
+                        + "catalog(action='search') returned it: it is the only value that "
+                        + "identifies one tool. Search again if you no longer hold it.");
     }
 
     /** First non-blank of the given values, or null when they are all blank. */
@@ -517,9 +889,7 @@ public class CatalogExecuteModule implements ToolModule {
      * and connect.
      */
     private static String displayName(String integration) {
-        if (integration == null || integration.isBlank()) return "provider";
-        String trimmed = integration.trim();
-        return trimmed.substring(0, 1).toUpperCase(Locale.ROOT) + trimmed.substring(1);
+        return IntegrationNames.displayName(integration);
     }
 
     /**
@@ -584,13 +954,83 @@ public class CatalogExecuteModule implements ToolModule {
     static void applyCredentialChoice(Map<String, Object> requestBody, Map<String, Object> parameters,
                                        ToolExecutionContext context) {
         String credentialSource = normalizedCredentialSource(parameters);
-        if (credentialSource != null) {
+        String chosenName = chosenCredentialName(parameters);
+        if (chosenName != null) {
+            // A named account IS one of the caller's own accounts, so the pool follows from
+            // the name and is not asked for separately. The catalog refuses a selection
+            // that does not say so (CatalogV1Controller), and making the caller state
+            // something only one value of which is ever valid would be a second way to
+            // get the same call wrong.
+            requestBody.put("credentialSource", "user");
+            // A positive whole number is an ID, not a name, on THIS path as well as on a
+            // workflow step's credential_selector. Both listings tell an agent so, in a
+            // sentence this module's help now applies to both, and a rule that is only
+            // true on one of them is worse than no rule: an account named "2024" would
+            // mean one thing in a step and another here. Read the same way in both, so
+            // the sentence is true wherever it is read.
+            Long numbered = normalizedCredentialId(chosenName);
+            if (numbered != null) {
+                requestBody.put("selectedCredentialId", numbered);
+            } else {
+                requestBody.put("selectedCredentialName", chosenName);
+            }
+            // Strict, or the choice is decoration: an unmatched name or id would fall
+            // through to the account default and the call would succeed against an account
+            // nobody chose. The pair travels together, exactly as the workflow path sends it.
+            requestBody.put("credentialSelectionStrict", true);
+        } else if (credentialSource != null) {
             requestBody.put("credentialSource", credentialSource);
         }
         Long pinnedCredentialId = pinnedUserCredentialId(parameters, context);
-        if (pinnedCredentialId != null) {
+        if (pinnedCredentialId != null && chosenName == null) {
             requestBody.put("selectedCredentialId", pinnedCredentialId);
         }
+        // Not both. Downstream the NAME is consulted before the pinned id, so sending
+        // both states a choice and then silently honours the other one - which is the
+        // exact defect the pin was added to close, reappearing from the other side. The
+        // name is the later and more specific choice, so it is the one that travels, and
+        // the pin is dropped rather than carried into a request that will ignore it.
+    }
+
+    /**
+     * The account the caller named for THIS call, or null when it named none.
+     *
+     * <p>Trimmed only. The matcher downstream ignores capitalisation and surrounding
+     * spaces and NOTHING else, and every text that offers these names says so, so
+     * cleaning the value further here would make this module accept names the run then
+     * refuses.
+     */
+    static String chosenCredentialName(Map<String, Object> parameters) {
+        Object raw = parameters == null ? null : parameters.get(CREDENTIAL_NAME_KEY);
+        if (raw == null) {
+            return null;
+        }
+        String value = String.valueOf(raw).trim();
+        return value.isEmpty() ? null : value;
+    }
+
+    /**
+     * Refuses the one credential choice that cannot be honoured, before anything runs.
+     *
+     * <p>Naming an account and asking for the PLATFORM pool are contradictory: platform
+     * keys are the platform's own and carry no name a caller could have read. Sending it
+     * on would reach the same refusal one hop later, from a guard whose message is
+     * about a field this caller never used, so it is answered here in the caller own
+     * vocabulary instead.
+     */
+    static ToolExecutionResult checkCredentialChoice(Map<String, Object> parameters) {
+        if (chosenCredentialName(parameters) == null) {
+            return null;
+        }
+        if (!"platform".equals(normalizedCredentialSource(parameters))) {
+            return null;
+        }
+        return ToolExecutionResult.failure(
+                ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "This call names one of your own accounts (credential_name) and also asks for the "
+                        + "platform's key (credential_source='platform'). Those cannot both hold, so "
+                        + "nothing ran and nothing was charged. Drop credential_source to run on the "
+                        + "named account, or drop credential_name to run on the platform's key.");
     }
 
     /**
@@ -645,7 +1085,10 @@ public class CatalogExecuteModule implements ToolModule {
 
     @SuppressWarnings("unchecked")
     private ToolExecutionResult handleSuccessResponse(String responseBody, String toolId,
-                                                       String requestedCredentialSource) throws Exception {
+                                                       String requestedCredentialSource,
+                                                       String chosenCredentialName,
+                                                       boolean accountChosenById,
+                                                       ToolExecutionContext context) throws Exception {
         Object parsed = objectMapper.readValue(responseBody, Object.class);
 
         if (parsed instanceof Map) {
@@ -669,7 +1112,7 @@ public class CatalogExecuteModule implements ToolModule {
                 Object upstream = resultMap.get("result");
                 Map<String, Object> detail = upstream instanceof Map
                         ? (Map<String, Object>) upstream : resultMap;
-                return credentialsRequired(toolId, detail, metadata, requestedCredentialSource);
+                return credentialsRequired(toolId, detail, metadata, requestedCredentialSource, context);
             }
 
             // A 200 FROM CATALOG-SERVICE MEANS THE REQUEST WAS HANDLED, NOT
@@ -697,6 +1140,47 @@ public class CatalogExecuteModule implements ToolModule {
                 String detail = upstreamMessageOf(resultMap);
                 String status = upstreamStatus > 0 ? " with HTTP " + upstreamStatus : "";
                 log.warn("catalog_call: tool {} refused upstream{} - {}", toolId, status, detail);
+
+                // A 401/403 HERE is not "no credential": a key was resolved, sent, and
+                // refused. The branch that knows how to explain an account, and the only
+                // one that can say a scope is unobtainable without the user's own OAuth
+                // client, hangs off `credentials_required` above - which this envelope is
+                // not, because the platform DID find a key to send. So an account granted
+                // gmail.labels and gmail.send calling an endpoint that needs
+                // gmail.readonly was answered with the provider's sentence and nothing
+                // else, and the caller, told only that retrying is pointless, reported a
+                // standing blocker rather than the one action that lifts it. Ask the same
+                // capability the sibling branch asks, and lead with a code that says which
+                // of the two situations this is.
+                if (upstreamStatus == 401 || upstreamStatus == 403) {
+                    String integration = firstNonBlank(
+                            text(resultMap, "credential_name"),
+                            text(metadata, "iconSlug"));
+                    Map<String, Object> capability = credentialCapability(toolId, integration, context);
+                    String capabilityRemedy = capability == null ? null : text(capability, "remedy");
+                    // The capability answers for THREE situations and only one of them is this
+                    // code's: nothing connected, nothing usable by STATUS, and an account short
+                    // of scopes. Leading a "no account is connected" sentence with a code whose
+                    // documented meaning is "a key WAS sent and connecting another is not the
+                    // fix" contradicts itself in one line, and routes the agent to a require
+                    // call with scopes the server will find nothing missing from. So the code is
+                    // raised only on the evidence it names: an account that HOLDS the
+                    // integration and lacks a scope the endpoint needs.
+                    if (capabilityRemedy != null
+                            && scopeGapExplainsThisCall(capability, requestedCredentialSource,
+                                                        chosenCredentialName, accountChosenById)) {
+                        Map<String, Object> enriched = new LinkedHashMap<>(metadata);
+                        enriched.put("credentialCapability", capability);
+                        return ToolExecutionResult.failure(
+                                ToolErrorCode.EXECUTION_FAILED,
+                                CREDENTIALS_INSUFFICIENT_CODE + ": the provider refused this call" + status
+                                        + ", so it produced nothing and nothing was charged."
+                                        + (detail.isEmpty() ? "" : " The provider said: " + detail)
+                                        + " " + capabilityRemedy,
+                                enriched);
+                    }
+                }
+
                 return ToolExecutionResult.failure(
                         ToolErrorCode.EXECUTION_FAILED,
                         UPSTREAM_REJECTED_CODE + ": the provider refused this call" + status
@@ -827,6 +1311,27 @@ public class CatalogExecuteModule implements ToolModule {
                 jitHint,
                 authMetadata
             );
+        } else if (e.getStatusCode() == HttpStatus.UNPROCESSABLE_ENTITY
+                && CREDENTIAL_SELECTION_UNRESOLVED.equals(text(errorBody, "error"))) {
+            // The credential selection was refused: the account named for this call could
+            // not be identified, or two of them answer to that name. Upstream already
+            // wrote the sentence that names WHICH account and what to do, so it leads
+            // here, whole. The generic branch below would have prefixed it with an HTTP
+            // status - which an agent can do nothing with and the help guide forbids -
+            // and then cut it at 200 characters, losing the half that says how to fix it.
+            String selection = firstNonBlank(text(errorBody, "message"), text(errorBody, "error"));
+            log.info("Tool {} refused: credential selection could not be honoured", toolId);
+            return ToolExecutionResult.failure(
+                ToolErrorCode.INVALID_PARAMETER_VALUE,
+                selection != null
+                    ? selection + " Nothing ran and nothing was charged. Copy an account name "
+                        + "exactly from the accounts list, or omit credential_name to use the "
+                        + "account this call would pick on its own."
+                    : "The account named for this call could not be used, so nothing ran and "
+                        + "nothing was charged. Copy an account name exactly from the accounts "
+                        + "list, or omit credential_name.",
+                errorBody.isEmpty() ? Map.of() : Map.of("upstreamError", errorBody)
+            );
         } else {
             log.error("HTTP error executing tool {}: {} - {}", toolId, e.getStatusCode(), e.getMessage());
             // NOT `e.getMessage()`: RestTemplate builds that from the status line
@@ -885,27 +1390,33 @@ public class CatalogExecuteModule implements ToolModule {
      */
     @SuppressWarnings("unchecked")
     private ToolExecutionResult checkServiceApproval(String toolId, ToolExecutionContext context,
-                                                      String requestedCredentialSource) {
+                                                      String requestedCredentialSource,
+                                                      boolean namesAnAccount) {
         if (context == null || context.tenantId() == null) {
             return null;
         }
         if ("platform".equals(requestedCredentialSource)) {
             return null;
         }
+        if (namesAnAccount) {
+            // A named account answers the question this gate asks, and answers it more
+            // precisely than the gate can. The gate looks for a credential marked DEFAULT
+            // for the integration, so an account holding exactly one credential that
+            // nothing ever marked default reads as "not connected" - and the caller would
+            // be shown a Connect card for a service it just named an account of. Whether
+            // the name resolves is settled by the run-time selection, which refuses by
+            // name ("no active credential of this integration is named that") instead of
+            // by brand.
+            return null;
+        }
 
         try {
-            String localUrl = "http://localhost:" + serverPort;
-            String url = localUrl + "/api/catalog/tools/" + toolId + "/info";
-            HttpHeaders headers = CatalogToolHeaderSupport.jsonHeaders(context.tenantId(), context);
+            Map<String, Object> toolInfo = fetchToolInfo(toolId, context);
 
-            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
-
-            if (response.getStatusCode() != HttpStatus.OK || response.getBody() == null) {
+            if (toolInfo == null) {
                 log.warn("Could not fetch tool info for credential check: {}", toolId);
                 return null;
             }
-
-            Map<String, Object> toolInfo = response.getBody();
 
             // A keyless / public tool (apis.auth_type 'none' or absent) needs no credential, so the
             // agent must be able to run it WITHOUT a connection. CredentialTypeNormalizer already
@@ -929,7 +1440,21 @@ public class CatalogExecuteModule implements ToolModule {
                 return null;
             }
 
-            String serviceType = iconSlug.toLowerCase();
+            // The INTEGRATION name, falling back to the icon slug.
+            //
+            // Not because icon slugs are shared - the seed importer mirrors the icon slug
+            // onto platform_credential_name and a validator refuses a duplicate, so for
+            // every seeded API the two strings are equal and this changes nothing. The
+            // reason is that the EXECUTOR resolves a credential by
+            // apis.platform_credential_name, which is what /info publishes as
+            // integrationName, so a gate that asks about a different string can answer a
+            // different question. They can genuinely diverge for an API registered
+            // through the tool, where the two are derived from different fields, and
+            // there the icon slug was asking about a credential nothing resolves.
+            String integrationName = firstNonBlank(
+                    toolInfo.get("integrationName") == null ? null : toolInfo.get("integrationName").toString(),
+                    iconSlug);
+            String serviceType = integrationName.toLowerCase(Locale.ROOT);
             Optional<CredentialSummaryDto> defaultCred = credentialClient.getDefaultCredential(context.tenantId(), serviceType);
             boolean hasDefaultCredential = defaultCred.isPresent();
 
@@ -944,8 +1469,20 @@ public class CatalogExecuteModule implements ToolModule {
             // were empty can only guess at the remedy, and guessing here sends
             // the caller to a pool that is also empty: they retry, are refused
             // again by a different guard, and are pointed back at the first.
-            boolean platformKeyAvailable = credentialClient.findPlatformCredentialByName(serviceType)
-                    .filter(dto -> dto.isFound())
+            //
+            // It asks whether a platform KEY exists, not whether a platform OAuth
+            // APPLICATION is registered. Those are different objects and the answer used
+            // to come from the wrong one: findPlatformCredentialByName finds the shared
+            // OAuth app row, which holds a client id and secret. That app lets a USER
+            // connect their own account; it can never itself run a call on anybody
+            // behalf. So for every OAuth integration this gate believed in a fallback
+            // pool that cannot serve a single call, stood down, and let the request go on
+            // to be refused downstream by the generic "no key here or on the platform" -
+            // which is exactly the refusal a person cannot act on. The executor resolves
+            // the platform key as a credential of the PLATFORM tenant, so that is what
+            // gets asked here too.
+            boolean platformKeyAvailable = credentialClient
+                    .getAccessToken(PLATFORM_TENANT_ID, serviceType)
                     .isPresent();
 
             // No own key, and the caller did not insist on one. If the platform
@@ -959,7 +1496,7 @@ public class CatalogExecuteModule implements ToolModule {
 
             log.info("User has no default credential for service {} (tool {}) - returning soft warning", serviceType, toolId);
 
-            String serviceName = iconSlug.substring(0, 1).toUpperCase() + iconSlug.substring(1);
+            String serviceName = IntegrationNames.displayName(integrationName);
 
             // Credential requirement the agent reads so it can tell the user what KIND of
             // connection request_credential will trigger (api_key prompt vs an OAuth consent
@@ -967,6 +1504,14 @@ public class CatalogExecuteModule implements ToolModule {
             // catalog (apis.auth_type, surfaced by /info as authType) - without threading it
             // here the agent only knew THAT a credential was needed, never which kind.
             Map<String, Object> credential = CredentialTypeNormalizer.buildRequirement(toolInfo);
+            if (credentialCapability != null) {
+                // The same block the tool contract publishes: which accounts exist, which
+                // could run this one, and the sentence to relay. A card that says
+                // "connect Gmail" when the endpoint needs a scope a standard connection
+                // never grants sends the user through a consent screen to arrive here again.
+                credential = credentialCapability.describe(credential, integrationName,
+                        requiredScopesOf(toolInfo), context.tenantId());
+            }
 
             Map<String, Object> softWarning = new LinkedHashMap<>();
             softWarning.put("status", "approval_needed");

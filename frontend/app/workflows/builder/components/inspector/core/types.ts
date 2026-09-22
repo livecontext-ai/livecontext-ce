@@ -177,7 +177,8 @@ export interface DecisionData {
   selectedBranch: string;
   evaluations: Array<{
     condition: string;
-    result: boolean;
+    /** Null when the branch has no condition to evaluate: an else, a switch default. */
+    result: boolean | null;
   }>;
   skippedBranches: string[];
 }
@@ -216,6 +217,7 @@ export type InspectorNodeType =
   | 'transform'
   | 'merge'
   | 'wait'
+  | 'user_approval'
   | 'fork'
   | 'download_file'
   | 'public_link'
@@ -304,6 +306,10 @@ export function detectNodeType(node: Node<BuilderNodeData> | null): InspectorNod
   if (nodeRegistry.isTransformNode(node)) return 'transform';
   if (nodeRegistry.isMergeNode(node)) return 'merge';
   if (nodeRegistry.isWaitNode(node)) return 'wait';
+  // Its config form is rendered by ParameterColumn, not NodeFormRenderer; this exists so
+  // the keys a parked approval reports have a home in the input-label registry, which is
+  // keyed on this type. Without it they fell through to humanizeKey.
+  if (nodeRegistry.isUserApprovalNode(node)) return 'user_approval';
   if (nodeRegistry.isForkNode(node)) return 'fork';
   if (nodeRegistry.isDownloadFileNode(node)) return 'download_file';
   if (nodeRegistry.isPublicLinkNode(node)) return 'public_link';

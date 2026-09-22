@@ -562,11 +562,13 @@ class CatalogExecuteModuleTest {
             when(credentialClient.getDefaultCredential(eq("user-1"), eq("elevenlabs")))
                 .thenReturn(Optional.empty());
 
-            com.apimarketplace.credential.client.dto.PlatformCredentialLookupDto sold =
-                new com.apimarketplace.credential.client.dto.PlatformCredentialLookupDto();
-            sold.setFound(true);
-            when(credentialClient.findPlatformCredentialByName("elevenlabs"))
-                .thenReturn(Optional.of(sold));
+            // The PLATFORM tenant is where the executor resolves a platform key, so that is
+            // what the flag has to be read from. Asking whether a platform OAuth
+            // APPLICATION row exists answers a different question: that row lets a USER
+            // connect their own account and can never run a call itself, so on every OAuth
+            // integration it reported a fallback pool that cannot serve one call.
+            when(credentialClient.getAccessToken("PLATFORM", "elevenlabs"))
+                .thenReturn(Optional.of("platform-key"));
 
             ToolExecutionResult withPlatformKey = module.executeGeneration(
                 Map.of("tool_id", ENDPOINT_ID, "params", Map.of("prompt", "a cat"),
@@ -580,7 +582,7 @@ class CatalogExecuteModuleTest {
                 .as("the platform sells this one, so switching pool is a remedy that works")
                 .isEqualTo(true);
 
-            when(credentialClient.findPlatformCredentialByName("elevenlabs"))
+            when(credentialClient.getAccessToken("PLATFORM", "elevenlabs"))
                 .thenReturn(Optional.empty());
 
             ToolExecutionResult withoutPlatformKey = module.executeGeneration(
@@ -672,6 +674,67 @@ class CatalogExecuteModuleTest {
             assertThat(sent.getBody().toString())
                 .as("who pays, which decides whether the platform bills at all")
                 .contains("user");
+            assertThat(sent.getHeaders().getFirst("X-Lc-Generation-Multiplier"))
+                .as("a call at the published rate says nothing about a factor, so an ordinary "
+                    + "generation's request is exactly the one it was before factors existed")
+                .isNull();
+        }
+
+        @Test
+        @DisplayName("a call whose choices move it off the published rate carries the factor")
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        void thePriceFactorTravelsOnItsOwnHeader() {
+            // It multiplies the amount charged, and it travels on a SEALED header: the gateway and
+            // the monolith both strip it inbound, so only the platform can set it. Lost here, a
+            // 1080p render is billed at the 720p rate on every call with nothing to notice.
+            when(restTemplate.exchange(
+                contains("/catalog/v1/tools/" + ENDPOINT_ID + "/execute"),
+                eq(HttpMethod.POST), any(HttpEntity.class), eq(String.class)))
+                .thenReturn(new ResponseEntity<>("{\"success\":true,\"result\":{}}", HttpStatus.OK));
+
+            module.executeGeneration(
+                Map.of("tool_id", ENDPOINT_ID,
+                       "params", Map.of("prompt", "a cat"),
+                       "credential_source", "user"),
+                new ToolExecutionContext("user-1", Map.of(), Map.of(), Set.of(), null, null, null, null),
+                new CatalogExecuteModule.GenerationBilling(
+                    "seedance-2.0", new java.math.BigDecimal("10"), "second",
+                    new java.math.BigDecimal("2.4")));
+
+            org.mockito.ArgumentCaptor<HttpEntity> captor =
+                org.mockito.ArgumentCaptor.forClass(HttpEntity.class);
+            verify(restTemplate).exchange(
+                contains("/catalog/v1/tools/" + ENDPOINT_ID + "/execute"),
+                eq(HttpMethod.POST), captor.capture(), eq(String.class));
+
+            assertThat(captor.getValue().getHeaders().getFirst("X-Lc-Generation-Multiplier"))
+                .as("what the call's own choices do to the rate")
+                .isEqualTo("2.4");
+        }
+
+        @Test
+        @DisplayName("a factor of exactly 1 is omitted, because it says the same thing as silence")
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        void aFactorOfOneIsNotSent() {
+            when(restTemplate.exchange(
+                contains("/catalog/v1/tools/" + ENDPOINT_ID + "/execute"),
+                eq(HttpMethod.POST), any(HttpEntity.class), eq(String.class)))
+                .thenReturn(new ResponseEntity<>("{\"success\":true,\"result\":{}}", HttpStatus.OK));
+
+            module.executeGeneration(
+                Map.of("tool_id", ENDPOINT_ID, "params", Map.of("prompt", "a cat")),
+                new ToolExecutionContext("user-1", Map.of(), Map.of(), Set.of(), null, null, null, null),
+                new CatalogExecuteModule.GenerationBilling(
+                    "seedance-2.0", new java.math.BigDecimal("10"), "second",
+                    java.math.BigDecimal.ONE));
+
+            org.mockito.ArgumentCaptor<HttpEntity> captor =
+                org.mockito.ArgumentCaptor.forClass(HttpEntity.class);
+            verify(restTemplate).exchange(
+                contains("/catalog/v1/tools/" + ENDPOINT_ID + "/execute"),
+                eq(HttpMethod.POST), captor.capture(), eq(String.class));
+
+            assertThat(captor.getValue().getHeaders().getFirst("X-Lc-Generation-Multiplier")).isNull();
         }
 
         @Test

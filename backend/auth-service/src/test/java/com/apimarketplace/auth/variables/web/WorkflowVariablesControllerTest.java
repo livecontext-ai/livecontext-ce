@@ -157,6 +157,23 @@ class WorkflowVariablesControllerTest {
         }
 
         @Test
+        @DisplayName("a padded '  VIEWER  ' is still blocked - this site omitted the trim the other 8 have")
+        void paddedViewerStillBlocked() {
+            // Regression: this controller compared "VIEWER".equalsIgnoreCase(orgRole) with no
+            // trim, while the eight other VIEWER checks in the codebase all trim. Nothing emits
+            // a padded role today, so this was latent - but it is exactly the drift the trim was
+            // added elsewhere to prevent, and a read-only role that stops being read-only is the
+            // wrong direction to fail in.
+            when(tenantResolver.resolveOrgId(httpRequest)).thenReturn(ORG);
+            when(tenantResolver.resolveOrgRole(httpRequest)).thenReturn("  VIEWER  ");
+
+            ResponseEntity<?> response = controller.create(httpRequest, "true", TENANT, anyRequest());
+
+            assertThat(response.getStatusCode().value()).isEqualTo(403);
+            verifyNoInteractions(service);
+        }
+
+        @Test
         @DisplayName("DELETE as org VIEWER returns 403")
         void deleteAsViewerReturns403() {
             stubViewerInOrg();

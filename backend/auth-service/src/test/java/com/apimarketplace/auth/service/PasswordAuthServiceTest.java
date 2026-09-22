@@ -43,6 +43,9 @@ class PasswordAuthServiceTest {
     @Mock
     private FirstAdminBootstrap firstAdminBootstrap;
 
+    @Mock
+    private com.apimarketplace.auth.repository.PasswordResetTokenRepository passwordResetTokenRepository;
+
     private PasswordAuthService service;
 
     @BeforeEach
@@ -52,6 +55,7 @@ class PasswordAuthServiceTest {
         ReflectionTestUtils.setField(service, "organizationService", organizationService);
         ReflectionTestUtils.setField(service, "firstAdminBootstrap", firstAdminBootstrap);
         ReflectionTestUtils.setField(service, "usernameValidator", new UsernameValidator(userRepository));
+        ReflectionTestUtils.setField(service, "passwordResetTokenRepository", passwordResetTokenRepository);
 
         // Default: no auto-admin. Tests that exercise the first-admin path override
         // via `when(firstAdminBootstrap.claimFirstAdminSlot()).thenReturn(true)`.
@@ -246,6 +250,207 @@ class PasswordAuthServiceTest {
             User result = service.register("  Test@Example.COM  ", "password123", "John", "Doe");
 
             assertThat(result.getEmail()).isEqualTo("test@example.com");
+        }
+    }
+
+    /**
+     * The minimum length, pinned as a VALUE and across all three writers.
+     *
+     * <p>Neither was pinned before, and both gaps were measured: setting
+     * MIN_PASSWORD_LENGTH to 4 left 56 tests green, because every assertion
+     * derived its boundary from the constant under test
+     * ({@code "x".repeat(MIN_PASSWORD_LENGTH - 1)}) and the one literal
+     * assertion exercised register, which carried its own hardcoded 8.
+     */
+    @Nested
+    @DisplayName("the one strength rule")
+    class TheOneStrengthRule {
+
+        @Test
+        @DisplayName("is 8 characters, a number that cannot be derived from itself")
+        void theMinimumIsEight() {
+            // Deliberately a literal. Asserting against the constant would pass
+            // for any value, and this number is mirrored by hand in
+            // frontend/app/[locale]/reset-password/page.tsx, which checks it
+            // before spending a single-use link. Changing it here is a decision
+            // that has to be taken on the frontend too, so it should not be
+            // possible to do quietly.
+            assertThat(PasswordAuthService.MIN_PASSWORD_LENGTH).isEqualTo(8);
+        }
+
+        @Test
+        @DisplayName("register refuses a password one character short, on the shared rule and not "
+                + "on a literal of its own")
+        void registerUsesTheSharedRule() {
+            String tooShort = "x".repeat(PasswordAuthService.MIN_PASSWORD_LENGTH - 1);
+
+            assertThatThrownBy(() -> service.register("new@example.com", tooShort, "Ada", "Lovelace"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(String.valueOf(PasswordAuthService.MIN_PASSWORD_LENGTH));
+
+            verify(userRepository, never()).save(any(User.class));
+        }
+
+        @Test
+        @DisplayName("all THREE writers refuse at exactly the same boundary, so the rule cannot drift "
+                + "between signing up, changing and resetting")
+        void everyWriterSharesTheBoundary() {
+            String tooShort = "x".repeat(PasswordAuthService.MIN_PASSWORD_LENGTH - 1);
+            String justLongEnough = "x".repeat(PasswordAuthService.MIN_PASSWORD_LENGTH);
+            User existing = new User();
+            existing.setId(7L);
+            existing.setEmail("owner@example.com");
+            existing.setPasswordHash(
+                    new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder()
+                            .encode("current-password"));
+            lenient().when(userRepository.findById(7L)).thenReturn(java.util.Optional.of(existing));
+            lenient().when(userRepository.existsByEmail(anyString())).thenReturn(false);
+
+            assertThatThrownBy(() -> service.register("a@example.com", tooShort, "A", "B"))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> service.changePassword(7L, "current-password", tooShort))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> service.resetPasswordTo(7L, tooShort))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            // And the boundary itself is accepted, so the rule is "shorter than",
+            // not "shorter than or equal to", in all three.
+            service.validateNewPassword(justLongEnough);
+            service.resetPasswordTo(7L, justLongEnough);
+        }
+    }
+
+    /**
+     * The write side of the reset-by-e-mail flow.
+     *
+     * <p>These were missing, and their absence was not visible: PasswordResetService
+     * mocks this class, so deleting the revoke-every-session line or the strength
+     * check left the whole reset test suite green while the guarantee its javadoc
+     * calls load-bearing was gone.
+     */
+    @Nested
+    @DisplayName("resetPasswordTo (password reset by e-mail, no current password)")
+    class ResetPasswordTo {
+
+        private User existing() {
+            User user = new User();
+            user.setId(7L);
+            user.setEmail("owner@example.com");
+            user.setPasswordHash("$2a$10$theOldHashThatMustNotSurvive");
+            return user;
+        }
+
+        @Test
+        @DisplayName("writes a hash of the NEW password, and does not keep the old one")
+        void writesTheNewHash() {
+            User user = existing();
+            String oldHash = user.getPasswordHash();
+            when(userRepository.findById(7L)).thenReturn(java.util.Optional.of(user));
+
+            service.resetPasswordTo(7L, "a-good-password");
+
+            ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+            verify(userRepository).save(saved.capture());
+            String written = saved.getValue().getPasswordHash();
+            assertThat(written).isNotEqualTo(oldHash);
+            // Hashed, never stored in the clear, and it really is THIS password.
+            assertThat(written).isNotEqualTo("a-good-password").startsWith("$2");
+            assertThat(new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder()
+                    .matches("a-good-password", written)).isTrue();
+        }
+
+        @Test
+        @DisplayName("revokes EVERY refresh token: someone resetting a password is often doing it "
+                + "because a live session is not theirs any more")
+        void revokesEverySession() {
+            when(userRepository.findById(7L)).thenReturn(java.util.Optional.of(existing()));
+
+            service.resetPasswordTo(7L, "a-good-password");
+
+            // Delete the revokeAllByUserId call and this is the only test that notices.
+            verify(refreshTokenRepository).revokeAllByUserId(eq(7L), any(java.time.LocalDateTime.class));
+        }
+
+        @Test
+        @DisplayName("changing a password BURNS any pending reset link, so one minted just before "
+                + "cannot still open the account after")
+        void changePasswordBurnsPendingResetLinks() {
+            User user = existing();
+            user.setPasswordHash(new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder()
+                    .encode("current-password"));
+            when(userRepository.findById(7L)).thenReturn(java.util.Optional.of(user));
+
+            service.changePassword(7L, "current-password", "a-good-password");
+
+            // The realistic case: someone notices a stranger in their mailbox and
+            // changes their password from a live session. Without this the
+            // stranger's link keeps working for the rest of the hour.
+            verify(passwordResetTokenRepository)
+                    .invalidateLiveTokens(eq(7L), any(java.time.LocalDateTime.class));
+        }
+
+        @Test
+        @DisplayName("refuses a password below the shared minimum, and writes nothing at all")
+        void refusesTooShort() {
+            // The lookup happens before the rule, so the row has to be there for
+            // the refusal under test to be the one about the password.
+            when(userRepository.findById(7L)).thenReturn(java.util.Optional.of(existing()));
+            String tooShort = "x".repeat(PasswordAuthService.MIN_PASSWORD_LENGTH - 1);
+
+            assertThatThrownBy(() -> service.resetPasswordTo(7L, tooShort))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(String.valueOf(PasswordAuthService.MIN_PASSWORD_LENGTH));
+
+            verify(userRepository, never()).save(any(User.class));
+            verify(refreshTokenRepository, never()).revokeAllByUserId(any(), any());
+        }
+
+        @Test
+        @DisplayName("refuses a null password rather than hashing one")
+        void refusesNull() {
+            when(userRepository.findById(7L)).thenReturn(java.util.Optional.of(existing()));
+
+            assertThatThrownBy(() -> service.resetPasswordTo(7L, null))
+                    .isInstanceOf(IllegalArgumentException.class);
+            verify(userRepository, never()).save(any(User.class));
+        }
+
+        @Test
+        @DisplayName("refuses a SUSPENDED account, so a link minted before the suspension cannot "
+                + "still rewrite its password")
+        void refusesADisabledAccount() {
+            User suspended = existing();
+            suspended.setEnabled(false);
+            when(userRepository.findById(7L)).thenReturn(java.util.Optional.of(suspended));
+
+            assertThatThrownBy(() -> service.resetPasswordTo(7L, "a-good-password"))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            verify(userRepository, never()).save(any(User.class));
+            verify(refreshTokenRepository, never()).revokeAllByUserId(any(), any());
+        }
+
+        @Test
+        @DisplayName("refuses a user id that no longer exists")
+        void refusesUnknownUser() {
+            when(userRepository.findById(404L)).thenReturn(java.util.Optional.empty());
+
+            assertThatThrownBy(() -> service.resetPasswordTo(404L, "a-good-password"))
+                    .isInstanceOf(IllegalArgumentException.class);
+            verify(refreshTokenRepository, never()).revokeAllByUserId(any(), any());
+        }
+
+        @Test
+        @DisplayName("validateNewPassword is the SAME rule, callable without writing, which is what "
+                + "lets the reset flow check a password before it spends the token")
+        void validateIsTheSameRuleWithoutAWrite() {
+            String tooShort = "x".repeat(PasswordAuthService.MIN_PASSWORD_LENGTH - 1);
+
+            assertThatThrownBy(() -> service.validateNewPassword(tooShort))
+                    .isInstanceOf(IllegalArgumentException.class);
+            service.validateNewPassword("x".repeat(PasswordAuthService.MIN_PASSWORD_LENGTH));
+
+            verifyNoInteractions(userRepository, refreshTokenRepository);
         }
     }
 }

@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,6 +63,10 @@ public class LimitNode extends BaseNode {
         earlyInputData.put("count", count);
         earlyInputData.put("from", from);
         earlyInputData.put("offset", offset);
+        // `input` keeps the plan's name and the shape V167 documents for the `config`
+        // output field, which shares this map. A FAILED row needs no companion key saying the
+        // expression was never evaluated: the row is already FAILED and carries its error, so
+        // the key would be a constant string on every failure of five node types.
         earlyInputData.put("input", inputExpression);
 
         // Input is required
@@ -125,7 +130,7 @@ public class LimitNode extends BaseNode {
 
             // Persist config as resolved_params for inspector visibility
             Map<String, Object> resolvedParams = new LinkedHashMap<>();
-            resolvedParams.put("input", inputItems);
+            resolvedParams.put("input", ReportedParams.reportValue(inputItems));
             resolvedParams.put("input_count", inputItems.size());
             resolvedParams.put("count", count);
             resolvedParams.put("from", from);
@@ -157,7 +162,7 @@ public class LimitNode extends BaseNode {
         failOutput.put("count", 0);
         failOutput.put("original_count", 0);
         failOutput.put("config", earlyInputData);
-        failOutput.put("resolved_params", earlyInputData);
+        failOutput.put("resolved_params", ReportedParams.forReport(earlyInputData));
         return failOutput;
     }
 

@@ -381,7 +381,7 @@ class DecisionNodeTest {
             assertNotNull(evaluations);
 
             Map<String, Object> ifEval = evaluations.stream()
-                .filter(e -> "if".equals(e.get("branch_type")))
+                .filter(e -> "if".equals(e.get("branch")))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("No 'if' branch evaluation recorded"));
 

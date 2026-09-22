@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 import com.apimarketplace.orchestrator.domain.file.FileRef;
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
 import com.apimarketplace.orchestrator.services.file.FileStorageService;
 import org.slf4j.Logger;
@@ -63,12 +64,18 @@ public class CompressionNode extends BaseNode {
         logger.info("Compression node executing: nodeId={}, operation={}, format={}, itemId={}",
             nodeId, config.operation(), config.format(), context.itemId());
 
+        // Hoisted out of the try so the CATCH reports it too. The normal failure here is a
+        // bad archive or an unsupported format - well AFTER the resolution - and reporting
+        // the configured template there gave `value` one meaning on success and another on
+        // failure, on the same node.
+        String inputValue = null;
+
         try {
-            String inputValue = resolveExpression(config.value(), context);
+            inputValue = resolveExpression(config.value(), context);
 
             if (inputValue == null || inputValue.isEmpty()) {
                 logger.warn("Compression node received null/empty input: nodeId={}", nodeId);
-                Map<String, Object> result = buildOutput("", config.operation(), config.format(), true, context);
+                Map<String, Object> result = buildOutput("", config.operation(), config.format(), true, context, inputValue);
                 return NodeExecutionResult.success(nodeId, result);
             }
 
@@ -79,7 +86,7 @@ public class CompressionNode extends BaseNode {
                 output = compress(inputValue, config.format());
             }
 
-            Map<String, Object> result = buildOutput(output, config.operation(), config.format(), true, context);
+            Map<String, Object> result = buildOutput(output, config.operation(), config.format(), true, context, inputValue);
 
             // Upload to S3 on compress only (non-fatal on failure)
             if ("compress".equals(config.operation()) && fileStorageService != null && output != null && !output.isEmpty()) {
@@ -105,7 +112,7 @@ public class CompressionNode extends BaseNode {
 
         } catch (Exception e) {
             logger.error("Compression execution failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
-            Map<String, Object> result = buildOutput(null, config.operation(), config.format(), false, context);
+            Map<String, Object> result = buildOutput(null, config.operation(), config.format(), false, context, inputValue);
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), result, 0L);
         }
     }
@@ -207,7 +214,7 @@ public class CompressionNode extends BaseNode {
         }
     }
 
-    private Map<String, Object> buildOutput(String result, String operation, String format, boolean success, ExecutionContext context) {
+    private Map<String, Object> buildOutput(String result, String operation, String format, boolean success, ExecutionContext context, String resolvedValue) {
         Map<String, Object> output = new HashMap<>();
         output.put("result", result);
         output.put("operation", operation);
@@ -222,19 +229,38 @@ public class CompressionNode extends BaseNode {
         output.put("item_index", context.itemIndex());
         output.put("itemIndex", context.itemIndex());
         output.put("item_id", context.itemId());
-        output.put("resolved_params", buildInputDataMap(operation, format, context));
+        output.put("resolved_params", buildInputDataMap(operation, format, resolvedValue));
         return output;
     }
 
-    private Map<String, Object> buildInputDataMap(String operation, String format, ExecutionContext context) {
+    /**
+     * The node's configuration, as the node itself reads it.
+     *
+     * <p>Both of these used to be re-resolved for display only, and both answers were wrong.
+     * {@code filename} is used CONFIGURED by the zip entry and the S3 upload, so a resolved
+     * one named a file that does not exist. And {@code value} is the payload being
+     * compressed - re-resolving ran the expression a second time, and
+     * {@code resolveTemplateString} coerced the result to a String, putting the whole
+     * payload (or a base64 blob, on decompress) onto the step row of every item.
+     *
+     * <p>{@code value} is what the node COMPRESSED, from its own evaluation, which is what
+     * that key means on {@code ConvertToFileNode} too - one key, one meaning, across
+     * sibling nodes. Before the work has resolved it (the failure path reached from the
+     * catch), it is the configured expression, which is all there is to say. Either way it
+     * is bounded: a payload worth compressing is too big for a column persisted per row.
+     */
+    private Map<String, Object> buildInputDataMap(String operation, String format, String resolvedValue) {
         Map<String, Object> inputData = new LinkedHashMap<>();
         inputData.put("operation", operation);
         inputData.put("format", format);
         if (config != null) {
-            if (config.value() != null) inputData.put("value", resolveTemplateString(config.value(), context));
-            if (config.filename() != null) inputData.put("filename", resolveTemplateString(config.filename(), context));
+            Object reportedValue = resolvedValue != null ? resolvedValue : config.value();
+            if (reportedValue != null) {
+                inputData.put("value", ReportedParams.valueFrom(config.value(), reportedValue));
+            }
+            if (config.filename() != null) inputData.put("filename", config.filename());
         }
-        return inputData;
+        return ReportedParams.forReport(inputData);
     }
 
     private String getCompressedExtension(String format) {

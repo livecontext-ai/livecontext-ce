@@ -6,7 +6,6 @@ import {
   getNodePosition,
   hasKeys,
   convertParamExpressionsToInputs,
-  isAiReasoningNode,
   isTransformNode,
   isWaitNode,
   isDownloadFileNode,
@@ -45,6 +44,7 @@ import {
   isSshNode,
   isSftpNode,
   isDatabaseNode,
+  isToolStepNode,
 } from './planHelpers';
 import { buildMediaPlanParams } from './mediaParams';
 import { nodeRegistry } from '../registry/nodeRegistry';
@@ -1514,23 +1514,10 @@ export function processTransformAndWaitNodes(ctx: PlanGeneratorContext): void {
  * Uses nodeRegistry for centralized node type detection.
  */
 function filterStepNodes(nodes: Node<BuilderNodeData>[]): Node<BuilderNodeData>[] {
-  return nodes.filter((node) => {
-    // Exclude CRUD nodes
-    if (isCrudNode(node)) return false;
-    // Exclude triggers
-    if (nodeRegistry.isTrigger(node)) return false;
-    // Exclude agents
-    if (isAiReasoningNode(node)) return false;
-    // Exclude all control nodes (decision, switch, option, loop, split, merge, fork, transform, wait, download_file, aggregate, exit, response)
-    if (nodeRegistry.isControlNode(node)) return false;
-    // Exclude notes
-    if (nodeRegistry.isNoteNode(node)) return false;
-    // Exclude interface nodes
-    if (nodeRegistry.isInterfaceNode(node)) return false;
-    // Include only tool/API nodes
-    if (node.data.toolData || node.data.apiData) return true;
-    return false;
-  });
+  // The rule now lives in planHelpers, unchanged, because the inspector has to ask the same
+  // question to decide whether to offer a control that only a tool step can act on. Two copies of
+  // this test disagreed in both directions.
+  return nodes.filter((node) => isToolStepNode(node));
 }
 
 /**

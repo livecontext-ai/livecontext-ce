@@ -196,6 +196,103 @@ class CatalogV1ControllerTest {
         }
 
         @Test
+        @DisplayName("the price factor is read from its header, and an absurd one is dropped")
+        void generationPriceFactorHeaderIsBound() throws Exception {
+            // It multiplies the amount charged. Lost on the way in, a 1080p render is billed at the
+            // 720p rate on every call; read as ZERO, the generation is free. Neither shows anywhere.
+            UUID toolId = UUID.randomUUID();
+            when(catalogV1Service.executeTool(eq(toolId.toString()), any(ToolExecutionRequest.class),
+                    any(), any(), any()))
+                    .thenReturn(ToolExecutionResponse.builder().success(true).build());
+
+            mockMvc.perform(post("/catalog/v1/tools/{toolId}/execute", toolId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("X-Lc-Generation-Model", "seedance-2.0")
+                            .header("X-Lc-Generation-Quantity", "10")
+                            .header("X-Lc-Generation-Unit", "second")
+                            .header("X-Lc-Generation-Multiplier", "2.4")
+                            .content("{}"))
+                    .andExpect(status().isOk());
+
+            org.mockito.ArgumentCaptor<ToolExecutionRequest> captor =
+                    org.mockito.ArgumentCaptor.forClass(ToolExecutionRequest.class);
+            verify(catalogV1Service).executeTool(eq(toolId.toString()), captor.capture(),
+                    any(), any(), any());
+            assertEquals(0, new java.math.BigDecimal("2.4")
+                            .compareTo(captor.getValue().getGenerationPriceMultiplier()),
+                    "the factor decides the amount, so it has to arrive intact");
+
+            // Zero and below cannot come from any descriptor this platform accepts. Dropped rather
+            // than honoured: an absent factor means "at the published rate", which is the
+            // conservative reading, while a zero would multiply the whole charge away.
+            // Above the CEILING is dropped too, and that is the case this door was hardened for:
+            // it checked only `<= 0` and passed everything else to the biller, so a forged
+            // factor of a million on a row with no maxCredits was reserved and committed. The
+            // bound is the descriptor parser's own constant, so nothing a seed can produce is
+            // refused here.
+            for (String absurd : new String[] { "0", "-3", "100.01", "1000000" }) {
+                org.mockito.Mockito.clearInvocations(catalogV1Service);
+                mockMvc.perform(post("/catalog/v1/tools/{toolId}/execute", toolId)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .header("X-Lc-Generation-Multiplier", absurd)
+                                .content("{}"))
+                        .andExpect(status().isOk());
+                verify(catalogV1Service).executeTool(eq(toolId.toString()), captor.capture(),
+                        any(), any(), any());
+                assertNull(captor.getValue().getGenerationPriceMultiplier(),
+                        "a factor of " + absurd + " is not a price");
+            }
+        }
+
+        @Test
+        @DisplayName("the ceiling ITSELF is bound, so the bound is not off by one against a real seed")
+        void theCeilingItselfIsAccepted() throws Exception {
+            // The parser refuses a model whose modifiers reach MORE than this together, so a
+            // product exactly equal to it is a descriptor this platform accepts and must charge.
+            UUID toolId = UUID.randomUUID();
+            when(catalogV1Service.executeTool(eq(toolId.toString()), any(ToolExecutionRequest.class),
+                    any(), any(), any()))
+                    .thenReturn(ToolExecutionResponse.builder().success(true).build());
+
+            mockMvc.perform(post("/catalog/v1/tools/{toolId}/execute", toolId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("X-Lc-Generation-Multiplier",
+                                    com.apimarketplace.common.web.BillingContextHeaders
+                                            .MAX_GENERATION_MULTIPLIER.toPlainString())
+                            .content("{}"))
+                    .andExpect(status().isOk());
+
+            org.mockito.ArgumentCaptor<ToolExecutionRequest> captor =
+                    org.mockito.ArgumentCaptor.forClass(ToolExecutionRequest.class);
+            verify(catalogV1Service).executeTool(eq(toolId.toString()), captor.capture(),
+                    any(), any(), any());
+            assertEquals(0, com.apimarketplace.common.web.BillingContextHeaders
+                            .MAX_GENERATION_MULTIPLIER
+                            .compareTo(captor.getValue().getGenerationPriceMultiplier()),
+                    "a factor the parser accepts must be chargeable");
+        }
+
+        @Test
+        @DisplayName("an ordinary call carries no factor, so nothing about it changed")
+        void anOrdinaryCallCarriesNoFactor() throws Exception {
+            UUID toolId = UUID.randomUUID();
+            when(catalogV1Service.executeTool(eq(toolId.toString()), any(ToolExecutionRequest.class),
+                    any(), any(), any()))
+                    .thenReturn(ToolExecutionResponse.builder().success(true).build());
+
+            mockMvc.perform(post("/catalog/v1/tools/{toolId}/execute", toolId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{}"))
+                    .andExpect(status().isOk());
+
+            org.mockito.ArgumentCaptor<ToolExecutionRequest> captor =
+                    org.mockito.ArgumentCaptor.forClass(ToolExecutionRequest.class);
+            verify(catalogV1Service).executeTool(eq(toolId.toString()), captor.capture(),
+                    any(), any(), any());
+            assertNull(captor.getValue().getGenerationPriceMultiplier());
+        }
+
+        @Test
         @DisplayName("analytics attribution comes from X-Lc-Workflow-Id / X-Lc-Node-Id headers only; a body cannot claim a workflow")
         void analyticsAttributionIsHeaderOnly() throws Exception {
             when(catalogV1Service.executeTool(eq("slack/send-message"), any(ToolExecutionRequest.class), any(), any(), any()))

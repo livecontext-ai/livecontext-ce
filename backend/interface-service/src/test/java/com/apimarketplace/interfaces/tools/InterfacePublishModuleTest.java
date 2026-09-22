@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -129,4 +130,70 @@ class InterfacePublishModuleTest {
             verify(publicationClient, never()).unpublishResource(any(), any(), any(), any());
         }
     }
+
+    @Nested
+    @DisplayName("access gate")
+    class AccessGate {
+
+        private ToolExecutionContext ctxWith(Map<String, Object> credentials) {
+            return new ToolExecutionContext(TENANT, credentials, Map.of(),
+                    java.util.Set.of(), null, null, null, null);
+        }
+
+        @Test
+        @DisplayName("read-mode denies publish and unpublish, and never reaches publication-service")
+        void readModeDeniesPublishing() {
+            // Regression: this module was ungated entirely, so a read-only or scoped agent could
+            // publish any reachable interface to the marketplace. The sibling table module has
+            // carried both gates since its own fix; interfaces were not carried along.
+            for (String action : java.util.List.of("publish", "unpublish")) {
+                java.util.Optional<ToolExecutionResult> res = module.execute(
+                        action, Map.of("interface_id", UUID.randomUUID().toString()), TENANT,
+                        ctxWith(Map.of("interfaceAccessMode", "read")));
+
+                assertThat(res).as("action %s must be handled", action).isPresent();
+                assertThat(res.get().success()).as("action %s must be denied", action).isFalse();
+                assertThat(res.get().error()).contains("read-only");
+            }
+            verifyNoInteractions(publicationClient);
+        }
+
+        @Test
+        @DisplayName("an interface INSIDE the approved list is published normally")
+        void allowListLetsApprovedInterfaceThrough() {
+            // Without this, a gate that refused an ALLOWED id would only be caught for the
+            // unrestricted case: every other happy-path test here runs with empty credentials.
+            // Asserts the publish actually REACHES publication-service, not merely that a
+            // particular error string is absent: `doesNotContain` on a null error passes
+            // vacuously, so the weak form would stay green if the gate refused every caller.
+            UUID approved = UUID.randomUUID();
+            when(publicationClient.publishResource(any(), eq(TENANT), isNull()))
+                    .thenReturn(Map.of("id", PUB_ID.toString()));
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", approved.toString());
+            params.put("title", "My Interface");
+            params.put("visibility", "public");
+
+            ToolExecutionResult res = module.execute("publish", params, TENANT,
+                    ctxWith(Map.of("allowedInterfaceIds", java.util.List.of(approved.toString()))))
+                    .orElseThrow();
+
+            assertThat(res.success()).isTrue();
+            verify(publicationClient).publishResource(any(), eq(TENANT), isNull());
+        }
+
+        @Test
+        @DisplayName("an interface outside the approved list cannot be published")
+        void allowListBlocksForeignInterface() {
+            java.util.Optional<ToolExecutionResult> res = module.execute(
+                    "publish", Map.of("interface_id", UUID.randomUUID().toString(), "title", "t"), TENANT,
+                    ctxWith(Map.of("allowedInterfaceIds", java.util.List.of(UUID.randomUUID().toString()))));
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isFalse();
+            assertThat(res.get().error()).contains("not in your approved interface list");
+        }
+    }
+
 }

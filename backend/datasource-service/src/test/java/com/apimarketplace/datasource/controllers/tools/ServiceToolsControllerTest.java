@@ -147,8 +147,8 @@ class ServiceToolsControllerTest {
     }
 
     @Test
-    @DisplayName("Should pass org context from request body")
-    void shouldPassOrgContext() {
+    @DisplayName("takes orgId from the body but NEVER the role - the role is the privilege axis")
+    void shouldPassOrgIdFromBodyButNeverTheRole() {
         when(toolsProvider.execute(any(), any(), any()))
             .thenReturn(ToolExecutionResult.success(Map.of()));
 
@@ -163,7 +163,13 @@ class ServiceToolsControllerTest {
         ArgumentCaptor<ToolExecutionContext> ctxCaptor = ArgumentCaptor.forClass(ToolExecutionContext.class);
         verify(toolsProvider).execute(any(), any(), ctxCaptor.capture());
         assertThat(ctxCaptor.getValue().orgId()).isEqualTo("org-1");
-        assertThat(ctxCaptor.getValue().orgRole()).isEqualTo("admin");
+        // This assertion used to expect "admin", pinning a body-supplied role. Every internal
+        // caller sends X-Organization-Role as a header from the same source it filled the body
+        // with, so the body read was a duplicate that a gateway-routed caller could use to assert
+        // its own privilege level. An absent role resolves to MEMBER, the safe direction.
+        assertThat(ctxCaptor.getValue().orgRole())
+                .as("a body-supplied role must never reach the execution context")
+                .isNull();
     }
 
     @Test

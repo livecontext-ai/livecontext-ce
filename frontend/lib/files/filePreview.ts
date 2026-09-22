@@ -74,6 +74,21 @@ const EXT_TO_MEDIA_MIME: Record<string, string> = {
   pdf: 'application/pdf',
 };
 
+/**
+ * The type without its parameters, lowercased: {@code text/html;charset=utf-8} becomes
+ * {@code text/html}.
+ *
+ * <p>Every decision taken by comparing a MIME type to a fixed string has to go through this
+ * first. A served Content-Type legitimately carries parameters, and an exact-match check on the
+ * raw string silently answers "no" for the very values it was written to catch - which, for the
+ * checks that decide whether bytes are allowed to execute, is the whole guard gone. It is latent
+ * rather than live today only because Chromium happens to strip the parameter off
+ * {@code Blob.type} before our code sees it, which is not a guarantee to build on.
+ */
+export function mimeEssence(mimeType: string | null | undefined): string {
+  return (mimeType ?? '').split(';')[0].trim().toLowerCase();
+}
+
 /** A MIME type considered too generic to drive a media element - re-type the blob from the filename. */
 function isGenericMime(mime: string): boolean {
   return mime === '' || mime === 'application/octet-stream' || mime === 'binary/octet-stream';
@@ -90,10 +105,19 @@ export function resolveMediaMimeType(
   mimeType: string | null | undefined,
   fileName: string | null | undefined,
 ): string | undefined {
-  const mime = (mimeType ?? '').toLowerCase();
+  const mime = mimeEssence(mimeType);
   if (!isGenericMime(mime)) return mimeType ?? undefined;
   return EXT_TO_MEDIA_MIME[extensionOf(fileName ?? '')];
 }
+
+/**
+ * Media fragment that asks a video element for a frame just past the start: frame zero of a
+ * fade-in is black, and a black rectangle reads as a preview that failed rather than a still.
+ */
+export const VIDEO_POSTER_FRAGMENT = '#t=0.1';
+
+/** Media fragment that strips the PDF reader's chrome, leaving the first page fitted to width. */
+export const PDF_FIRST_PAGE_FRAGMENT = '#toolbar=0&navpanes=0&scrollbar=0&view=FitH';
 
 /**
  * Classify a file into a preview kind from its MIME type and/or filename.
@@ -104,7 +128,9 @@ export function detectPreviewKind(
   mimeType: string | null | undefined,
   fileName: string | null | undefined,
 ): PreviewKind {
-  const mime = (mimeType ?? '').toLowerCase();
+  // Parameters off first: every comparison below is against a bare type, and `application/xml`
+  // arrives as `application/xml;charset=utf-8` often enough to matter.
+  const mime = mimeEssence(mimeType);
   const ext = extensionOf(fileName ?? '');
 
   if (mime.startsWith('image/') || IMAGE_EXTENSIONS.has(ext)) return 'image';
@@ -167,7 +193,10 @@ export function syntaxLanguageFor(
   const ext = extensionOf(fileName ?? '');
   if (EXT_TO_PRISM_LANGUAGE[ext]) return EXT_TO_PRISM_LANGUAGE[ext];
 
-  const mime = (mimeType ?? '').toLowerCase();
+  // Essence for the same reason as everywhere else in this module: the consequence here is only
+  // a parameterised XML losing its colouring, but a comparison that is right in one function and
+  // raw two below is the state that lets the dangerous one drift back.
+  const mime = mimeEssence(mimeType);
   if (mime.includes('json')) return 'json';
   if (mime.includes('typescript')) return 'typescript';
   if (mime.includes('javascript')) return 'javascript';

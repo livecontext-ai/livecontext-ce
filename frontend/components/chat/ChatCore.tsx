@@ -305,6 +305,7 @@ export function ChatCore({
         toolCallId: pa.tool_call_id,
         argsSummary: pa.args_summary,
         applicationId: pa.application_id,
+        subject: pa.subject,
         timestamp: pa.created_at ? parseUtcAware(pa.created_at).getTime() : Date.now(),
       }));
     return Array.from(byKey.values());
@@ -469,13 +470,27 @@ export function ChatCore({
   // ============================================
 
   // Stop stream handler
+  const questionContinuationVersionRef = useRef(0);
+  const queuedQuestionResumesRef = useRef<Array<{ conversationId: string; id: string }>>([]);
+  useEffect(() => () => { questionContinuationVersionRef.current += 1; }, [conversationId]);
+  const invalidateQuestionContinuations = useCallback(() => {
+    questionContinuationVersionRef.current += 1;
+    for (const queued of queuedQuestionResumesRef.current) {
+      if (queued.conversationId === conversationId) {
+        useMessageQueueStore.getState().remove(queued.conversationId, queued.id);
+      }
+    }
+    queuedQuestionResumesRef.current = queuedQuestionResumesRef.current.filter(q => q.conversationId !== conversationId);
+  }, [conversationId]);
+
   const handleStopStream = useCallback(() => {
+    invalidateQuestionContinuations();
     if (onStopStream) {
       onStopStream();
     } else if (conversationId) {
       streaming.stopStream(conversationId);
     }
-  }, [conversationId, onStopStream, streaming]);
+  }, [conversationId, onStopStream, streaming, invalidateQuestionContinuations]);
 
   useEffect(() => {
     const canStopWithEscape = isStreamStarting || isStreamingThisConversation;
@@ -517,6 +532,9 @@ export function ChatCore({
     if (!queued) {
       addToast({ type: 'error', title: t('chat.queue.full'), message, duration: 5000 });
     }
+    // enqueue is synchronous and inserts at the front; retain that item's ID so
+    // Stop can remove a question continuation without clearing unrelated messages.
+    return queued ? useMessageQueueStore.getState().getQueue(conversationId)[0] : undefined;
   }, [conversationId, addToast, t]);
 
   // Every call the agent is HOLDING behind this card, or empty when it came from the
@@ -599,9 +617,12 @@ export function ChatCore({
     enqueueApprovalResume(message);
   }, [enqueueApprovalResume]);
 
-  // Tool authorization - approve. execute/agent/catalog resume the agent (it performs the
-  // now-authorized action server-side); application:acquire instead lets the USER install via
-  // the marketplace modal. `blanket` (card checkbox) flips the per-conversation auto-authorize.
+  // Tool authorization - approve. Every rule resumes the agent, which performs the
+  // now-authorized action server-side (running a workflow, pinning one, arming an agent's
+  // cron, calling an external API); application:acquire is the one exception and instead
+  // lets the USER install via the marketplace modal. The handling below is rule-agnostic on
+  // purpose, so a newly gated rule needs no change here.
+  // `blanket` (card checkbox) flips the per-conversation auto-authorize.
   const handleToolAuthorized = useCallback(async (rule: string, blanket: boolean, toolCallId?: string) => {
     if (!conversationId) return;
     // Dismiss/clear THIS specific card by its (rule, toolCallId) key so a sibling
@@ -696,6 +717,7 @@ export function ChatCore({
     if (!conversationId) return false;
     if (askUserInFlightRef.current.has(toolCallId)) return false;
     askUserInFlightRef.current.add(toolCallId);
+    const continuationVersion = questionContinuationVersionRef.current;
     const key = askUserKey(toolCallId);
     const pending = pendingAskUserQuestions.find(q => q.toolCallId === toolCallId);
     const gateKey = pending?.blocking ? pending.gateKey : undefined;
@@ -714,7 +736,7 @@ export function ChatCore({
     askUserInFlightRef.current.delete(toolCallId);
     dismissKey(key);
     streaming.clearAskUserQuestion(conversationId, key);
-    if (gateKey && released) {
+    if ((gateKey && released) || continuationVersion !== questionContinuationVersionRef.current) {
       // The held call resumes inside the turn still running; a message here would queue a
       // redundant second turn. Both halves required, as for the authorization card.
       return true;
@@ -725,33 +747,51 @@ export function ChatCore({
       const picks = [...a.selected, ...(a.freeText ? [a.freeText] : [])].join(', ');
       return `- ${a.header}: ${picks}`;
     });
-    enqueueApprovalResume([t('askUser.resumeIntro'), ...lines].join('\n'));
+    const queued = enqueueApprovalResume([t('askUser.resumeIntro'), ...lines].join('\n'));
+    if (queued) queuedQuestionResumesRef.current.push({ conversationId, id: queued.id });
     return true;
   }, [conversationId, pendingAskUserQuestions, streaming, dismissKey, enqueueApprovalResume, addToast, t]);
 
-  const handleAskUserDismissed = useCallback((toolCallId: string) => {
-    if (!conversationId) return;
+  const handleAskUserDismissed = useCallback(async (toolCallId: string) => {
+    if (!conversationId || askUserInFlightRef.current.has(toolCallId)) return false;
+    askUserInFlightRef.current.add(toolCallId);
+    const continuationVersion = questionContinuationVersionRef.current;
     const key = askUserKey(toolCallId);
     const pending = pendingAskUserQuestions.find(q => q.toolCallId === toolCallId);
     const gateKey = pending?.blocking ? pending.gateKey : undefined;
-    dismissKey(key);
-    streaming.clearAskUserQuestion(conversationId, key);
-    // No resume: a held call is released as dismissed so the agent moves on at once.
-    conversationApi.dismissAskUser(conversationId, toolCallId, gateKey).catch(() => {});
-  }, [conversationId, pendingAskUserQuestions, streaming, dismissKey]);
+    try {
+      const released = await conversationApi.dismissAskUser(conversationId, toolCallId, gateKey);
+      dismissKey(key);
+      streaming.clearAskUserQuestion(conversationId, key);
+      // An expired park has no running call to receive the dismissal. Resume through
+      // the same queue as a late answer, preserving the original task and other cards.
+      if (!(gateKey && released) && continuationVersion === questionContinuationVersionRef.current) {
+        const queued = enqueueApprovalResume(t('askUser.resumeSkipped', {
+          headers: pending?.questions.map(q => q.header).join(', ') ?? toolCallId,
+        }));
+        if (queued) queuedQuestionResumesRef.current.push({ conversationId, id: queued.id });
+      }
+      return true;
+    } catch {
+      addToast({ type: 'error', title: t('askUser.submitFailedTitle'), message: t('askUser.submitFailed'), duration: 5000 });
+      return false;
+    } finally {
+      askUserInFlightRef.current.delete(toolCallId);
+    }
+  }, [conversationId, pendingAskUserQuestions, streaming, dismissKey, enqueueApprovalResume, addToast, t]);
 
   // Install modal completed → grant once (a stray agent re-acquire is a benign 409) and
   // resume the agent telling it the app is installed.
   const handleInstallSuccess = useCallback(async () => {
     installSucceededRef.current = true;
     const rule = installState?.rule;
-    if (!conversationId || !rule) return;
+    if (!conversationId || !rule || !installState) return;
     try {
       await conversationApi.approveToolAuthorization(conversationId, rule, false);
     } catch {
       // Non-fatal.
     }
-    resumeAgent(t('toolAuthorization.resumeInstalled'));
+    resumeAgent(`${t('toolAuthorization.resumeInstalled')}\n${installState.publication.title} (${installState.publication.id})`);
   }, [conversationId, installState, resumeAgent, t]);
 
   // Install modal closed. If the install already succeeded, just dismiss; otherwise the user
@@ -774,6 +814,7 @@ export function ChatCore({
     const messageContent = (content || inputValue).trim();
     // Allow sending if there's content OR attachments
     if (!messageContent && (!attachments || attachments.length === 0)) return;
+    if (!opts?.keepPendingActions) invalidateQuestionContinuations();
 
     // If any approval/authorization cards are displayed and the user types a FRESH message,
     // treat that as an implicit dismissal: clear ALL pending cards (both kinds) so they
@@ -810,7 +851,7 @@ export function ChatCore({
 
     setInputValue('');
     await onSendMessage(messageContent || undefined, attachments, defaultSkillIds, opts);
-  }, [inputValue, onSendMessage, pendingServiceApprovals, pendingToolAuthorizations, pendingAskUserQuestions, conversationId, streaming, dismissKey]);
+  }, [inputValue, onSendMessage, pendingServiceApprovals, pendingToolAuthorizations, pendingAskUserQuestions, conversationId, streaming, dismissKey, invalidateQuestionContinuations]);
 
   // Key press handler
   const handleKeyPress = useCallback((e: React.KeyboardEvent) => {

@@ -599,6 +599,7 @@ public class CliAgentService {
             request.setStopReason(stopReason != null ? stopReason.name() : null);
             request.setNodeId("cli:" + session.sessionId);
             request.setProvider("external"); // Claude Code is the LLM
+            request.setKeyRoute(com.apimarketplace.agent.domain.KeyRoute.PLATFORM.name()); // a CLI holds no API key
             request.setModel(session.model != null ? session.model : "claude-code");
             request.setStatus(session.toolResults.stream().allMatch(ToolResult::success)
                 ? "COMPLETED" : "PARTIAL_SUCCESS");

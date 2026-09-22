@@ -1,5 +1,8 @@
 package com.apimarketplace.auth.repository;
 
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
 import com.apimarketplace.auth.domain.InvitationStatus;
 import com.apimarketplace.auth.domain.OrganizationInvitation;
 import org.springframework.data.jpa.repository.EntityGraph;
@@ -18,8 +21,9 @@ public interface OrganizationInvitationRepository extends JpaRepository<Organiza
     @EntityGraph(attributePaths = {"organization", "invitedBy"})
     Optional<OrganizationInvitation> findById(UUID id);
 
+    /** Lookup by HMAC of the plaintext invitation token (TokenAtRest.hash); the token column is encrypted. */
     @EntityGraph(attributePaths = {"organization", "invitedBy"})
-    Optional<OrganizationInvitation> findByToken(String token);
+    Optional<OrganizationInvitation> findByTokenHash(String tokenHash);
 
     @EntityGraph(attributePaths = {"organization", "invitedBy"})
     List<OrganizationInvitation> findByOrganization_IdAndStatus(UUID organizationId, InvitationStatus status);
@@ -38,4 +42,13 @@ public interface OrganizationInvitationRepository extends JpaRepository<Organiza
     long countByInvitedBy_IdAndCreatedAtAfter(Long inviterId, LocalDateTime since);
 
     long countByOrganization_IdAndCreatedAtAfter(UUID organizationId, LocalDateTime since);
+
+    /**
+     * READ-ONLY plaintext match for a row written before 2026-09-17 (token in clear, no hash).
+     * Native on purpose: a JPQL comparison would convert the parameter through the encrypting
+     * converter. Rewrites nothing; the delayed startup backfill does. Gated by the service on
+     * {@code PlaintextTokenBackfill.mayHaveLegacyRows}.
+     */
+    @Query(value = "SELECT * FROM auth.organization_invitation WHERE token = :plain AND token_hash IS NULL", nativeQuery = true)
+    Optional<OrganizationInvitation> findLegacyPlaintext(@Param("plain") String plain);
 }

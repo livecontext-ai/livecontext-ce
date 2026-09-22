@@ -68,7 +68,7 @@ public enum ThinkingLevel {
      */
     public static ThinkingLevel auto(CallPurpose purpose, int toolCount, int userMsgChars) {
         return switch (CallPurpose.orDefault(purpose)) {
-            case CLASSIFY, GUARDRAIL -> MEDIUM;
+            case CLASSIFY, GUARDRAIL, JSON_COMPLETION -> MEDIUM;
             case MAIN -> (toolCount <= 2 && userMsgChars < 50) ? LOW : HIGH;
         };
     }

@@ -15,7 +15,7 @@ interface DeploymentBadgeProps {
  * feature list - same checkmark style as the other feature lines, set apart by a bottom
  * border. Cloud and self-hosted are complementary (a self-hosted Community Edition
  * instance can link a Cloud account for the same plan features), so this is informational,
- * never a selector. The free open-source CE + GitHub link live once under the grid (SelfHostNote).
+ * never a selector. The free source-available CE + GitHub link live once under the grid (SelfHostNote).
  */
 const DeploymentBadge = React.memo(function DeploymentBadge({ size = 'sm', className = '' }: DeploymentBadgeProps) {
   const t = useTranslations('pricing.deployment');

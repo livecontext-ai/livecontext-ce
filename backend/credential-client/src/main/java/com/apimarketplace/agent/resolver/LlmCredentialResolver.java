@@ -12,8 +12,8 @@ public interface LlmCredentialResolver {
      * Resolve an API key for the given provider name, using the in-flight
      * request's userId (read via
      * {@code com.apimarketplace.common.web.TenantResolver#currentRequestUserId()}).
-     * Suitable for singleton callers that have no userId in hand
-     * (e.g. {@code AbstractLLMProvider}).
+     * Suitable for request-less callers (catalog discovery, the admin status page);
+     * completion calls resolve through the two-arg form with the request's tenant.
      *
      * @param providerName the provider identifier (e.g., "anthropic", "openai", "google", "mistral", "deepseek")
      * @return the API key if found in external storage, empty otherwise
@@ -37,9 +37,29 @@ public interface LlmCredentialResolver {
     }
 
     /**
+     * The user's OWN saved key for the provider, and only that: no platform fallback.
+     * An execution pinned to the user's key resolves through this, so it can never
+     * silently run on the platform key. The default answers empty because it cannot
+     * tell a user key from a platform key; an implementation that can read the user's
+     * credential overrides it, and until then an OWN_KEY-pinned call fails closed.
+     */
+    default Optional<String> resolveUserApiKey(String userId, String providerName) {
+        return Optional.empty();
+    }
+
+    /**
      * Invalidate cached key for a specific provider.
      */
     default void invalidate(String providerName) {
+        // no-op by default
+    }
+
+    /**
+     * Invalidate ONE user's cached keys for a provider, after that user saved, removed or
+     * switched their own key: their next call must reflect it without waiting out the TTL
+     * and without touching any other user's slot.
+     */
+    default void invalidate(String userId, String providerName) {
         // no-op by default
     }
 

@@ -985,6 +985,18 @@ describe('GenerateParametersForm', () => {
     expect(screen.queryByTestId('generate-input_image-1-generate-1')).not.toBeNull();
   });
 
+  it('falls back to the parameter name when the model declares no role for the file', async () => {
+    // A model that says nothing about what its file IS still has to be fillable, and the
+    // parameter's own name is what any documentation about it uses.
+    apiMocks.getModels.mockResolvedValue({
+      models: [{ ...IMAGE_TO_VIDEO_MODEL, inputs: {} }], count: 1, kinds: ['video'],
+    });
+
+    renderForm({ generateModel: 'frames-to-video', generateParams: {} });
+
+    await waitFor(() => expect(screen.getByText('generate.params.input_image')).toBeTruthy());
+  });
+
   it('sends several files as a LIST, which is the shape the provider is given', async () => {
     apiMocks.getModels.mockResolvedValue({
       models: [IMAGE_TO_VIDEO_MODEL], count: 1, kinds: ['video'],
@@ -1012,7 +1024,10 @@ describe('GenerateParametersForm', () => {
     });
 
     const { onUpdate } = renderForm({ generateModel: 'frames-to-video', generateParams: {} });
-    await waitFor(() => expect(screen.getByText('generate.params.input_image')).toBeTruthy());
+    // Headed by the ROLE, not by the parameter's own name. The heading used to say
+    // "Reference image" over fields the model itself called a first frame.
+    await waitFor(() => expect(screen.getByText('assetRoles.source')).toBeTruthy());
+    expect(screen.queryByText('generate.params.input_image')).toBeNull();
 
     fireEvent.change(screen.getByTestId('generate-input_image-generate-1'), {
       target: { value: '{{core:download.output.file}}' },

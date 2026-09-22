@@ -1,5 +1,7 @@
 package com.apimarketplace.publication.repository;
 
+
+
 import com.apimarketplace.publication.domain.SharedLinkEntity;
 import com.apimarketplace.publication.domain.SharedLinkEntity.ResourceType;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -32,19 +34,33 @@ public interface SharedLinkRepository extends JpaRepository<SharedLinkEntity, UU
     // Token-keyed public lookups (no org scope - token IS the auth)
     // ──────────────────────────────────────────────────────────────────────
 
-    Optional<SharedLinkEntity> findByToken(String token);
+    /**
+     * Both token columns are encrypted with a random IV (see TokenAtRest), so every lookup goes
+     * through the sibling hash column. There is no {@code findByToken} / {@code findByResourceToken}
+     * on purpose: a JPQL equality on the encrypted column can never match.
+     */
+    Optional<SharedLinkEntity> findByTokenHash(String tokenHash);
 
-    Optional<SharedLinkEntity> findByResourceTokenAndIsActiveTrue(String resourceToken);
+    Optional<SharedLinkEntity> findByResourceTokenHashAndIsActiveTrue(String resourceTokenHash);
 
     Optional<SharedLinkEntity> findByResourceIdAndIsActiveTrue(UUID resourceId);
 
+    /**
+     * Deactivates by token hash alone, with NO tenant or organization predicate.
+     *
+     * <p>Intentional, and the reasoning lives at its only caller,
+     * {@code SharedLinkService#unregister}: the endpoint behind it is unroutable from the edge
+     * and every caller is already authorised on the owning resource. Read that note before
+     * adding a scope clause here, because the callers treat a failure as non-blocking and a
+     * predicate that misses would silently leave a link shared.
+     */
     @Modifying
-    @Query("UPDATE SharedLinkEntity s SET s.isActive = false, s.updatedAt = CURRENT_TIMESTAMP WHERE s.resourceToken = :resourceToken")
-    void deactivateByResourceToken(@Param("resourceToken") String resourceToken);
+    @Query("UPDATE SharedLinkEntity s SET s.isActive = false, s.updatedAt = CURRENT_TIMESTAMP WHERE s.resourceTokenHash = :resourceTokenHash")
+    int deactivateByResourceTokenHash(@Param("resourceTokenHash") String resourceTokenHash);
 
     @Modifying
-    @Query("UPDATE SharedLinkEntity s SET s.accessCount = s.accessCount + 1, s.lastAccessed = CURRENT_TIMESTAMP WHERE s.token = :token")
-    void incrementAccessCount(@Param("token") String token);
+    @Query("UPDATE SharedLinkEntity s SET s.accessCount = s.accessCount + 1, s.lastAccessed = CURRENT_TIMESTAMP WHERE s.id = :id")
+    void incrementAccessCountById(@Param("id") UUID id);
 
     // ──────────────────────────────────────────────────────────────────────
     // Org-strict finders (USER_SCOPED isolation - canonical CRUD path)
@@ -76,10 +92,10 @@ public interface SharedLinkRepository extends JpaRepository<SharedLinkEntity, UU
             @Param("orgId") String orgId, @Param("resourceType") ResourceType resourceType);
 
     @Query("SELECT s FROM SharedLinkEntity s "
-         + "WHERE s.organizationId = :orgId AND s.resourceToken = :resourceToken "
+         + "WHERE s.organizationId = :orgId AND s.resourceTokenHash = :resourceTokenHash "
          + "AND s.isActive = true")
-    Optional<SharedLinkEntity> findByOrganizationIdStrictAndResourceTokenAndIsActiveTrue(
-            @Param("orgId") String orgId, @Param("resourceToken") String resourceToken);
+    Optional<SharedLinkEntity> findByOrganizationIdStrictAndResourceTokenHashAndIsActiveTrue(
+            @Param("orgId") String orgId, @Param("resourceTokenHash") String resourceTokenHash);
 
     @Query("SELECT s FROM SharedLinkEntity s "
          + "WHERE s.organizationId = :orgId AND s.resourceId = :resourceId "
@@ -125,14 +141,32 @@ public interface SharedLinkRepository extends JpaRepository<SharedLinkEntity, UU
     long countByTenantIdAndResourceType(String tenantId, ResourceType resourceType);
 
     /**
-     * @deprecated Use {@link #findByOrganizationIdStrictAndResourceTokenAndIsActiveTrue(String, String)}.
+     * @deprecated Use {@link #findByOrganizationIdStrictAndResourceTokenHashAndIsActiveTrue(String, String)}.
      */
     @Deprecated
-    Optional<SharedLinkEntity> findByTenantIdAndResourceTokenAndIsActiveTrue(String tenantId, String resourceToken);
+    Optional<SharedLinkEntity> findByTenantIdAndResourceTokenHashAndIsActiveTrue(String tenantId, String resourceTokenHash);
 
     /**
      * @deprecated Use {@link #findByOrganizationIdStrictAndResourceIdAndIsActiveTrue(String, UUID)}.
      */
     @Deprecated
     Optional<SharedLinkEntity> findByTenantIdAndResourceIdAndIsActiveTrue(String tenantId, UUID resourceId);
+
+    /**
+     * READ-ONLY plaintext match for a row written before 2026-09-17 (token in clear, no hash).
+     * Native on purpose: a JPQL comparison would convert the parameter through the encrypting
+     * converter. Rewrites nothing; the delayed startup backfill does. Gated by the service on
+     * {@code PlaintextTokenBackfill.mayHaveLegacyRows}.
+     */
+    @Query(value = "SELECT * FROM publication.shared_links WHERE token = :plain AND token_hash IS NULL", nativeQuery = true)
+    Optional<SharedLinkEntity> findLegacyPlaintext(@Param("plain") String plain);
+
+    /**
+     * READ-ONLY plaintext match for a row written before 2026-09-17 (token in clear, no hash).
+     * Native on purpose: a JPQL comparison would convert the parameter through the encrypting
+     * converter. Rewrites nothing; the delayed startup backfill does. Gated by the service on
+     * {@code PlaintextTokenBackfill.mayHaveLegacyRows}.
+     */
+    @Query(value = "SELECT * FROM publication.shared_links WHERE resource_token = :plain AND resource_token_hash IS NULL", nativeQuery = true)
+    Optional<SharedLinkEntity> findLegacyPlaintextResourceToken(@Param("plain") String plain);
 }

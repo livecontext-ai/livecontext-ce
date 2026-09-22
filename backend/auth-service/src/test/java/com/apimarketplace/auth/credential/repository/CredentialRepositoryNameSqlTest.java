@@ -1,6 +1,7 @@
 package com.apimarketplace.auth.credential.repository;
 
 import com.apimarketplace.common.security.CredentialEncryptionService;
+import com.apimarketplace.testsupport.ScratchPostgres;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,14 +10,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.junit.jupiter.api.Assumptions;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -58,21 +57,13 @@ import static org.mockito.Mockito.when;
  *
  * <p><b>How it runs.</b> It talks to a plain Postgres over JDBC rather than starting one:
  * Testcontainers needs a Docker socket, which the {@code arc-build} CI runners do not expose.
- * CI provides a {@code postgres:16-alpine} service container and sets
+ * CI provides a {@code pgvector/pgvector:pg16} service container and sets
  * {@code CREDENTIAL_TEST_PG_URL}, so the class runs there for real.
  *
- * <p>The gate deliberately behaves differently on a dev machine and on CI, because a test that
- * skips in CI is the same as no test, and this file exists precisely because the previous one
- * ran nowhere. With {@code CI} unset and no URL it aborts as skipped (a laptop with no scratch
- * Postgres is not a failure). With {@code CI} set it REFUSES to skip: no URL is a hard failure
- * naming the workflow step that must provide it, so deleting those {@code env:} lines, or
- * moving the class out of the job that carries the service container, breaks the build instead
- * of quietly returning the file to being compiled and never executed. A URL that is set but
- * unreachable always fails, so a broken service container cannot pass either.
- *
- * <p>It creates and TRUNCATEs {@code auth.credentials}, so it refuses to start unless the
- * target database name contains {@code test}: pointing it at a dev database would wipe real
- * credentials. Locally:
+ * <p>{@link ScratchPostgres} owns that decision and documents it: skipped on a laptop with no
+ * scratch database, a hard failure on CI (a test that skips there is the same as no test), and a
+ * refusal for any URL that does not visibly name a scratch one. This class TRUNCATEs
+ * {@code auth.credentials}, which is why that last check matters. Locally:
  * {@code createdb lc_auth_test && CREDENTIAL_TEST_PG_URL=jdbc:postgresql://localhost:5432/lc_auth_test
  * mvn -pl auth-service test -Dtest=CredentialRepositoryNameSqlTest}.
  */
@@ -80,11 +71,10 @@ import static org.mockito.Mockito.when;
 @DisplayName("CredentialRepository name SQL - real Postgres")
 class CredentialRepositoryNameSqlTest {
 
-    private static final String URL = System.getenv("CREDENTIAL_TEST_PG_URL");
-    private static final String USER =
-            System.getenv().getOrDefault("CREDENTIAL_TEST_PG_USER", "postgres");
-    private static final String PASSWORD =
-            System.getenv().getOrDefault("CREDENTIAL_TEST_PG_PASSWORD", "postgres");
+    private static final ScratchPostgres DB = ScratchPostgres.forPrefix(
+            "CREDENTIAL_TEST_PG",
+            "it is the only thing that runs the credential name and rename SQL against a real "
+                    + "engine");
 
     private JdbcTemplate jdbc;
     private CredentialEncryptionService encryption;
@@ -93,20 +83,9 @@ class CredentialRepositoryNameSqlTest {
 
     @BeforeAll
     void setUpSchema() {
-        requireDatabaseOnCi();
+        DB.require();
 
-        // This class TRUNCATEs auth.credentials. A URL pointing at a dev or, worse, a shared
-        // database would destroy real credentials, and the mistake is one copy-paste away, so
-        // refuse anything that is not visibly a scratch database.
-        String database = URL.substring(URL.lastIndexOf('/') + 1).split("\\?")[0];
-        if (!database.toLowerCase().contains("test")) {
-            throw new IllegalStateException(
-                    "CREDENTIAL_TEST_PG_URL must point at a scratch database whose name contains "
-                            + "'test' (this test truncates auth.credentials), got: " + database);
-        }
-        awaitDatabase();
-
-        DriverManagerDataSource ds = new DriverManagerDataSource(URL, USER, PASSWORD);
+        DriverManagerDataSource ds = new DriverManagerDataSource(DB.url(), DB.user(), DB.password());
         ds.setDriverClassName("org.postgresql.Driver");
         this.jdbc = new JdbcTemplate(ds);
         NamedParameterJdbcTemplate namedJdbc = new NamedParameterJdbcTemplate(ds);
@@ -121,7 +100,7 @@ class CredentialRepositoryNameSqlTest {
         when(enc.encrypt(anyString())).thenAnswer(inv -> inv.getArgument(0));
 
         jdbc.execute("CREATE SCHEMA IF NOT EXISTS auth");
-        jdbc.execute("DROP TABLE IF EXISTS auth.credentials");
+        jdbc.execute("DROP TABLE IF EXISTS auth.credentials CASCADE");
         jdbc.execute("""
                 CREATE TABLE auth.credentials (
                     id BIGSERIAL PRIMARY KEY,
@@ -171,6 +150,117 @@ class CredentialRepositoryNameSqlTest {
         assertThat(getTimestamp(id, "updated_at")).isAfter(updatedAtBefore);
         // The secret is never re-encrypted by this path.
         assertThat(getCredentialDataText(id)).isEqualTo(dataBefore);
+    }
+
+    @Test
+    @DisplayName("updateLlmMode rewrites ONE JSONB key of an llm_* row, moves updated_at, and leaves the encrypted api_key byte-for-byte")
+    void updateLlmModeRewritesOnlyTheModeKey() {
+        long id = insertCredential("tenant-1", "Anthropic", "llm_anthropic",
+                Map.of("api_key", "enc:sk-ant-secret", "mode", "no_proxy"));
+        jdbc.update("UPDATE auth.credentials SET updated_at = ? WHERE id = ?",
+                Timestamp.from(Instant.now().minus(2, ChronoUnit.DAYS)), id);
+        Timestamp updatedAtBefore = getTimestamp(id, "updated_at");
+
+        int rows = repository.updateLlmMode(id, "org-1", "proxy");
+
+        assertThat(rows).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT credential_data->>'mode' FROM auth.credentials WHERE id = ?", String.class, id)).isEqualTo("proxy");
+        assertThat(jdbc.queryForObject(
+                "SELECT credential_data->>'api_key' FROM auth.credentials WHERE id = ?", String.class, id)).isEqualTo("enc:sk-ant-secret");
+        assertThat(getTimestamp(id, "updated_at")).isAfter(updatedAtBefore);
+        // A row without a mode yet gets one (jsonb_set with create_missing).
+        long fresh = insertCredential("tenant-1", "OpenAI", "llm_openai", Map.of("api_key", "enc:sk-x"));
+        assertThat(repository.updateLlmMode(fresh, "org-1", "proxy")).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT credential_data->>'mode' FROM auth.credentials WHERE id = ?", String.class, fresh)).isEqualTo("proxy");
+    }
+
+    @Test
+    @DisplayName("findUsableLlmIntegrations returns exactly the keys the resolver would serve, and nothing else")
+    void findUsableLlmIntegrationsMirrorsTheResolver() {
+        // Serves: default llm_ row, no mode (defaults to no_proxy), non-blank key.
+        insertDefaultLlm("tenant-1", "llm_anthropic", Map.of("api_key", "enc:a"));
+        // Serves: explicit no_proxy.
+        insertDefaultLlm("tenant-1", "llm_openai", Map.of("api_key", "enc:b", "mode", "no_proxy"));
+        // Does NOT serve: opted into the platform key.
+        insertDefaultLlm("tenant-1", "llm_google", Map.of("api_key", "enc:c", "mode", "proxy"));
+        // Does NOT serve: no key behind the row.
+        insertDefaultLlm("tenant-1", "llm_mistral", Map.of("mode", "no_proxy"));
+        insertDefaultLlm("tenant-1", "llm_deepseek", Map.of("api_key", "", "mode", "no_proxy"));
+        // Does NOT serve: not the default, so the lookup never reaches it.
+        long notDefault = insertCredential("tenant-1", "Second OpenAI", "llm_openai",
+                Map.of("api_key", "enc:d"));
+        jdbc.update("UPDATE auth.credentials SET is_default = FALSE WHERE id = ?", notDefault);
+        // Does NOT serve: another tenant's key.
+        insertDefaultLlm("tenant-OTHER", "llm_xai", Map.of("api_key", "enc:e"));
+        // Does NOT serve: not an LLM key at all, and a lookalike the LIKE escape must reject.
+        insertDefaultLlm("tenant-1", "gmail", Map.of("api_key", "enc:f"));
+        insertDefaultLlm("tenant-1", "llmXanthropic", Map.of("api_key", "enc:g"));
+
+        List<String> usable = repository.findUsableLlmIntegrations("tenant-1");
+
+        assertThat(usable).containsExactlyInAnyOrder("llm_anthropic", "llm_openai");
+    }
+
+    @Test
+    @DisplayName("findUsableLlmIntegrations reads mode and key the way the RESOLVER reads them: trimmed, and case-blind on the mode")
+    void findUsableLlmIntegrationsMatchesTheResolverOnShapeNotSpelling() {
+        // The resolver compares the mode with equalsIgnoreCase on a trimmed value, so each
+        // of these three rows runs on the PLATFORM key. A literal <> 'proxy' in SQL would
+        // have quoted all three as own-key, which is the expensive direction of wrong.
+        insertDefaultLlm("tenant-1", "llm_anthropic", Map.of("api_key", "enc:a", "mode", "Proxy"));
+        insertDefaultLlm("tenant-1", "llm_openai", Map.of("api_key", "enc:b", "mode", "PROXY"));
+        insertDefaultLlm("tenant-1", "llm_google", Map.of("api_key", "enc:c", "mode", "  proxy "));
+        // A tab is whitespace to String.trim() but not to BTRIM with no character set, which
+        // is how the first version of this predicate still let a proxy row through.
+        insertDefaultLlm("tenant-1", "llm_xai", Map.of("api_key", "enc:x", "mode", "\tproxy\n"));
+        // The resolver rejects a blank key with isBlank(), and a whitespace-only value
+        // reaches the column verbatim: the encryptor passes blank input through unchanged.
+        insertDefaultLlm("tenant-1", "llm_mistral", Map.of("api_key", "   "));
+        insertDefaultLlm("tenant-1", "llm_cohere", Map.of("api_key", "\t\n"));
+        // Kept, so the assertion proves the query still returns something on this data.
+        insertDefaultLlm("tenant-1", "llm_deepseek", Map.of("api_key", "enc:d", "mode", "NO_PROXY"));
+
+        assertThat(repository.findUsableLlmIntegrations("tenant-1")).containsExactly("llm_deepseek");
+    }
+
+    @Test
+    @DisplayName("findUsableLlmIntegrations lower-cases the integration it answers (a pin on behaviour this query already had)")
+    void findUsableLlmIntegrationsAnswersLowerCase() {
+        // The column has no case contract; the picker matches the catalogue provider in
+        // lower case, so a row saved as LLM_Anthropic must not read as a second provider.
+        insertDefaultLlm("tenant-1", "LLM_Anthropic", Map.of("api_key", "enc:a"));
+
+        assertThat(repository.findUsableLlmIntegrations("tenant-1")).containsExactly("llm_anthropic");
+    }
+
+    @Test
+    @DisplayName("findUsableLlmIntegrations answers empty for a blank tenant and for one with no key, never throws")
+    void findUsableLlmIntegrationsEmptyCases() {
+        insertDefaultLlm("tenant-1", "llm_anthropic", Map.of("api_key", "enc:a"));
+
+        assertThat(repository.findUsableLlmIntegrations("tenant-none")).isEmpty();
+        assertThat(repository.findUsableLlmIntegrations("")).isEmpty();
+        assertThat(repository.findUsableLlmIntegrations(null)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("updateLlmMode refuses a non-LLM row, a row in another workspace, and an unknown id (0 rows, never throws)")
+    void updateLlmModeScopeAndKindGuards() {
+        long gmail = insertCredential("tenant-1", "Gmail", "gmail", Map.of("access_token", "t"));
+        long other = insertCredential("tenant-1", "Anthropic", "llm_anthropic", Map.of("api_key", "k"));
+        jdbc.update("UPDATE auth.credentials SET organization_id = 'org-OTHER' WHERE id = ?", other);
+        // 'llm\_%' must match a literal underscore: an integration like 'llmX...' is not an LLM key.
+        long lookalike = insertCredential("tenant-1", "Lookalike", "llmXanthropic", Map.of("api_key", "k"));
+
+        assertThat(repository.updateLlmMode(gmail, "org-1", "proxy")).isZero();
+        assertThat(repository.updateLlmMode(other, "org-1", "proxy")).isZero();
+        assertThat(repository.updateLlmMode(lookalike, "org-1", "proxy")).isZero();
+        assertThat(repository.updateLlmMode(999_999L, "org-1", "proxy")).isZero();
+        assertThat(repository.updateLlmMode(null, "org-1", "proxy")).isZero();
+        assertThat(jdbc.queryForObject(
+                "SELECT credential_data->>'mode' FROM auth.credentials WHERE id = ?", String.class, gmail)).isNull();
     }
 
     @Test
@@ -364,53 +454,6 @@ class CredentialRepositoryNameSqlTest {
 
     // ────────────────────────── helpers ──────────────────────────
 
-    /**
-     * Skip on a laptop, fail on CI. The whole reason this class replaced a Testcontainers
-     * {@code *IT} is that the old one was executed by no build and nobody could tell, so the
-     * one outcome it must never produce is "silently did not run" in the place that is
-     * supposed to run it.
-     */
-    private static void requireDatabaseOnCi() {
-        if (URL != null && !URL.isBlank()) {
-            return;
-        }
-        boolean onCi = System.getenv("CI") != null && !System.getenv("CI").isBlank();
-        if (onCi) {
-            throw new IllegalStateException(
-                    "CREDENTIAL_TEST_PG_URL is unset on CI. This class must execute there: it is "
-                            + "the only thing that runs the credential name/rename SQL against a "
-                            + "real engine. Restore the env block on the workflow step that runs "
-                            + "it, and keep that step in a job carrying the postgres service.");
-        }
-        Assumptions.abort(
-                "no scratch Postgres: set CREDENTIAL_TEST_PG_URL to run this locally "
-                        + "(CI always sets it)");
-    }
-
-    /**
-     * A CI service container answers on its port before Postgres finishes starting, so the
-     * first connection can be refused on an otherwise healthy database. Retry briefly, then
-     * fail loudly: skipping here would turn a broken CI service into a silent pass.
-     */
-    private static void awaitDatabase() {
-        RuntimeException last = null;
-        for (int attempt = 0; attempt < 30; attempt++) {
-            try (Connection ignored = DriverManager.getConnection(URL, USER, PASSWORD)) {
-                return;
-            } catch (Exception e) {
-                last = new IllegalStateException(
-                        "CREDENTIAL_TEST_PG_URL is set but the database is unreachable: " + URL, e);
-                try {
-                    Thread.sleep(1_000);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw last;
-                }
-            }
-        }
-        throw last;
-    }
-
     private long insertCredential(String tenantId, String name, Map<String, Object> data) {
         return insertCredential(tenantId, name, "gmail", data);
     }
@@ -427,6 +470,13 @@ class CredentialRepositoryNameSqlTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /** A DEFAULT credential of {@code integration}, which is the shape the resolver reads. */
+    private long insertDefaultLlm(String tenantId, String integration, Map<String, Object> data) {
+        long id = insertCredential(tenantId, integration + " key", integration, data);
+        jdbc.update("UPDATE auth.credentials SET is_default = TRUE WHERE id = ?", id);
+        return id;
     }
 
     private String getString(long id, String column) {

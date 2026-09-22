@@ -1,5 +1,8 @@
 package com.apimarketplace.auth.service;
 
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.common.security.CredentialEncryptionService;
+
 import com.apimarketplace.auth.domain.*;
 import com.apimarketplace.auth.repository.*;
 import com.apimarketplace.common.web.AppEditionProvider;
@@ -27,6 +30,12 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("OrganizationMemberService Tests")
 class OrganizationMemberServiceTest {
+
+    /** Token columns are hashed through TokenAtRest; a unit test must install the material itself. */
+    @org.junit.jupiter.api.BeforeAll
+    static void installTokenAtRest() {
+        TokenAtRest.install(new CredentialEncryptionService("test-password-123", "0123456789abcdef"));
+    }
 
     @Mock private OrganizationMemberRepository memberRepository;
     @Mock private OrganizationInvitationRepository invitationRepository;
@@ -1258,7 +1267,7 @@ class OrganizationMemberServiceTest {
         @DisplayName("PENDING token → valid + email + org + role + hasAccount=false when no local user")
         void pendingTokenForBrandNewEmail() {
             OrganizationInvitation inv = new OrganizationInvitation(org, "newcomer@test.com", OrganizationRole.ADMIN, owner);
-            when(invitationRepository.findByToken("tok-1")).thenReturn(Optional.of(inv));
+            when(invitationRepository.findByTokenHash(TokenAtRest.hash("tok-1"))).thenReturn(Optional.of(inv));
             when(userRepository.findByEmail("newcomer@test.com")).thenReturn(Optional.empty());
 
             OrganizationMemberService.InvitationInfo info = service.getInvitationInfo("tok-1");
@@ -1274,7 +1283,7 @@ class OrganizationMemberServiceTest {
         @DisplayName("PENDING token with an existing local user → hasAccount=true")
         void pendingTokenWhenAccountExists() {
             OrganizationInvitation inv = new OrganizationInvitation(org, "target@test.com", OrganizationRole.MEMBER, owner);
-            when(invitationRepository.findByToken("tok-2")).thenReturn(Optional.of(inv));
+            when(invitationRepository.findByTokenHash(TokenAtRest.hash("tok-2"))).thenReturn(Optional.of(inv));
             when(userRepository.findByEmail("target@test.com")).thenReturn(Optional.of(targetUser));
 
             OrganizationMemberService.InvitationInfo info = service.getInvitationInfo("tok-2");
@@ -1288,13 +1297,13 @@ class OrganizationMemberServiceTest {
         void nullOrBlankTokenIsInvalid() {
             assertThat(service.getInvitationInfo(null).valid()).isFalse();
             assertThat(service.getInvitationInfo("   ").valid()).isFalse();
-            verify(invitationRepository, never()).findByToken(any());
+            verify(invitationRepository, never()).findByTokenHash(any());
         }
 
         @Test
         @DisplayName("unknown token → invalid (leaks nothing)")
         void unknownTokenIsInvalid() {
-            when(invitationRepository.findByToken("nope")).thenReturn(Optional.empty());
+            when(invitationRepository.findByTokenHash(TokenAtRest.hash("nope"))).thenReturn(Optional.empty());
 
             OrganizationMemberService.InvitationInfo info = service.getInvitationInfo("nope");
 
@@ -1307,7 +1316,7 @@ class OrganizationMemberServiceTest {
         void expiredTokenIsInvalidAndNotMutated() {
             OrganizationInvitation inv = new OrganizationInvitation(org, "stale@test.com", OrganizationRole.MEMBER, owner);
             inv.setExpiresAt(java.time.LocalDateTime.now().minusDays(1));
-            when(invitationRepository.findByToken("expired")).thenReturn(Optional.of(inv));
+            when(invitationRepository.findByTokenHash(TokenAtRest.hash("expired"))).thenReturn(Optional.of(inv));
 
             OrganizationMemberService.InvitationInfo info = service.getInvitationInfo("expired");
 
@@ -1321,7 +1330,7 @@ class OrganizationMemberServiceTest {
         void nonPendingTokenIsInvalid() {
             OrganizationInvitation accepted = new OrganizationInvitation(org, "a@test.com", OrganizationRole.MEMBER, owner);
             accepted.setStatus(InvitationStatus.ACCEPTED);
-            when(invitationRepository.findByToken("acc")).thenReturn(Optional.of(accepted));
+            when(invitationRepository.findByTokenHash(TokenAtRest.hash("acc"))).thenReturn(Optional.of(accepted));
 
             assertThat(service.getInvitationInfo("acc").valid()).isFalse();
         }

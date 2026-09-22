@@ -25,14 +25,19 @@ import {
  */
 export async function performRunAction(
   action: RunPanelAction,
-  target: { workflowId: string; runId?: string | null },
+  target: { workflowId: string; runId?: string | null; surfaceId?: string },
 ): Promise<void> {
   // Addressed, always: an unaddressed request is claimed by EVERY mounted canvas,
   // so a surface that lost its workflow id would have a foreign canvas answer for
   // it. Nothing renders a control without one, and this keeps it that way.
   if (!target.workflowId) throw new Error('No workflow to act on');
 
-  const claim = requestRunAction({ action, workflowId: target.workflowId, runId: target.runId });
+  const claim = requestRunAction({
+    action,
+    workflowId: target.workflowId,
+    runId: target.runId,
+    surfaceId: target.surfaceId,
+  });
   if (claim.handled) {
     // Await the claimer, so `pending` covers the real work and its failure lands
     // on the control that was pressed rather than only in a toast host that the
@@ -41,7 +46,7 @@ export async function performRunAction(
     return;
   }
 
-  const runId = target.runId || getCachedRunPanelData(target.workflowId).runId;
+  const runId = target.runId || getCachedRunPanelData(target.workflowId, target.surfaceId).runId;
   if (!runId) throw new Error('No run to act on');
   // Note: unlike the canvas path, this does NOT refresh the run afterwards - the
   // bus is the canvas' to publish, and there is none here by definition. On a
@@ -54,7 +59,7 @@ export async function performRunAction(
 }
 
 export interface RunActionsState {
-  /** The run the canvas of this workflow is bound to, if any. */
+  /** The run the canvas of this workflow surface is bound to, if any. */
   runId: string | null;
   /** Raw run status, or undefined while no snapshot has been published. */
   status?: string;
@@ -74,6 +79,7 @@ export interface RunActionsState {
 
 interface RunSnapshot {
   workflowId: string | null;
+  surfaceId?: string;
   runId: string | null;
   status?: string;
   pinnedVersion: number | null;
@@ -88,10 +94,11 @@ interface RunSnapshot {
  * hook - a panel tab bar, an application toolbar - sit above large subtrees that
  * must not re-render at that rate.
  */
-function readSnapshot(workflowId: string | null): RunSnapshot {
-  const data = getCachedRunPanelData(workflowId ?? '');
+function readSnapshot(workflowId: string | null, surfaceId?: string): RunSnapshot {
+  const data = getCachedRunPanelData(workflowId ?? '', surfaceId);
   return {
     workflowId,
+    surfaceId,
     runId: data.runId,
     status: data.runInfo?.status as string | undefined,
     pinnedVersion: data.pinnedVersion,
@@ -101,6 +108,7 @@ function readSnapshot(workflowId: string | null): RunSnapshot {
 
 function sameSnapshot(a: RunSnapshot, b: RunSnapshot): boolean {
   return a.workflowId === b.workflowId
+    && (a.surfaceId ?? null) === (b.surfaceId ?? null)
     && a.runId === b.runId
     && a.status === b.status
     && a.pinnedVersion === b.pinnedVersion
@@ -119,9 +127,11 @@ export function useRunActions(
    * here would act on that previous run from a bar showing the new one.
    */
   preferredRunId?: string | null,
+  /** Canvas/panel pair to observe. Omitted for the route-owned page surface. */
+  surfaceId?: string,
 ): RunActionsState {
   const id = workflowId ?? null;
-  const [snapshot, setSnapshot] = useState<RunSnapshot>(() => readSnapshot(id));
+  const [snapshot, setSnapshot] = useState<RunSnapshot>(() => readSnapshot(id, surfaceId));
   const [pending, setPending] = useState<RunPanelAction | null>(null);
   const [failed, setFailed] = useState(false);
   /** The run `pending` / `failed` are about. */
@@ -131,7 +141,9 @@ export function useRunActions(
   // would paint one frame of the previous workflow's run - long enough to offer a
   // stop for a run this surface is no longer showing.
   //
-  if (snapshot.workflowId !== id) setSnapshot(readSnapshot(id));
+  if (snapshot.workflowId !== id || (snapshot.surfaceId ?? null) !== (surfaceId ?? null)) {
+    setSnapshot(readSnapshot(id, surfaceId));
+  }
 
   // `pending` and `failed` describe an attempt on ONE run, so they are dropped
   // the moment the surface points at another - a change of workflow, and equally
@@ -139,7 +151,11 @@ export function useRunActions(
   // over, a healthy run inherits the red ring and the "this did not work" name;
   // a carried-over `pending` is worse, leaving its stop disabled and spinning
   // until a promise about a different run settles.
-  const currentRunId = preferredRunId ?? (snapshot.workflowId === id ? snapshot.runId : readSnapshot(id).runId) ?? null;
+  const snapshotMatchesSurface = snapshot.workflowId === id
+    && (snapshot.surfaceId ?? null) === (surfaceId ?? null);
+  const currentRunId = preferredRunId
+    ?? (snapshotMatchesSurface ? snapshot.runId : readSnapshot(id, surfaceId).runId)
+    ?? null;
   if (actedOn !== currentRunId) {
     setActedOn(currentRunId);
     if (pending !== null) setPending(null);
@@ -153,20 +169,21 @@ export function useRunActions(
     // does. A live run would self-heal on its next publish; a run that goes quiet
     // (an interface waiting on the user) would not.
     setSnapshot(prev => {
-      const cached = readSnapshot(id);
+      const cached = readSnapshot(id, surfaceId);
       return sameSnapshot(prev, cached) ? prev : cached;
     });
     return subscribeRunPanelData(id, (data: RunPanelData) => {
       const next: RunSnapshot = {
         workflowId: id,
+        surfaceId,
         runId: data.runId,
         status: data.runInfo?.status as string | undefined,
         pinnedVersion: data.pinnedVersion,
         isPreviewOnly: data.isPreviewOnly,
       };
       setSnapshot(prev => (sameSnapshot(prev, next) ? prev : next));
-    });
-  }, [id]);
+    }, surfaceId);
+  }, [id, surfaceId]);
 
   const runId = currentRunId;
   /** The run on screen right now, for callbacks that settle after a switch. */
@@ -183,7 +200,7 @@ export function useRunActions(
     const attemptedRunId = runId;
     setFailed(false);
     setPending(action);
-    performRunAction(action, { workflowId: id, runId })
+    performRunAction(action, { workflowId: id, runId, surfaceId })
       .catch((err: unknown) => {
         // The reason is for the log; the CONTROL says "this failed" in the user's
         // language, because an API message is not translated and a raw one would
@@ -198,7 +215,7 @@ export function useRunActions(
       // settles after the surface moved on would clear the CURRENT run's spinner
       // and re-enable its stop while that run's own request is still in flight.
       .finally(() => { if (currentRunRef.current === attemptedRunId) setPending(null); });
-  }, [id, runId]);
+  }, [id, runId, surfaceId]);
 
   return {
     runId,

@@ -95,12 +95,12 @@ class CatalogToolBillingRefusalTest {
         dto.setPricingVersionId(1L);
         dto.setEffectiveMarkup(credits);
         when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(), anyLong(),
-                any(UUID.class), any(), any())).thenReturn(Optional.of(dto));
+                any(UUID.class), any(), any(), any())).thenReturn(Optional.of(dto));
     }
 
     private void givenNoPricePublished() {
         when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(), anyLong(),
-                any(UUID.class), any(), any())).thenReturn(Optional.empty());
+                any(UUID.class), any(), any(), any())).thenReturn(Optional.empty());
     }
 
     private void givenReserveAnswers(boolean success, String error, boolean delinquent) {

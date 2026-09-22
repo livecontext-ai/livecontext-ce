@@ -19,8 +19,18 @@ COPY --parents */pom.xml ./
 RUN mvn -B -DskipTests -pl publication-service -am dependency:go-offline
 
 COPY . .
-RUN mvn -B -DskipTests -pl publication-service -am clean package
-
+# Image builds do not run tests (ci.yml does, on its own), so skip test
+# COMPILATION too: -DskipTests still javac-compiles every test source, and this
+# reactor carries more test code than main code (orchestrator-service alone:
+# 1172 test files vs 967 main). -Dmaven.test.skip=true skips both. Safe here
+# because no module publishes or consumes a test-jar. Same flag the CE monolith
+# image already uses. `clean` is dropped: this layer starts from a fresh COPY and
+# .dockerignore excludes **/target/, so there is nothing to clean - it only
+# walked all 29 modules. -T 2 is a BOUNDED parallel build: the reactor closure
+# has real width (9 client modules), but several of these builds run concurrently
+# on one node whose runner pods have no CPU limit, so `1C` (all host cores each)
+# would thrash rather than help.
+RUN mvn -B -T 2 -Dmaven.test.skip=true -pl publication-service -am package
 # Runtime stage
 FROM ${JRE_IMAGE}
 RUN apk add --no-cache curl

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { CalendarClock, MoreVertical, Zap } from 'lucide-react';
+import { CalendarClock, MoreVertical, Pause, Play, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { menuItemClass, menuSurfaceClass } from '@/components/ui/menu';
@@ -10,6 +10,11 @@ import { agendaService } from '@/lib/api/orchestrator/agenda.service';
 import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import { agendaErrorText } from '@/components/agenda/agendaErrors';
 import type { ActiveAutomation } from '@/lib/api/orchestrator/dashboard.service';
+import {
+  canControlProductionResource,
+  productionResourceKind,
+  setProductionResourcePaused,
+} from '@/lib/api/orchestrator/resource-control';
 
 /**
  * What a row must do with the content the menu lands on, applied by the row itself.
@@ -40,7 +45,7 @@ export const TRIGGER_ROW_ACTIONS_YIELD =
  * thing before it renders.
  */
 export function hasTriggerRowActions(automation: ActiveAutomation): boolean {
-  return Boolean(automation.schedule?.scheduleId);
+  return Boolean(automation.schedule?.scheduleId) || canControlProductionResource(automation);
 }
 
 interface TriggerRowActionsProps {
@@ -79,12 +84,19 @@ export function TriggerRowActions({ automation, onNavigate, onResult }: TriggerR
   // from the action having done nothing, and is how "run instead" was reported broken.
   const refreshAutomations = useRefreshHomeStatus();
   const scheduleId = automation.schedule?.scheduleId;
+  const resourceKind = productionResourceKind(automation.resourceType);
+  // A spending cap refuses every fire of this schedule, the ones asked for from here
+  // included. Read straight from the server's verdict rather than re-derived: the cap can
+  // be a workflow's period budget or an agent's own credit budget, and this row does not
+  // need to know which.
+  const budgetBlocked = Boolean(automation.schedule?.budgetBlocked);
 
   // Same condition as `hasTriggerRowActions`, read through it so the row and the menu can
   // never disagree about whether this row has one.
-  if (!hasTriggerRowActions(automation) || !scheduleId) return null;
+  if (!hasTriggerRowActions(automation)) return null;
 
   const run = async (keepNextOccurrence: boolean) => {
+    if (!scheduleId) return;
     setBusy(true);
     try {
       const outcome = await agendaService.runNow(scheduleId, keepNextOccurrence);
@@ -112,13 +124,32 @@ export function TriggerRowActions({ automation, onNavigate, onResult }: TriggerR
     }
   };
 
+  const toggleResourcePause = async () => {
+    setBusy(true);
+    try {
+      const paused = !automation.resourcePaused;
+      await setProductionResourcePaused(automation, paused);
+      setOpen(false);
+      onResult('success', paused
+        ? t('resourcePaused', { type: resourceKind })
+        : t('resourceResumed', { type: resourceKind }));
+      refreshAutomations();
+    } catch {
+      onResult('error', t('resourceToggleFailed', { type: resourceKind }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const openInAgenda = () => {
     setOpen(false);
     // Hand the agenda the day the fire lands on plus the schedule to highlight, so the
     // user arrives looking at the occurrence rather than at today.
-    const params = new URLSearchParams({ focus: scheduleId });
+    const params = new URLSearchParams();
+    if (scheduleId) params.set('focus', scheduleId);
     if (automation.schedule?.nextFireAt) params.set('date', automation.schedule.nextFireAt);
-    onNavigate(`/app/agenda?${params.toString()}`);
+    const query = params.toString();
+    onNavigate(query ? `/app/agenda?${query}` : '/app/agenda');
   };
 
   return (
@@ -172,20 +203,38 @@ export function TriggerRowActions({ automation, onNavigate, onResult }: TriggerR
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className={`w-64 ${menuSurfaceClass}`}>
-        <ActionItem
-          icon={Zap}
-          label={t('runNow')}
-          hint={t('runNowHint')}
-          disabled={busy}
-          onClick={() => void run(true)}
-        />
-        <ActionItem
-          icon={Zap}
-          label={t('runInstead')}
-          hint={t('runInsteadHint')}
-          disabled={busy}
-          onClick={() => void run(false)}
-        />
+        {scheduleId && (
+          <>
+            {/* Both of these ask the schedule to fire NOW, and a spending cap refuses a
+                fire whoever asked for it - so offering them on a capped row would only
+                produce a failure toast. Disabled rather than hidden, so the row states the
+                reason instead of quietly losing its actions. */}
+            <ActionItem
+              icon={Zap}
+              label={t('runNow')}
+              hint={budgetBlocked ? t('runNowBudgetBlocked') : t('runNowHint')}
+              disabled={busy || budgetBlocked}
+              onClick={() => void run(true)}
+            />
+            <ActionItem
+              icon={Zap}
+              label={t('runInstead')}
+              hint={budgetBlocked ? t('runNowBudgetBlocked') : t('runInsteadHint')}
+              disabled={busy || budgetBlocked}
+              onClick={() => void run(false)}
+            />
+          </>
+        )}
+        {canControlProductionResource(automation) && (
+          <ActionItem
+            icon={automation.resourcePaused ? Play : Pause}
+            label={automation.resourcePaused
+              ? t('resumeResource', { type: resourceKind })
+              : t('pauseResource', { type: resourceKind })}
+            disabled={busy}
+            onClick={() => void toggleResourcePause()}
+          />
+        )}
         <ActionItem icon={CalendarClock} label={t('openAgenda')} onClick={openInAgenda} />
       </PopoverContent>
     </Popover>

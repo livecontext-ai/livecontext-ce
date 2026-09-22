@@ -81,6 +81,12 @@ const CLI_BRIDGE_PROVIDER: Record<'claudeCode' | 'codex' | 'geminiCli' | 'mistra
 // 1: cloud connection (default), 2: AI providers (API keys), 3: CLI providers, 4: platform credentials, 5: done
 const TOTAL_STEPS = 5;
 
+// Chat providers only, deliberately. This wizard exists to get a fresh install to a
+// working model, and every entry here is a provider that can answer a conversation.
+// A decision provider (typesafe) answers a Classify node and nothing else, so asking
+// for its key before the install has a chat model would be asking for the optional
+// one first. It is keyed afterwards from Settings > AI Providers, whose own list does
+// carry it, and a provider missing from THAT list has no key field anywhere.
 const ALL_PROVIDER_DEFINITIONS: LlmProviderDefinition[] = [
   {
     providerName: 'anthropic',

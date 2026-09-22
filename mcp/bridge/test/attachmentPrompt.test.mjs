@@ -142,6 +142,66 @@ test('no attachments returns the base prompt unchanged', () => {
   assert.equal(writes.length, 0);
 });
 
+// ─── fileRef note: input_image unreachable-from-chat regression ─────────────
+// Before this fix an attachment reached the CLI agent only as a local disk
+// path for Read/vision - it never became a canonical FileRef, so the agent
+// could SEE an attached image but never REFERENCE it in a tool call (e.g.
+// generation's input_image, which requires "the whole file object another
+// tool returned", not a bridge-host-local path meaningless to the platform).
+// conversation-service's AttachmentService now sets `fileRef` on the wire
+// when the attachment is backed by a durable, tenant-scoped S3 object (null
+// for a legacy DB-blob row - see MessageAttachment#fileRef() on the Java
+// side); this pins the bridge's matching half of that fix (the direct-API
+// path's half is AgentLoopServiceFileRefNoteTest, keep the two in parity).
+
+test('attachment WITH a fileRef gets a note naming the file and its verbatim JSON, alongside the normal disk-Read handling', () => {
+  const { writeFile, writes } = recordingWriter();
+  const fileRef = { _type: 'file', path: 'user-1/general/chat/photo.jpg', name: 'photo.jpg', mimeType: 'image/jpeg', size: 3, id: '3f1b2c3d-4e5f-6789-abcd-ef0123456789' };
+  const r = buildAttachmentPrompt('Edit this photo', [
+    { type: 'IMAGE', mimeType: 'image/jpeg', fileName: 'photo.jpg', data: b64bin([1, 2, 3]), fileRef },
+  ], { attachDir: '/tmp/att', writeFile });
+
+  // Unaffected: the image still goes to disk for Read/vision exactly as before.
+  assert.equal(writes.length, 1);
+  assert.ok(r.finalPrompt.includes('Use the Read tool'));
+  // New: the model also gets the FileRef spelled out, so it can pass it to a
+  // tool argument instead of the disk path (meaningless to the platform).
+  assert.ok(r.finalPrompt.includes('photo.jpg'));
+  assert.ok(r.finalPrompt.includes('input_image'));
+  assert.ok(r.finalPrompt.includes(JSON.stringify(fileRef)));
+  assert.ok(r.finalPrompt.endsWith('Edit this photo'));
+});
+
+test('attachment with no fileRef (legacy DB-blob row) gets no note - never a fabricated key', () => {
+  const { writeFile } = recordingWriter();
+  const r = buildAttachmentPrompt('Look at this', [
+    { type: 'IMAGE', mimeType: 'image/png', fileName: 'old.png', data: b64bin([1, 2, 3]) },
+  ], { attachDir: '/tmp/att', writeFile });
+
+  assert.ok(!r.finalPrompt.includes('input_image'));
+  assert.ok(r.finalPrompt.endsWith('Look at this'));
+});
+
+test('fileRef note appears even for a TEXT attachment that is inlined rather than written to disk', () => {
+  const { writeFile } = recordingWriter();
+  const fileRef = { _type: 'file', path: 'user-1/general/chat/notes.txt', name: 'notes.txt', mimeType: 'text/plain', size: 8, id: 'aaaa' };
+  const r = buildAttachmentPrompt('q', [
+    { type: 'TEXT', mimeType: 'text/plain', fileName: 'notes.txt', data: b64('the body'), fileRef },
+  ], { attachDir: '/tmp/att', writeFile });
+
+  assert.ok(r.finalPrompt.includes('the body'), 'still inlined as before');
+  assert.ok(r.finalPrompt.includes(JSON.stringify(fileRef)), 'and the fileRef note is present too');
+});
+
+test('a non-object fileRef value is ignored, not thrown, and produces no note', () => {
+  const { writeFile } = recordingWriter();
+  const r = buildAttachmentPrompt('q', [
+    { type: 'IMAGE', mimeType: 'image/png', fileName: 'x.png', data: b64bin([1]), fileRef: 'not-an-object' },
+  ], { attachDir: '/tmp/att', writeFile });
+
+  assert.ok(!r.finalPrompt.includes('input_image'));
+});
+
 test('GUARANTEE: for EVERY allowed format the assembled prompt has no NUL byte', () => {
   // Two passes per format: (A) realistic content, (B) adversarial binary-with-NUL
   // forced under that MIME. In both passes finalPrompt must be NUL-free, so the

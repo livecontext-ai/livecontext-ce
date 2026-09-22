@@ -59,7 +59,8 @@ public class PublicationCloudPlatformInfoAccess implements CloudPlatformCredenti
     @Override
     @SuppressWarnings("unchecked")
     public Optional<Map<String, Object>> fetchPlatformInfo(String integrationName, String apiToolId,
-                                                            String modelId, String quantity) {
+                                                            String modelId, String quantity,
+                                                            String priceMultiplier) {
         if (integrationName == null || integrationName.isBlank()) {
             return Optional.empty();
         }
@@ -74,7 +75,8 @@ public class PublicationCloudPlatformInfoAccess implements CloudPlatformCredenti
         headers.set(INSTALL_HEADER, credentials.installId());
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
 
-        String url = url(credentials.cloudApiUrl(), integrationName, apiToolId, modelId, quantity);
+        String url = url(credentials.cloudApiUrl(), integrationName, apiToolId, modelId, quantity,
+                priceMultiplier);
         try {
             ResponseEntity<Map> response = restTemplate.exchange(
                     url, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
@@ -92,14 +94,15 @@ public class PublicationCloudPlatformInfoAccess implements CloudPlatformCredenti
     }
 
     private static String url(String base, String integrationName, String apiToolId,
-                              String modelId, String quantity) {
+                              String modelId, String quantity, String priceMultiplier) {
         String cleanBase = base.endsWith("/") ? base.substring(0, base.length() - 1) : base;
         StringBuilder url = new StringBuilder(cleanBase).append(PLATFORM_INFO_PATH)
                 .append(URLEncoder.encode(integrationName, StandardCharsets.UTF_8));
         boolean first = true;
         first = appendParam(url, first, "apiToolId", apiToolId);
         first = appendParam(url, first, "modelId", modelId);
-        appendParam(url, first, "quantity", quantity);
+        first = appendParam(url, first, "quantity", quantity);
+        appendParam(url, first, "priceMultiplier", priceMultiplier);
         return url.toString();
     }
 

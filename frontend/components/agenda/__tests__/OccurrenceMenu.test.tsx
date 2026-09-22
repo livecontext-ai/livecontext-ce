@@ -73,6 +73,16 @@ describe('OccurrenceMenu', () => {
     expect(item('menu.pause')).toBeTruthy();
   });
 
+  it.each([
+    ['WORKFLOW', 'workflow'],
+    ['AGENT', 'agent'],
+    ['APPLICATION', 'interface'],
+  ] as const)('names the full-resource action for a %s', (resourceType, type) => {
+    renderMenu(occurrence({ resourceType, runIdPublic: 'run-1' }));
+
+    expect(item(`menu.pauseResource:{"type":"${type}"}`)).toBeTruthy();
+  });
+
   it('withholds MOVE, but keeps run early, when no scope can move this occurrence', () => {
     // Chips 2..n of an interval schedule: not the pending fire, and the cron cannot be
     // rewritten. Running early still works because it acts on the SCHEDULE, not on this
@@ -155,5 +165,67 @@ describe('OccurrenceMenu', () => {
     renderMenu(occurrence({ kind: 'PAST', status: 'FAILED' }));
 
     expect(item('status.failed')).toBeTruthy();
+  });
+  describe('an occurrence a spending cap is going to refuse', () => {
+    // The RESOURCE-level verdict, which is the one "run early" depends on: it runs the
+    // schedule at the moment of the click, not the fire being looked at. Both kinds of cap
+    // land here, a workflow's period budget and an agent's own credit budget, because the
+    // server resolves the verdict and the calendar never learns which kind it is.
+    const blocked = () => occurrence({ budgetBlocked: true });
+
+    it('offers run early, but disabled', () => {
+      // Hidden would be worse: the action would simply be missing, with no reason given,
+      // on a menu where every other occurrence has it.
+      renderMenu(blocked());
+
+      const runNow = item('menu.runNow');
+      expect(runNow).not.toBeNull();
+      expect((runNow!.closest('button') as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('replaces the hint with the reason', () => {
+      renderMenu(blocked());
+
+      expect(item('menu.runNowBudgetBlocked')).not.toBeNull();
+      expect(item('menu.runNowHint')).toBeNull();
+    });
+
+    it('does not call back when the disabled item is clicked', () => {
+      const onRunNow = vi.fn();
+      render(
+        <OccurrenceMenu
+          occurrence={blocked()}
+          anchor={{ x: 10, y: 10 }}
+          timezone="UTC"
+          busy={false}
+          canMutate
+          onClose={() => {}}
+          onRunNow={onRunNow}
+          onMove={() => {}}
+          onTogglePause={() => {}}
+          onOpenResource={() => {}}
+        />,
+      );
+      (item('menu.runNow')!.closest('button') as HTMLButtonElement).click();
+
+      expect(onRunNow).not.toHaveBeenCalled();
+    });
+
+    it('disables run early on an occurrence AFTER the cap lifts, because the click is now', () => {
+      // The case that keying on `armed` got wrong. A monthly cap lifting on the 1st leaves
+      // the occurrence dated the 5th armed, because that fire WILL happen - but clicking
+      // run early today runs the schedule today, and today the cap still holds.
+      renderMenu(occurrence({ armed: true, budgetBlocked: true }));
+
+      expect((item('menu.runNow')!.closest('button') as HTMLButtonElement).disabled).toBe(true);
+      expect(item('menu.runNowBudgetBlocked')).not.toBeNull();
+    });
+
+    it('leaves an armed occurrence with a working run early', () => {
+      renderMenu(occurrence());
+
+      expect((item('menu.runNow')!.closest('button') as HTMLButtonElement).disabled).toBe(false);
+      expect(item('menu.runNowHint')).not.toBeNull();
+    });
   });
 });

@@ -80,6 +80,67 @@ describe('PlanComparisonDialog', () => {
     expect(cells).toEqual(['100 MB', '1 GB', '10 GB', '100 GB shared', '1 TB']);
   });
 
+  it('states the Free AI allowance, and what the paid plans have instead', () => {
+    // A blank cell on the paid columns would read as "this plan does not include
+    // it", which is the opposite of true: their credits already fund agents. The
+    // row therefore declares a fallback VALUE rather than leaving a cross, and
+    // this is the only test that renders it - the data-level test can see the
+    // fallback key resolves, not that the cell prints it.
+    renderDialog();
+    open();
+
+    const row = screen.getByTestId('plan-comparison-row-aiCredits');
+    const cells = Array.from(row.querySelectorAll('td')).map((c) => c.textContent?.trim());
+    expect(cells).toEqual([
+      '100 / month',
+      'Included in credits',
+      'Included in credits',
+      'Included in credits',
+      'Included in credits',
+    ]);
+  });
+
+  it('quotes the allowance the caller passes, not the seeded constant', () => {
+    // The pricing page reads the live plan row and hands it down, so an admin
+    // raising the allowance to 250 must not leave this table saying 100 on the
+    // same screen.
+    render(
+      <NextIntlClientProvider locale="en" messages={en as any}>
+        <PlanComparisonDialog currentPlanCode={null} freeAiCredits={250} />
+      </NextIntlClientProvider>
+    );
+    open();
+
+    const row = screen.getByTestId('plan-comparison-row-aiCredits');
+    expect(row.querySelector('td')?.textContent?.trim()).toBe('250 / month');
+  });
+
+  it('says "Not included" for Free when the allowance is closed, and leaves the paid columns alone', () => {
+    // An admin setting included_ai_credits to 0 closes the free tier. The card drops
+    // its bullet; this table must not keep printing '0 / month' beside it, which would
+    // advertise a pot nobody has and make the two surfaces disagree on one screen.
+    render(
+      <NextIntlClientProvider locale="en" messages={en as any}>
+        <PlanComparisonDialog currentPlanCode={null} freeAiCredits={0} />
+      </NextIntlClientProvider>
+    );
+    open();
+
+    const row = screen.getByTestId('plan-comparison-row-aiCredits');
+    const cells = Array.from(row.querySelectorAll('td')).map((c) => c.textContent?.trim());
+    // The same wording every other dimension uses for 'this plan does not have it',
+    // not the paid plans' answer - their credits DO fund agents, a closed Free tier
+    // funds nothing. The paid columns must keep their own answer, or closing the free
+    // tier would quietly rewrite what every other plan says about agents.
+    expect(cells[0]).toBe('Not included');
+    expect(cells.slice(1)).toEqual([
+      'Included in credits',
+      'Included in credits',
+      'Included in credits',
+      'Included in credits',
+    ]);
+  });
+
   it('states node coverage as ONE step, at Starter', () => {
     renderDialog();
     open();

@@ -92,8 +92,9 @@ class MemoryToolsProviderTest {
         // by every model on every turn, so an unconditional promise here is the most
         // expensive place to be wrong.
         assertThat(tool().description())
-            .contains("WHEN this workspace has any")
+            .contains("When past preferences or decisions help")
             .contains("list(as_index=true)")
+            .contains("if absent")
             .doesNotContain("already in your context");
     }
 
@@ -103,7 +104,7 @@ class MemoryToolsProviderTest {
         assertThat(tool().parameters().stream()
             .filter(p -> p.name().equals("summary"))
             .findFirst().orElseThrow().description())
-            .contains("injected into every agent's context");
+            .contains("injected into the index for agents in scope");
     }
 
     @Test

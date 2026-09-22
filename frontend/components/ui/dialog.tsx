@@ -37,12 +37,22 @@ interface DialogContentProps
    * was opened from.
    */
   overlayClassName?: string
+  /**
+   * Accessible name for the corner close button. Pass a TRANSLATED string.
+   *
+   * The default is the English word, which is what every dialog in the app
+   * announced to a French or Chinese screen-reader user until this prop existed.
+   * It stays the default rather than becoming required so no existing caller
+   * changes behaviour; each one can hand over its own translation as it is
+   * touched.
+   */
+  closeLabel?: string
 }
 
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DialogContentProps
->(({ className, overlayClassName, children, ...props }, ref) => (
+>(({ className, overlayClassName, closeLabel = "Close", children, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay className={overlayClassName} />
     <DialogPrimitive.Content
@@ -69,7 +79,7 @@ const DialogContent = React.forwardRef<
           className="absolute right-4 top-4 h-8 w-8 rounded-lg"
         >
           <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
+          <span className="sr-only">{closeLabel}</span>
         </Button>
       </DialogPrimitive.Close>
     </DialogPrimitive.Content>

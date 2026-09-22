@@ -17,9 +17,10 @@
  * own variants rather than a colour picked here.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import * as React from 'react';
 import { AgendaHeader } from '../AgendaHeader';
+import { AGENDA_KIND_ORDER } from '../agendaLaunchKinds';
 import { ALL_RESOURCE_TYPES, type AgendaPreferences } from '@/hooks/useAgendaPreferences';
 
 vi.mock('next-intl', () => ({
@@ -107,8 +108,8 @@ describe('AgendaHeader', () => {
 
     const controls = barControls();
     // Two arrows, Today, the title (which is the date picker's trigger), three resource
-    // kinds, four views, settings.
-    expect(controls).toHaveLength(12);
+    // kinds, trigger filter, four views, settings.
+    expect(controls).toHaveLength(13);
     for (const control of controls) {
       for (const signature of BUTTON_SIGNATURE) {
         expect(control.className).toContain(signature);
@@ -207,5 +208,68 @@ describe('AgendaHeader', () => {
     const off = screen.getByRole('button', { name: 'resource.agent' });
     expect(off.getAttribute('aria-pressed')).toBe('false');
     expect(off.className).toContain('opacity-40');
+  });
+
+  describe('the launch-kind filter', () => {
+    function openFilter() {
+      renderHeader();
+      fireEvent.click(screen.getByRole('button', { name: 'filters.launchKinds' }));
+    }
+
+    it('offers every kind the calendar can report, agent launches included', () => {
+      // The default selection is this whole list, so a kind missing from the popover is
+      // a kind the user can never bring back once it is off.
+      openFilter();
+
+      for (const kind of AGENDA_KIND_ORDER) {
+        expect(
+          screen.getByRole('button', { name: new RegExp(`kind\.${kind.toLowerCase()}$`) }),
+          kind,
+        ).toBeTruthy();
+      }
+    });
+
+    it('is headed by a name that is true of what it lists', () => {
+      // It used to say "Trigger types" above Sub-agent, Task and Widget - three things
+      // this feature's own documentation insists are deliberately not trigger types.
+      openFilter();
+
+      expect(screen.getAllByText('filters.launchKinds').length).toBeGreaterThan(0);
+      expect(screen.queryByText('filters.triggerTypes')).toBeNull();
+    });
+
+    it('dims the kinds that are switched off and leaves the rest plain', () => {
+      // The first version of this test rendered the DEFAULT selection, where nothing is
+      // off, and then asserted one chip was not dimmed - it could not have failed. The
+      // header takes the selection as a prop, so the off state has to be passed in.
+      const selected = AGENDA_KIND_ORDER.filter((kind) => kind !== 'CHAT');
+      render(
+        <AgendaHeader
+          title="September 2026"
+          anchor={NOW}
+          onPickDate={() => {}}
+          preferences={preferences()}
+          timezoneOptions={['UTC']}
+          search=""
+          triggerTypes={selected}
+          onSearchChange={() => {}}
+          onPrevious={() => {}}
+          onNext={() => {}}
+          onToday={() => {}}
+          onUpdate={() => {}}
+          onToggleResourceType={() => {}}
+          onResetPreferences={() => {}}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'filters.launchKinds' }));
+
+      const off = screen.getByRole('button', { name: /kind\.chat$/ });
+      expect(off.getAttribute('aria-pressed')).toBe('false');
+      expect(off.className).toContain('opacity-40');
+
+      const on = screen.getByRole('button', { name: /kind\.sub_agent$/ });
+      expect(on.getAttribute('aria-pressed')).toBe('true');
+      expect(on.className).not.toContain('opacity-40');
+    });
   });
 });

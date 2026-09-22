@@ -10,11 +10,10 @@ import { conversationApi, conversationRoute } from '@/lib/api/conversationApi';
 import type { Conversation } from '@/lib/api/conversationApi';
 import { workflowService } from '@/lib/api/orchestrator/workflow.service';
 import { agentService } from '@/lib/api/orchestrator/agent.service';
-import { settingsNavItems } from '@/components/settings/settingsNavItems';
+import { settingsNavItems, isSettingsNavItemVisible } from '@/components/settings/settingsNavItems';
 import { stripLocale } from '@/contexts/SidePanelContext';
 import { useSafeNavigate } from '@/contexts/NavigationGuardContext';
 import { useAuth } from '@/lib/providers/smart-providers';
-import { IS_CE } from '@/lib/edition';
 import { cn } from '@/lib/utils';
 import { useIsMacPlatform } from '@/lib/utils/platform';
 import { conversationDisplayTitle } from '@/lib/utils/conversationTitle';
@@ -60,9 +59,7 @@ function useGlobalSearch() {
     if (!trimmed) return [];
     const q = trimmed.toLowerCase();
     return settingsNavItems
-      .filter(item =>
-        !item.hidden && (!item.adminOnly || isAdmin) && (!item.hiddenInCE || !IS_CE) && (!item.ceOnly || IS_CE)
-      )
+      .filter(item => isSettingsNavItemVisible(item, { isAdmin }))
       .filter(item => item.label.toLowerCase().includes(q))
       .slice(0, MAX_PER_GROUP)
       .map(item => ({

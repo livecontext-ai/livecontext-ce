@@ -279,6 +279,23 @@ class InterfaceServiceTest {
         }
 
         @Test
+        @DisplayName("excluded interface types do not inflate the exact total before pagination")
+        void excludedTypeDoesNotInflateTotalBeforePagination() {
+            InterfaceEntity visible = iface("Visible", Instant.parse("2026-06-02T00:00:00Z"));
+            visible.setInterfaceType("html");
+            InterfaceEntity hiddenSearch = iface("Hidden search", Instant.parse("2026-06-01T00:00:00Z"));
+            hiddenSearch.setInterfaceType("web_search");
+            stubTenant(visible, hiddenSearch);
+
+            InterfaceService.InterfacePage page = interfaceService.listInterfacesPaged(
+                    TENANT, null, null, null, null, null, 0, 1, null, null,
+                    null, false, "web_search");
+
+            assertThat(page.items()).containsExactly(visible);
+            assertThat(page.totalCount()).isEqualTo(1);
+        }
+
+        @Test
         @DisplayName("a null publication client (test/back-compat wiring) skips the filter and emits no badges")
         void nullPublicationClientDegradesGracefully() {
             InterfaceService noPubClient = new InterfaceService(
@@ -997,7 +1014,8 @@ class InterfaceServiceTest {
                     "file", Map.of("_type", "file", "path", "tenant-1/gen/clip.mp4",
                             "name", "clip.mp4", "mimeType", "video/mp4", "size", 812_344),
                     "billed_quantity", new java.math.BigDecimal("5"),
-                    "billed_unit", "seconds"));
+                    "billed_unit", "seconds",
+                    "billed_credits", new java.math.BigDecimal("240")));
         }
 
         /** A legacy image tool result: a list under `images`, plus `billing_model` and `prompt`. */
@@ -1059,10 +1077,28 @@ class InterfaceServiceTest {
                     .containsEntry("kind", "video")
                     .containsEntry("billed_quantity", new java.math.BigDecimal("5"))
                     .containsEntry("billed_unit", "seconds")
+                    // What it cost, stored beside the size it was billed on. The card does not
+                    // render it yet; the row is what a reader of it will have, and a row written
+                    // before that day would otherwise be the only one that cannot answer.
+                    .containsEntry("billed_credits", new java.math.BigDecimal("240"))
                     .containsEntry("model", "seedance-2.0-fast")
                     // Same id under the key already-stored rows use, so the card
                     // names the model without the card changing.
                     .containsEntry("billing_model", "seedance-2.0-fast");
+        }
+
+        @Test
+        @DisplayName("carries NO price when the result had none, so an unbilled generation is not "
+                + "shown as a free one")
+        void carriesNoPriceWhenTheResultHadNone() {
+            // The reader's own provider key paid, or this install does not meter. Writing a zero
+            // here would put "0" under an asset that was paid for somewhere else.
+            expectFreshRow();
+
+            InterfaceEntity result = interfaceService.createOrUpdateImageGenerationInterface(
+                    TENANT, "conv-1", "msg-1", "agent-1", "clip", legacyResult(), null, null);
+
+            assertThat(result.getData()).doesNotContainKey("billed_credits");
         }
 
         @Test

@@ -2,19 +2,17 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from '@/i18n/navigation';
-import { Button } from '@/components/ui/button';
-import { Trash2, Sparkles } from 'lucide-react';
 import { useToast } from './Toast';
 import ToastContainer from './ToastContainer';
 import { StatusBadge, mapBackendStatusToStatusType } from './ui/StatusBadge';
 import { orchestratorApi } from '@/lib/api/orchestrator';
-import { apiClient } from '@/lib/api/api-client';
 import { formatRelativeDate } from '@/lib/utils/dateFormatters';
 import { getCanvasEdges, getCanvasNodes, subscribeCanvasNodes } from '@/app/workflows/builder/services/canvasNodesStore';
 import { nodeMatchesStep } from '@/app/workflows/builder/services/nodeMatcher';
 import { getIconSlug, NodeIcon, nodeIconRadiusClass } from '@/app/workflows/builder/components/nodes/shared';
 import { findNodeClassById } from '@/app/workflows/builder/nodes/nodeClasses';
 import { computeDagOrder, sortByDagOrder } from '@/lib/workflow/dagStepOrder';
+import { useTranslations } from 'next-intl';
 
 const orchestratorUrl = '/api/proxy';
 
@@ -67,9 +65,8 @@ export default function StepTable({
   className = '',
   onStepClick,
   onStepsLoaded,
-  onAddAnalyzeBadges,
-  onAnalyzeClick
 }: StepTableProps) {
+  const t = useTranslations();
   const router = useRouter();
   const { toasts, addToast, removeToast } = useToast();
 
@@ -80,9 +77,7 @@ export default function StepTable({
   // and the table would refetch in a loop.
   const onStepsLoadedRef = useRef(onStepsLoaded);
   onStepsLoadedRef.current = onStepsLoaded;
-  const [error, setError] = useState<string | null>(null);
-  const [selectedSteps, setSelectedSteps] = useState<Set<string | number>>(new Set());
-  const [showDeleteStepsModal, setShowDeleteStepsModal] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   // Chargement des steps agrégés
   // Note: Uses orchestratorApi which goes through Gateway (not direct localhost calls)
@@ -99,7 +94,7 @@ export default function StepTable({
 
     try {
       setLoading(true);
-      setError(null);
+      setLoadFailed(false);
 
       // Use orchestratorApi to fetch aggregated steps
       const aggregatedData = await orchestratorApi.getAggregatedSteps(runId);
@@ -128,7 +123,7 @@ export default function StepTable({
       onStepsLoadedRef.current?.(transformedSteps);
     } catch (err) {
       console.error('Error fetching aggregated steps:', err);
-      setError('Failed to load steps');
+      setLoadFailed(true);
       setSteps([]);
       // The parent is told about the failure too, exactly as its own (now deleted) request did:
       // leaving it on the previous attempt's rows would let a stale step be auto-selected behind
@@ -146,73 +141,6 @@ export default function StepTable({
       setLoading(false);
     }
   }, [runId, addToast]);
-
-  // Suppression multiple de steps
-  const deleteSelectedSteps = () => {
-    if (selectedSteps.size === 0) return;
-    setShowDeleteStepsModal(true);
-  };
-
-  // Confirmation de suppression des steps
-  const confirmDeleteSteps = async () => {
-    if (selectedSteps.size === 0) return;
-
-    const count = selectedSteps.size;
-    const idsToDelete = Array.from(selectedSteps);
-
-    try {
-      // Audit 2026-05-17 round-3 - route through apiClient so OIDC token AND
-      // X-Active-Organization-ID are attached. Prior raw fetch had neither,
-      // making the endpoint a no-op on the auth filter side AND a cross-org
-      // delete vector if the auth filter was ever bypassed.
-      const deletePromises = idsToDelete.map(id =>
-        apiClient.delete<void>(`/api/workflows/steps/${id}`)
-          .then(() => ({ ok: true }))
-          .catch(() => ({ ok: false }))
-      );
-
-      const results = await Promise.all(deletePromises);
-      const failed = results.filter(r => !r.ok);
-
-      if (failed.length > 0) {
-        throw new Error(`Failed to delete ${failed.length} step(s)`);
-      }
-
-      setSteps(prev => prev.filter(s => s.id && !selectedSteps.has(s.id)));
-      setSelectedSteps(new Set());
-      setShowDeleteStepsModal(false);
-      
-      addToast({
-        type: 'success',
-        title: 'Steps Deleted Successfully',
-        message: `${count} step(s) have been deleted successfully`
-      });
-    } catch (err) {
-      console.error('Error deleting selected steps:', err);
-      addToast({
-        type: 'error',
-        title: 'Error Deleting Steps',
-        message: 'Failed to delete selected steps'
-      });
-    }
-  };
-
-  // Gestion de la sélection des steps
-  const toggleStepSelection = (id: string | number) => {
-    setSelectedSteps(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(id)) {
-        newSet.delete(id);
-      } else {
-        newSet.add(id);
-      }
-      return newSet;
-    });
-  };
-
-  const clearStepSelection = () => {
-    setSelectedSteps(new Set());
-  };
 
   // Gestion du clic sur un step
   const handleStepClick = (step: WorkflowStep) => {
@@ -249,10 +177,6 @@ export default function StepTable({
     });
   }, [runId, fetchSteps]);
 
-  // Fonction pour sélectionner tous les steps
-  const selectAllSteps = useCallback(() => {
-    setSelectedSteps(new Set(steps.map(s => s.id)));
-  }, [steps]);
 
   // ── DAG reading order ──
   //
@@ -300,47 +224,17 @@ export default function StepTable({
 
   return (
     <div className={`space-y-4 w-full h-full flex flex-col ${className}`}>
-      {/* Actions contextuelles */}
-      {selectedSteps.size > 0 && (
-        <div className="flex items-center gap-2 mb-4 flex-shrink-0">
-          {onAddAnalyzeBadges && (
-            <Button 
-              variant="default"
-              size="sm"
-              onClick={() => {
-                const selectedIds = Array.from(selectedSteps);
-                onAddAnalyzeBadges(selectedIds.map(id => id.toString()), 'workflow');
-                // Close modal if onAnalyzeClick is provided
-                if (onAnalyzeClick) {
-                  onAnalyzeClick();
-                }
-              }}
-            >
-              <Sparkles className="h-4 w-4 mr-1.5" />
-              Analyze Step
-            </Button>
-          )}
-          <Button 
-            variant="destructive"
-            size="sm"
-            onClick={deleteSelectedSteps}
-          >
-            <Trash2 className="h-4 w-4 mr-1.5" />
-            Delete ({selectedSteps.size})
-          </Button>
-          <Button 
-            variant="ghost"
-            size="sm"
-            onClick={clearStepSelection}
-          >
-            Clear selection
-          </Button>
-        </div>
-      )}
-
       {/* Table des steps */}
       <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
-        {!loading && steps.length === 0 ? (
+        {!loading && loadFailed ? (
+          <div
+            data-testid="workflow-logs-steps-error"
+            role="alert"
+            className="flex h-full items-center justify-center py-8 text-center text-sm text-red-600 dark:text-red-400"
+          >
+            <p>{t('workflow.logs.loadStepsError')}</p>
+          </div>
+        ) : !loading && steps.length === 0 ? (
           <div className="text-center py-8 text-theme-secondary h-full flex items-center justify-center">
             <p>No steps found</p>
           </div>
@@ -349,19 +243,6 @@ export default function StepTable({
             <table className="w-full text-sm" style={{ tableLayout: 'auto' }}>
               <thead className="bg-theme-secondary border-b border-theme sticky top-0 z-20">
                 <tr>
-                  <th className="px-3 py-3 text-center font-medium text-theme-primary w-12 sticky left-0 z-30 bg-theme-secondary">
-                    {!loading && (
-                      <div className="flex items-center justify-center">
-                        <input
-                          type="checkbox"
-                          checked={steps.length > 0 && steps.every(s => selectedSteps.has(s.id))}
-                          onChange={steps.every(s => selectedSteps.has(s.id)) ? clearStepSelection : selectAllSteps}
-                          className="rounded border-theme"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </div>
-                    )}
-                  </th>
                   <th className="px-3 py-3 text-left font-medium text-theme-primary w-20 min-w-[80px]">Status</th>
                   <th className="px-3 py-3 text-left font-medium text-theme-primary w-32 min-w-[128px]">Counts</th>
                   <th className="px-3 py-3 text-left font-medium text-theme-primary min-w-[200px]">Step Alias</th>
@@ -375,11 +256,6 @@ export default function StepTable({
                   // Skeleton loading rows
                   Array.from({ length: 5 }).map((_, skeletonIndex) => (
                     <tr key={`skeleton-${skeletonIndex}`} className="border border-transparent h-14">
-                      <td className="px-3 py-2 w-12 min-w-[48px] sticky left-0 z-10">
-                        <div className="h-4 bg-theme-tertiary rounded animate-pulse w-4" style={{
-                          animationDelay: `${skeletonIndex * 50}ms`
-                        }}></div>
-                      </td>
                       <td className="px-3 py-2 w-20 min-w-[80px]">
                         <div className="h-6 bg-theme-tertiary rounded animate-pulse w-16" style={{
                           animationDelay: `${skeletonIndex * 50 + 10}ms`
@@ -423,17 +299,6 @@ export default function StepTable({
                       className="border border-transparent cursor-pointer transition-colors hover-row-datasource h-14 text-sm"
                       onClick={() => handleStepClick(s)}
                     >
-                      <td className="px-3 py-2 w-12 min-w-[48px] sticky left-0 z-10 bg-theme-primary text-center">
-                        <div className="flex items-center justify-center">
-                          <input
-                            type="checkbox"
-                            checked={selectedSteps.has(s.id)}
-                            onChange={() => toggleStepSelection(s.id)}
-                            onClick={(e) => e.stopPropagation()}
-                            className="rounded border-theme"
-                          />
-                        </div>
-                      </td>
                       <td className="px-3 py-2 w-20 min-w-[80px]">
                         <StatusBadge status={mapBackendStatusToStatusType(s.status)} variant="noBackground" />
                       </td>
@@ -501,26 +366,6 @@ export default function StepTable({
           </div>
         )}
       </div>
-
-      {/* Modale de confirmation de suppression */}
-      {showDeleteStepsModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-theme-primary rounded-lg p-6 shadow-lg max-w-md w-full max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-theme-primary mb-4">Confirm Deletion</h3>
-            <p className="text-sm text-theme-secondary mb-4">
-              Are you sure you want to delete {selectedSteps.size} step(s)? This action cannot be undone.
-            </p>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setShowDeleteStepsModal(false)}>
-                Cancel
-              </Button>
-              <Button variant="destructive" onClick={confirmDeleteSteps}>
-                Delete
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <ToastContainer toasts={toasts} onRemoveToast={removeToast} />
     </div>

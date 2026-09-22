@@ -4,6 +4,7 @@ import {
   formatZoneAbbreviation,
   addMonths,
   dayKey,
+  formatCompactDateRange,
   isSameDay,
   monthGridDays,
   startOfDay,
@@ -23,6 +24,32 @@ import {
  * ten months of the year.
  */
 describe('agendaTime', () => {
+  describe('formatCompactDateRange', () => {
+    it('collapses a week in one month into a short localized title', () => {
+      const from = zonedTimeToInstant('Europe/Paris', 2026, 9, 7, 0, 0);
+      const to = zonedTimeToInstant('Europe/Paris', 2026, 9, 13, 23, 59);
+
+      expect(formatCompactDateRange(from, to, 'Europe/Paris', 'fr'))
+        .toBe('7 - 13 sept. 2026');
+    });
+
+    it('keeps both month names when the week crosses a month boundary', () => {
+      const from = zonedTimeToInstant('Europe/Paris', 2026, 8, 31, 0, 0);
+      const to = zonedTimeToInstant('Europe/Paris', 2026, 9, 6, 23, 59);
+
+      expect(formatCompactDateRange(from, to, 'Europe/Paris', 'fr'))
+        .toBe('31 août - 6 sept. 2026');
+    });
+
+    it('never exposes typographic dash characters returned by Intl', () => {
+      const from = new Date('2026-09-07T00:00:00.000Z');
+      const to = new Date('2026-09-13T23:59:00.000Z');
+
+      expect(formatCompactDateRange(from, to, 'UTC', 'en'))
+        .not.toMatch(/[\u2013\u2014]/u);
+    });
+  });
+
   describe('zonedTimeToInstant', () => {
     it('resolves a wall-clock time to the instant that zone reads it at', () => {
       // 09:00 Paris in September is 07:00 UTC (CEST, UTC+2).

@@ -1,6 +1,7 @@
 import type { Node } from 'reactflow';
 import type { BuilderNodeData, NodePolicy } from '../types';
 import { nodeRegistry } from '../registry/nodeRegistry';
+import { isToolStepNode } from './planHelpers';
 
 /**
  * Helpers around the per-node execution policy (`nodePolicy` plan block).
@@ -15,6 +16,27 @@ import { nodeRegistry } from '../registry/nodeRegistry';
 
 /** UI bound for the retry stepper (backend accepts any value >= 0). */
 export const MAX_RETRY_COUNT = 10;
+
+/**
+ * True when this node is executed as a catalog tool call, which is the only place the
+ * provider-retry budget means anything (`StepNode` is what carries it to the catalog).
+ *
+ * Delegates to `isToolStepNode`, the predicate that decides which canvas nodes become `plan.mcps`
+ * entries. That is deliberate and load-bearing: a second, similar-looking test disagreed with it in
+ * both directions, and the direction that mattered was offering the field on a node whose setting
+ * could never reach a plan entry at all.
+ */
+export function nodeCallsProvider(node: Node<BuilderNodeData>): boolean {
+  return !!node && isToolStepNode(node);
+}
+
+/** Like {@link coercePositiveInt} but keeps 0, for the one field where 0 is a real value. */
+function coerceNonNegativeInt(value: unknown): number | undefined {
+  const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  if (typeof n !== 'number' || !Number.isFinite(n)) return undefined;
+  const i = Math.floor(n);
+  return i >= 0 ? i : undefined;
+}
 
 function coercePositiveInt(value: unknown): number | undefined {
   const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
@@ -54,6 +76,15 @@ export function sanitizeNodePolicy(raw: unknown): NodePolicy | undefined {
   if (timeoutMs !== undefined) policy.timeoutMs = timeoutMs;
 
   if (coerceTrue(source.executeOnce)) policy.executeOnce = true;
+
+  // The one field where 0 is a STATEMENT, not a default: it means "do not retry the provider
+  // call, this node paces itself". Every field above resolves 0 to "unset" and drops it, which
+  // here would make "off" unexpressible - the setting would silently fall back to the platform
+  // budget it was added to override.
+  const providerRetryMaxWaitSec = coerceNonNegativeInt(source.providerRetryMaxWaitSec);
+  if (providerRetryMaxWaitSec !== undefined) {
+    policy.providerRetryMaxWaitSec = providerRetryMaxWaitSec;
+  }
 
   return Object.keys(policy).length > 0 ? policy : undefined;
 }
@@ -113,5 +144,9 @@ export function gateNodePolicyForNode(
     const { executeOnce: _dropped, ...rest } = gated;
     gated = rest;
   }
+  // providerRetryMaxWaitSec is deliberately NOT gated. It is inert on a node the engine does not
+  // execute as a tool call, and the backend simply never reads it there, whereas dropping it here
+  // would run on every save: opening an agent-built workflow and saving it would silently delete a
+  // setting nobody asked to remove. An inert field is a much smaller problem than that.
   return Object.keys(gated).length > 0 ? gated : undefined;
 }

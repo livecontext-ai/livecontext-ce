@@ -7,6 +7,7 @@ import { workflowService } from '@/lib/api/orchestrator/workflow.service';
 import { executionService } from '@/lib/api/orchestrator/execution.service';
 import { versionService } from '@/lib/api/orchestrator/version.service';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
+import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import type { WorkflowBoardCard, WorkflowBoardColumn } from '@/lib/api/orchestrator/types';
 
 const COLUMN_KEYS: WorkflowBoardColumn[] = ['draft', 'production', 'needsReview', 'paused'];
@@ -54,6 +55,10 @@ export type WorkflowBoardSource = 'workflow' | 'application';
 
 export function useWorkflowBoard(source: WorkflowBoardSource = 'workflow'): UseWorkflowBoardReturn {
   const router = useRouter();
+  // Dragging a card between columns pins, unpins, pauses or resumes it - all four change
+  // what the bell lists as armed and what its imminent-fire ring pulses for, and nothing else
+  // invalidates that payload.
+  const refreshAutomations = useRefreshHomeStatus();
   const [columns, setColumns] = useState<Record<WorkflowBoardColumn, ColumnState>>(EMPTY_COLUMNS);
   const [initialLoading, setInitialLoading] = useState(true);
   const [errorCode, setErrorCode] = useState<BoardErrorCode | null>(null);
@@ -172,14 +177,17 @@ export function useWorkflowBoard(source: WorkflowBoardSource = 'workflow'): UseW
     movingRef.current = true;
     try {
       if (target === 'draft') {
-        await versionService.pinVersion(card.workflowId, null);
+        const unpinned = await versionService.pinVersion(card.workflowId, null);
+        if (unpinned.success) refreshAutomations();
       } else if (target === 'production') {
         if (card.column === 'paused' && card.productionRunId) {
           await executionService.reactivateWorkflow(card.productionRunId);
+          refreshAutomations();
         }
       } else if (target === 'paused') {
         if (card.productionRunId) {
           await executionService.cancelWorkflow(card.productionRunId);
+          refreshAutomations();
         }
       }
       refresh();
@@ -188,7 +196,7 @@ export function useWorkflowBoard(source: WorkflowBoardSource = 'workflow'): UseW
     } finally {
       movingRef.current = false;
     }
-  }, [canDrop, refresh]);
+  }, [canDrop, refresh, refreshAutomations]);
 
   const closePinRequest = useCallback(() => setPinRequest(null), []);
 
@@ -196,6 +204,11 @@ export function useWorkflowBoard(source: WorkflowBoardSource = 'workflow'): UseW
     if (!pinRequest) return;
     try {
       const result = await versionService.pinVersion(pinRequest.workflowId, version);
+      // Gated on `success`, like the two pin sites that already were: a declined pin changed no
+      // row, and the ask is not free of consequence - it stamps "asked just now", which would
+      // then silence the visit-ask the user makes seconds later, the one moment the bell most
+      // needs to be able to correct itself.
+      if (result.success) refreshAutomations();
       const workflowId = pinRequest.workflowId;
       const sourcePublicationId = pinRequest.sourcePublicationId;
       setPinRequest(null);
@@ -222,7 +235,7 @@ export function useWorkflowBoard(source: WorkflowBoardSource = 'workflow'): UseW
     } catch {
       setErrorCode('moveFailed');
     }
-  }, [pinRequest, refresh, router]);
+  }, [pinRequest, refresh, router, refreshAutomations]);
 
   const totalCount =
     columns.draft.totalCount +

@@ -184,7 +184,7 @@ export function BrowserAgentParametersForm({
         value={modelSelection}
         onChange={handleModelPick}
         disabled={isRunMode}
-        costProfile="agentConversation"
+        costProfile="chatConversation"
       />
 
       {/* Task - mandatory */}

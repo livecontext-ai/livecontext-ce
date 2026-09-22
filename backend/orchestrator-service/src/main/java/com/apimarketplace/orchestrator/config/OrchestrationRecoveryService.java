@@ -244,7 +244,17 @@ public class OrchestrationRecoveryService {
             return;
         }
 
-        logger.warn("[Recovery] Found {} candidate zombie RUNNING run(s) with no activity since {}",
+        // DEBUG, not WARN: a "candidate" is only a row whose updated_at is older than the
+        // threshold, and the two checks below legitimately skip most of them (blocking
+        // signal, async agent in flight). A run parked on a long WAIT_TIMER or a
+        // sub-workflow awaiting its child therefore re-qualifies on EVERY 30 s pass, so
+        // warning here produced ~2 880 lines a day about runs the scanner deliberately
+        // leaves alone - enough to bury the real WARNs in the same log. What deserves a
+        // WARN is a run actually transitioned to FAILED, which is logged per-run below plus
+        // once in the summary. A pass that recovers nothing therefore emits no ROUTINE WARN;
+        // the two fail-safe skip warnings further down (signal check / pending-agent check
+        // failed) still fire, and should - those are genuine faults, not the steady state.
+        logger.debug("[Recovery] Found {} candidate zombie RUNNING run(s) with no activity since {}",
                 zombies.size(), cutoff);
 
         Instant now = clock.instant();
@@ -313,7 +323,7 @@ public class OrchestrationRecoveryService {
                     .filter(r -> r.getStatus() == RunStatus.FAILED)
                     .toList();
             runRepository.saveAll(failedRuns);
-            logger.info("[Recovery] Recovered {} zombie run(s)", recovered);
+            logger.warn("[Recovery] Recovered {} zombie run(s) out of {} candidate(s)", recovered, zombies.size());
 
             // Side-effect cleanup + SSE broadcast for every run we just transitioned to
             // FAILED. Mirrors the pattern in WorkflowResumeService.stopWorkflow:

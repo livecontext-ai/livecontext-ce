@@ -30,11 +30,6 @@ export type AnalyticsEvent =
   // onboarding_step_completed is emitted by the backend ONLY (single producer)
   | 'onboarding_completed'
   | 'onboarding_skipped'
-  // The onboarding proposal actually landed in a chat composer. Distinct from
-  // the `first_build_prompt_proposed` prop on onboarding_completed, which only
-  // says one was BUILT: in between it can expire, lose to a restored draft, or
-  // never reach the home view.
-  | 'first_build_prompt_filled'
   // - App navigation
   | 'nav_item_clicked'
   // - Marketplace / discovery
@@ -83,6 +78,10 @@ export type AnalyticsEvent =
   | 'credential_deleted'
   | 'ai_provider_key_saved'
   | 'ai_provider_key_deleted'
+  // - Own LLM keys (a cloud user's key, Settings > AI providers > Your keys)
+  | 'own_llm_key_saved'
+  | 'own_llm_key_deleted'
+  | 'own_llm_key_mode_changed'
   // - Pricing / billing (conversion)
   | 'pricing_page_viewed'
   | 'pricing_plan_clicked'

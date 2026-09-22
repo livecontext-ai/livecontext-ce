@@ -3,7 +3,8 @@
 import React from 'react';
 import { StatusBadge, mapBackendStatusToStatusType } from '@/components/ui/StatusBadge';
 import { cn } from '@/lib/utils';
-import { RenderType, BranchEvaluation, LoopProgress, SplitProgress } from '@/lib/api/orchestrator/types';
+import { RenderType, LoopProgress, SplitProgress } from '@/lib/api/orchestrator/types';
+import { normalizeBranchEvaluations, describeResult } from '@/lib/workflows/branchEvaluation';
 import { ChevronRight, Check } from 'lucide-react';
 import { formatUtcDateTime, parseUtcAware } from '@/lib/utils/dateFormatters';
 
@@ -271,14 +272,19 @@ export const JsonNavigableRenderer: React.FC<RendererProps> = ({ value, onNaviga
 };
 
 /**
- * Evaluations table renderer for Decision nodes.
+ * Evaluations table renderer for branching nodes (decision, switch, option, loop).
+ *
+ * Reads the canonical shape through `normalizeBranchEvaluation`, which also accepts
+ * the per-node spellings written before that shape existed. This renderer used to
+ * read `branch` / `resolved` / `selected` from rows that carried `branch_type` /
+ * `resolved_condition` and no selection, so it drew an empty table and never
+ * highlighted the branch the run took.
  */
 export const EvaluationsTableRenderer: React.FC<RendererProps> = ({ value }) => {
-  if (!value || !Array.isArray(value) || value.length === 0) {
+  const evaluations = normalizeBranchEvaluations(value);
+  if (evaluations.length === 0) {
     return <span className="text-muted-foreground">-</span>;
   }
-
-  const evaluations = value as BranchEvaluation[];
 
   return (
     <div className="text-sm border rounded overflow-hidden">
@@ -304,18 +310,25 @@ export const EvaluationsTableRenderer: React.FC<RendererProps> = ({ value }) => 
                 {evaluation.selected ? (
                   <span className="text-green-600 flex items-center gap-1">
                     <Check className="h-3 w-3" />
-                    {evaluation.branch}
+                    {evaluation.label || '-'}
                   </span>
                 ) : (
-                  <span className="text-muted-foreground">{evaluation.branch}</span>
+                  <span className="text-muted-foreground">{evaluation.label || '-'}</span>
                 )}
               </td>
-              <td className="px-2 py-1 font-mono">{evaluation.condition || '(default)'}</td>
-              <td className="px-2 py-1 font-mono">{evaluation.resolved || '-'}</td>
+              <td className="px-2 py-1 font-mono">{evaluation.condition || '(no condition)'}</td>
+              <td className="px-2 py-1 font-mono">
+                {evaluation.resolved || '-'}
+                {evaluation.unresolved.length > 0 && (
+                  <span className="block text-xs text-amber-600 dark:text-amber-500">
+                    {evaluation.unresolved.map((ref) => ref.reason).join(' · ')}
+                  </span>
+                )}
+              </td>
               <td className="px-2 py-1">
-                {evaluation.result !== null ? (
-                  <span>{String(evaluation.result)}</span>
-                ) : '-'}
+                <span className={cn(evaluation.result === null && "text-muted-foreground")}>
+                  {describeResult(evaluation)}
+                </span>
               </td>
             </tr>
           ))}
@@ -326,10 +339,12 @@ export const EvaluationsTableRenderer: React.FC<RendererProps> = ({ value }) => 
 };
 
 /**
- * Cases table renderer for Switch nodes.
+ * Cases table renderer for Switch nodes. Same canonical shape as the branch table:
+ * a switch case is a branch matched on a value rather than on a boolean expression.
  */
 export const CasesTableRenderer: React.FC<RendererProps> = ({ value }) => {
-  if (!value || !Array.isArray(value) || value.length === 0) {
+  const cases = normalizeBranchEvaluations(value);
+  if (cases.length === 0) {
     return <span className="text-muted-foreground">-</span>;
   }
 
@@ -340,11 +355,12 @@ export const CasesTableRenderer: React.FC<RendererProps> = ({ value }) => {
           <tr>
             <th className="text-left px-2 py-1 font-medium">Case</th>
             <th className="text-left px-2 py-1 font-medium">Value</th>
+            <th className="text-left px-2 py-1 font-medium">Resolved</th>
             <th className="text-left px-2 py-1 font-medium">Selected</th>
           </tr>
         </thead>
         <tbody>
-          {value.map((caseItem: any, i: number) => (
+          {cases.map((caseItem, i) => (
             <tr
               key={i}
               className={cn(
@@ -352,8 +368,9 @@ export const CasesTableRenderer: React.FC<RendererProps> = ({ value }) => {
                 caseItem.selected && "bg-green-50 dark:bg-green-950/20"
               )}
             >
-              <td className="px-2 py-1">{caseItem.label || caseItem.type}</td>
-              <td className="px-2 py-1 font-mono">{caseItem.value || '(default)'}</td>
+              <td className="px-2 py-1">{caseItem.label || '-'}</td>
+              <td className="px-2 py-1 font-mono">{caseItem.condition || '(default)'}</td>
+              <td className="px-2 py-1 font-mono">{caseItem.resolved || '-'}</td>
               <td className="px-2 py-1">
                 {caseItem.selected ? (
                   <Check className="h-3 w-3 text-green-600" />

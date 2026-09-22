@@ -70,4 +70,19 @@ public interface FileDownloader {
             return statusCode >= 500;
         }
     }
+
+    /**
+     * The URL, or a URL it redirected to, is one this platform refuses to fetch.
+     *
+     * <p>Distinct from its parent because the two mean opposite things to a caller: an
+     * ordinary {@link FileDownloadException} is a failure worth retrying, while this one
+     * will refuse identically every time. {@code FileToolsProvider} maps it to
+     * {@code INVALID_PARAMETER_VALUE} so an agent corrects the URL instead of retrying a
+     * refusal until it runs out of iterations.
+     */
+    class UrlNotAllowedException extends FileDownloadException {
+        public UrlNotAllowedException(String message) {
+            super(message);
+        }
+    }
 }

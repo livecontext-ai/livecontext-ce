@@ -10,7 +10,7 @@
  */
 
 import React, { useCallback, useState, useEffect, useId, useRef } from 'react';
-import { Table, Bot, Workflow } from 'lucide-react';
+import { Table, Bot } from 'lucide-react';
 import type { Node } from 'reactflow';
 import type { BuilderNodeData } from '@/app/workflows/builder/types';
 import type { TriggerDataForPanel } from '@/app/workflows/builder/components/WorkflowBuilder';
@@ -31,6 +31,8 @@ interface WorkflowBuilderPanelContentProps {
   workflowId: string;
   runId?: string;
   readOnly?: boolean;
+  /** Outer side-panel tab hosting this workflow hierarchy. */
+  hostTabId?: string;
   /**
    * This tab was opened ON an application: the Application sub-tab is the
    * default view and the canvas is what the user switches to in order to watch
@@ -107,7 +109,7 @@ function BindCanvasToRun({
   return null;
 }
 
-export function WorkflowBuilderPanelContent({ workflowId, runId, readOnly = false, applicationFirst, initialApplicationConfigs, applicationTemplateSource, planOverride, canEditWorkflow = true, canEditRelatedWorkflows = true }: WorkflowBuilderPanelContentProps) {
+export function WorkflowBuilderPanelContent({ workflowId, runId, readOnly = false, hostTabId, applicationFirst, initialApplicationConfigs, applicationTemplateSource, planOverride, canEditWorkflow = true, canEditRelatedWorkflows = true }: WorkflowBuilderPanelContentProps) {
   const sidePanel = useSidePanelSafe();
   const canvasNodesRef = useRef<Node<BuilderNodeData>[]>([]);
   /**
@@ -117,7 +119,10 @@ export function WorkflowBuilderPanelContent({ workflowId, runId, readOnly = fals
    * the workflow - otherwise picking a run here would rewrite the page's URL and
    * move the canvas behind this panel.
    */
-  const surfaceId = useId();
+  const generatedSurfaceId = useId();
+  // The outer tab id is stable and addressable by global controls. Reusing it
+  // lets a later Logs request verify and, if needed, rebind this exact canvas.
+  const surfaceId = hostTabId ?? generatedSurfaceId;
 
   const [triggerData, setTriggerData] = useState<TriggerDataForPanel | null>(null);
   /**
@@ -294,26 +299,13 @@ export function WorkflowBuilderPanelContent({ workflowId, runId, readOnly = fals
         if (pinnedRun?.runId) pinnedRunId = pinnedRun.runId;
       } catch { /* fall back to builder */ }
 
-      if (pinnedRunId) {
-        sidePanel.openTab({
-          id: workflowPanelTabId(subWfId, pinnedRunId),
-          label: wfName,
-          icon: React.createElement(Workflow, { className: 'w-4 h-4' }),
-          content: React.createElement(WorkflowBuilderPanelContent, {
-            workflowId: subWfId,
-            runId: pinnedRunId,
-            readOnly,
-            canEditWorkflow: canEditRelatedWorkflows,
-            canEditRelatedWorkflows,
-          }),
-          preferredWidth: 0.5,
-          keepMounted: true,
-        });
-      } else {
-        openWorkflowBuilderTab(sidePanel, {
-          workflowId: subWfId, workflowName: wfName, readOnly, canEditWorkflow: canEditRelatedWorkflows,
-        });
-      }
+      openWorkflowBuilderTab(sidePanel, {
+        workflowId: subWfId,
+        runId: pinnedRunId,
+        workflowName: wfName,
+        readOnly,
+        canEditWorkflow: canEditRelatedWorkflows,
+      });
     };
     window.addEventListener('workflowOpenSubWorkflow', handler as EventListener);
     return () => window.removeEventListener('workflowOpenSubWorkflow', handler as EventListener);
@@ -336,6 +328,7 @@ export function WorkflowBuilderPanelContent({ workflowId, runId, readOnly = fals
         <div className="relative w-full h-full overflow-hidden">
           <WorkflowPanelContent
             workflowId={workflowId}
+            hostTabId={hostTabId ?? workflowPanelTabId(workflowId, runId)}
             /* Fall back to the canvas's in-place run id (reported via triggerData)
                so the Application interface renders against the live run even when
                the panel was opened without a runId (the + menu / chat-event path,
@@ -364,6 +357,7 @@ export function WorkflowBuilderPanelContent({ workflowId, runId, readOnly = fals
                   <WorkflowRunCanvas
                     workflowId={workflowId}
                     runId={boundRunId}
+                    surfaceId={surfaceId}
                     planOverride={planOverride}
                     hideToggle={!canEditWorkflow}
                     onTriggerConfigsChange={setTriggerData}

@@ -49,6 +49,9 @@ class EmbeddedAuthControllerTest {
     private OrganizationMemberService organizationMemberService;
 
     @Mock
+    private com.apimarketplace.auth.service.PasswordResetService passwordResetService;
+
+    @Mock
     private HttpServletRequest request;
 
     private EmbeddedAuthController controller;
@@ -56,7 +59,7 @@ class EmbeddedAuthControllerTest {
     @BeforeEach
     void setUp() {
         controller = new EmbeddedAuthController(
-                passwordAuthService, installStateService, organizationMemberService);
+                passwordAuthService, installStateService, organizationMemberService, passwordResetService);
     }
 
     private static Map<String, String> registerBody(String email, String invitationToken) {

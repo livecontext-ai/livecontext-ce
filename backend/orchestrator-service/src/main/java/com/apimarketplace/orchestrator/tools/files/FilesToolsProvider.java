@@ -741,7 +741,8 @@ public class FilesToolsProvider implements ToolsProvider {
         // file went looking for content or a url, and a url is exactly the value
         // those tools refuse: they need the bytes, which only the ref locates.
         out.put("NEXT", e.getS3Key() != null
-                ? "pass 'ref' whole to any tool that takes a file (generation input_image / input_audio / "
+                ? "pass 'ref' whole to any tool that takes a file (generation input_image, "
+                  + "first_frame_image, last_frame_image, reference_image, input_audio or "
                   + "input_video, a workflow node's file parameter), or files(action='view', file_id='"
                   + e.getId() + "') to read the content"
                 : "files(action='view', file_id='" + e.getId() + "') to read the content or get the file's url");
@@ -1243,7 +1244,7 @@ public class FilesToolsProvider implements ToolsProvider {
             + "Pass folder='root' (or a folder_ref) to browse the folder TREE instead of a flat list - returns folders[] + files[].\n"
             + "- get: metadata + a cheap preview (JSON skeleton / text head) for one file_id. No full content. "
             + "Also returns 'ref' for a stored file: the file OBJECT to hand to any tool that takes a file "
-            + "(generation input_image / input_audio / input_video, a workflow node's file parameter). Pass 'ref' "
+            + "(generation input_image / first_frame_image / last_frame_image / reference_image / input_audio / input_video, a workflow node's file parameter). Pass 'ref' "
             + "whole and unchanged - a file_id, a url or a name is not a file object and is refused.\n"
             + "- view: read a file's content for one file_id. This is how you access an uploaded file's data: "
             + "documents (PDF, Word, Excel, HTML, CSV, text/code) come back as extracted TEXT in 'content'; images "

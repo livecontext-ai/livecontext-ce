@@ -10,7 +10,7 @@ interface SelfHostNoteProps {
 }
 
 /**
- * Single under-the-grid note: the free, open-source Community Edition can be self-hosted and
+ * Single under-the-grid note: the free, source-available Community Edition can be self-hosted and
  * linked to any plan to get the same features. Rendered once per pricing surface (not per card),
  * since self-hosting is a deployment choice that complements - not replaces - the paid plans.
  */

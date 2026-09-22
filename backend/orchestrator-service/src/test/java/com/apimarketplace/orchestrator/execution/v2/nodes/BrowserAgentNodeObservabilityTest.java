@@ -161,6 +161,30 @@ class BrowserAgentNodeObservabilityTest {
     }
 
     @Test
+    @DisplayName("BILLING: the key route the module surfaced on its result reaches the observability row, so a browser run on the user's own key is billed its flat fee")
+    void recordsTheKeyRouteTheModuleSurfaced() {
+        BrowserAgentNode node = new BrowserAgentNode(
+            "browser:own-key",
+            Map.of("task", "scrape", "llm", Map.of("provider", "openai", "model", "gpt-4o"))
+        );
+        node.acceptServices(registryWith(browserAgentModule, agentClient));
+
+        Map<String, Object> rawOutput = new LinkedHashMap<>();
+        rawOutput.put("stop_reason", "COMPLETED");
+        rawOutput.put("steps", List.of());
+        rawOutput.put(BrowserAgentModule.KEY_ROUTE_KEY, "OWN_KEY");
+        when(browserAgentModule.execute(eq("agent_browse"), anyMap(), anyString(), any()))
+            .thenReturn(Optional.of(ToolExecutionResult.success(rawOutput)));
+
+        node.execute(context);
+
+        ArgumentCaptor<AgentObservabilityRequest> captor =
+            ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient, times(1)).recordObservability(captor.capture());
+        assertThat(captor.getValue().getKeyRoute()).isEqualTo("OWN_KEY");
+    }
+
+    @Test
     @DisplayName("recordObservability posts agent_type='browser_agent' with canonical COMPLETED stop reason")
     void recordsBrowserAgentObservabilityOnSuccess() {
         BrowserAgentNode node = new BrowserAgentNode(
@@ -256,15 +280,20 @@ class BrowserAgentNodeObservabilityTest {
     }
 
     @Test
-    @DisplayName("recordObservability propagates cache_read + cache_creation tokens onto the request")
+    @DisplayName("an Anthropic-billed session reports PLAIN input, because that family counts the cache beside the prompt")
     void recordsCacheTokensFromRunnerCostBlock() {
         // Pins the contract from runner.py::_extract_token_usage:
         //   cost.cache_read_tokens     → req.cacheReadTokens
         //   cost.cache_creation_tokens → req.cacheCreationTokens
         // Without this, browser-use's cache hit data flows from the Python
         // runner all the way to MinIO/Postgres but the auth-service ledger
-        // never sees it - silent under-discount once cache-aware billing
-        // ships in v0.1.
+        // never sees it.
+        //
+        // AND the prompt total must be converted, which this test used to assert the
+        // wrong way round: runner.py reports tokens_in INCLUSIVE of cache_read, so
+        // forwarding 5000 verbatim while ALSO reporting 3000 cache reads billed those
+        // 3000 tokens twice - once at full input rate inside the prompt, once again on
+        // the (discounted) cache line. The billed figure is the plain input, 2000.
         BrowserAgentNode node = new BrowserAgentNode(
             "browser:cache-aware",
             Map.of("task", "scrape", "llm", Map.of("provider", "anthropic", "model", "claude-sonnet-4-6"))
@@ -298,12 +327,58 @@ class BrowserAgentNodeObservabilityTest {
         verify(agentClient, times(1)).recordObservability(captor.capture());
 
         AgentObservabilityRequest req = captor.getValue();
-        assertThat(req.getPromptTokens()).isEqualTo(5000L);
+        assertThat(req.getPromptTokens()).isEqualTo(2000L);
         assertThat(req.getCompletionTokens()).isEqualTo(800L);
         assertThat(req.getCacheReadTokens()).isEqualTo(3000L);
         assertThat(req.getCacheCreationTokens()).isEqualTo(500L);
+        // cachedTokens is the OpenAI-family field; filling it too would count the same
+        // 3000 tokens under two names.
+        assertThat(req.getCachedTokens()).isZero();
+        // prompt + completion, the one rule the whole change uses: 2000 + 800. For an
+        // Anthropic-billed row the cache sits outside the total, exactly as the Anthropic
+        // API reports it, and the cache counters carry it.
+        assertThat(req.getTotalTokens()).isEqualTo(2800L);
         // browser_seconds → durationMs (12.5s = 12500ms)
         assertThat(req.getDurationMs()).isEqualTo(12500L);
+    }
+
+    @Test
+    @DisplayName("an OpenAI-billed session keeps the cache INSIDE the prompt and reports it as cachedTokens, the field that family reads")
+    void recordsCachedSubsetForOpenAiFamily() {
+        // The mirror of the case above. The OpenAI family discounts usage.cachedTokens
+        // and ignores cacheReadTokens, so filling only the latter meant a browser
+        // session on an OpenAI model never got its cache discount at all.
+        BrowserAgentNode node = new BrowserAgentNode(
+            "browser:openai-cache",
+            Map.of("task", "scrape", "llm", Map.of("provider", "openai", "model", "gpt-5.4"))
+        );
+        node.acceptServices(registryWith(browserAgentModule, agentClient));
+
+        Map<String, Object> rawOutput = new LinkedHashMap<>();
+        rawOutput.put("stop_reason", "COMPLETED");
+        rawOutput.put("steps", List.of(Map.of("action", "navigate", "duration_ms", 100L)));
+        rawOutput.put("cost", Map.of(
+            "tokens_in", 5000,
+            "tokens_out", 800,
+            "cache_read_tokens", 3000,
+            "cache_creation_tokens", 0,
+            "llm_calls", 2
+        ));
+        rawOutput.put("session_id", "sess-openai");
+
+        when(browserAgentModule.execute(eq("agent_browse"), anyMap(), anyString(), any()))
+            .thenReturn(Optional.of(ToolExecutionResult.success(rawOutput)));
+
+        node.execute(context);
+
+        ArgumentCaptor<AgentObservabilityRequest> captor =
+            ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient, times(1)).recordObservability(captor.capture());
+
+        AgentObservabilityRequest req = captor.getValue();
+        assertThat(req.getPromptTokens()).isEqualTo(5000L);
+        assertThat(req.getCachedTokens()).isEqualTo(3000L);
+        assertThat(req.getCacheReadTokens()).isZero();
     }
 
     @Test

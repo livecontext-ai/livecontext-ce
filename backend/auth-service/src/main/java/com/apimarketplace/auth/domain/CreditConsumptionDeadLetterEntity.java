@@ -46,6 +46,10 @@ public class CreditConsumptionDeadLetterEntity implements OrgScopedEntity {
     @Column(name = "completion_tokens")
     private Integer completionTokens;
 
+    /** Key route the consumption was meant to be billed under (OWN_KEY / PLATFORM / null). */
+    @Column(name = "key_route", length = 16)
+    private String keyRoute;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -95,6 +99,8 @@ public class CreditConsumptionDeadLetterEntity implements OrgScopedEntity {
 
     public Integer getCompletionTokens() { return completionTokens; }
     public void setCompletionTokens(Integer completionTokens) { this.completionTokens = completionTokens; }
+    public String getKeyRoute() { return keyRoute; }
+    public void setKeyRoute(String keyRoute) { this.keyRoute = keyRoute; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

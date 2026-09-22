@@ -452,3 +452,127 @@ describe('useCreditWallet - each clause of the read guard, separately', () => {
     expect(renderHook(() => useCreditWallet()).result.current.allowance).toBe(10_000);
   });
 });
+
+describe('useCreditWallet - when the credits come back', () => {
+  const GRANT_DATE = '2026-10-14T23:53:09';
+
+  const INVOICE_DATE = '2027-09-14T23:53:09';
+
+  it('carries the credit date and the invoice date the billing payload named', () => {
+    givenBalance(9_779);
+    givenSubscription({
+      subscription: {
+        planCode: 'TEAM',
+        creditTierIndex: 4,
+        cadence: 'yearly',
+        currentPeriodEnd: INVOICE_DATE,
+        nextCreditGrantAt: GRANT_DATE,
+      },
+    });
+
+    const { result } = renderHook(() => useCreditWallet());
+
+    expect(result.current.renewsAt).toBe(GRANT_DATE);
+    // The invoice date is carried so a surface can explain why it is not the credit date.
+    // Read off the SAME row the backend computed the credit date from, which is why it is
+    // currentPeriodEnd and not the served `cadence`: swapPlan moves a subscription's cadence
+    // without moving the price row the payload prefers when serving it.
+    expect(result.current.periodEndsAt).toBe(INVOICE_DATE);
+    expect(result.current.allowance).toBe(100_000);
+  });
+
+  it('ignores a non-string invoice date, exactly as it does the credit date', () => {
+    givenBalance(9_779);
+    givenSubscription({
+      subscription: {
+        planCode: 'PRO',
+        creditTierIndex: 1,
+        currentPeriodEnd: [2027, 9, 14],
+        nextCreditGrantAt: GRANT_DATE,
+      },
+    });
+
+    const { result } = renderHook(() => useCreditWallet());
+
+    expect(result.current.renewsAt).toBe(GRANT_DATE);
+    expect(result.current.periodEndsAt).toBeNull();
+  });
+
+  it('reports no date when the backend named none - a cancelled row is owed no grant', () => {
+    // The backend answers null for a subscription set to cancel or out of good standing.
+    // Nothing here may substitute a period end for it: that date is when access STOPS.
+    givenBalance(9_779);
+    givenSubscription({
+      subscription: { planCode: 'PRO', creditTierIndex: 1, nextCreditGrantAt: null },
+    });
+
+    const { result } = renderHook(() => useCreditWallet());
+
+    expect(result.current.renewsAt).toBeNull();
+    // The grant itself is still knowable, and the gauge still needs it.
+    expect(result.current.allowance).toBe(10_000);
+  });
+
+  it('withholds the date for the same reason it withholds the allowance: the wallet is not ours', () => {
+    // Owner-pays: the balance on screen belongs to the workspace owner, so OUR renewal
+    // date beside THEIR balance would be two accounts stated as one.
+    givenBalance(250_000);
+    givenSubscription({
+      activeOrgPlanCode: 'TEAM',
+      subscription: {
+        planCode: 'FREE',
+        creditTierIndex: 0,
+        currentPeriodEnd: INVOICE_DATE,
+        nextCreditGrantAt: GRANT_DATE,
+      },
+    });
+
+    const { result } = renderHook(() => useCreditWallet());
+
+    expect(result.current.allowance).toBeNull();
+    expect(result.current.renewsAt).toBeNull();
+    expect(result.current.periodEndsAt).toBeNull();
+  });
+
+  it('withholds the date on a failed read, which answers HTTP 200 with status error', () => {
+    givenBalance(40_000);
+    givenSubscription({
+      status: 'error',
+      subscription: { planCode: 'PRO', creditTierIndex: 1, nextCreditGrantAt: GRANT_DATE },
+    });
+
+    const { result } = renderHook(() => useCreditWallet());
+
+    expect(result.current.renewsAt).toBeNull();
+  });
+
+  it('withholds the date in CE, which has no cycle grant to renew', () => {
+    mocks.isCe.value = true;
+    givenBalance(9_779);
+    givenSubscription({
+      subscription: { planCode: 'FREE', creditTierIndex: 0, nextCreditGrantAt: GRANT_DATE },
+    });
+
+    const { result } = renderHook(() => useCreditWallet());
+
+    expect(result.current.renewsAt).toBeNull();
+    expect(result.current.allowance).toBeNull();
+  });
+
+  it('ignores a non-string date instead of passing it on to a formatter', () => {
+    // A LocalDateTime rendered as a [y,M,d,...] array is what a mis-configured mapper
+    // produces; formatting it downstream yields "Invalid Date", not an error anyone sees.
+    givenBalance(9_779);
+    givenSubscription({
+      subscription: {
+        planCode: 'PRO',
+        creditTierIndex: 1,
+        nextCreditGrantAt: [2026, 10, 14, 23, 53, 9],
+      },
+    });
+
+    const { result } = renderHook(() => useCreditWallet());
+
+    expect(result.current.renewsAt).toBeNull();
+  });
+});

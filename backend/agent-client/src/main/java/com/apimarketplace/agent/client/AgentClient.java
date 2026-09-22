@@ -36,14 +36,31 @@ public class AgentClient {
 
     private static final Logger log = LoggerFactory.getLogger(AgentClient.class);
 
+    /**
+     * Query parameter that declares a public read of the model catalogue. ONE spelling, referenced
+     * by both the emitter here and the {@code @RequestParam} in agent-service's controller: the
+     * whole public-catalogue fix rides on this name matching, and a typo on either side would
+     * silently leave the filter never applied.
+     */
+    public static final String PUBLIC_READ_PARAM = "publicRead";
+
+    /**
+     * Query param asking agent-service to drop the CLI-bridge providers from an AUTHENTICATED
+     * catalogue read. Separate from {@link #PUBLIC_READ_PARAM}, which also widens the read to
+     * providers with no key: a signed-in non-admin must lose the bridges WITHOUT gaining those.
+     */
+    public static final String HIDE_BRIDGES_PARAM = "hideBridges";
+
     private final RestTemplate restTemplate;
     private final RestTemplate memoryRestTemplate = createMemoryRestTemplate();
     private final RestTemplate executionRestTemplate;
-    // Dedicated bounded-timeout template used ONLY by
-    // {@link #getRecentActivity} - 2s connect / 3s read. Prevents the
-    // recent-activity branch from parking an orchestrator aggregator thread
-    // on a slow / hung agent-service (auditor B v5 fix; the default
-    // {@code restTemplate} has open-ended JDK timeouts).
+    // Bounded-timeout template for the read paths that sit inside a page render -
+    // 2s connect / 3s read. Prevents them from parking an orchestrator aggregator
+    // thread on a slow / hung agent-service (auditor B v5 fix; the default
+    // {@code restTemplate} has open-ended JDK timeouts). Keeps the name the other
+    // service clients use for their equivalent field, though it now serves
+    // {@link #getRecentAgentResources} AND {@link #getWorkspaceAgentRuns}: both are
+    // enrichments of a page that must still render without them.
     private final RestTemplate recentActivityRestTemplate;
     private final String baseUrl;
 
@@ -101,7 +118,8 @@ public class AgentClient {
 
     /**
      * 2s connect / 3s read - tight read-path budget for the
-     * {@code /api/internal/agents/recent-activity} fan-out branch.
+     * {@code /api/internal/agents/recent-activity} fan-out branch and the agenda's
+     * {@code /api/internal/agents/executions/window} history read.
      */
     private static RestTemplate createRecentActivityRestTemplate() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -1154,10 +1172,44 @@ public class AgentClient {
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> getModelsInfo(String category, String tenantId, String organizationId) {
+        return getModelsInfo(category, tenantId, organizationId, false, false);
+    }
+
+    /**
+     * @param publicRead the caller is serving a genuinely PUBLIC, unauthenticated read and wants
+     *                   the catalogue trimmed accordingly (today: no CLI-bridge providers, no
+     *                   bridge host address, on the hosted product).
+     *                   <p>Explicit rather than inferred from a missing {@code X-User-ID}: that
+     *                   header is also absent on every internal call made off a request thread,
+     *                   because {@code OrgContextHeaderForwarder} can only copy it from a bound
+     *                   servlet request. Inferring would have trimmed the catalogue for
+     *                   {@code ModelCatalogEnricher} on a scheduled run and not on a chat request,
+     *                   making node validation depend on which thread happened to ask.
+     * @param hideBridges the caller is serving a SIGNED-IN reader who is not a platform admin:
+     *                   drop the CLI-bridge providers, keep the availability filter. The CLIs run
+     *                   on the operator's own subscription, so an end user must never be shown
+     *                   one; the admin surfaces that point execution links at a CLI pass false and
+     *                   keep the whole catalogue. Explicit for the same reason as above, and never
+     *                   both flags at once: {@code publicRead} already drops them.
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getModelsInfo(String category, String tenantId,
+                                             String organizationId, boolean publicRead,
+                                             boolean hideBridges) {
         String url = baseUrl + "/api/internal/agent/models";
+        java.util.List<String> query = new java.util.ArrayList<>();
         if (category != null && !category.isBlank()) {
-            url = url + "?category=" + java.net.URLEncoder.encode(
-                    category, java.nio.charset.StandardCharsets.UTF_8);
+            query.add("category=" + java.net.URLEncoder.encode(
+                    category, java.nio.charset.StandardCharsets.UTF_8));
+        }
+        if (publicRead) {
+            query.add(PUBLIC_READ_PARAM + "=true");
+        }
+        if (hideBridges) {
+            query.add(HIDE_BRIDGES_PARAM + "=true");
+        }
+        if (!query.isEmpty()) {
+            url = url + "?" + String.join("&", query);
         }
         try {
             ResponseEntity<Map> response = restTemplate.exchange(
@@ -1367,6 +1419,87 @@ public class AgentClient {
         } catch (Exception e) {
             log.error("Failed to list tasks for tenant={}: {}", tenantId, e.getMessage());
             return null;
+        }
+    }
+
+    // ========== Agent run history over a window (the agenda calendar) ==========
+
+    /**
+     * Hard ceiling on one agent-run window, enforced by the endpoint and respected by the
+     * caller.
+     *
+     * <p>It lives HERE, in the module both sides already depend on, because the two must
+     * agree for a truncation flag to mean anything: a caller asking for 5000 while the
+     * server clamps to 2000 receives a full page, sees fewer rows than it asked for, and
+     * concludes the window was complete. That is a silent wrong answer on a page whose
+     * whole contract is saying when it is showing a partial history.
+     *
+     * <p>It is a compile-time constant, so both readers INLINE it: changing the number
+     * means rebuilding agent-service and orchestrator-service, not just this module.
+     * Every service here ships from one image build per commit, so that is automatic;
+     * do not reach for this constant from anything released on its own schedule.
+     */
+    public static final int WORKSPACE_RUNS_MAX_LIMIT = 2000;
+
+    /**
+     * Every agent run of a workspace inside {@code [from, to]}, newest first.
+     *
+     * <p>ONE round trip for a whole calendar window: the agenda merges these with the
+     * workflow epochs it reads locally, so a month costs one extra call rather than one
+     * per agent or one per day.
+     *
+     * <p><b>Fail-open, but not fail-silent.</b> This sits inside a page render, so an
+     * agent-service that is slow or down must cost the calendar its agent rows and never
+     * the whole month: the budget is tight (2s connect / 3s read via
+     * {@link #recentActivityRestTemplate}) and no failure propagates. What a failure does
+     * NOT do any more is look like an answer - it returns
+     * {@link AgentRunWindowDto#unavailable()}, so the page can say its agent history is
+     * missing instead of drawing a quiet month and calling it complete.
+     *
+     * @param orgRole the caller's role in that workspace, forwarded because the endpoint
+     *                applies the per-member agent deny-list. Omitting it does not leak
+     *                anything, but it makes the guard treat an owner as an ordinary
+     *                member: the admin short-circuit is skipped and the restriction
+     *                lookup is performed instead, which is an extra hop whenever the
+     *                guard's cache TTL is not configured.
+     * @param limit how many rows the caller can draw. The server clamps it; whether the
+     *              window was cut short comes back as a FIELD, never inferred from the
+     *              row count, because the deny-list shortens that count too.
+     */
+    public AgentRunWindowDto getWorkspaceAgentRuns(String tenantId, String orgId, String orgRole,
+                                                   java.time.Instant from, java.time.Instant to,
+                                                   int limit) {
+        if (tenantId == null || tenantId.isBlank() || orgId == null || orgId.isBlank()
+                || from == null || to == null || limit < 1) {
+            // Nothing was asked, so nothing is known - but this is not a failure either:
+            // the caller decided not to ask. Reported as an available, empty, complete
+            // window so it cannot raise a "history unavailable" notice of its own.
+            return AgentRunWindowDto.of(List.of(), false, null);
+        }
+        String url = UriComponentsBuilder.fromHttpUrl(baseUrl + "/api/internal/agents/executions/window")
+                .queryParam("from", from.toString())
+                .queryParam("to", to.toString())
+                .queryParam("limit", limit)
+                .toUriString();
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-User-ID", tenantId);
+        OrgContextHeaderForwarder.setIfPresent(headers, orgId);
+        // setIfPresent carries the org id only. The role is a separate header and the
+        // endpoint's deny-list reads it, exactly as getAgents does above.
+        if (orgRole != null && !orgRole.isBlank()) {
+            headers.set("X-Organization-Role", orgRole);
+        }
+        HttpEntity<Void> entity = new HttpEntity<>(headers);
+        try {
+            ResponseEntity<AgentRunWindowDto> response = recentActivityRestTemplate.exchange(
+                    url, HttpMethod.GET, entity, AgentRunWindowDto.class);
+            return response.getBody() != null ? response.getBody() : AgentRunWindowDto.unavailable();
+        } catch (Exception e) {
+            log.warn("Failed to fetch agent runs for the agenda tenant={} org={} window={}..{}: {}",
+                    tenantId, orgId, from, to, e.getMessage());
+            // NOT an empty window. An empty one says "no agent ran", which the calendar
+            // would draw as a complete, quiet month.
+            return AgentRunWindowDto.unavailable();
         }
     }
 

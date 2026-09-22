@@ -35,7 +35,8 @@ vi.mock('@/hooks/useAuthGuard', () => ({
 }));
 
 // Cloud edition (not CE) - the CE gating is covered by HighlightedApps.ce.test.tsx.
-vi.mock('@/lib/edition', () => ({ IS_CE: false }));
+// IS_MANAGED_CLOUD is read by the verified badge on each card's publisher row.
+vi.mock('@/lib/edition', () => ({ IS_CE: false, IS_MANAGED_CLOUD: true }));
 vi.mock('@/lib/format-cost', () => ({ isCeMode: false }));
 
 vi.mock('@/hooks/useCeCloudLinkStatus', () => ({

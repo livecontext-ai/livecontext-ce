@@ -7,6 +7,8 @@ import com.apimarketplace.catalog.domain.dto.ToolExecutionResponse;
 import com.apimarketplace.catalog.repository.ApiRepository;
 import com.apimarketplace.catalog.repository.ToolNextHintRepository;
 import com.apimarketplace.catalog.service.billing.CatalogToolBillingService;
+import com.apimarketplace.catalog.service.generation.GenerationSpec;
+import com.apimarketplace.catalog.service.generation.RelayedGenerationMeasurement;
 import com.apimarketplace.catalog.service.exception.InsufficientCreditsException;
 import com.apimarketplace.catalog.service.exception.ToolNotFoundException;
 import com.apimarketplace.catalog.service.execution.BinaryResponseHandler;
@@ -215,7 +217,8 @@ public class ToolExecutionManager {
             // half and left the second caller charging twice.
             boolean cacheEnabled = request != null
                     && "STREAM".equalsIgnoreCase(request.getBillingScopeKind())
-                    && !isGenerationCall(request, context);
+                    && !isGenerationCall(request, context)
+                    && isCacheable(context);
 
             // Credential-state versioning of the cache key. Without it, a cached
             // response survives a credential switch: connect a new Gmail account,
@@ -290,7 +293,7 @@ public class ToolExecutionManager {
                 billingScope = buildBillingScope(context, request, intendedCredentialSource(request),
                         userId, apiId, UUID.randomUUID().toString());
                 // No scope means no guard below can run, and the call would go
-                // out free. That is correct for the 600+ ordinary catalog
+                // out free. That is correct for the 1000+ ordinary catalog
                 // endpoints and wrong for a generation, which spends the
                 // owner's paid provider key: an unresolvable composite slug or
                 // a user id that is not a number would produce the asset with
@@ -438,7 +441,8 @@ public class ToolExecutionManager {
                         resultData = toolExecutionOrchestrator.projectResult(
                             resultData,
                             context.getOutputSchemaJson(),
-                            context.getExecutionMode()
+                            context.getExecutionMode(),
+                            responseHeadersOf(executionResult)
                         );
                     } catch (Exception projectorEx) {
                         log.warn("OutputProjector failed for tool {}: {} - falling back to raw response",
@@ -550,6 +554,14 @@ public class ToolExecutionManager {
                 metadata.put("iconSlug", context.getIconSlug());
             }
             metadata.put("status", executionResult.getOrDefault("status", "unknown"));
+            // Only when it happened, so a call that went out once carries nothing new. The wait
+            // is inside this call, so the node stayed RUNNING and emitted nothing: this is the
+            // only thing that tells a reader afterwards that the provider refused and we came
+            // back, rather than the provider simply being slow.
+            int providerRetries = com.apimarketplace.catalog.service.http.ProviderRetryContext.getRetries();
+            if (providerRetries > 0) {
+                metadata.put("providerRetries", providerRetries);
+            }
 
             // Include httpStatus from HttpExecutionService (contains code and error)
             if (executionResult.containsKey("httpStatus")) {
@@ -605,9 +617,21 @@ public class ToolExecutionManager {
             // Exactly one of the two, exactly once, for every reservation taken
             // above. A failed upstream call releases: the customer is never
             // charged for a call that produced nothing.
-            reservationSettled = settleReservation(
+            Settlement settlement = settleReservation(
                     reservationSourceId, reservedAmount, billingScope, context,
                     success, (String) executionResult.get("credentialSource"));
+            reservationSettled = settlement.settled();
+            // What this call cost, stated only when it cost something HERE.
+            //
+            // Absent is not zero. A call on the reader's own key, a released reservation, an
+            // endpoint with no published price and a self-hosted install with no ledger at all
+            // reach this line with nothing charged, and each of them would read as "free" if the
+            // key were written with a zero in it. Downstream this number is shown beside an asset,
+            // so a zero over a generation the reader paid their own provider for would be a lie
+            // that looks like a fact.
+            if (settlement.billedCredits() != null) {
+                metadata.put(BILLED_CREDITS_KEY, settlement.billedCredits());
+            }
 
             return ToolExecutionResponse.builder()
                     .success(success)
@@ -755,6 +779,23 @@ public class ToolExecutionManager {
     public static final long GENERATION_CALLER_BUDGET_MS = GENERATION_WORST_CASE_MS + 300_000L;
 
     /**
+     * Response-metadata key carrying the credits this call was charged.
+     *
+     * <p>Present ONLY on a call the platform actually billed: it is written from the committed
+     * reservation, so a call on the reader's own key and a released one carry no key at all. A
+     * self-hosted install carries none for a second, independent reason worth knowing - with markup
+     * off, {@code preflightReserve} allows the call without billing, so there is no reservation to
+     * settle and this code is never reached. The commit-outcome check is the guard for the case
+     * where a reservation DOES exist; both sides of that check answer {@code BILLING_DISABLED}
+     * rather than a success word when they metered nothing.
+     *
+     * <p>Same word as {@code GenerationProvenanceFields.BILLED_CREDITS} and deliberately not the
+     * same constant: one names a field of a stored recipe, the other a field of a tool result, and
+     * a shared constant would make a rename of either silently rewrite the other's wire format.
+     */
+    public static final String BILLED_CREDITS_KEY = "billedCredits";
+
+    /**
      * The credential pool this call is going to use, as far as it can be known
      * BEFORE the call. Only the caller's explicit choice is knowable here:
      * {@code "user"} (never billed) or {@code "platform"} (billed).
@@ -782,7 +823,7 @@ public class ToolExecutionManager {
      * classes of endpoint have opposite money outcomes:
      * <ul>
      *   <li><b>Ordinary catalog endpoint</b> - proceeds UNBILLED, with a WARN.
-     *       The 600+ endpoints carry no published price, so the reserve was
+     *       The 1000+ endpoints carry no published price, so the reserve was
      *       going to resolve nothing anyway; taking the whole catalog down
      *       because the credit ledger is unreachable costs more than it
      *       protects.</li>
@@ -827,9 +868,10 @@ public class ToolExecutionManager {
 
     /**
      * Close the reservation exactly once: commit what is actually due, or
-     * release it. Returns true when the reservation has been settled (or when
+     * release it. Reports whether the reservation has been settled (or that
      * there was nothing to settle), which is what stops the finally-block
-     * safety net from releasing on top of a commit.
+     * safety net from releasing on top of a commit - and, when the commit took
+     * the reserved amount whole, how much that was.
      *
      * <p>Three outcomes:
      * <ul>
@@ -846,36 +888,70 @@ public class ToolExecutionManager {
      *       later adjustment to make.</li>
      * </ul>
      */
-    private boolean settleReservation(String sourceId,
+    private Settlement settleReservation(String sourceId,
                                       java.math.BigDecimal reservedAmount,
                                       CatalogToolBillingService.BillingScope scope,
                                       ToolContextService.ToolContext context,
                                       boolean success,
                                       String resolvedCredentialSource) {
         if (sourceId == null) {
-            return true; // nothing reserved - nothing to settle
+            return Settlement.UNBILLED; // nothing reserved - nothing to settle
         }
         try {
             if (!success) {
                 catalogBillingService.releaseOnFailure(sourceId, "catalog: upstream call failed");
-                return true;
+                return Settlement.UNBILLED;
             }
             if ("USER".equalsIgnoreCase(resolvedCredentialSource)) {
                 catalogBillingService.releaseOnFailure(sourceId,
                         "catalog: the user's own credential answered (BYOK) - not billable");
-                return true;
+                return Settlement.UNBILLED;
             }
-            catalogBillingService.commitOnSuccess(sourceId, reservedAmount,
+            String outcome = catalogBillingService.commitOnSuccess(sourceId, reservedAmount,
                     scope != null ? scope.provider() : null,
                     scope != null ? scope.model() : null);
-            return true;
+            return Settlement.of(outcome, reservedAmount);
         } catch (Exception e) {
             // Report NOT settled so the finally block attempts the release. A
             // commit that threw after the ledger row flipped is safe to chase
             // with a release: scope-release on a committed row is a no-op.
             log.warn("[ToolExecutionManager] Could not settle reservation {} for tool {}: {}",
                     sourceId, context.getToolName(), e.getMessage());
-            return false;
+            return Settlement.NOT_SETTLED;
+        }
+    }
+
+    /**
+     * How the reservation ended, and what it took.
+     *
+     * @param settled      true once the reservation can no longer be released twice - what stops
+     *                     the finally-block safety net from refunding on top of a commit
+     * @param billedCredits the amount charged, or null when this call charged nothing here
+     */
+    record Settlement(boolean settled, java.math.BigDecimal billedCredits) {
+
+        /** Settled with no charge: nothing was reserved, the call failed, or the reader's own key answered. */
+        static final Settlement UNBILLED = new Settlement(true, null);
+        /** The settle itself failed, so the finally block still has to release. */
+        static final Settlement NOT_SETTLED = new Settlement(false, null);
+
+        /**
+         * The outcome of a commit, read for whether the reserved amount is the amount taken.
+         *
+         * <p>Only a commit that took the whole reserved amount reports a number, and which
+         * outcomes those are is decided once, next to the commit, by
+         * {@code CatalogToolBillingService.commitTookTheWholeAmount}. A PARTIAL commit charges less
+         * than was reserved and does not say how much, an expired reservation charged nothing, an
+         * idempotent retry cannot say which commit it repeats, and a deployment that does not meter
+         * reached no ledger. In each of those the amount is left absent, which every reader already
+         * handles: it is the same answer as a call on the reader's own key.
+         */
+        static Settlement of(String commitOutcome, java.math.BigDecimal reservedAmount) {
+            if (!CatalogToolBillingService.commitTookTheWholeAmount(commitOutcome)
+                    || reservedAmount == null || reservedAmount.signum() <= 0) {
+                return UNBILLED;
+            }
+            return new Settlement(true, reservedAmount);
         }
     }
 
@@ -929,8 +1005,39 @@ public class ToolExecutionManager {
         // For catalog tool calls, neither LLM provider nor LLM model applies - fall back to the
         // human-readable apiName and the tool name from context so the ledger entry is traceable
         // (e.g. "Markup reservation: OpenAI/create_image") instead of the legacy "null/null".
+        //
+        // A GENERATION names its model instead of its endpoint, because the endpoint does not
+        // identify what was bought. One endpoint backs several models at several rates - Gemini's
+        // `generate_content` serves both gemini-2.5-flash-image and gemini-3-pro-image, at 78 and
+        // 268 credits a call - so a ledger that records the endpoint writes the same two words over
+        // two purchases that differ by a factor of three. The usage page filters on this column, so
+        // the reader could see the amounts and never learn which model produced them.
+        //
+        // Ordinary endpoints are untouched: only a generation carries a model id here, and this is
+        // a LABEL. Nothing prices, resolves or authorises on it - the price comes from
+        // `generationModelId` passed separately to the reserve, and the endpoint is identified by
+        // `toolSlug` - so the name written here decides what a person reads, and nothing else.
+        //
+        // The model is the one the CALL declared, and only that. This path never measures it out of
+        // the body the way the CE relay does: there the install is not trusted to state its own
+        // size, so the body is measured and the model falls out of that measurement for free, while
+        // here the generation surface sends it (as `X-Lc-Generation-Model`, stripped at every edge).
+        // Deriving it twice, two ways, for one fact is the duplication that ends with the two
+        // disagreeing.
+        //
+        // So a call that names no model is labelled by endpoint. For a per-model priced endpoint
+        // that never happens - such a call is REFUSED before it runs, unpriced - which covers the
+        // case this change exists for, two models at two rates behind one endpoint. It does happen
+        // for a generation endpoint carrying a single endpoint-level price, reached through
+        // catalog(action='execute') with no model named: that row says what it can, which is which
+        // endpoint was bought. The same call relayed from a linked install is labelled by model,
+        // and those two rows can sit on one usage page. Worth knowing before reading a filter as
+        // exhaustive.
         String billingProvider = null;
-        String billingModel = context != null ? context.getToolName() : null;
+        String generationModelId = request != null ? request.getGenerationModelId() : null;
+        String billingModel = generationModelId != null && !generationModelId.isBlank()
+                ? generationModelId
+                : (context != null ? context.getToolName() : null);
         var apiOpt = apiRepository.findById(apiId);
         if (apiOpt.isPresent()) {
             ApiEntity api = apiOpt.get();
@@ -959,6 +1066,27 @@ public class ToolExecutionManager {
             return null;
         }
 
+        // MEASURED from the body, not believed from the headers.
+        //
+        // The size, the unit, the model and the factor all decide what this call costs, and all
+        // four arrived as `X-Lc-Generation-*` headers. Those are stripped at the gateway and at the
+        // CE monolith, which is the whole defence - and stripping happens at an EDGE, so anything
+        // reaching catalog-service without traversing one (another in-cluster service, a misrouted
+        // ingress, a mesh misconfiguration) was believed. A forged `X-Lc-Generation-Multiplier:
+        // 0.001` turned a 15 second 4K render from 11,670 credits into 11.67, and a forged
+        // quantity of 1 did the same to a ten second clip, with billed_quantity reported back as
+        // the forged value so nothing on the invoice looked wrong.
+        //
+        // The cloud already refuses to believe a linked install for exactly this reason and
+        // re-derives everything from the provider-shaped body it was handed
+        // (RelayedGenerationMeasurement). The body is right here too, so the same reading applies
+        // and the headers stop being authoritative for money on every path.
+        //
+        // Null when this is not a generation, or when the body carries no model the descriptor
+        // knows - and then the headers are used exactly as before, which keeps every ordinary
+        // endpoint and every pre-existing caller unchanged.
+        RelayedGenerationMeasurement.Measured measured = measureFromBody(context, request);
+
         CatalogToolBillingService.BillingScope scope = CatalogToolBillingService.BillingScope.of(
                 userIdLong,
                 credentialSource,
@@ -975,12 +1103,20 @@ public class ToolExecutionManager {
                 // V428: which generation model is being priced, and how big the
                 // call is. Absent for an ordinary tool, in which case pricing
                 // resolves exactly as it did before.
-                request != null ? request.getGenerationModelId() : null,
-                request != null ? request.getGenerationQuantity() : null,
+                measured != null && measured.modelId() != null ? measured.modelId() : generationModelId,
+                measured != null ? measured.quantity()
+                        : (request != null ? request.getGenerationQuantity() : null),
                 // The unit that quantity is counted in. Carried so the billing
                 // layer can tell a rate and a measurement apart when they
                 // describe different things.
-                request != null ? request.getGenerationQuantityUnit() : null,
+                measured != null ? measured.quantityUnit()
+                        : (request != null ? request.getGenerationQuantityUnit() : null),
+                // What the call's own choices do to the published rate (a 1080p
+                // render, a reference image the provider charges to read).
+                // Absent for every ordinary tool and for a generation whose
+                // model declares no modifiers.
+                measured != null ? measured.priceMultiplier()
+                        : (request != null ? request.getGenerationPriceMultiplier() : null),
                 // The CE relay reserved this call against the linked cloud
                 // account before dispatching it and settles it itself. It is
                 // wire-sealed on the DTO, so no external caller can claim it.
@@ -1016,6 +1152,45 @@ public class ToolExecutionManager {
      * every ordinary endpoint already has. Failing closed here would disable
      * the cache for the whole surface on a database blip.
      */
+    /**
+     * Whether serving this endpoint's previous answer is the same as calling it.
+     *
+     * <p>True for almost everything, which is why the cache pays: a read costs the same
+     * answer twice. It is FALSE for an endpoint whose read CONSUMES what it returns, and
+     * those exist. Telegram's {@code getUpdates} is the reference case: it drains a
+     * server-side queue and advances a cursor, so the bytes are gone once read. Cached, the
+     * first call inside the window returns the real batch and every later one replays it,
+     * so a message that genuinely arrived in between is never seen. The symptom is not an
+     * error, it is a poller that reports an empty inbox forever, which is what production
+     * showed: 313 calls over three days, every one of them {@code {"ok":true,"result":[]}},
+     * most served from cache in under 40ms.
+     *
+     * <p>Declared by the endpoint in its {@code execution} block as {@code "cacheable":
+     * false}, so the fact lives in the catalog seed beside the endpoint it describes rather
+     * than in a list here that nobody updates when an API is added. Absent means cacheable,
+     * which keeps every existing endpoint exactly as it was.
+     */
+    // Package-private so the decision can be tested on its own. Reaching it through a full
+    // execution would need a billing scope, a reservation and an HTTP hop to assert one
+    // boolean, and the test would then fail for a dozen reasons that are not this rule.
+    boolean isCacheable(ToolContextService.ToolContext context) {
+        String spec = context == null ? null : context.getExecutionSpecJson();
+        if (spec == null || spec.isBlank()) {
+            return true;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(spec);
+            com.fasterxml.jackson.databind.JsonNode cacheable = node.get("cacheable");
+            return cacheable == null || !cacheable.isBoolean() || cacheable.asBoolean();
+        } catch (Exception e) {
+            // Unreadable spec must not disable the cache for an endpoint that was fine
+            // before: fail towards the behaviour every other endpoint already has.
+            log.warn("[ToolExecutionManager] Could not read the execution spec of tool {}: {} - "
+                    + "treating it as cacheable", context.getToolId(), e.getMessage());
+            return true;
+        }
+    }
+
     private boolean isGenerationCall(ToolExecutionRequest request, ToolContextService.ToolContext context) {
         if (request != null && request.getGenerationModelId() != null) {
             return true;
@@ -1031,6 +1206,50 @@ public class ToolExecutionManager {
             log.warn("[ToolExecutionManager] Could not tell whether tool {} is a generation: {} - "
                     + "treating it as an ordinary endpoint for caching", context.getToolId(), e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Read the billing context out of the BODY this call is about to send.
+     *
+     * <p>Returns null for an ordinary endpoint, for a body that names no model this descriptor
+     * knows, or when the descriptor cannot be read at all - in every one of those the caller falls
+     * back to what the request carried, which is what this path did before.
+     *
+     * <p>Deliberately the same class the CE relay uses. Two readers of one body would be two
+     * chances to disagree, and a disagreement here is a call charged one amount locally and another
+     * through the relay.
+     */
+    private RelayedGenerationMeasurement.Measured measureFromBody(
+            ToolContextService.ToolContext context, ToolExecutionRequest request) {
+        if (request == null || request.getParameters() == null || request.getParameters().isEmpty()) {
+            return null;
+        }
+        if (apiToolRepoForSlug == null || context == null || context.getToolId() == null) {
+            return null;
+        }
+        try {
+            var tool = apiToolRepoForSlug.findById(UUID.fromString(context.getToolId()));
+            if (tool.isEmpty() || !tool.get().isGeneration()) {
+                return null;
+            }
+            GenerationSpec spec = GenerationSpec.parse(
+                    objectMapper.readTree(tool.get().getGenerationSpec()), "tool:" + context.getToolId())
+                    .orElse(null);
+            if (spec == null) {
+                return null;
+            }
+            RelayedGenerationMeasurement.Measured measured =
+                    RelayedGenerationMeasurement.measure(spec, request.getParameters());
+            // A body whose model this descriptor does not recognise is not something to price from:
+            // fall back rather than replace a stated model with nothing.
+            return measured != null && measured.modelId() != null ? measured : null;
+        } catch (Exception e) {
+            // Never fail a call because the descriptor could not be read. Falling back to the
+            // request's own values is the behaviour that predates this.
+            log.warn("[ToolExecutionManager] Could not measure the body of tool {} for billing: {} - "
+                    + "using the values the request carried", context.getToolId(), e.getMessage());
+            return null;
         }
     }
 
@@ -1226,6 +1445,35 @@ public class ToolExecutionManager {
             return toolNextHintRepository.findByToolNameId(toolNameId);
         }
         return List.of();
+    }
+
+    /**
+     * The response headers HttpExecutionService captured, if any.
+     *
+     * <p>They were being dropped here: only {@code executionResult.get("data")} went on to the
+     * projection, so a value a provider returns ONLY in a header (LinkedIn's upload ETag, which
+     * finalizeUpload requires) was unreachable by any endpoint declaration. Reading them costs
+     * nothing for the tools that ignore them.
+     */
+    static Map<String, String> responseHeadersOf(Map<String, Object> executionResult) {
+        if (executionResult == null) {
+            return null;
+        }
+        Object headers = executionResult.get("headers");
+        if (!(headers instanceof Map<?, ?> map)) {
+            return null;
+        }
+        // Copied rather than cast. Every producer today builds this from
+        // HttpHeaders.toSingleValueMap(), so the values are Strings, but an unchecked cast would
+        // turn a future producer's non-String value into a ClassCastException inside a call that
+        // had already succeeded. Coercing costs one small map per call and cannot throw.
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            if (e.getKey() != null && e.getValue() != null) {
+                out.put(String.valueOf(e.getKey()), String.valueOf(e.getValue()));
+            }
+        }
+        return out;
     }
 
 }

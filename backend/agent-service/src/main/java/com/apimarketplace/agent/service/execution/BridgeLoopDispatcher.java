@@ -82,18 +82,55 @@ public class BridgeLoopDispatcher {
      *                  the default {@code USER} role and deny the dispatch.
      */
     public AgentExecutionResponseDto dispatchRaw(AgentExecutionRequestDto request, String userRoles) {
+        return dispatchRaw(request, userRoles, false);
+    }
+
+    /**
+     * @param viaExecutionLink the run reached this CLI because an execution link routed it here,
+     *                         not because anyone asked for it. See {@link #gateSelection}.
+     */
+    public AgentExecutionResponseDto dispatchRaw(AgentExecutionRequestDto request, String userRoles,
+                                                 boolean viaExecutionLink) {
         if (bridgeClient == null) {
             log.warn("[BRIDGE_DISPATCH] dispatchRaw called but bridge client not available");
             return null;
         }
-        // Gate the bridge subscription before dispatching - the non-bridge path gates
-        // inside LLMProviderFactory, but dispatchRaw bypasses the factory so we must
-        // call the guard here. Throws BridgeAccessDeniedException → GlobalExceptionHandler
-        // maps to 403/429 with the typed reason.
-        if (bridgeAccessGuard != null) {
-            bridgeAccessGuard.enforce(request.tenantId(), userRoles, request.provider(), true);
-        }
+        gateSelection(request.tenantId(), userRoles, request.provider(), viaExecutionLink);
         return bridgeClient.execute(request);
+    }
+
+    /**
+     * Refuse a bridge the caller CHOSE and may not use. A routed one is not a choice.
+     *
+     * <p>{@code BridgeAccessGuard} answers one question: may this user SELECT this CLI. That is
+     * the right question for someone who picked {@code claude-code} as their model, and the wrong
+     * one for a run that asked for {@code anthropic} and was sent here by
+     * {@code agent.model_execution_links} - a platform routing decision the user never made, is
+     * billed for at the BILLED pair's price, and cannot see. Applying the policy to both made the
+     * link a trap: production's "Agenda Scout" was migrated onto {@code anthropic} and still
+     * failed every 30 minutes with {@code Bridge access denied for claude-code}, because link 7
+     * put it back on the CLI and the guard then judged its non-admin owner as if they had asked
+     * for it.
+     *
+     * <p>A routed run is not the unrestricted CLI either: the caller stamps
+     * {@code withRestrictedToolset(true)}, so it runs with an empty cwd and none of the CLI's
+     * native tools. The user gets the session and nothing else - no project files, no shell, no
+     * sign of which CLI answered.
+     *
+     * <p><b>Known consequence, stated rather than buried:</b> a routed run skips the per-user
+     * DAILY QUOTA too, because the guard decides and counts in the same call. The quota still caps
+     * anyone who picks a bridge directly. Capping routed traffic needs a counter that does not
+     * also refuse, which is a separate change with its own policy question.
+     */
+    private void gateSelection(String tenantId, String userRoles, String provider,
+                               boolean viaExecutionLink) {
+        if (bridgeAccessGuard == null || viaExecutionLink) {
+            return;
+        }
+        // Throws BridgeAccessDeniedException → GlobalExceptionHandler maps to 403/429 with the
+        // typed reason. The non-bridge path gates inside LLMProviderFactory; this one bypasses
+        // the factory, so the call has to be here.
+        bridgeAccessGuard.enforce(tenantId, userRoles, provider, true);
     }
 
     /**
@@ -101,6 +138,14 @@ public class BridgeLoopDispatcher {
      * direct {@code AgentLoopService} path. Caller is responsible for routing.
      */
     public AgentLoopResult execute(AgentLoopContext context) {
+        return execute(context, false);
+    }
+
+    /**
+     * @param viaExecutionLink the run reached this CLI because an execution link routed it here.
+     *                         See {@link #gateSelection}.
+     */
+    public AgentLoopResult execute(AgentLoopContext context, boolean viaExecutionLink) {
         if (bridgeClient == null) {
             return AgentLoopResult.builder()
                 .success(false)
@@ -123,13 +168,9 @@ public class BridgeLoopDispatcher {
             context.getPurposeOrDefault(), context.provider(), context.model(),
             context.tenantId(), context.agentId());
 
-        // Gate the bridge subscription before dispatching (classify/guardrail path).
-        // Bypasses LLMProviderFactory so we must call the guard here - same defense
-        // as dispatchRaw. Throws BridgeAccessDeniedException → GlobalExceptionHandler
-        // maps reason → 403/429.
-        if (bridgeAccessGuard != null) {
-            bridgeAccessGuard.enforce(context.tenantId(), context.userRoles(), context.provider(), true);
-        }
+        // Same rule as dispatchRaw: refuse a bridge the caller chose and may not use, let a
+        // routed one through (classify/guardrail path).
+        gateSelection(context.tenantId(), context.userRoles(), context.provider(), viaExecutionLink);
 
         AgentExecutionResponseDto response = bridgeClient.execute(dto);
 
@@ -258,6 +299,18 @@ public class BridgeLoopDispatcher {
      */
     AgentLoopResult convertResponse(AgentExecutionResponseDto response, String provider, String model) {
         if (!response.success()) {
+            // A failed run is not a free run: carry back what the CLI spent before it
+            // stopped, instead of reporting a hard zero. The direct-API loop has always
+            // returned usage on its cancel path, which is why a stopped deepseek turn bills
+            // and a stopped bridge turn did not.
+            //
+            // Be precise about what this buys TODAY: it makes the counters AVAILABLE to
+            // every caller. Two of the three still throw them away one layer up -
+            // ClassifyResult.failure and GuardrailResult.failure hard-code zero tokens, and
+            // JsonCompletionService bills only its success path - so for those the value
+            // dies there, not here. Fixing that means widening those two result types,
+            // which is a separate change; this one stops the loss at the source and stops
+            // the two bridge converters from disagreeing.
             return AgentLoopResult.builder()
                 .success(false)
                 .error(response.error())
@@ -268,7 +321,10 @@ public class BridgeLoopDispatcher {
                 .stopReason(parseStopReason(response.stopReason()))
                 .conversationHistory(convertHistory(response.conversationHistory()))
                 .toolResults(Collections.emptyList())
-                .usagePerIteration(Collections.emptyList())
+                .usage(response.totalUsage() != null ? convertUsage(response.totalUsage()) : null)
+                .usagePerIteration(response.usagePerIteration() != null
+                    ? response.usagePerIteration().stream().map(this::convertUsage).toList()
+                    : Collections.emptyList())
                 .iterationDurations(Collections.emptyList())
                 .finishReasonsPerIteration(Collections.emptyList())
                 .build();

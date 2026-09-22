@@ -61,6 +61,12 @@ function read(messages: any, path: string): unknown {
 /** Message paths under `pricing` that the FAQ and the plan comparison resolve. */
 const REQUIRED_PATHS = [
   'compare.dimensions.creditsTooltip',
+  // The other three "i" that answer "what does a credit buy". They say it in
+  // the same words and with the same figures, so they belong to the same
+  // parity, placeholder and punctuation sweeps as the one above.
+  'compare.dimensions.aiCreditsTooltip',
+  'planCards.features.creditsFreeTooltip',
+  'planCards.features.aiCreditsFreeTooltip',
   `faq.${CREDIT_EXAMPLES_FAQ_KEY}.examplesCaption`,
   ...CREDIT_EXAMPLES.flatMap((example) => [
     `faq.${CREDIT_EXAMPLES_FAQ_KEY}.examples.${example.id}.count`,
@@ -110,7 +116,19 @@ describe('credit examples', () => {
 
   it('quotes round numbers, so the copy reads as an estimate rather than a guarantee', () => {
     for (const example of CREDIT_EXAMPLES) {
-      expect(example.perEntryPack % 5).toBe(0);
+      // A multiple of 5, OR a single digit. The multiple-of-5 rule exists so a count
+      // reads as an estimate rather than a measurement.
+      //
+      // The single-digit escape hatch is currently UNUSED and kept on purpose. It was
+      // added when an agent conversation cost ~550 credits and a pack covered 9.1 of
+      // them: the only multiples of 5 on offer were 5 (understating the pack by 45%,
+      // which is a different claim rather than an estimate) and 10 (which the pack did
+      // not cover). Since the page moved to a lightweight basis on 2026-09-21 an agent
+      // conversation is ~55 credits and a pack covers 90, so every count is comfortably
+      // above ten and no example needs the hatch. A margin move or a dearer basis can
+      // put one back under ten, which is why it stays.
+      const roundEnough = example.perEntryPack % 5 === 0 || example.perEntryPack < 10;
+      expect(roundEnough, `perEntryPack ${example.perEntryPack} for ${example.id}`).toBe(true);
     }
   });
 });
@@ -174,8 +192,169 @@ describe('credit-to-conversation copy', () => {
     expect(answer).toContain('{classifyCredits}');
   });
 
+  /**
+   * The four pricing "i" that price a unit of work, and the three model-picker
+   * ones. They are the same sentence in two places: "about N credits for <a
+   * unit>, an estimate from real usage". The figure is bolded with the `**`
+   * marker (see lib/utils/boldMarkup) because it is the one thing a reader is
+   * scanning for.
+   */
+  const MARKED_TOOLTIPS = [
+    ['pricing', 'compare.dimensions.creditsTooltip'],
+    ['pricing', 'compare.dimensions.aiCreditsTooltip'],
+    ['pricing', 'planCards.features.creditsFreeTooltip'],
+    ['pricing', 'planCards.features.aiCreditsFreeTooltip'],
+    ['modelInfo', 'creditEstimateTooltip.chatConversation'],
+    ['modelInfo', 'creditEstimateTooltip.guardrailCheck'],
+    ['modelInfo', 'creditEstimateTooltip.classifyStep'],
+  ] as const;
+
+  it.each(Object.keys(LOCALES))('%s bolds a figure in every credit tooltip', (locale) => {
+    // Two ways this breaks silently, both in one locale at a time: a translator
+    // drops the marker (the figure stops standing out, nothing throws), or
+    // leaves an odd one (a literal `**` is printed at a customer, and
+    // renderBoldMarkup deliberately does not hide it).
+    for (const [root, path] of MARKED_TOOLTIPS) {
+      const value = read((LOCALES[locale] as any)?.[root] ?? {}, path);
+      expect(typeof value, `${locale}.${root}.${path}`).toBe('string');
+      const text = value as string;
+      const markers = (text.match(/\*\*/g) ?? []).length;
+      expect(markers % 2, `${locale}.${root}.${path} has an unpaired ** marker`).toBe(0);
+      // And EVERY figure is marked, not merely one of them. The paid tooltip
+      // quotes three, and a locale that emphasised the first and dropped the
+      // other two would pass a "contains a marked figure" check while reading,
+      // to that language's users, as one bold number and two plain ones.
+      const outsideSpans = text.replace(/\*\*[^*]+\*\*/g, '');
+      const unmarked = [...outsideSpans.matchAll(/\{\w*[Cc]redits\}/g)].map((m) => m[0]);
+      expect(unmarked, `${locale}.${root}.${path} quotes a figure it does not emphasise`)
+        .toEqual([]);
+      // ...and at least one span exists, or a message quoting no figure at all
+      // would satisfy the line above by vacuum.
+      expect(text, `${locale}.${root}.${path} marks no figure`)
+        .toMatch(/\*\*[^*]*\{\w+\}[^*]*\*\*/);
+    }
+  });
+
+  it.each(Object.keys(LOCALES))('%s marks a figure ONLY where something renders the marker', (locale) => {
+    // The other half of the convention, and the one nothing else can see. The
+    // marker is deliberately left visible when it is unpaired (an authoring
+    // mistake should be found), which means a `**` in a message that is NOT
+    // routed through `renderBoldMarkup` prints raw asterisks at a reader, in
+    // that locale only, with every test green. Two components render it today:
+    // FeatureLabel (the pricing "i") and ModelInfo (the picker estimate). So
+    // the set of marked messages is pinned to the set they read.
+    const allowed = new Set(MARKED_TOOLTIPS.map(([root, path]) => `${root}.${path}`));
+    const marked: string[] = [];
+    const walk = (node: unknown, trail: string) => {
+      if (typeof node === 'string') {
+        if (node.includes('**')) marked.push(trail);
+      } else if (node && typeof node === 'object') {
+        for (const [key, value] of Object.entries(node)) {
+          walk(value, trail ? `${trail}.${key}` : key);
+        }
+      }
+    };
+    walk(LOCALES[locale], '');
+
+    const unrendered = marked.filter((path) => !allowed.has(path));
+    expect(
+      unrendered,
+      `${locale}: these messages mark a figure with ** but nothing renders the marker, `
+        + 'so a reader sees the asterisks. Either route the surface through '
+        + 'renderBoldMarkup and add it to MARKED_TOOLTIPS, or drop the marker',
+    ).toEqual([]);
+    // And the allow-list is not stale in the other direction.
+    expect(marked.sort()).toEqual([...allowed].sort());
+  });
+
   it('lists the conversation-cost answer first, where a reader looks for it', () => {
     expect(FAQ_KEYS[0]).toBe('conversationCost');
+  });
+
+  /** The four pricing "i" (the picker's three price a model the reader already picked). */
+  const PRICING_TOOLTIPS = MARKED_TOOLTIPS
+    .filter(([root]) => root === 'pricing')
+    .map(([, path]) => path);
+
+  /** The figures whose value depends on which MODEL the work ran on. */
+  const MODEL_PRICED = ['{exchangeCredits}', '{simpleCredits}', '{agentCredits}', '{classifyCredits}'];
+
+  it.each(Object.keys(LOCALES))('%s attributes every model-priced figure, and only those', (locale) => {
+    // The page prices on the LIGHTWEIGHT end (see PRICING_BASIS_MODEL), which inverts the
+    // direction these figures can be wrong in: they used to be the ceiling and are now
+    // close to the floor. An estimate that no longer names what it was priced on is
+    // therefore not merely vaguer, it reads as a promise it cannot keep. The model is
+    // interpolated rather than written into the copy so six locales cannot disagree about
+    // which model the platform quotes.
+    //
+    // The inverse matters as much, which is why this is one test and not two: a flat
+    // price does NOT vary by model, so naming one beside it would invent a qualification
+    // and turn an exact figure into an apparent estimate. {nodeCredits} is the flat one
+    // (CreditService debits exactly one credit per workflow node), and the free-plan
+    // credits tooltip is the message that quotes it.
+    const pricing = (LOCALES[locale] as any)?.pricing ?? {};
+    const wrong: string[] = [];
+    for (const path of [...PRICING_TOOLTIPS, `faq.${CREDIT_EXAMPLES_FAQ_KEY}.answer`]) {
+      const message = String(read(pricing, path) ?? '');
+      const modelPriced = MODEL_PRICED.some((unit) => message.includes(unit));
+      const attributed = message.includes('{basisModel}');
+      if (modelPriced !== attributed) {
+        wrong.push(`${path}: ${modelPriced ? 'quotes a model-priced figure and names no model'
+          : 'names a model beside a figure that does not vary by model'}`);
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it.each(Object.keys(LOCALES))('%s names no model the basis no longer is', (locale) => {
+    // A translator updating one sentence and leaving the model name in another is the
+    // shape this catches: the figure moves, the attribution does not, and only that
+    // language's readers see a price attributed to a model it was not priced on.
+    const pricing = (LOCALES[locale] as any)?.pricing ?? {};
+    const stale = REQUIRED_PATHS.filter((path) => /Sonnet|Claude|GPT|Gemini/i
+      .test(String(read(pricing, path) ?? '')));
+    expect(stale).toEqual([]);
+  });
+
+  it.each(Object.keys(LOCALES))('%s says which pot the free plan\'s comparison figure is', (locale) => {
+    // The comparison table's "Monthly credits" row carries ONE label and ONE tooltip for
+    // all five columns (plan-comparison.ts declares a single scale row), and that tooltip
+    // prices a short agent exchange, which on FREE the monthly bucket refuses. The CELL
+    // is therefore the only place that can say which pot the Free figure belongs to, and
+    // the plan card two clicks away already says "workflow credits" on its own line.
+    //
+    // Asserted as a SHAPE, because "workflows" is a different word in every locale: the
+    // cell must carry a parenthesised qualifier beside the figure. The English one is
+    // then checked for the word itself, so the shape rule cannot be satisfied by a
+    // qualifier that says something else entirely.
+    const cell = String(read((LOCALES[locale] as any)?.pricing ?? {}, 'compare.values.creditsFree'));
+    expect(cell, `${locale}: the free credits cell names no pot`).toMatch(/[(（].+[)）]/);
+    if (locale === 'en') expect(cell.toLowerCase()).toContain('workflow');
+  });
+
+  it.each(Object.keys(LOCALES))('%s prices each free-plan pot with a debit that pot can fund', (locale) => {
+    // The Free plan shows two lines and they fund DIFFERENT SOURCE TYPES, which is a
+    // backend rule and not a presentation choice: CreditService restricts the monthly
+    // bucket to WORKFLOW_NODE / WORKFLOW_NODE_PROMO, while a chat turn, an agent turn
+    // and a classify step all draw the separate AI allowance, and the flat-cost add-ons
+    // draw PAYG.
+    //
+    // So the unit a tooltip quotes is not a wording choice either. This card used to
+    // price the monthly pot with a classification step, which on FREE that pot REFUSES:
+    // the sentence read as a promise the ledger would not keep. Each "i" now quotes a
+    // unit its own pot actually pays for, and the LLM units are pinned OUT of the
+    // workflow one so the mistake cannot come back under a different placeholder.
+    const features = (LOCALES[locale] as any)?.pricing?.planCards?.features ?? {};
+    expect(features.creditsFreeTooltip, `${locale}: the workflow pot must price a workflow node`)
+      .toContain('{nodeCredits}');
+    for (const llmUnit of ['{exchangeCredits}', '{classifyCredits}', '{simpleCredits}', '{agentCredits}']) {
+      expect(
+        features.creditsFreeTooltip,
+        `${locale}: the monthly workflow pot cannot fund ${llmUnit}, so it must not price itself with it`,
+      ).not.toContain(llmUnit);
+    }
+    expect(features.aiCreditsFreeTooltip, `${locale}: the AI pot must price an agent exchange`)
+      .toContain('{exchangeCredits}');
   });
 
   it.each(Object.keys(LOCALES))('%s writes no em-dash or en-dash in the new copy', (locale) => {

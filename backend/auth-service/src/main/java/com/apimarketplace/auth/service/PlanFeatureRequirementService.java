@@ -60,6 +60,19 @@ public class PlanFeatureRequirementService {
         return cache.get(CACHE_KEY, k -> load());
     }
 
+    /**
+     * Whether {@code planCode} clears the bar stored for {@code featureKey}.
+     *
+     * <p>No row, or a row this build cannot read as a plan, means every plan may use it: the
+     * table holds only the exceptions, and the same contract is what auth-client's
+     * {@code PlanFeatureGate} applies to the map it fetches from here. Callers that must not
+     * diverge from a run's own verdict ask this rather than re-deriving it from
+     * {@link #requirements()}.
+     */
+    public boolean allows(String planCode, String featureKey) {
+        return PlanTier.meets(planCode, requirements().get(featureKey));
+    }
+
     /** Full rows for the admin list, cheapest plan first then key. */
     @Transactional(readOnly = true)
     public List<PlanFeatureRequirement> list() {

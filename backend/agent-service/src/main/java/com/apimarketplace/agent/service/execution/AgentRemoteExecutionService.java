@@ -97,6 +97,31 @@ public class AgentRemoteExecutionService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ExecutionLinkRouter executionLinkRouter;
 
+    /**
+     * Pins whose API key each execution runs on (see {@link KeyRouteResolver}). Optional
+     * for the same reason as the router: a unit test constructing this service directly
+     * leaves it null, and the context is then unpinned (pre-pin behaviour).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private KeyRouteResolver keyRouteResolver;
+
+    /**
+     * Key under which the execution's {@code KeyRoute} rides on the response's
+     * {@code metrics} map. Read by the orchestrator (workflow agents) and
+     * conversation-service (chat) when they report observability, which is where the
+     * credit debit happens.
+     */
+    public static final String KEY_ROUTE_METRIC = "keyRoute";
+
+    /**
+     * Optional Prometheus metrics sink. Field-injected for the same reason as the other
+     * optional collaborators above (a dozen unit tests construct this service positionally).
+     * Only consulted by the execution-link bridge-failure fallback below, to keep a
+     * silent-by-design recovery visible to operators.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.agent.metrics.AgentPrometheusMetrics prometheusMetrics;
+
     // ========== Full Agent Execution ==========
 
     /**
@@ -190,11 +215,11 @@ public class AgentRemoteExecutionService {
             ? executionLinkRouter.runnableRoute(request.provider(), request.model(), resolveActivitySource(request))
             : null;
 
-        // Billed identity (kept for billing) vs execution identity (where the run actually goes).
-        final String billedProvider = request.provider();
-        final String billedModel = request.model();
-        final String execProvider = executionRoute != null ? executionRoute.executionProvider() : billedProvider;
-        final String execModel = executionRoute != null ? executionRoute.executionModel() : billedModel;
+        // Execution identity (where the run actually goes; = billed identity unless a link
+        // redirected it). executeAgentViaBridge/executeAgentDirect each recompute the full
+        // execProvider/execModel pair themselves from executionRoute - this one is only to
+        // decide which of the two to call.
+        final String execProvider = executionRoute != null ? executionRoute.executionProvider() : request.provider();
 
         // Bridge path iff the EXECUTION provider is a CLI bridge (and the bridge is wired).
         // executeAgentViaBridge consumes the route (exec target + billed relabel + restricted
@@ -203,10 +228,38 @@ public class AgentRemoteExecutionService {
             return executeAgentViaBridge(request, executionRoute, startTime, agentEntityId, executionId, taskId, userRoles);
         }
 
-        // Otherwise the run goes through the direct agent loop below. When a link targets a
-        // regular API provider, loopRequest carries the EXECUTION identity and the result is
-        // re-stamped with the billed identity (relabel after convertToResponseDto). The direct
-        // loop exposes ONLY platform MCP tools, so no extra "API mode" restriction is needed.
+        // Otherwise the run goes through the direct agent loop.
+        return executeAgentDirect(request, executionRoute, startTime, agentEntityId, executionId, taskId, false);
+    }
+
+    /**
+     * Run the direct (non-bridge) agent loop for either of two callers:
+     * <ol>
+     *   <li>the normal path from {@link #executeAgent}, when the execution target is not a
+     *       CLI bridge - {@code skipStartedEvent=false}, this publishes fleet activity
+     *       "started" itself;</li>
+     *   <li>the execution-link bridge-failure fallback from {@link #dispatchToBridge}, when
+     *       a linked bridge dispatch failed before producing any visible output -
+     *       {@code skipStartedEvent=true} because {@link #executeAgentViaBridge} already
+     *       published "started" for this logical execution before the (failed) bridge
+     *       attempt, and {@code executionRoute} is passed as {@code null} since {@code request}
+     *       already carries the billed identity verbatim (nothing to re-stamp).</li>
+     * </ol>
+     *
+     * <p>When a link targets a regular API provider, {@code loopRequest} carries the
+     * EXECUTION identity and the result is re-stamped with the billed identity (relabel
+     * after {@link #convertToResponseDto}). The direct loop exposes ONLY platform MCP
+     * tools, so no extra "API mode" restriction is needed.
+     */
+    private AgentExecutionResponseDto executeAgentDirect(AgentExecutionRequestDto request,
+                                                          ModelExecutionLinkService.ExecutionRoute executionRoute,
+                                                          long startTime,
+                                                          String agentEntityId,
+                                                          String executionId,
+                                                          String taskId,
+                                                          boolean skipStartedEvent) {
+        final String execProvider = executionRoute != null ? executionRoute.executionProvider() : request.provider();
+        final String execModel = executionRoute != null ? executionRoute.executionModel() : request.model();
         final AgentExecutionRequestDto loopRequest = executionRoute != null
             ? request.withExecutionTarget(execProvider, execModel)
             : request;
@@ -218,10 +271,14 @@ public class AgentRemoteExecutionService {
         // live-heartbeat streams.
         ConversationRedisStreamingCallback.ConversationCallback conversationCallback = null;
         try {
-            // Publish fleet activity: execution started
-            String source = resolveActivitySource(request);
-            agentActivityPublisher.publishExecutionStarted(
-                agentEntityId, executionId, request.model(), source, taskId);
+            // Publish fleet activity: execution started. Skipped on the bridge-failure
+            // fallback path - executeAgentViaBridge already published it for this
+            // logical execution before the (failed) bridge attempt.
+            if (!skipStartedEvent) {
+                String source = resolveActivitySource(request);
+                agentActivityPublisher.publishExecutionStarted(
+                    agentEntityId, executionId, request.model(), source, taskId);
+            }
 
             // Build the guard chain: tenant budget (macro) → agent budget (micro).
             // Tenant always wins because it's chained first; if the tenant runs out of credits
@@ -294,12 +351,14 @@ public class AgentRemoteExecutionService {
                 totalTokens, totalToolCalls, duration, taskId);
 
             // Convert result to DTO, enriching with conversation callback data if available
-            AgentExecutionResponseDto response = convertToResponseDto(result, duration, conversationCallback);
+            AgentExecutionResponseDto response = convertToResponseDto(result, duration, conversationCallback,
+                context.keyRoute());
             // A link to a regular API provider executed on the EXECUTION identity; re-stamp the
             // BILLED identity so the orchestrator's observability + credit consumption (which read
             // the result's provider/model) charge the billed price, not the execution provider.
             if (executionRoute != null) {
-                response = response.withBilledIdentity(billedProvider, billedModel);
+                response = response.withBilledIdentity(request.provider(), request.model(),
+                        executionRoute.executionProvider());
             }
             return response;
 
@@ -440,12 +499,19 @@ public class AgentRemoteExecutionService {
             AgentExecutionRequestDto effectiveRequest = java.util.Objects.equals(effectiveEffort, dispatchRequest.reasoningEffort())
                 ? dispatchRequest
                 : dispatchRequest.withReasoningEffort(effectiveEffort);
-            response = bridgeDispatcher.dispatchRaw(effectiveRequest, userRoles);
+            // executionRoute != null: an execution link put this run on the CLI. The caller
+            // asked for the billed pair and is charged for it; refusing them the CLI they never
+            // named is what left the migrated agents failing every 30 minutes.
+            response = bridgeDispatcher.dispatchRaw(effectiveRequest, userRoles, executionRoute != null);
         } catch (BridgeAccessDeniedException e) {
             // Surface the typed denial so GlobalExceptionHandler maps it to 403/429
             // with the reason code. Catching it as generic Exception below would
             // squash it into a 200/FAILED response prefixed "Bridge agent execution
-            // error: ..." - masking quota vs misconfiguration vs disabled-policy.
+            // error: ..." - masking quota vs misconfiguration vs disabled-policy. NEVER
+            // falls back even on a linked run: this is a deliberate admin policy/quota
+            // decision (admin_only, exhausted daily cap), not a transport failure -
+            // silently bypassing it onto the full-price direct API would defeat the
+            // cost control the admin configured.
             long duration = System.currentTimeMillis() - startTime;
             log.warn("Bridge agent execution denied: provider={} reason={}",
                 e.getProviderName(), e.getReason());
@@ -453,35 +519,34 @@ public class AgentRemoteExecutionService {
                 agentEntityId, executionId, "FAILED", 0, 0, duration, taskId);
             throw e;
         } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            log.error("Bridge agent execution failed: {}", e.getMessage(), e);
-            agentActivityPublisher.publishExecutionCompleted(
-                agentEntityId, executionId, "FAILED", 0, 0, duration, taskId);
-            return new AgentExecutionResponseDto(
-                false, null, null, List.of(), 0, Map.of(),
-                "Bridge agent execution error: " + e.getMessage(),
-                duration, request.provider(), request.model(),
-                List.of(), AgentStopReason.ERROR.name(),
-                Map.of(), List.of(), List.of(), List.of(),
-                List.of(), List.of(), null
-            );
+            return handleBridgeFailurePreStream(request, dispatchRequest, executionRoute, startTime,
+                agentEntityId, executionId, taskId,
+                "Bridge agent execution error: " + e.getMessage(), e);
         }
 
         long duration = System.currentTimeMillis() - startTime;
 
         if (response == null) {
-            log.error("Bridge returned null response for provider={}, model={}",
-                request.provider(), request.model());
-            agentActivityPublisher.publishExecutionCompleted(
-                agentEntityId, executionId, "FAILED", 0, 0, duration, taskId);
-            return new AgentExecutionResponseDto(
-                false, null, null, List.of(), 0, Map.of(),
-                "Bridge execution failed: no response from bridge server",
-                duration, request.provider(), request.model(),
-                List.of(), AgentStopReason.ERROR.name(),
-                Map.of(), List.of(), List.of(), List.of(),
-                List.of(), List.of(), null
-            );
+            return handleBridgeFailurePreStream(request, dispatchRequest, executionRoute, startTime,
+                agentEntityId, executionId, taskId,
+                "Bridge execution failed: no response from bridge server", null);
+        }
+
+        // A linked run that reached the bridge but failed before producing anything an end
+        // user could see (no content, no tool results) is safe to retry invisibly: nothing
+        // has been streamed yet (the bridge publishes to Redis as it goes, so ANY visible
+        // output means this branch must not fire - see hasNoVisibleOutput). A non-link
+        // (direct bridge selection) failure falls through unchanged below, exactly as before
+        // this fallback existed - there is no distinct billed identity to retry on when the
+        // billed pair already IS the bridge.
+        // A run the user cancelled is never retried: re-running it on the direct API would
+        // bill a full turn for a chat the user just stopped, invisibly.
+        if (executionRoute != null && !response.success() && response.hasNoVisibleOutput()
+                && !response.wasCancelledByUser()) {
+            return handleBridgeFailurePreStream(request, dispatchRequest, executionRoute, startTime,
+                agentEntityId, executionId, taskId,
+                response.error() != null ? response.error() : "Bridge execution failed before producing output",
+                null);
         }
 
         // Re-stamp the BILLED identity onto the response so the orchestrator's
@@ -489,7 +554,11 @@ public class AgentRemoteExecutionService {
         // as authoritative) charge the billed model, not the CLI bridge it executed
         // on. No-op when no link redirected this run.
         if (executionRoute != null) {
-            response = response.withBilledIdentity(request.provider(), request.model());
+            // The provider that produced the counts is the one we dispatched to, read back
+            // from the request that ran rather than re-derived from the route: one fact,
+            // one source.
+            response = response.withBilledIdentity(request.provider(), request.model(),
+                    dispatchRequest.provider());
         }
 
         int totalTokens = 0;
@@ -503,7 +572,62 @@ public class AgentRemoteExecutionService {
             response.success() ? "COMPLETED" : "FAILED",
             totalTokens, totalToolCalls, duration, taskId);
 
-        return response;
+        // A bridge holds no API key: the run is PLATFORM, said explicitly (like a CLI session
+        // and a sub-agent bridge child) so the fleet view can split routes without guessing.
+        return response.withMetric(KEY_ROUTE_METRIC, KeyRoute.PLATFORM.name());
+    }
+
+    /**
+     * A bridge dispatch failed before producing anything an end user could see (transport
+     * exception, no response, or a response with empty content/finalResponse/toolResults).
+     * When {@code executionRoute} is non-null (a model execution link caused this dispatch),
+     * silently retries the SAME billed request on its direct API instead of surfacing the
+     * failure - the retry is invisible because nothing was ever shown. Otherwise (a direct,
+     * non-link bridge selection) there is no distinct billed identity to retry on, so this
+     * reproduces the original failure response exactly as before this fallback existed.
+     *
+     * @param cause the transport exception, or {@code null} when the bridge returned cleanly
+     *              (null response, or a response with no visible output)
+     */
+    private AgentExecutionResponseDto handleBridgeFailurePreStream(
+            AgentExecutionRequestDto request,
+            AgentExecutionRequestDto dispatchRequest,
+            ModelExecutionLinkService.ExecutionRoute executionRoute,
+            long startTime, String agentEntityId, String executionId, String taskId,
+            String failureMessage, Exception cause) {
+        if (executionRoute != null) {
+            log.warn("[EXECUTION_LINK_FALLBACK] bridge dispatch for billed={}/{} (exec={}/{}) "
+                    + "failed before producing output ({}); retrying on the billed pair's direct API",
+                request.provider(), request.model(), dispatchRequest.provider(), dispatchRequest.model(),
+                cause != null ? cause.toString() : failureMessage);
+            if (prometheusMetrics != null) {
+                prometheusMetrics.recordExecutionLinkFallback(
+                    request.provider(), request.model(), dispatchRequest.provider());
+            }
+            // executionRoute=null: request already carries the billed identity verbatim,
+            // nothing to re-stamp. skipStartedEvent=true: executeAgentViaBridge already
+            // published "started" for this logical execution before the failed attempt.
+            return executeAgentDirect(request, null, startTime, agentEntityId, executionId, taskId, true);
+        }
+
+        long duration = System.currentTimeMillis() - startTime;
+        if (cause != null) {
+            log.error("Bridge agent execution failed: {}", cause.getMessage(), cause);
+        } else {
+            log.error("{} (provider={}, model={})", failureMessage, request.provider(), request.model());
+        }
+        agentActivityPublisher.publishExecutionCompleted(
+            agentEntityId, executionId, "FAILED", 0, 0, duration, taskId);
+        // A bridge that crashed before streaming still ran as a bridge: PLATFORM, said
+        // explicitly, so no bridge row is ever left unpinned (zero tokens, zero debit).
+        return new AgentExecutionResponseDto(
+            false, null, null, List.of(), 0, Map.of(),
+            failureMessage,
+            duration, request.provider(), request.model(),
+            List.of(), AgentStopReason.ERROR.name(),
+            Map.of(KEY_ROUTE_METRIC, KeyRoute.PLATFORM.name()), List.of(), List.of(), List.of(),
+            List.of(), List.of(), null
+        );
     }
 
     // ========== Queue-Based Execution Router ==========
@@ -714,6 +838,31 @@ public class AgentRemoteExecutionService {
         if (executionId != null && !executionId.isBlank()) {
             credentials.put("__executionId__", executionId);
         }
+        // The caller's own capabilities travel on the request as a typed field, and every
+        // permission check downstream reads them out of CREDENTIALS instead. Left unmirrored,
+        // a workflow agent node reaches those checks with an empty answer, and both
+        // AgentModuleResolver.callerMayUse and ToolAccessControl read silence as "allowed",
+        // so the gap is an open gate rather than a closed one.
+        // An EMPTY list is included on purpose. It is the most restricted caller there is
+        // (mode=off, zero tools), and skipping it would leave the credential absent, which
+        // callerMayUse reads as ALLOWED: the one caller that may do nothing would be the one
+        // permitted everything.
+        if (request.enabledModules() != null
+                && credentials.get(AgentModuleResolver.ENABLED_MODULES_CREDENTIAL_KEY) == null) {
+            credentials.put(AgentModuleResolver.ENABLED_MODULES_CREDENTIAL_KEY,
+                    List.copyOf(request.enabledModules()));
+        }
+        // Whose key this execution runs on, resolved ONCE here for the EXECUTION provider
+        // (request already carries the execution identity when a link redirected it). Also
+        // stamped into the credentials, the channel a parent already uses to hand
+        // __executionId__ / __taskId__ to the sub-agents it spawns: a child inherits the
+        // pin and never re-resolves.
+        com.apimarketplace.agent.domain.KeyRoute keyRoute = keyRouteResolver != null
+            ? keyRouteResolver.resolve(request.tenantId(), request.provider())
+            : null;
+        if (keyRoute != null) {
+            com.apimarketplace.agent.domain.KeyRoute.stamp(credentials, keyRoute, request.provider());
+        }
 
         return AgentLoopContext.builder()
             .provider(request.provider())
@@ -732,8 +881,13 @@ public class AgentRemoteExecutionService {
             .maxTokens(com.apimarketplace.agent.config.MaxTokensClamp.clamp(
                     request.maxTokens(),
                     modelCatalogService.resolveMaxOutputTokens(request.provider(), request.model())))
+            // Observability only: lets the loop report context use as a share of what this
+            // model can hold. Null (model absent from the catalog) is fine - the
+            // loop then reports size without claiming a severity.
+            .contextWindow(modelCatalogService.resolveContextWindow(request.provider(), request.model()))
             .temperature(request.temperature())
             .tenantId(request.tenantId())
+            .keyRoute(keyRoute)
             .agentId(request.agentEntityId())
             .runId(request.runId())
             .executionId(executionId)
@@ -778,6 +932,10 @@ public class AgentRemoteExecutionService {
             String fileName = (String) map.get("fileName");
             String base64Data = (String) map.get("data");
             String extractedText = (String) map.get("extractedText");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> fileRef = map.get("fileRef") instanceof Map<?, ?> m
+                ? (Map<String, Object>) m
+                : null;
 
             AttachmentType type = typeStr != null
                 ? AttachmentType.valueOf(typeStr.toUpperCase())
@@ -793,6 +951,7 @@ public class AgentRemoteExecutionService {
                 .fileName(fileName)
                 .data(data)
                 .extractedText(extractedText)
+                .fileRef(fileRef)
                 .build();
         } catch (Exception e) {
             log.warn("Failed to convert attachment: {}", e.getMessage());
@@ -814,7 +973,8 @@ public class AgentRemoteExecutionService {
     }
 
     private AgentExecutionResponseDto convertToResponseDto(AgentLoopResult result, long duration,
-                                                             ConversationRedisStreamingCallback.ConversationCallback conversationCallback) {
+                                                             ConversationRedisStreamingCallback.ConversationCallback conversationCallback,
+                                                             com.apimarketplace.agent.domain.KeyRoute keyRoute) {
         // Convert tool results to Maps
         List<Map<String, Object>> toolResultMaps = result.toolResults() != null
             ? result.toolResults().stream()
@@ -858,6 +1018,12 @@ public class AgentRemoteExecutionService {
         Map<String, Object> enrichedMetrics = new HashMap<>(result.metrics() != null ? result.metrics() : Map.of());
         if (conversationCallback != null) {
             enrichedMetrics.put("reasoningDurationMs", reasoningDurationMs);
+        }
+        // Whose key this execution ran on, for the caller's observability report (which is
+        // what reaches the debit): the record has no dedicated field and 120+ positional
+        // constructions, so it rides on the metrics map under a stable key.
+        if (keyRoute != null) {
+            enrichedMetrics.put(KEY_ROUTE_METRIC, keyRoute.name());
         }
 
         return new AgentExecutionResponseDto(

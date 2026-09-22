@@ -11,7 +11,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ASSETS = join(HERE, '..', 'assets');
 const VERSION = JSON.parse(readFileSync(join(HERE, '..', 'package.json'), 'utf8')).version;
 
-const PORT = process.env.LIVECONTEXT_PORT || '3000';
+// Preserve the legacy launcher override while using Compose's canonical setting.
+if (process.env.LIVECONTEXT_PORT) process.env.FRONTEND_PORT = process.env.LIVECONTEXT_PORT;
 const HOME = process.env.LIVECONTEXT_HOME || join(process.cwd(), 'livecontext');
 const PROJECT = 'livecontext';
 
@@ -25,21 +26,21 @@ const c = {
 const log = (...a) => console.log(...a);
 const die = (msg) => { console.error(`\n${c.red('x')} ${msg}\n`); process.exit(1); };
 
-// On Windows, spawning `docker` needs a shell so PATHEXT resolves docker.exe.
-const USE_SHELL = process.platform === 'win32';
+// Docker is an executable on every supported platform. Pass arguments directly
+// so installation paths containing spaces or shell characters stay intact.
 
 // Run a command, inheriting stdio (for the long docker commands). Returns exit code.
 function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const p = spawn(cmd, args, { stdio: 'inherit', shell: USE_SHELL, ...opts });
+    const p = spawn(cmd, args, { stdio: 'inherit', ...opts });
     p.on('close', (code) => resolve(code ?? 1));
     p.on('error', () => resolve(127));
   });
 }
 // Run quietly and capture, for checks.
 function capture(cmd, args) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', shell: USE_SHELL });
-  return { code: r.status ?? 127, out: (r.stdout || '') + (r.stderr || '') };
+  const r = spawnSync(cmd, args, { encoding: 'utf8' });
+  return { code: r.status ?? 127, stdout: r.stdout || '', out: (r.stdout || '') + (r.stderr || '') };
 }
 
 function checkDocker() {
@@ -97,9 +98,9 @@ async function fetchSeed() {
 }
 
 // Poll the frontend until it answers (first boot runs migrations + tool registration).
-function waitForHealth(timeoutMs = 240000) {
+function waitForHealth(port, timeoutMs = 240000) {
   const started = Date.now();
-  const url = `http://localhost:${PORT}/`;
+  const url = `http://localhost:${port}/`;
   return new Promise((resolve) => {
     const tick = () => {
       const req = http.get(url, (res) => {
@@ -124,20 +125,29 @@ async function up() {
   log(`${c.green('✓')} Docker ${c.dim(info.docker)} · Compose ${c.dim(info.compose)}`);
   const compose = ensureWorkdir();
   log(`${c.b('LiveContext')} ${c.dim('v' + VERSION)} : starting the stack in ${c.cyan(HOME)}`);
+  const config = capture('docker', composeArgs(compose, ['config', '--format', 'json']));
+  if (config.code !== 0) die('Cannot resolve Docker Compose configuration. Check your .env file.');
+  let port;
+  try {
+    port = JSON.parse(config.stdout).services.frontend.ports.find(p => Number(p.target) === 3000)?.published;
+    if (!/^\d+$/.test(String(port)) || Number(port) < 1 || Number(port) > 65535) throw new Error();
+  } catch {
+    die('Cannot determine the frontend port. Set FRONTEND_PORT to a valid port in your .env file.');
+  }
   await fetchSeed();
   log(c.dim('Pulling images and starting containers (first run downloads a few GB)...\n'));
   const code = await run('docker', composeArgs(compose, ['up', '-d', '--remove-orphans']));
   if (code !== 0) die('docker compose failed to start the stack. See the output above.');
   process.stdout.write(`\n${c.dim('Waiting for LiveContext to become ready')}`);
-  const ok = await waitForHealth();
+  const ok = await waitForHealth(port);
   log('');
   if (!ok) {
-    log(`${c.red('!')} The stack started but did not answer on port ${PORT} in time.`);
+    log(`${c.red('!')} The stack started but did not answer on port ${port} in time.`);
     log(`  Check logs with: ${c.b('livecontext logs')}`);
     process.exit(2);
   }
   log(`\n${c.green('✓ LiveContext is running.')}`);
-  log(`  Open ${c.b(c.cyan(`http://localhost:${PORT}`))}  ${c.dim('(the first account you create becomes the admin)')}`);
+  log(`  Open ${c.b(c.cyan(`http://localhost:${port}`))}  ${c.dim('(the first account you create becomes the admin)')}`);
   log(`\n  ${c.dim('Manage it:')}  livecontext logs   ·   livecontext down   ·   livecontext update`);
   log(`  ${c.dim('Optional config (LLM keys, SMTP, ports):')} edit ${c.dim(join(HOME, '.env.example'))} → .env and re-run.\n`);
 }
@@ -183,7 +193,7 @@ ${c.b('LiveContext')} ${c.dim('v' + VERSION)} : self-hosted AI automation, one c
   ${c.dim('--version')}  Print the CLI version.
 
   ${c.dim('Docker is required (it is the runtime). This CLI only orchestrates it.')}
-  ${c.dim('Data lives in ' + HOME + ' (remove it to reset).')}
+  ${c.dim('Configuration lives in ' + HOME + '; application data persists in Docker volumes.')}
 `);
 }
 

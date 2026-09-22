@@ -16,7 +16,7 @@ export default function SelfHostPage() {
       <DocsHero
         eyebrow="Share & host"
         title="Self-hosting"
-        lead="Community Edition (CE) is the free, open-source build of LiveContext you run yourself. It packs every backend service plus the web app into one process, keeps all your data in your own database, and can optionally link to a LiveContext cloud account for hosted models, the marketplace, and fresh catalogs."
+        lead="Community Edition (CE) is the free, source-available build of LiveContext you run yourself. It packs every backend service plus the web app into one process, keeps all your data in your own database, and can optionally link to a LiveContext cloud account for hosted models, the marketplace, and fresh catalogs."
       />
 
       <DocsProse>
@@ -400,7 +400,7 @@ docker compose up -d
             The broader tour of building your first agent or workflow.
           </Card>
           <Card icon={Github} title="Get the code" href={SELF_HOSTED_GITHUB_URL}>
-            The open-source repository, with setup instructions and the Docker Compose file.
+            The public source repository, with setup instructions and the Docker Compose file.
           </Card>
         </CardGrid>
       </DocsProse>

@@ -174,6 +174,10 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
 
   const modalContent = (
     <div
+      // Named so a test can assert this modal did NOT open: the resource-info control sits
+      // beside the breadcrumb crumb that opens it, and "clicking the info button must not
+      // rename the resource" is only a real assertion if the thing it looks for exists.
+      data-testid="edit-metadata-modal"
       className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[9999] flex items-center justify-center p-4"
       onClick={onClose}
     >

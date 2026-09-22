@@ -24,6 +24,8 @@ import {
   Info,
   AlertTriangle,
   Star,
+  KeyRound,
+  Building2,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -41,13 +43,58 @@ import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { cn } from '@/lib/utils';
 import type { AIModel } from '@/hooks/useModels';
 import { getProviderDisplayName } from '@/lib/ai-providers/providerIcons';
-import { formatCreditEstimate, type CostProfileId, type ModelCostBasis } from '@/lib/billing/model-cost-estimate';
+import {
+  formatCreditAmount,
+  formatCreditEstimate,
+  ownKeyChargeFor,
+  type CostProfileId,
+  type ModelCostBasis,
+  type ModelRates,
+  type OwnKeyCharge,
+} from '@/lib/billing/model-cost-estimate';
 import { getClientLocale } from '@/lib/utils/locale';
+import { renderBoldMarkup } from '@/lib/utils/boldMarkup';
 import { UpgradeRequiredBadge } from '@/components/billing/UpgradeRequiredBadge';
+import { FreeTierBadge } from '@/components/billing/FreeTierBadge';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Everything the credit estimate prices a model with. The catalogue serves the
+ * cache prices beside `pricing`, not inside it, so they have to be gathered here;
+ * passing `model.pricing` alone was what made the badge quote every cached token
+ * at the full input rate.
+ *
+ * `provider` and `supportsPromptCaching` are part of the price, not decoration:
+ * the first decides what a cache rate the catalogue omits costs, the second
+ * whether a cache rate applies to this model at all.
+ */
+function creditRatesOf(model: AIModel): ModelRates | undefined {
+  if (!model.pricing) return undefined;
+  return {
+    input: model.pricing.input,
+    output: model.pricing.output,
+    cacheRead: model.priceCacheRead,
+    cacheWrite: model.priceCacheWrite,
+    provider: model.provider,
+    supportsPromptCaching: model.supportsPromptCaching,
+  };
+}
+
+/**
+ * Which message states an own-key charge. The capped half is the platform price and is marked
+ * as the estimate it is; the other half is the flat fee, the most this turn can be billed, and
+ * is stated plainly because it does not move with the length of an average turn.
+ */
+function ownKeyFeeMessage(charge: OwnKeyCharge): 'creditEstimateShort' | 'ownKeyFeeShort' {
+  return charge.estimated ? 'creditEstimateShort' : 'ownKeyFeeShort';
+}
+
+function ownKeyFeeCredits(charge: OwnKeyCharge): string {
+  return formatCreditAmount(charge.credits, getClientLocale());
+}
 
 type Tier = 'top' | 'high' | 'mid' | 'budget';
 
@@ -89,14 +136,29 @@ export function formatContextWindow(tokens: number | undefined): string | null {
 }
 
 /**
- * Format a USD-per-1M-tokens price. Sub-dollar shows 1 decimal (e.g. "$0.3"),
- * dollar+ rounds to the nearest integer ("$15", "$3"). Errs on the side of
- * conciseness over precision - full breakdown lives in the billing panel.
+ * Format a USD-per-1M-tokens price. Dollar+ rounds to the nearest integer
+ * ("$15", "$3"), a tenth or more shows 1 decimal ("$0.3"), and anything below
+ * that keeps two significant digits ("$0.042"). Errs on the side of conciseness
+ * over precision, but never past the point where a price reads as free.
+ *
+ * <p><b>Why the smallest band exists.</b> One decimal was enough while the
+ * cheapest catalogue row was around $0.3 per 1M. A decision model prices its
+ * input at $0.042 and bills no output at all, which the old single rule rendered
+ * as "$0.0/$0.0 per 1M": the one row in the picker whose whole argument is that
+ * it costs almost nothing was the one row that claimed to cost nothing, and a
+ * reader has no way to tell that apart from an unpriced model. Two significant
+ * digits hold for anything a provider is plausibly going to charge, without
+ * padding the common rates with zeroes they do not have.
+ *
+ * <p>A true zero is printed "$0" rather than "$0.0": it is free, and a decimal
+ * place on it only invites the same confusion from the other side.
  */
 function formatPricePerMillion(value: number | undefined | null): string | null {
   if (value === undefined || value === null) return null;
-  if (value < 1) return `$${(Math.round(value * 10) / 10).toFixed(1)}`;
-  return `$${Math.round(value)}`;
+  if (value >= 1) return `$${Math.round(value)}`;
+  if (value <= 0) return '$0';
+  if (value >= 0.1) return `$${(Math.round(value * 10) / 10).toFixed(1)}`;
+  return `$${Number(value.toPrecision(2))}`;
 }
 
 // No per-image formatter here: these components render models from
@@ -247,6 +309,82 @@ export function ProviderKindBadge({ providerKind, className }: ProviderKindBadge
   );
 }
 
+/**
+ * Which key this model's next turn runs on: the caller's own, or the platform's.
+ *
+ * <p><b>Why a badge and not just the number.</b> An own-key row already stated its charge, but
+ * as a bare credit figure shaped exactly like the platform estimate beside it: the same words,
+ * the same place, and the only thing marking it as a different route was a hover tooltip. Hover
+ * does not exist on a touch device, so on half the app the two routes were indistinguishable -
+ * and they bill from different pockets, since on one of them the provider invoices the tokens
+ * directly. Which key runs is a fact about the choice, so it is said where the choice is made.
+ *
+ * <p><b>Why BOTH routes are marked, and only sometimes.</b> A reader who has brought no key of
+ * their own has one route and no question to answer: a badge on every row would be pure
+ * furniture. The moment they hold one, the SAME list mixes the two - their key serves the
+ * providers they keyed, the platform serves the rest - and then the absence of a mark is not an
+ * answer, because an absence also looks like a row that forgot to say. So the pair appears
+ * together or not at all; {@link ModelOptionDisplay} decides on the caller holding a usable key.
+ *
+ * <p>The own-key half is drawn from {@link ownKeyChargeFor} being answerable, which is the
+ * server's own gate: a key that would actually serve, on a plan that lets it. Never a guess from
+ * the provider's name - see {@link ProviderKindBadge}, whose inferred "byok" kind means nothing
+ * about billing and is hidden for exactly that reason.
+ *
+ * <p>The label collapses to the icon alone in {@code compact}, where the row has ~280px for
+ * everything: the word is kept for a screen reader and the tooltip carries it for a pointer, so
+ * the narrow case loses the width, never the meaning.
+ */
+function KeyRouteBadge({
+  route, compact = false, className,
+}: { route: 'own' | 'platform'; compact?: boolean; className?: string }) {
+  const t = useTranslations('modelInfo');
+  const own = route === 'own';
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant="outline"
+            data-testid={own ? 'own-key-badge' : 'platform-key-badge'}
+            className={cn(
+              'text-[10px] py-0 px-1.5 leading-tight font-medium gap-1',
+              // The two halves differ by WEIGHT, not by hue, and that is deliberate. Every free
+              // colour was already spoken for on this very line: the tier badge sits immediately
+              // to the left in violet / blue / emerald / slate, the provider-kind badge in sky,
+              // amber or fuchsia, and the upgrade lock in amber. A tinted own-key pill in any of
+              // them produced two near-identical pastel pills side by side (blue "High tier" next
+              // to a blue "Your key" was the one that made this obvious), and the reader has to
+              // tell them apart at a glance, because one of them says who gets invoiced.
+              //
+              // So the own-key half is SOLID, in the blue the settings panel marks "Runs on your
+              // key" with: the hue still agrees with the other surface that talks about the route,
+              // and the fill is what makes it a different object from the tier pill. The platform
+              // half is not a pill at all - no ground, no border, just the muted caption it
+              // deserves. It is the ordinary case, and it is only drawn to stop an absent mark
+              // from reading as a row that forgot to say.
+              own
+                ? 'border-transparent bg-blue-600 text-white dark:bg-blue-500 dark:text-white'
+                : 'border-transparent bg-transparent text-slate-500 dark:text-slate-400',
+              className,
+            )}
+          >
+            {own
+              ? <KeyRound className="h-3 w-3 flex-shrink-0" aria-hidden />
+              : <Building2 className="h-3 w-3 flex-shrink-0" aria-hidden />}
+            <span className={compact ? 'sr-only' : undefined}>
+              {t(own ? 'ownKeyBadge' : 'platformKeyBadge')}
+            </span>
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent className={MENU_TOOLTIP_Z}>
+          {t(own ? 'ownKeyBadgeTooltip' : 'platformKeyBadgeTooltip')}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Inline display - what each option renders
 // ─────────────────────────────────────────────────────────────────────────────
@@ -266,6 +404,18 @@ interface ModelOptionDisplayProps {
    * client. The caller asks `useMonthlyCreditsCannotPay` once.
    */
   upgradeRequired?: boolean;
+  /**
+   * True when the reader's free-tier allowance pays for this model right now,
+   * which marks the row with a "Free" chip. The mirror image of
+   * {@link upgradeRequired}, and passed in for the same reason: the answer
+   * belongs to the whole list.
+   *
+   * <p><b>It must come from `useMonthlyCreditsCannotPay.freeTierForModel`</b>,
+   * the verdict that also weighs the allowance balance. That is what keeps this
+   * chip and {@link upgradeRequired}'s lock off the same row; the reasoning lives
+   * with the verdict.
+   */
+  freeTier?: boolean;
   /**
    * Multiplier + cost profiles from `useModelCostBasis`, or null to show no
    * estimate (which is what CE gets). Passed in for the same reason as
@@ -292,8 +442,9 @@ export function ModelOptionDisplay({
   model,
   variant = 'default',
   upgradeRequired = false,
+  freeTier = false,
   costBasis = null,
-  costProfile = 'agentConversation',
+  costProfile = 'chatConversation',
   className,
 }: ModelOptionDisplayProps) {
   const t = useTranslations('modelInfo');
@@ -306,12 +457,32 @@ export function ModelOptionDisplay({
   // What the choice will actually cost, in the same credits the ledger debits,
   // said BEFORE the model is picked. Null on CE, on an unpriced row, and on a
   // catalogue sentinel rate.
-  const creditEstimate = formatCreditEstimate(model.pricing, costBasis, costProfile, getClientLocale());
+  const creditEstimate = formatCreditEstimate(creditRatesOf(model), costBasis, costProfile, getClientLocale(), model.provider, model.id);
+  // On the caller's own key the ledger takes a flat fee per turn, capped at what the
+  // platform route would have charged, so the token-rate estimate above is a number that
+  // route does not pay. State what it does pay instead.
+  const ownKeyCharge = ownKeyChargeFor(model, creditRatesOf(model), costBasis, costProfile);
 
   return (
     <div className={cn('flex flex-col gap-0.5 min-w-0 w-full', className)}>
       <div className="flex items-center gap-1.5 min-w-0">
-        <span className="truncate text-sm font-medium">{model.name}</span>
+        {/* Greyed when the balance cannot pay for it, which is how a row reads as
+            unavailable at a glance rather than only through the lock. The NAME
+            carries it and the row does not: the name has contrast to spare, while
+            the 11px meta line beneath it is already close to the floor and fading
+            the subtree would take it under.
+
+            slate-600, not slate-500, and the difference is not cosmetic: a blocked
+            row is read on three backgrounds, and 14px/500 is normal text, so the
+            bar is 4.5:1. slate-500 gives 4.76 on white but 4.32 on the menu's
+            hover/selected `bg-gray-100` and 4.13 on the pickers' `SelectItem`
+            hover, i.e. it fails in exactly the states a row is in while being
+            considered. slate-600 gives 7.58 / 6.89 / 6.57. Dark side:
+            slate-400 on gray-800 is 5.72. */}
+        <span className={cn(
+          'truncate text-sm font-medium',
+          upgradeRequired && 'text-slate-600 dark:text-slate-400',
+        )}>{model.name}</span>
         {model.recommended && (
           <TooltipProvider delayDuration={150}>
             <Tooltip>
@@ -343,7 +514,22 @@ export function ModelOptionDisplay({
           typeface; tier/provider badges and capability icons first, then the
           numeric facts (context · price) separated by a subtle middot. */}
       <div className="flex items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500 dark:text-slate-400 min-w-0 flex-wrap">
+        {/* First on the meta line, ahead of tier and provider. It and the lock two
+            badges along are the pair that answers "can I run this?", which is what
+            a reader on a workflow-scoped plan is reading the row for; they are
+            never both present, so the line never carries two markers however far
+            apart they sit. The figure this chip could quote is left out here - see
+            {@code FreeTierBadge.credits} for why a row must not ask for it. */}
+        <FreeTierBadge covered={freeTier} />
         <TierBadge tier={model.tier} />
+        {/* Drawn only for a caller who HAS a key of their own, where the list genuinely mixes
+            the two routes. For everyone else there is one route and nothing to disambiguate. */}
+        {costBasis?.ownKey && (
+          <KeyRouteBadge
+            route={ownKeyCharge !== null ? 'own' : 'platform'}
+            compact={variant === 'compact'}
+          />
+        )}
         <ProviderKindBadge providerKind={model.providerKind} />
         {/* Said where the choice is made rather than after it. Every picker
             that renders this row spends from the pay-as-you-go bucket (a chat
@@ -361,10 +547,23 @@ export function ModelOptionDisplay({
         {showPrice && (
           <span>{t('priceShort', { input: priceIn, output: priceOut })}</span>
         )}
-        {creditEstimate && (ctx || showPrice) && (
+        {(ownKeyCharge !== null || creditEstimate) && (ctx || showPrice) && (
           <span aria-hidden className="text-slate-300 dark:text-slate-600">·</span>
         )}
-        {creditEstimate && (
+        {ownKeyCharge !== null ? (
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="whitespace-nowrap" data-testid="own-key-fee">
+                  {t(ownKeyFeeMessage(ownKeyCharge), { credits: ownKeyFeeCredits(ownKeyCharge) })}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className={MENU_TOOLTIP_Z}>
+                <div className="text-xs max-w-[15rem]">{t('ownKeyFeeTooltip')}</div>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ) : creditEstimate ? (
           <TooltipProvider delayDuration={150}>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -374,12 +573,16 @@ export function ModelOptionDisplay({
               </TooltipTrigger>
               <TooltipContent className={MENU_TOOLTIP_Z}>
                 <div className="text-xs max-w-[15rem]">
-                  {t(`creditEstimateTooltip.${costProfile}`, { credits: creditEstimate })}
+                  {/* The figure is bolded inside the message (see
+                      renderBoldMarkup): it is the one thing the reader opened
+                      the tooltip for, and the sentence around it is what says
+                      the figure is an estimate rather than a cap. */}
+                  {renderBoldMarkup(t(`creditEstimateTooltip.${costProfile}`, { credits: creditEstimate }))}
                 </div>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -391,6 +594,15 @@ export function ModelOptionDisplay({
 
 interface ModelInfoPopoverProps {
   model: AIModel;
+  /**
+   * See {@link ModelOptionDisplayProps.freeTier}, from the same verdict and the
+   * same caller. Repeated on this card because the row's chip explains itself
+   * through a hover tooltip, which a touch device can never open - the same
+   * reason the credit estimate is repeated here. On the composer menu this card
+   * is on every row; on the pickers it is beside the chosen model, so there the
+   * sentence arrives once a model is selected.
+   */
+  freeTier?: boolean;
   /** Optional custom trigger; defaults to a small (i) icon button. */
   trigger?: React.ReactNode;
   /** See {@link ModelOptionDisplayProps.costBasis}. Passed by the same caller. */
@@ -407,17 +619,24 @@ interface ModelInfoPopoverProps {
  */
 export function ModelInfoPopover({
   model,
+  freeTier = false,
   trigger,
   costBasis = null,
-  costProfile = 'agentConversation',
+  costProfile = 'chatConversation',
   className,
 }: ModelInfoPopoverProps) {
   const t = useTranslations('modelInfo');
+  // The chip's own namespace, so the card and the chip cannot drift into two
+  // different explanations of one allowance.
+  const tFreeTier = useTranslations('billing.freeTier');
   const [open, setOpen] = React.useState(false);
   // The row's estimate lives behind a hover tooltip, which a touch device can
   // never open. This card IS the touch path (it opens on tap), so the figure and
   // its explanation are repeated here rather than being pointer-only.
-  const creditEstimate = formatCreditEstimate(model.pricing, costBasis, costProfile, getClientLocale());
+  const creditEstimate = formatCreditEstimate(creditRatesOf(model), costBasis, costProfile, getClientLocale(), model.provider, model.id);
+  // Same substitution as the row: on the caller's own key the token-rate estimate is not
+  // what gets debited, and this card is the only path a touch device has to either figure.
+  const ownKeyCharge = ownKeyChargeFor(model, creditRatesOf(model), costBasis, costProfile);
 
   const priceIn = formatPricePerMillion(model.pricing?.input);
   const priceOut = formatPricePerMillion(model.pricing?.output);
@@ -470,12 +689,30 @@ export function ModelInfoPopover({
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="font-semibold text-base">{model.name}</span>
               <TierBadge tier={model.tier} />
+              {/* The card is the touch path to everything the row says on hover, the route
+                  included: without it a tablet reader sees the fee and never learns whose key
+                  it belongs to. */}
+              {costBasis?.ownKey && (
+                <KeyRouteBadge route={ownKeyCharge !== null ? 'own' : 'platform'} />
+              )}
               <ProviderKindBadge providerKind={model.providerKind} />
             </div>
             <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
               {getProviderDisplayName(model.provider)} / <span className="font-mono">{model.id}</span>
             </div>
           </div>
+
+          {/* The touch path for the row's "Free" chip: its own explanation is a
+              hover tooltip, and this card opens on tap. Stated in full here,
+              where there is width for it, rather than abbreviated. */}
+          {freeTier && (
+            <div
+              data-testid="free-tier-detail"
+              className="rounded-md border border-sky-300 bg-sky-50 px-2 py-1.5 text-xs text-sky-800 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300"
+            >
+              {tFreeTier('tooltip')}
+            </div>
+          )}
 
           {model.deprecatedAt && (
             <div className="flex items-start gap-1.5 rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300">
@@ -522,7 +759,19 @@ export function ModelInfoPopover({
             </dl>
           )}
 
-          {creditEstimate && (
+          {ownKeyCharge !== null ? (
+            <div className="rounded-md border border-slate-200 dark:border-slate-700 p-2" data-testid="own-key-fee-card">
+              <div className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">
+                {t('ownKeyFeeLabel')}
+              </div>
+              <div className="text-sm font-semibold text-theme-primary">
+                {t(ownKeyFeeMessage(ownKeyCharge), { credits: ownKeyFeeCredits(ownKeyCharge) })}
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                {t('ownKeyFeeTooltip')}
+              </p>
+            </div>
+          ) : creditEstimate ? (
             <div className="rounded-md border border-slate-200 dark:border-slate-700 p-2">
               <div className="text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">
                 {t('creditEstimateLabel')}
@@ -531,10 +780,10 @@ export function ModelInfoPopover({
                 {t('creditEstimateShort', { credits: creditEstimate })}
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                {t(`creditEstimateTooltip.${costProfile}`, { credits: creditEstimate })}
+                {renderBoldMarkup(t(`creditEstimateTooltip.${costProfile}`, { credits: creditEstimate }))}
               </p>
             </div>
-          )}
+          ) : null}
 
           {(priceIn || priceOut || priceCacheRead || priceBatchIn) && (
             <div className="rounded-md border border-slate-200 dark:border-slate-700 p-2">

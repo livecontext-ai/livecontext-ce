@@ -21,6 +21,9 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -37,6 +40,7 @@ import static org.mockito.Mockito.when;
 class ApiCatalogBundleServiceTest {
 
     @Mock private ApiCatalogBundleRepository bundleRepo;
+    @Mock private ApiCatalogBundleChunkReader chunkReader;
     @Mock private ApiCatalogSnapshotReader snapshotReader;
     @Mock private ApiCatalogGenerationPriceReader priceReader;
 
@@ -50,7 +54,7 @@ class ApiCatalogBundleServiceTest {
         String pub  = Base64.getEncoder().encodeToString(kp.getPublic().getEncoded());
 
         signer = new ApiCatalogBundleSigner(priv, pub, "test-key", "test-cloud");
-        service = new ApiCatalogBundleService(bundleRepo, snapshotReader, priceReader, signer);
+        service = new ApiCatalogBundleService(bundleRepo, snapshotReader, priceReader, signer, chunkReader);
     }
 
     private static ApiCatalogSnapshotReader.Snapshot snapshotWith(int apiCount, int toolsPerApi) {
@@ -158,7 +162,7 @@ class ApiCatalogBundleServiceTest {
     void buildBundleRequiresKey() {
         ApiCatalogBundleSigner noKey = new ApiCatalogBundleSigner("", "", "k", "i");
         ApiCatalogBundleService svc =
-                new ApiCatalogBundleService(bundleRepo, snapshotReader, priceReader, noKey);
+                new ApiCatalogBundleService(bundleRepo, snapshotReader, priceReader, noKey, chunkReader);
 
         assertThatThrownBy(svc::buildBundle)
                 .isInstanceOf(IllegalStateException.class)
@@ -252,17 +256,18 @@ class ApiCatalogBundleServiceTest {
 
     @Test
     @DisplayName("The served bundle carries the STORED gzip bytes - signature, checksum and size all verify")
-    void serveActiveBundle() {
+    void serveActiveBundle() throws Exception {
         when(snapshotReader.snapshot()).thenReturn(snapshotWith(1, 2));
         when(bundleRepo.findTopByOrderByVersionDesc()).thenReturn(Optional.empty());
         when(bundleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         ApiCatalogBundleEntity built = service.buildBundle();
 
-        when(bundleRepo.findFirstByActiveTrue()).thenReturn(Optional.of(built));
+        serveFromRow(built);
         Optional<ApiCatalogBundleService.RawBundle> served = service.getActiveRawBundle();
 
         assertThat(served).isPresent();
         ApiCatalogBundleService.RawBundle raw = served.get();
+        byte[] servedBytes = payloadOf(raw);
         assertThat(raw.version()).isEqualTo(built.getVersion());
         assertThat(raw.checksum()).isEqualTo(built.getChecksum());
         assertThat(raw.signature()).isEqualTo(built.getSignature());
@@ -270,36 +275,34 @@ class ApiCatalogBundleServiceTest {
         assertThat(raw.toolCount()).isEqualTo(2);
 
         // Signature + checksum cover the gzip bytes, per contract.
-        assertThat(signer.verify(raw.payloadGz(), raw.signature())).isTrue();
-        assertThat(signer.checksum(raw.payloadGz())).isEqualTo(raw.checksum());
-        assertThat(ApiCatalogBundlePayload.gunzip(raw.payloadGz())).hasSize((int) raw.rawBytesSize());
+        assertThat(signer.verify(servedBytes, raw.signature())).isTrue();
+        assertThat(signer.checksum(servedBytes)).isEqualTo(raw.checksum());
+        assertThat(ApiCatalogBundlePayload.gunzip(servedBytes)).hasSize((int) raw.rawBytesSize());
+        assertThat(servedBytes)
+                .as("the sliced reader must reassemble the exact stored payload")
+                .isEqualTo(built.getPayloadGz());
     }
 
     @Test
     @DisplayName("Serving returns empty when no bundle is active")
     void noActiveBundle() {
-        when(bundleRepo.findFirstByActiveTrue()).thenReturn(Optional.empty());
+        when(bundleRepo.findActiveServingView()).thenReturn(List.of());
         assertThat(service.getActiveRawBundle()).isEmpty();
     }
 
     @Test
-    @DisplayName("A zero-length payload is not servable, so it can never be served as an empty envelope")
-    void zeroLengthPayloadIsNotServable() {
-        ApiCatalogBundleEntity row = new ApiCatalogBundleEntity();
-        row.setVersion(6L);
-        row.setPayloadGz(new byte[0]);
-        when(bundleRepo.findFirstByActiveTrue()).thenReturn(Optional.of(row));
-
-        assertThat(service.getActiveRawBundle()).isEmpty();
-    }
-
-    @Test
-    @DisplayName("A row WITHOUT stored payload (a CE-applied record) is not servable")
-    void rawSkipsPayloadlessRow() {
+    @DisplayName("An active row whose payload measures zero is not servable - a CE-applied record must "
+            + "never go out as an empty envelope")
+    void aRowMeasuringZeroBytesIsNotServable() {
+        // Since serving reads the length through the reader, an absent payload
+        // and a zero-length one arrive here as the same 0 and share this branch,
+        // so one test covers it. That the two DB states really do both measure 0
+        // is a property of the SQL, verified against a real Postgres in
+        // ApiCatalogBundlePostgresMappingTest#missingPayloadReportsZeroLength.
         ApiCatalogBundleEntity ceRow = new ApiCatalogBundleEntity();
         ceRow.setVersion(5L);
-        ceRow.setPayloadGz(null);
-        when(bundleRepo.findFirstByActiveTrue()).thenReturn(Optional.of(ceRow));
+        when(bundleRepo.findActiveServingView()).thenReturn(List.of(viewOf(ceRow)));
+        when(chunkReader.payloadLength(5L)).thenReturn(0L);
 
         assertThat(service.getActiveRawBundle()).isEmpty();
     }
@@ -311,8 +314,9 @@ class ApiCatalogBundleServiceTest {
         row.setVersion(42L);
         row.setChecksum("cs");
         row.setPayloadGz(new byte[]{7, 7});
-        when(bundleRepo.findByVersion(42L)).thenReturn(Optional.of(row));
-        when(bundleRepo.findByVersion(43L)).thenReturn(Optional.empty());
+        when(bundleRepo.findServingViewByVersion(42L)).thenReturn(List.of(viewOf(row)));
+        when(bundleRepo.findServingViewByVersion(43L)).thenReturn(List.of());
+        when(chunkReader.payloadLength(42L)).thenReturn(2L);
 
         assertThat(service.getRawBundleByVersion(42L)).isPresent();
         assertThat(service.getRawBundleByVersion(43L)).isEmpty();
@@ -344,7 +348,7 @@ class ApiCatalogBundleServiceTest {
 
     @Test
     @DisplayName("Serving stays valid after live-catalog drift (payload is pinned at build time)")
-    void liveTableDriftDoesNotInvalidateServing() {
+    void liveTableDriftDoesNotInvalidateServing() throws Exception {
         // Build with one snapshot…
         when(snapshotReader.snapshot()).thenReturn(snapshotWith(1, 1));
         when(bundleRepo.findTopByOrderByVersionDesc()).thenReturn(Optional.empty());
@@ -354,10 +358,46 @@ class ApiCatalogBundleServiceTest {
         // …then the live catalog changes (next snapshot would differ). Unlike
         // the model bundle (re-derives at read time and throws on drift), the
         // API bundle serves the stored bytes - still verifiable.
-        when(bundleRepo.findFirstByActiveTrue()).thenReturn(Optional.of(built));
+        serveFromRow(built);
         Optional<ApiCatalogBundleService.RawBundle> served = service.getActiveRawBundle();
 
         assertThat(served).isPresent();
-        assertThat(signer.verify(served.get().payloadGz(), served.get().signature())).isTrue();
+        assertThat(signer.verify(payloadOf(served.get()), served.get().signature())).isTrue();
+    }
+
+    /** The projection the serving path now reads, built from a persisted row. */
+    private static ApiCatalogBundleRepository.ServingView viewOf(ApiCatalogBundleEntity e) {
+        return new ApiCatalogBundleRepository.ServingView() {
+            @Override public Long getVersion() { return e.getVersion(); }
+            @Override public Integer getSchemaVersion() { return e.getSchemaVersion(); }
+            @Override public String getChecksum() { return e.getChecksum(); }
+            @Override public String getSignature() { return e.getSignature(); }
+            @Override public String getSigningKeyId() { return e.getSigningKeyId(); }
+            @Override public String getIssuer() { return e.getIssuer(); }
+            @Override public Integer getApiCount() { return e.getApiCount(); }
+            @Override public Integer getToolCount() { return e.getToolCount(); }
+            @Override public Integer getRawBytesSize() { return e.getRawBytesSize(); }
+        };
+    }
+
+    /** Serves the row's payload through the sliced reader, as production does. */
+    private void serveFromRow(ApiCatalogBundleEntity e) {
+        byte[] gz = e.getPayloadGz();
+        when(bundleRepo.findActiveServingView()).thenReturn(List.of(viewOf(e)));
+        when(chunkReader.payloadLength(e.getVersion())).thenReturn((long) gz.length);
+        when(chunkReader.readChunk(eq(e.getVersion()), anyLong(), anyInt())).thenAnswer(inv -> {
+            long offset = inv.getArgument(1);
+            int want = inv.getArgument(2);
+            int from = (int) Math.min(offset, gz.length);
+            int to = (int) Math.min((long) from + want, gz.length);
+            return java.util.Arrays.copyOfRange(gz, from, to);
+        });
+    }
+
+    /** Drains a served bundle's payload stream. */
+    private static byte[] payloadOf(ApiCatalogBundleService.RawBundle bundle) throws Exception {
+        try (java.io.InputStream in = bundle.payload().get()) {
+            return in.readAllBytes();
+        }
     }
 }

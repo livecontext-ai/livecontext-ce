@@ -340,4 +340,32 @@ class MockNodeResultFactoryTest {
         assertThat(result.status()).isEqualTo(NodeStatus.FAILED);
         assertThat(result.errorMessage().orElse("")).contains("not available");
     }
+
+    @Test
+    @DisplayName("a mocked step's raw params go through the same gate a real run uses")
+    void mockedParamsPassTheReportingGate() {
+        // The row a mocked node leaves is persisted and rendered like any other, so the
+        // rules that hold for a real run hold here. Templates are the point of a mock and
+        // stay readable; what does not is a LITERAL an author typed instead of
+        // `{{$vars.x}}`, and a body with no ceiling. Both reached the step row untouched
+        // while this producer sat outside the gate.
+        Step step = new Step("gmail/send", "mcp", "Send", null,
+            new java.util.LinkedHashMap<>(Map.of(
+                "q", "{{trigger:hook.output.q}}",
+                "apiKey", "AIzaSyLITERALKEYTYPEDBYHAND",
+                "body", "z".repeat(5_000))),
+            null, null, null, null, null, null);
+        StepNode node = new StepNode("mcp:send", step);
+
+        NodeExecutionResult result = factory.build(node, context,
+            mock(Map.of("output", Map.of("ok", true))));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> reported = (Map<String, Object>) result.output().get("resolved_params");
+        assertThat(reported).containsEntry("q", "{{trigger:hook.output.q}}");
+        assertThat(reported.get("apiKey")).isEqualTo("<withheld: credential>");
+        assertThat(String.valueOf(reported.get("body")).length())
+            .as("a mocked row is a row: it carries no unbounded payload either")
+            .isLessThan(500);
+    }
 }

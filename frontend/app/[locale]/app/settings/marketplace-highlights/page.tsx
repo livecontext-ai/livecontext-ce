@@ -34,12 +34,27 @@ import LoadingSpinner from '@/components/LoadingSpinner';
 import { cn } from '@/lib/utils';
 import { IS_CE } from '@/lib/edition';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
+import { MarketplaceDemoInstallCard } from '@/components/settings/MarketplaceDemoInstallCard';
 
-const DISPLAY_MODES: HighlightDisplayMode[] = [
-  // LANDING first: it's the public-facing surface (homepage showcase). Its bucket
-  // is curated independently from APPLICATION (which drives the in-chat row) but
-  // holds APPLICATION-type publications - see candidatePublicationMode.
+// The public surfaces first: the home page, then one row per persona page. They are
+// curated independently from APPLICATION (which drives the in-chat row) but all hold
+// APPLICATION-type publications - see candidatePublicationMode. The resource buckets
+// follow, which is the order an admin reaches for: the public pages are the ones that
+// get edited, the rest rarely move.
+// Exported for the test that ties this list to PERSONA_KEYS: the bucket a persona page
+// asks for is BUILT at runtime (`LANDING_${persona.toUpperCase()}`) while this list, the
+// Java enum and the migration all spell it out, so a seventh persona would request a bucket
+// the backend rejects, fall back to the home page's row, and show no error anywhere.
+export const PUBLIC_PAGE_MODES: HighlightDisplayMode[] = [
   'LANDING',
+  'LANDING_OPS',
+  'LANDING_CREATOR',
+  'LANDING_SUPPORT',
+  'LANDING_SALES',
+  'LANDING_MARKETING',
+  'LANDING_RECRUITING',
+];
+const RESOURCE_MODES: HighlightDisplayMode[] = [
   'APPLICATION',
   'INTERFACE',
   'AGENT',
@@ -47,11 +62,13 @@ const DISPLAY_MODES: HighlightDisplayMode[] = [
   'TABLE',
   'SKILL',
 ];
+const DISPLAY_MODES: HighlightDisplayMode[] = [...PUBLIC_PAGE_MODES, ...RESOURCE_MODES];
 
 // The publication displayMode whose candidates belong in a given highlight bucket.
-// Every bucket is 1:1 with its type except LANDING, which holds APPLICATION apps.
+// Every bucket is 1:1 with its type except the landing ones, which hold APPLICATION
+// apps: a page curated from a type nothing publishes would have no candidates at all.
 function candidatePublicationMode(mode: HighlightDisplayMode): HighlightDisplayMode {
-  return mode === 'LANDING' ? 'APPLICATION' : mode;
+  return mode.startsWith('LANDING') ? 'APPLICATION' : mode;
 }
 
 // Compact 16:10 app thumbnail for a curation row - reuses the EXACT marketplace
@@ -324,7 +341,10 @@ export default function MarketplaceHighlightsPage() {
         <p className="mt-1 text-sm text-theme-secondary">{t('subtitle')}</p>
       </div>
 
-      {/* DisplayMode tabs */}
+      <MarketplaceDemoInstallCard />
+
+      {/* One tab per bucket: the public pages, then the resource rows. Thirteen of them
+          wrap onto two lines, which is why the public ones lead. */}
       <div className="flex flex-wrap gap-1 border-b border-theme">
         {DISPLAY_MODES.map(mode => (
           <button

@@ -68,6 +68,39 @@ class GeminiProviderCachedContentWiringTest {
     }
 
     @Test
+    @DisplayName("the cachedContent lookup is keyed on the REQUEST tenant's own key, not the platform's (a cache is per key)")
+    void cachedContentUsesTheRequestBoundKey() {
+        GeminiProvider provider = new GeminiProvider();
+        provider.setCachedContentManager(cacheManager);
+        provider.setCredentialResolver(new com.apimarketplace.agent.resolver.LlmCredentialResolver() {
+            @Override public Optional<String> resolveApiKey(String providerName) { return Optional.of("sk-thread-user"); }
+            @Override public Optional<String> resolveApiKey(String userId, String providerName) {
+                return Optional.of("tenant-9".equals(userId) ? "sk-user-9" : "sk-platform");
+            }
+            @Override public Optional<String> resolveUserApiKey(String userId, String providerName) {
+                return "tenant-9".equals(userId) ? Optional.of("sk-user-9") : Optional.empty();
+            }
+        });
+        when(cacheManager.getOrCreate(anyString(), anyString(), anyString(), any(), anyInt()))
+                .thenReturn(Optional.of("cachedContents/tenant-9"));
+        CompletionRequest req = CompletionRequest.builder()
+                .tenantId("tenant-9")
+                .keyRoute(com.apimarketplace.agent.domain.KeyRoute.OWN_KEY)
+                .model("gemini-1.5-flash")
+                .systemPrompt("You are a helpful assistant.")
+                .userPrompt("hi")
+                .build();
+
+        Map<String, Object> body = provider.buildRequestBody(req);
+
+        assertThat(body).containsEntry("cachedContent", "cachedContents/tenant-9");
+        // A cachedContent belongs to the key that created it: looking it up with the platform
+        // key would miss (or worse, hit another tenant's cache namespace).
+        org.mockito.Mockito.verify(cacheManager).getOrCreate(
+                org.mockito.ArgumentMatchers.eq("sk-user-9"), anyString(), anyString(), any(), anyInt());
+    }
+
+    @Test
     @DisplayName("manager returns empty → legacy body, no cachedContent")
     void managerEmptyLegacyBody() {
         GeminiProvider provider = new GeminiProvider();

@@ -9,6 +9,7 @@ import com.apimarketplace.catalog.service.exception.ApiAuthenticationException;
 import com.apimarketplace.catalog.service.exception.ToolNotFoundException;
 import com.apimarketplace.catalog.service.execution.MockToolExecutionService;
 import lombok.RequiredArgsConstructor;
+import com.apimarketplace.common.web.BillingContextHeaders;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -58,10 +59,12 @@ public class CatalogV1Controller {
                                          @RequestHeader(value = "X-Lc-Generation-Model", required = false) String generationModelId,
                                          @RequestHeader(value = "X-Lc-Generation-Quantity", required = false) java.math.BigDecimal generationQuantity,
                                          @RequestHeader(value = "X-Lc-Generation-Unit", required = false) String generationQuantityUnit,
+                                         @RequestHeader(value = "X-Lc-Generation-Multiplier", required = false) java.math.BigDecimal generationPriceMultiplier,
                                          @RequestHeader(value = "X-Lc-Workflow-Id", required = false) String analyticsWorkflowId,
                                          @RequestHeader(value = "X-Lc-Node-Id", required = false) String analyticsNodeId) {
         applyBillingHeaders(request, billingScopeKind, billingScopeId, billingStepId,
-                generationModelId, generationQuantity, generationQuantityUnit);
+                generationModelId, generationQuantity, generationQuantityUnit,
+                generationPriceMultiplier);
         applyAnalyticsHeaders(request, analyticsWorkflowId, analyticsNodeId);
         return executeToolInternal(toolId, request, userId, orgId, requestId);
     }
@@ -84,10 +87,12 @@ public class CatalogV1Controller {
                                                     @RequestHeader(value = "X-Lc-Generation-Model", required = false) String generationModelId,
                                                     @RequestHeader(value = "X-Lc-Generation-Quantity", required = false) java.math.BigDecimal generationQuantity,
                                          @RequestHeader(value = "X-Lc-Generation-Unit", required = false) String generationQuantityUnit,
+                                         @RequestHeader(value = "X-Lc-Generation-Multiplier", required = false) java.math.BigDecimal generationPriceMultiplier,
                                          @RequestHeader(value = "X-Lc-Workflow-Id", required = false) String analyticsWorkflowId,
                                          @RequestHeader(value = "X-Lc-Node-Id", required = false) String analyticsNodeId) {
         applyBillingHeaders(request, billingScopeKind, billingScopeId, billingStepId,
-                generationModelId, generationQuantity, generationQuantityUnit);
+                generationModelId, generationQuantity, generationQuantityUnit,
+                generationPriceMultiplier);
         applyAnalyticsHeaders(request, analyticsWorkflowId, analyticsNodeId);
         // Combine apiSlug/toolSlug - service handles this format
         String toolId = apiSlug + "/" + toolSlug;
@@ -178,7 +183,8 @@ public class CatalogV1Controller {
                                               String stepId,
                                               String generationModelId,
                                               java.math.BigDecimal generationQuantity,
-                                              String generationQuantityUnit) {
+                                              String generationQuantityUnit,
+                                              java.math.BigDecimal generationPriceMultiplier) {
         if (request == null) return;
         if (request.getBillingScopeKind() == null && scopeKind != null && !scopeKind.isBlank()) {
             request.setBillingScopeKind(scopeKind);
@@ -215,6 +221,22 @@ public class CatalogV1Controller {
                 && !generationQuantityUnit.isBlank()) {
             request.setGenerationQuantityUnit(generationQuantityUnit);
         }
+        // What the call's own choices do to its price. Sanitised through the SAME rule the two
+        // quote endpoints use, which this door did not apply: it dropped a non-positive value and
+        // passed anything else straight through to the biller.
+        //
+        // That asymmetry was the wrong way round. The two doors that enforced a ceiling can only
+        // MISQUOTE; this one is the one that takes money. The justification for leaving it open was
+        // that the value can only come from a header this edge strips, but stripping happens at the
+        // gateway and the CE monolith, not here: anything reaching catalog-service without
+        // traversing an edge (another in-cluster service, a misrouted ingress) was believed. A
+        // factor of a million on a row with no maxCredits is a million times the rate, reserved and
+        // committed, with billed_quantity still correct so nothing on the invoice looks wrong.
+        java.math.BigDecimal sanitizedMultiplier =
+                BillingContextHeaders.sanitizeGenerationMultiplier(generationPriceMultiplier);
+        if (request.getGenerationPriceMultiplier() == null && sanitizedMultiplier != null) {
+            request.setGenerationPriceMultiplier(sanitizedMultiplier);
+        }
     }
 
     private ResponseEntity<?> executeToolInternal(String toolId,
@@ -242,6 +264,10 @@ public class CatalogV1Controller {
             //     choice refuse the call instead of quietly using the default key.
             com.apimarketplace.catalog.service.http.CredentialModeContext.setSelectedCredentialName(safeRequest.getSelectedCredentialName());
             com.apimarketplace.catalog.service.http.CredentialModeContext.setSelectionStrict(safeRequest.getCredentialSelectionStrict());
+            // The caller's own retry budget for this call, and the counter the execution path
+            // writes back into. Cleared in the same finally as the credential context.
+            com.apimarketplace.catalog.service.http.ProviderRetryContext.begin(
+                    safeRequest.getProviderRetryMaxWaitSeconds());
             // Refused HERE and not only where the choice is read, because the branches
             // that read it are not the only ones a caller can reach. The agentic
             // branch (no explicit source) and the platform branch never consult the
@@ -341,6 +367,7 @@ public class CatalogV1Controller {
                     ));
         } finally {
             com.apimarketplace.catalog.service.http.CredentialModeContext.clear();
+            com.apimarketplace.catalog.service.http.ProviderRetryContext.clear();
         }
     }
 

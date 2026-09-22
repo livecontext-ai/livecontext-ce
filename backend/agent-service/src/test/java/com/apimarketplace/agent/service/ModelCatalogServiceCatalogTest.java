@@ -53,6 +53,12 @@ class ModelCatalogServiceCatalogTest {
         service = Mockito.spy(new ModelCatalogService(
                 repository, categoryRepository, llmProviderFactory, credentialRepository,
                 cachedRateLimitProvider, "", authPricingSyncClient));
+        // CE. The default-selection cases below assert that a BRIDGE may be the overall default
+        // ("bridges still win for chat / agent.create"), which is true of a self-hosted install
+        // running its own CLI and false of the hosted product, where one operator subscription is
+        // shared. Pinned explicitly so each test says which edition it describes; the cloud
+        // counterparts live in ModelCatalogServiceHideBridgesTest.
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "authMode", "embedded");
     }
 
     private Map<String, Object> provider(String name, List<Map<String, Object>> models) {
@@ -391,6 +397,11 @@ class ModelCatalogServiceCatalogTest {
         ModelCatalogService spy = Mockito.spy(new ModelCatalogService(
                 repository, categoryRepository, llmProviderFactory, credentialRepository,
                 cachedRateLimitProvider, "http://bridge-host.test:8093", authPricingSyncClient));
+        // CE, and it has to be: the assertion that proves the rewrite RAN is that the default
+        // moved off the YAML-static anthropic onto codex. In cloud a bridge is never the overall
+        // default, so the answer would be anthropic again - the same value the fixture starts
+        // with, which is precisely a result this test could not distinguish from "never ran".
+        org.springframework.test.util.ReflectionTestUtils.setField(spy, "authMode", "embedded");
 
         Map<String, Object> raw = new LinkedHashMap<>();
         Map<String, Object> codex = new LinkedHashMap<>();

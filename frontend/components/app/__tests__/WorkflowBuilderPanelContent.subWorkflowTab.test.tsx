@@ -80,6 +80,8 @@ describe('WorkflowBuilderPanelContent - opening a nested sub-workflow', () => {
     await openSubWorkflowFromPanel();
 
     expect(openTab.mock.calls[0][0].id).toBe(`workflow-run-${SUB_WF}-${RUN}`);
+    const content = openTab.mock.calls[0][0].content as React.ReactElement<Record<string, unknown>>;
+    expect(content.props.hostTabId).toBe(`workflow-run-${SUB_WF}-${RUN}`);
   });
 
   it('opens a sub-workflow of SOMEONE ELSE publication locked, and its own children too', async () => {
@@ -110,16 +112,13 @@ describe('WorkflowBuilderPanelContent - opening a nested sub-workflow', () => {
   });
 
   it('carries the same answer to a sub-workflow opened on its pinned run', async () => {
-    // The pinned-run branch builds its tab inline instead of going through the
-    // shared opener, so it needs the permission threaded separately.
+    // The shared opener gives the run tab one host identity and carries the
+    // permission to this workflow and any child it opens.
     getPinnedWorkflowRun.mockResolvedValue({ runId: RUN });
     await openSubWorkflowFromPanel({ canEditWorkflow: false, canEditRelatedWorkflows: false });
 
     const content = openTab.mock.calls[0][0].content as React.ReactElement<Record<string, unknown>>;
     expect(content.props.canEditWorkflow).toBe(false);
-    // This branch builds its tab inline instead of going through the shared
-    // opener, so the hand-on has to be threaded twice - once for the tab it opens
-    // and once for what THAT tab opens.
     expect(content.props.canEditRelatedWorkflows).toBe(false);
   });
 

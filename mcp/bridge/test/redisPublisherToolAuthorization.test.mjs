@@ -177,3 +177,42 @@ test('emits distinct credential approval events within a bridge turn', async () 
     [false, false, true],
   );
 });
+
+test('relays the card SUBJECT, so a CLI-backed chat names the workflow going live', async () => {
+  // Parity, not decoration: the general chat is backed by claude-code/codex as often as by
+  // the direct route, and a card that reaches only one of them named is a card that asks
+  // "run this action?" about a pin for half the users.
+  const redis = makeRedis();
+  const publisher = new RedisPublisher(redis, 'stream-1', 'conv-1', redis);
+
+  await publisher.publishToolResult('call-3', 'workflow', true, 100, '{}', {
+    toolAuthorizationRequired: true,
+    rule: 'workflow:pin',
+    toolName: 'workflow',
+    action: 'pin',
+    toolCallId: 'call-3',
+    subject: { kind: 'workflow', id: 'w-1', version: 12 },
+  });
+
+  const authEvent = parseEvents(redis).find((e) => e.toolAuthorization);
+  assert.ok(authEvent, 'a tool_authorization event must be published');
+  assert.deepEqual(authEvent.toolAuthorization.subject, { kind: 'workflow', id: 'w-1', version: 12 });
+});
+
+test('a gated rule with no subject still publishes its card', async () => {
+  // Every rule that shipped before the subject existed goes through this same hop.
+  const redis = makeRedis();
+  const publisher = new RedisPublisher(redis, 'stream-1', 'conv-1', redis);
+
+  await publisher.publishToolResult('call-4', 'workflow', true, 100, '{}', {
+    toolAuthorizationRequired: true,
+    rule: 'workflow:execute',
+    toolName: 'workflow',
+    action: 'execute',
+    toolCallId: 'call-4',
+  });
+
+  const authEvent = parseEvents(redis).find((e) => e.toolAuthorization);
+  assert.ok(authEvent, 'a tool_authorization event must be published');
+  assert.equal(authEvent.toolAuthorization.subject, undefined);
+});

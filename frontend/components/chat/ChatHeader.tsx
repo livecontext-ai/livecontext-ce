@@ -4,9 +4,11 @@ import React, { useMemo, useState, useEffect } from "react";
 import { SelectedModel, AIModel } from "@/hooks/useModels";
 import { PanelLeft, PanelRight, PanelBottom, ChevronLeft, ChevronRight, Home, Sparkles, Minimize2, FileText, Pencil, Globe, ArrowLeft, Download, List, SlidersHorizontal } from "lucide-react";
 import { useSidePanelLayoutSafe } from "@/contexts/SidePanelLayoutContext";
+import { useWorkflowLogsSidePanel } from "@/components/workflow/useWorkflowLogsSidePanel";
 import { useConversationActivity } from "@/contexts/ConversationActivityContext";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { AvatarDisplay } from "@/components/agents/AvatarPicker";
+import { VerifiedBadge } from '@/components/profile/VerifiedBadge';
 import { Button } from "@/components/ui/button";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { useRouter, usePathname } from "next/navigation";
@@ -16,9 +18,6 @@ import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useWorkflowMode } from "@/contexts/WorkflowModeContext";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { StepDataTable } from "@/app/workflows/builder/components/inspector/StepDataTable";
-import { WorkflowRunResultModalContent } from "@/components/WorkflowRunResultModalContent";
 import { orchestratorApi } from "@/lib/api";
 import { useTranslations } from "next-intl";
 import { PublishWorkflowModal } from "@/components/workflow/ShareWorkflowModal";
@@ -29,6 +28,7 @@ import { MarketplaceHeaderActions } from "@/components/marketplace/MarketplaceHe
 import { NotificationBell } from "@/components/chat/NotificationBell";
 import { ApplicationActivationButton } from "@/components/applications/ApplicationActivationButton";
 import { useCanMutateInCurrentOrg } from "@/lib/stores/current-org-store";
+import { APPLICATION_PANEL_TAB_ID, WORKFLOW_PANEL_TAB_ID } from '@/lib/sidePanel/tabResource';
 
 /**
  * Header-side model row. Inherits the full {@link AIModel} payload (capability
@@ -93,6 +93,9 @@ interface ChatHeaderProps {
    *  click-to-open-right-panel affordance belongs to agent conversations (agent config
    *  panel) and is meaningless for a human peer. */
   agentSlotNonInteractive?: boolean;
+  /** The DM peer's user id, so their verified check can render next to their name in the
+   *  agent-avatar slot. Null outside a DM - an agent never carries one. */
+  agentSlotUserId?: string | number | null;
   dashboardBreadcrumbItems?: Array<{ label: string; onClick?: () => void; icon?: React.ComponentType<{ className?: string }>; isLoading?: boolean; truncate?: boolean; editable?: boolean; onEditComplete?: (newValue: string) => void }>;
   showProfileView?: boolean;
   // Data view props
@@ -109,8 +112,6 @@ interface ChatHeaderProps {
   onOpenWorkflowInChat?: () => void;
   // Workflow mode props
   isRunMode?: boolean;
-  onViewModeChange?: (mode: 'configuration' | 'result') => void;
-  viewMode?: 'configuration' | 'result';
   // Interface page props
   isInterfacePage?: boolean;
   interfaceId?: string | null;
@@ -193,6 +194,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   isDashboard = false,
   agentSlotLoading = false,
   agentSlotNonInteractive = false,
+  agentSlotUserId = null,
   showProfileView = false,
   dashboardBreadcrumbItems = [],
   // Data view props
@@ -209,8 +211,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onOpenWorkflowInChat,
   // Workflow mode props
   isRunMode: isRunModeProp = false,
-  onViewModeChange,
-  viewMode: viewModeProp,
   // Interface page props
   isInterfacePage = false,
   interfaceId = null,
@@ -299,10 +299,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
     : `text-[var(--text-primary)] ${QUIET_ICON_HOVER}`}`;
   const t = useTranslations();
   const { isOpen: isActivityOpen, toggle: toggleActivity } = useConversationActivity();
-
-  const [isResultsModalOpen, setIsResultsModalOpen] = useState(false);
-  const [selectedStepAlias, setSelectedStepAlias] = useState<string | null>(null);
-  const [stepBreadcrumbItems, setStepBreadcrumbItems] = useState<Array<{ label: string; onClick?: () => void; icon?: React.ComponentType<{ className?: string }> }>>([]);
+  const { openWorkflowLogs, canOpenWorkflowLogs } = useWorkflowLogsSidePanel();
 
   // Share modal state
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -326,12 +323,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   // Use WorkflowModeContext if available, otherwise use pathname or prop
   const { isRunMode: isRunModeFromContext } = useWorkflowMode();
   const isRunMode = isRunModeProp || isRunModeFromContext || isRunModeFromPath;
-
-  // View mode state for run mode (configuration/result)
-  const [localViewMode, setLocalViewMode] = useState<'configuration' | 'result'>('result');
-  const viewMode = viewModeProp ?? localViewMode;
-
-
 
   // Save status, dirty flag and agent-streaming gate of THIS workflow's canvas.
   // Shared with the side panel's workflow sub-tab, which offers the same Save -
@@ -371,29 +362,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
 
   // NOTE: Validation state listener and reset logic have been commented out above
   // See "RUN BUTTON VALIDATION - COMMENTED OUT" section for original code
-
-  // Initialize viewMode to 'result' when entering run mode
-  useEffect(() => {
-    if (isRunMode && !viewModeProp) {
-      setLocalViewMode('result');
-      // Dispatch event to sync with InspectorPanel
-      window.dispatchEvent(new CustomEvent('workflowViewModeChange', {
-        detail: { mode: 'result' }
-      }));
-    }
-  }, [isRunMode, viewModeProp]);
-
-  const handleViewModeChange = (mode: 'configuration' | 'result') => {
-    if (onViewModeChange) {
-      onViewModeChange(mode);
-    } else {
-      setLocalViewMode(mode);
-    }
-    // Dispatch event to InspectorPanel
-    window.dispatchEvent(new CustomEvent('workflowViewModeChange', {
-      detail: { mode }
-    }));
-  };
 
   const router = useRouter();
 
@@ -501,6 +469,21 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
 
     fetchWorkflowData();
   }, [activeWorkflowId, tenantId, authLoading, isAuthenticated]);
+
+  const handleOpenWorkflowLogs = React.useCallback((targetWorkflowId: string | null | undefined) => {
+    if (!targetWorkflowId || !currentRunId) return;
+    openWorkflowLogs({
+      workflowId: targetWorkflowId,
+      runId: currentRunId,
+      workflowName: workflowNameFromApi || null,
+      reuseActiveWorkflowTab: true,
+      hostTabId: isApplicationPage
+        ? APPLICATION_PANEL_TAB_ID
+        : isWorkflowPage
+          ? WORKFLOW_PANEL_TAB_ID
+          : undefined,
+    });
+  }, [currentRunId, isApplicationPage, isWorkflowPage, openWorkflowLogs, workflowNameFromApi]);
 
   // Build breadcrumb items for workflow view (similar to dashboard format)
   const workflowBreadcrumbItems = useMemo(() => {
@@ -755,6 +738,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               >
                 <AvatarDisplay avatarUrl={agentAvatarUrl} name={agentName || undefined} size="sm" />
                 <span className="text-base text-theme-primary">{agentName}</span>
+                <VerifiedBadge userId={agentSlotUserId} />
               </div>
             ) : null
           )}
@@ -853,44 +837,14 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => setIsResultsModalOpen(true)}
+                onClick={() => handleOpenWorkflowLogs(effectiveAppWorkflowId)}
+                disabled={!currentRunId || !canOpenWorkflowLogs}
                 title={t('actions.logs')}
                 className="h-8 px-2 lg:px-3"
               >
                 <FileText className="w-4 h-4 lg:mr-1" />
                 <span className="hidden lg:inline">{t('actions.logs')}</span>
               </Button>
-              {effectiveAppWorkflowId && currentRunId && (
-                <Dialog open={isResultsModalOpen} onOpenChange={(open) => {
-                  setIsResultsModalOpen(open);
-                  if (!open) {
-                    setSelectedStepAlias(null);
-                    setStepBreadcrumbItems([]);
-                  }
-                }}>
-                  <DialogContent className="w-[90vw] max-w-[1400px] h-[80vh] max-h-[800px] overflow-hidden bg-theme-primary p-0 flex flex-col rounded-3xl">
-                    <DialogHeader className="px-6 pt-4 pb-3 h-auto max-h-[90px] overflow-hidden">
-                      {stepBreadcrumbItems.length > 0 ? (
-                        <Breadcrumb
-                          items={stepBreadcrumbItems}
-                          variant="minimal"
-                          separator="slash"
-                          className="mb-0"
-                        />
-                      ) : (
-                        <DialogTitle className="text-base">{t('breadcrumb.workflowSteps')}</DialogTitle>
-                      )}
-                    </DialogHeader>
-                    <div className="px-6 pb-6 flex-1 min-h-0 overflow-hidden">
-                      <WorkflowRunResultModalContent
-                        workflowId={effectiveAppWorkflowId}
-                        runId={currentRunId}
-                        onBreadcrumbChange={setStepBreadcrumbItems}
-                      />
-                    </div>
-                  </DialogContent>
-                </Dialog>
-              )}
             </>
           )}
           {isWorkflowPage && workflowId && !isApplicationPage && (
@@ -922,46 +876,14 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                   <Button
                     variant="default"
                     size="sm"
-                    onClick={() => {
-                      setIsResultsModalOpen(true);
-                    }}
+                    onClick={() => handleOpenWorkflowLogs(workflowId)}
+                    disabled={!currentRunId || !canOpenWorkflowLogs}
                     title={t('actions.logs')}
                     className="h-8 px-2 lg:px-3"
                   >
                     <FileText className="w-4 h-4 lg:mr-1" />
                     <span className="hidden lg:inline">{t('actions.logs')}</span>
                   </Button>
-                  {workflowId && currentRunId && (
-                    <Dialog open={isResultsModalOpen} onOpenChange={(open) => {
-                      setIsResultsModalOpen(open);
-                      if (!open) {
-                        setSelectedStepAlias(null);
-                        setStepBreadcrumbItems([]);
-                      }
-                    }}>
-                      <DialogContent className="w-[90vw] max-w-[1400px] h-[80vh] max-h-[800px] overflow-hidden bg-theme-primary p-0 flex flex-col rounded-3xl">
-                        <DialogHeader className="px-6 pt-4 pb-3 h-auto max-h-[90px] overflow-hidden">
-                          {stepBreadcrumbItems.length > 0 ? (
-                            <Breadcrumb
-                              items={stepBreadcrumbItems}
-                              variant="minimal"
-                              separator="slash"
-                              className="mb-0"
-                            />
-                          ) : (
-                            <DialogTitle className="text-base">{t('breadcrumb.workflowSteps')}</DialogTitle>
-                          )}
-                        </DialogHeader>
-                        <div className="px-6 pb-6 flex-1 min-h-0 overflow-hidden">
-                          <WorkflowRunResultModalContent
-                            workflowId={workflowId}
-                            runId={currentRunId}
-                            onBreadcrumbChange={setStepBreadcrumbItems}
-                          />
-                        </div>
-                      </DialogContent>
-                    </Dialog>
-                  )}
                 </>
               ) : (
                 <>
@@ -1094,6 +1016,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               >
                 <AvatarDisplay avatarUrl={agentAvatarUrl} name={agentName || undefined} size="sm" />
                 <span className="text-base text-theme-primary">{agentName}</span>
+                <VerifiedBadge userId={agentSlotUserId} />
               </div>
             ) : null
           )}
@@ -1169,43 +1092,13 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => setIsResultsModalOpen(true)}
+                onClick={() => handleOpenWorkflowLogs(effectiveAppWorkflowId)}
+                disabled={!currentRunId || !canOpenWorkflowLogs}
                 title={t('actions.logs')}
                 className="h-8 px-2"
               >
                 <FileText className="w-4 h-4" />
               </Button>
-              {effectiveAppWorkflowId && currentRunId && (
-                <Dialog open={isResultsModalOpen} onOpenChange={(open) => {
-                  setIsResultsModalOpen(open);
-                  if (!open) {
-                    setSelectedStepAlias(null);
-                    setStepBreadcrumbItems([]);
-                  }
-                }}>
-                  <DialogContent className="w-[90vw] max-w-[1400px] h-[80vh] max-h-[800px] overflow-hidden bg-theme-primary p-0 flex flex-col rounded-3xl">
-                    <DialogHeader className="px-6 pt-4 pb-3 h-auto max-h-[90px] overflow-hidden">
-                      {stepBreadcrumbItems.length > 0 ? (
-                        <Breadcrumb
-                          items={stepBreadcrumbItems}
-                          variant="minimal"
-                          separator="slash"
-                          className="mb-0"
-                        />
-                      ) : (
-                        <DialogTitle className="text-base">{t('breadcrumb.workflowSteps')}</DialogTitle>
-                      )}
-                    </DialogHeader>
-                    <div className="px-6 pb-6 flex-1 min-h-0 overflow-hidden">
-                      <WorkflowRunResultModalContent
-                        workflowId={effectiveAppWorkflowId}
-                        runId={currentRunId}
-                        onBreadcrumbChange={setStepBreadcrumbItems}
-                      />
-                    </div>
-                  </DialogContent>
-                </Dialog>
-              )}
             </>
           )}
           {isWorkflowPage && workflowId && !isApplicationPage && (
@@ -1236,45 +1129,13 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                   <Button
                     variant="default"
                     size="sm"
-                    onClick={() => {
-                      setIsResultsModalOpen(true);
-                    }}
+                    onClick={() => handleOpenWorkflowLogs(workflowId)}
+                    disabled={!currentRunId || !canOpenWorkflowLogs}
                     title={t('actions.logs')}
                     className="h-8 px-2"
                   >
                     <FileText className="w-4 h-4" />
                   </Button>
-                  {workflowId && currentRunId && (
-                    <Dialog open={isResultsModalOpen} onOpenChange={(open) => {
-                      setIsResultsModalOpen(open);
-                      if (!open) {
-                        setSelectedStepAlias(null);
-                        setStepBreadcrumbItems([]);
-                      }
-                    }}>
-                      <DialogContent className="w-[90vw] max-w-[1400px] h-[80vh] max-h-[800px] overflow-hidden bg-theme-primary p-0 flex flex-col rounded-3xl">
-                        <DialogHeader className="px-6 pt-4 pb-3 h-auto max-h-[90px] overflow-hidden">
-                          {stepBreadcrumbItems.length > 0 ? (
-                            <Breadcrumb
-                              items={stepBreadcrumbItems}
-                              variant="minimal"
-                              separator="slash"
-                              className="mb-0"
-                            />
-                          ) : (
-                            <DialogTitle className="text-base">{t('breadcrumb.workflowSteps')}</DialogTitle>
-                          )}
-                        </DialogHeader>
-                        <div className="px-6 pb-6 flex-1 min-h-0 overflow-hidden">
-                          <WorkflowRunResultModalContent
-                            workflowId={workflowId}
-                            runId={currentRunId}
-                            onBreadcrumbChange={setStepBreadcrumbItems}
-                          />
-                        </div>
-                      </DialogContent>
-                    </Dialog>
-                  )}
                 </>
               ) : (
                 <>

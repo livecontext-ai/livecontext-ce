@@ -8,12 +8,26 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
 import reactor.core.publisher.Flux;
 
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import com.apimarketplace.agent.resolver.LlmCredentialResolver;
+
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -54,7 +68,8 @@ class AbstractLLMProviderTest {
 
         @Override
         protected Map<String, Object> buildRequestBody(CompletionRequest request) {
-            return Map.of("model", request.model() != null ? request.model() : "test-model-1");
+            // Mutable: the streaming paths put "stream": true into the body they are handed.
+            return new HashMap<>(Map.of("model", request.model() != null ? request.model() : "test-model-1"));
         }
 
         @Override
@@ -63,9 +78,10 @@ class AbstractLLMProviderTest {
         }
 
         @Override
-        protected HttpHeaders buildHeaders() {
+        protected HttpHeaders buildHeaders(CompletionRequest request) {
             HttpHeaders headers = new HttpHeaders();
-            headers.set("Authorization", "Bearer " + apiKey);
+            // Mirrors every real provider: the key is resolved from the request, not the field.
+            headers.set("Authorization", "Bearer " + resolveApiKey(request));
             headers.set("Content-Type", "application/json");
             return headers;
         }
@@ -122,6 +138,274 @@ class AbstractLLMProviderTest {
         void shouldReturnFalseWhenKeyBlank() {
             TestLLMProvider unconfigured = new TestLLMProvider("   ");
             assertThat(unconfigured.isConfigured()).isFalse();
+        }
+    }
+
+    /**
+     * A credential resolver that records HOW it was asked. The two overloads mean two
+     * different things: the 1-arg form reads the user off the calling thread's servlet
+     * request (the pre-pin behaviour), the 2-arg form resolves for an explicit user, and
+     * a null user there means "platform key only".
+     */
+    static class RecordingResolver implements LlmCredentialResolver {
+        final List<String> twoArgUserIds = new ArrayList<>();
+        final List<String> userOnlyUserIds = new ArrayList<>();
+        int oneArgCalls = 0;
+        final Map<String, String> userKeys = new HashMap<>();
+        String platformKey;
+
+        @Override
+        public Optional<String> resolveApiKey(String providerName) {
+            oneArgCalls++;
+            return Optional.ofNullable(platformKey);
+        }
+
+        @Override
+        public Optional<String> resolveApiKey(String userId, String providerName) {
+            twoArgUserIds.add(userId);
+            if (userId != null && userKeys.containsKey(userId)) {
+                return Optional.of(userKeys.get(userId));
+            }
+            return Optional.ofNullable(platformKey);
+        }
+
+        /** The user's own key only: what an OWN_KEY-pinned call must resolve through. */
+        @Override
+        public Optional<String> resolveUserApiKey(String userId, String providerName) {
+            userOnlyUserIds.add(userId);
+            return Optional.ofNullable(userKeys.get(userId));
+        }
+    }
+
+    /** A fake connection that records the request properties the streaming setup sets. */
+    static class RecordingConnection extends java.net.HttpURLConnection {
+        final Map<String, String> properties = new HashMap<>();
+
+        RecordingConnection() throws java.net.MalformedURLException {
+            super(new java.net.URL("http://localhost/stream"));
+        }
+
+        @Override
+        public void setRequestProperty(String key, String value) {
+            properties.put(key, value);
+        }
+
+        @Override public void connect() { }
+        @Override public void disconnect() { }
+        @Override public boolean usingProxy() { return false; }
+    }
+
+    @Nested
+    @DisplayName("resolveApiKey(CompletionRequest) - whose key serves a call")
+    class KeyRouteResolutionTests {
+
+        private RecordingResolver resolver;
+
+        @BeforeEach
+        void wireResolver() {
+            resolver = new RecordingResolver();
+            resolver.platformKey = "sk-platform";
+            resolver.userKeys.put("tenant-9", "sk-user-9");
+            provider.setCredentialResolver(resolver);
+        }
+
+        @Test
+        @DisplayName("regression: off a queue worker (no servlet request bound) the request's tenant still resolves the user's own key")
+        void queueWorkerPathResolvesTheRequestTenantsKey() {
+            // No RequestContextHolder is bound in this test, exactly like a dequeued
+            // agent execution. Before the fix the provider asked the 1-arg overload,
+            // found no thread user, and silently served the platform key.
+            CompletionRequest request = CompletionRequest.builder()
+                .tenantId("tenant-9")
+                .model("test-model-1")
+                .build();
+
+            assertThat(provider.resolveApiKey(request)).isEqualTo("sk-user-9");
+            assertThat(resolver.twoArgUserIds).containsExactly("tenant-9");
+            assertThat(resolver.oneArgCalls).isZero();
+        }
+
+        @Test
+        @DisplayName("a PLATFORM-pinned request skips the user credential even when the tenant holds a key")
+        void platformPinSkipsTheUserCredential() {
+            CompletionRequest request = CompletionRequest.builder()
+                .tenantId("tenant-9")
+                .keyRoute(KeyRoute.PLATFORM)
+                .model("test-model-1")
+                .build();
+
+            assertThat(provider.resolveApiKey(request)).isEqualTo("sk-platform");
+            assertThat(resolver.twoArgUserIds).containsExactly((String) null);
+            assertThat(resolver.oneArgCalls).isZero();
+        }
+
+        @Test
+        @DisplayName("a request naming no tenant keeps the pre-pin behaviour (in-flight servlet user via the 1-arg overload)")
+        void requestWithoutTenantKeepsLegacyThreadResolution() {
+            CompletionRequest request = CompletionRequest.builder()
+                .model("test-model-1")
+                .build();
+
+            assertThat(provider.resolveApiKey(request)).isEqualTo("sk-platform");
+            assertThat(resolver.oneArgCalls).isEqualTo(1);
+            assertThat(resolver.twoArgUserIds).isEmpty();
+        }
+
+        @Test
+        @DisplayName("falls back to the env-injected key when the resolver has nothing for the tenant nor the platform")
+        void fallsBackToEnvKeyWhenResolverMisses() {
+            resolver.platformKey = null;
+            resolver.userKeys.clear();
+            CompletionRequest request = CompletionRequest.builder()
+                .tenantId("tenant-9")
+                .model("test-model-1")
+                .build();
+
+            assertThat(provider.resolveApiKey(request)).isEqualTo("test-api-key");
+        }
+
+        @Test
+        @DisplayName("isConfigured(request) is true when ONLY the tenant's own key exists, while the request-less check stays false")
+        void configuredForTheTenantWhenOnlyTheirKeyExists() {
+            TestLLMProvider noEnvKey = new TestLLMProvider(null);
+            RecordingResolver userOnly = new RecordingResolver();
+            userOnly.userKeys.put("tenant-9", "sk-user-9");
+            noEnvKey.setCredentialResolver(userOnly);
+            CompletionRequest request = CompletionRequest.builder()
+                .tenantId("tenant-9")
+                .model("test-model-1")
+                .build();
+
+            assertThat(noEnvKey.isConfigured()).isFalse();
+            assertThat(noEnvKey.isConfigured(request)).isTrue();
+        }
+
+        @Test
+        @DisplayName("regression: complete() sends the request tenant's own key in the Authorization header, with no servlet request bound")
+        void completeSendsTheTenantsOwnKeyWithoutAServletRequest() {
+            // The pre-fix provider built its headers from the calling thread's user, which a
+            // dequeued execution does not have: this call went out with the platform key.
+            RestTemplate restTemplate = mock(RestTemplate.class);
+            TestLLMProvider dequeued = new TestLLMProvider(null, restTemplate, new ObjectMapper());
+            dequeued.setCredentialResolver(resolver);
+            @SuppressWarnings("rawtypes")
+            ArgumentCaptor<HttpEntity> sent = ArgumentCaptor.forClass(HttpEntity.class);
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), sent.capture(), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("choices", List.of())));
+
+            CompletionResponse response = dequeued.complete(CompletionRequest.builder()
+                .tenantId("tenant-9")
+                .model("test-model-1")
+                .build());
+
+            assertThat(response).isNotNull();
+            assertThat(sent.getValue().getHeaders().getFirst("Authorization")).isEqualTo("Bearer sk-user-9");
+            assertThat(resolver.oneArgCalls).as("the calling thread was never consulted").isZero();
+        }
+
+        @Test
+        @DisplayName("complete() proceeds for a tenant whose own key is the ONLY key (no env key, no platform key)")
+        void completeProceedsOnTheTenantsKeyAlone() {
+            RestTemplate restTemplate = mock(RestTemplate.class);
+            TestLLMProvider noPlatformKey = new TestLLMProvider(null, restTemplate, new ObjectMapper());
+            RecordingResolver userOnly = new RecordingResolver();
+            userOnly.userKeys.put("tenant-9", "sk-user-9");
+            noPlatformKey.setCredentialResolver(userOnly);
+            @SuppressWarnings("rawtypes")
+            ArgumentCaptor<HttpEntity> sent = ArgumentCaptor.forClass(HttpEntity.class);
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), sent.capture(), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("choices", List.of())));
+
+            noPlatformKey.complete(CompletionRequest.builder().tenantId("tenant-9").model("test-model-1").build());
+
+            // The gate that used to say "Provider is not configured" for this tenant now lets
+            // the call through on their key.
+            assertThat(sent.getValue().getHeaders().getFirst("Authorization")).isEqualTo("Bearer sk-user-9");
+        }
+
+        @Test
+        @DisplayName("an OWN_KEY pin with no usable user key fails closed: never the platform key, never the env key")
+        void ownKeyPinNeverFallsBackToPlatform() {
+            resolver.userKeys.clear();   // platformKey "sk-platform" and env key "test-api-key" both still exist
+            CompletionRequest request = CompletionRequest.builder()
+                .tenantId("tenant-9")
+                .keyRoute(KeyRoute.OWN_KEY)
+                .model("test-model-1")
+                .build();
+
+            assertThatThrownBy(() -> provider.resolveApiKey(request))
+                .isInstanceOf(LLMProviderException.class)
+                .hasMessageContaining("own test key")
+                .hasMessageContaining("Save a key");
+            assertThat(resolver.userOnlyUserIds).containsExactly("tenant-9");
+            assertThat(resolver.twoArgUserIds).as("the user-first slot (which may hold the platform key) is never consulted").isEmpty();
+            assertThatThrownBy(() -> provider.complete(request)).isInstanceOf(LLMProviderException.class)
+                .hasMessageContaining("own test key");
+        }
+
+        @Test
+        @DisplayName("an OWN_KEY pin resolves through the user-only lookup, not the user-first one")
+        void ownKeyPinUsesTheUserOnlyLookup() {
+            CompletionRequest request = CompletionRequest.builder()
+                .tenantId("tenant-9")
+                .keyRoute(KeyRoute.OWN_KEY)
+                .model("test-model-1")
+                .build();
+
+            assertThat(provider.resolveApiKey(request)).isEqualTo("sk-user-9");
+            assertThat(resolver.userOnlyUserIds).containsExactly("tenant-9");
+            assertThat(resolver.twoArgUserIds).isEmpty();
+        }
+
+        @Test
+        @DisplayName("isConfiguredFor / configurationProblem answer per (tenant, route) without reading the calling thread")
+        void configuredForAnswersPerTenantAndRoute() {
+            assertThat(provider.isConfiguredFor("tenant-9", KeyRoute.OWN_KEY)).isTrue();
+            assertThat(provider.isConfiguredFor("tenant-9", KeyRoute.PLATFORM)).isTrue();
+            assertThat(provider.configurationProblem("tenant-9", KeyRoute.OWN_KEY)).isNull();
+
+            resolver.userKeys.clear();
+            assertThat(provider.isConfiguredFor("tenant-9", KeyRoute.OWN_KEY)).isFalse();
+            assertThat(provider.configurationProblem("tenant-9", KeyRoute.OWN_KEY)).contains("own test key");
+            assertThat(provider.isConfiguredFor("tenant-9", KeyRoute.PLATFORM)).isTrue();
+            assertThat(provider.configurationProblem(null, KeyRoute.OWN_KEY)).contains("names no tenant");
+            assertThat(resolver.oneArgCalls).isZero();
+        }
+
+        @Test
+        @DisplayName("catalog discovery keeps the request-less resolution (the in-flight user, via the 1-arg overload)")
+        void discoveryStaysRequestLess() {
+            provider.discoveryHeaders();
+
+            assertThat(resolver.oneArgCalls).isEqualTo(1);
+            assertThat(resolver.twoArgUserIds).isEmpty();
+            assertThat(resolver.userOnlyUserIds).isEmpty();
+        }
+
+        @Test
+        @DisplayName("streamReactive builds its headers from the request tenant before any subscription")
+        void streamReactiveHeadersAreRequestBound() {
+            provider.streamReactive(CompletionRequest.builder()
+                .tenantId("tenant-9")
+                .model("test-model-1")
+                .build());
+
+            assertThat(resolver.twoArgUserIds).isNotEmpty().allMatch("tenant-9"::equals);
+            assertThat(resolver.oneArgCalls).isZero();
+        }
+
+        @Test
+        @DisplayName("the streaming connection carries the request tenant's own key")
+        void streamingConnectionCarriesTheTenantsKey() throws Exception {
+            RecordingConnection connection = new RecordingConnection();
+
+            provider.setupStreamingConnection(connection, CompletionRequest.builder()
+                .tenantId("tenant-9")
+                .model("test-model-1")
+                .build());
+
+            assertThat(connection.properties).containsEntry("Authorization", "Bearer sk-user-9");
+            assertThat(resolver.oneArgCalls).isZero();
         }
     }
 

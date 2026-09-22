@@ -68,9 +68,10 @@ public class CredentialToolsProvider implements ToolsProvider {
             .description("""
                 Discover which external services the user has connected (Gmail, Slack, Calendar, etc.).
                 Takes NO parameters - just call get_connected_services().
-                Returns: {connected: [{name, integration, status, isDefault, account}], count, defaultCount, hint}.
+                Returns: {connected: [{name, integration, status, isDefault, account, scopes}], count, defaultCount, hint}.
                 Status: 'active' (ready), 'expiring' (still works, token expiring soon), 'needs_reauth' (token revoked or expired; only the user can Reconnect, you cannot use or fix it), 'error' (misconfigured; an admin must fix it, reconnecting alone will not help).
-                isDefault=true marks the one that runs when nothing names another. The others are NOT dead: a workflow mcp step runs on one of them by setting credential_selector to an expression that resolves to that entry's name, which is how one workflow serves several accounts of the same integration instead of being duplicated per account. Selectable this way are the entries whose status is exactly 'active' (an expiring one is refused too, not only needs_reauth and error), whose name is not shared with another active entry of the same integration, and whose name is not a positive whole number (that is read as a credential id). Capitalisation and surrounding spaces are ignored when matching; nothing else about the name is.
+                scopes lists what an OAuth account was actually granted, and is absent for a credential that has no scope concept. Two accounts of one integration routinely differ here, and that difference is what decides which endpoints each one can run. You do not have to compare them yourself: catalog(action='response_schema', tool_id='<uuid>') names the accounts that can run that endpoint.
+                isDefault=true marks the one that runs when nothing names another. The others are NOT dead: name one and it runs instead, either on a direct call - catalog(action='execute', credential_name='<name>') - or on a workflow mcp step, by setting credential_selector to an expression that resolves to that entry's name, which is how one workflow serves several accounts of the same integration instead of being duplicated per account. Selectable either way are the entries whose status is exactly 'active' (an expiring one is refused too, not only needs_reauth and error), whose name is not shared with another active entry of the same integration, and whose name is not a positive whole number (that is read as a credential id). Capitalisation and surrounding spaces are ignored when matching; nothing else about the name is. An unmatched name FAILS the call rather than falling back to the default.
 
                 WHEN TO USE: when uncertain which service the user has (e.g. "check my emails" without specifying Gmail/Outlook), and whenever you need the exact NAME of an account, which is the only way to discover the values credential_selector accepts.
                 SKIP if the user names the service AND you do not need an account name (e.g. "send with Gmail" when they have one Gmail).
@@ -87,20 +88,26 @@ public class CredentialToolsProvider implements ToolsProvider {
                   "count": 3,
                   "defaultCount": 2,
                   "connected": [
-                    {"name": "Gmail", "integration": "gmail", "status": "active", "isDefault": true, "account": "me@example.com"},
+                    {"name": "Gmail", "integration": "gmail", "status": "active", "isDefault": true, "account": "me@example.com", "scopes": ["https://www.googleapis.com/auth/gmail.send"]},
                     {"name": "Client A", "integration": "instagram", "status": "active", "isDefault": true},
                     {"name": "Client B", "integration": "instagram", "status": "active", "isDefault": false}
                   ],
-                  "hint": "User has 2 default credential(s) ready for execution: Gmail, Client A. Executing a tool directly always uses the default one. This is what YOUR workspace holds; a workflow runs under its owner's, so a name taken from here resolves only if the two are the same. Also held and selectable by a workflow step that names one in its credential_selector (active only): \\"Client B\\" (instagram)."
+                  "hint": "User has 2 default credential(s) ready for execution: Gmail, Client A. Executing a tool directly uses the default one unless the call names another with credential_name. This is what YOUR workspace holds; a workflow runs under its owner's, so a name taken from here resolves only if the two are the same. Also held and selectable BY NAME, either on a direct catalog execute call through its credential_name argument, or by a workflow step that names one in its credential_selector (active only): \\"Client B\\" (instagram)."
                 }
 
                 Two entries share an integration when the user holds several accounts of it,
-                as with Client A and Client B above. Executing a tool directly always uses the
-                default one; to run a workflow step on the other, pass its name through the
-                step's credential_selector. Copy the name from here rather than retyping it:
+                as with Client A and Client B above. Executing a tool directly uses the default
+                one unless the call names another: pass credential_name on a catalog execute
+                call, or, for a workflow step, pass the name through the step's
+                credential_selector. Copy the name from here rather than retyping it:
                 only capitalisation and surrounding spaces are ignored when matching, so any
                 other reformatting (a hyphen for a space, a shortened form) selects nothing and
-                the step fails rather than falling back.
+                the call fails rather than falling back.
+
+                The scopes field is what decides which of two accounts of one integration can
+                run a given endpoint. Ask for the endpoint contract with
+                catalog(action='response_schema', tool_id='<uuid>') and its credential block
+                names the accounts that can run it, and what to do when none can.
 
                 This lists what the CALLING workspace holds. A workflow runs under its owner's
                 workspace, so a name taken from here is only guaranteed to resolve if you are
@@ -134,6 +141,13 @@ public class CredentialToolsProvider implements ToolsProvider {
                 String account = extractAccountIdentifier(c);
                 if (account != null) {
                     entry.put("account", account);
+                }
+                // What this account was actually granted. Two accounts of one integration
+                // routinely differ, and that difference is the whole reason one of them
+                // cannot run an endpoint the other can. Omitted when empty rather than sent
+                // as [], so a key with no scope concept does not read as a revoked one.
+                if (c.getScopes() != null && !c.getScopes().isEmpty()) {
+                    entry.put("scopes", c.getScopes());
                 }
 
                 return entry;
@@ -178,7 +192,8 @@ public class CredentialToolsProvider implements ToolsProvider {
             String extra = SelectableAccounts.offer(connected);
             result.put("hint", String.format(
                 "User has %d default credential(s) ready for execution: %s. Executing a tool "
-                + "directly always uses the default one. This is what YOUR workspace holds; a "
+                + "directly uses the default one unless the call names another with "
+                + "credential_name. This is what YOUR workspace holds; a "
                 + "workflow runs under its owner's, so a name taken from here resolves only if "
                 + "the two are the same.%s",
                 defaultCount,

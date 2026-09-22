@@ -15,10 +15,13 @@ export interface NodeLiveStateInfo {
   liveState: NodeLiveState | null;
   /**
    * Signals the node is parked on. Empty unless liveState is 'awaiting', and
-   * even then only USER_APPROVAL signals appear: that is all
-   * {@code getPendingSignalsForNode} exposes (it feeds the per-item approval
-   * UI). A node parked on a timer or a webhook is still reported as 'awaiting',
-   * it just has no per-signal detail to show.
+   * even then only USER_APPROVAL signals appear: this hook asks
+   * {@code getPendingSignalsForNode} for that kind, because it feeds the
+   * per-item approval UI. Other kinds exist in the run state (the interface
+   * node's Continue button reads INTERFACE_SIGNAL through the same selector),
+   * they are simply not what this column shows. A node parked on a timer or a
+   * webhook is still reported as 'awaiting', it just has no per-signal detail
+   * to show here.
    */
   pendingSignals: PendingSignal[];
 }

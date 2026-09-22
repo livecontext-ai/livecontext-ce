@@ -68,16 +68,51 @@ public class PublicationCleanupService {
      */
     @SuppressWarnings("unchecked")
     int deactivateOrphanedPublications() {
-        // 1. Get all ACTIVE publication workflow IDs (same schema, no cross-schema issue)
+        // 1. Candidate set = ACTIVE publications of type WORKFLOW (same schema, no cross-schema issue).
+        //
+        // The type filter is the point, and it is not defensive dressing. V38 made workflow_id
+        // nullable precisely because "AGENT publications have no workflow", so an AGENT row's
+        // null flowed into the set below and UUID::toString then raised an NPE from OUTSIDE
+        // getExistingWorkflowIds' try block: the run aborted into the outer catch at
+        // cleanupStalePublications and NOT ONE of the 131 WORKFLOW publications was ever checked
+        // for orphanhood. The scheduler survived, the work did not, silently, every night since
+        // the first ACTIVE NON-WORKFLOW publication existed - AGENT is merely the type prod
+        // happens to hold; INTERFACE, TABLE and SKILL rows never get a workflow_id either
+        // (ResourcePublicationService never sets one). This is a whole dead job, not one odd row.
+        //
+        // Filtering on publication_type rather than on "workflow_id IS NOT NULL" says what is
+        // actually meant: this job answers "does the referenced workflow still exist", a question
+        // with no meaning for a publication whose subject is an agent, a table or a page.
+        // The IS NOT NULL stays as a data-hygiene guard for a malformed WORKFLOW row.
+        //
+        // KNOWN GAP, deliberately not widened here: WORKFLOW is one of five publication types
+        // (WORKFLOW, AGENT, TABLE, INTERFACE, SKILL), so the other FOUR are never orphan-checked
+        // at all. Each needs an existence probe against a different service, keyed on a different
+        // column - a different client call and a different contract than this method's.
         List<UUID> activeWorkflowIds = em.createNativeQuery(
-                "SELECT workflow_id FROM workflow_publications WHERE status = 'ACTIVE'")
+                "SELECT workflow_id FROM workflow_publications "
+                        + "WHERE status = 'ACTIVE' AND publication_type = 'WORKFLOW' "
+                        + "AND workflow_id IS NOT NULL")
                 .getResultList();
 
         if (activeWorkflowIds.isEmpty()) {
             return 0;
         }
 
-        Set<UUID> workflowIdSet = new HashSet<>(activeWorkflowIds);
+        // Second gate, and it is NOT redundant with the SQL above. Two different things throw on
+        // a null: the client's own mapping at step 2 (guarded there), and the orphan test at
+        // step 3, which calls existingIds.contains(id) - and on the client's two EMPTY branches
+        // existingIds is an immutable Set.of(), whose contains(null) THROWS. (Its fail-safe
+        // branch hands back our own HashSet, which tolerates a null; the empty ones do not.)
+        // Neither gate covers the other, so this one filters as the set is built, which is the
+        // only placement that also holds for a future caller bypassing the query above.
+        Set<UUID> workflowIdSet = activeWorkflowIds.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(HashSet::new));
+
+        if (workflowIdSet.isEmpty()) {
+            return 0;
+        }
 
         // 2. Ask orchestrator which of these workflows still exist (HTTP call, no cross-schema SQL)
         Set<UUID> existingIds = orchestratorClient.getExistingWorkflowIds(workflowIdSet);

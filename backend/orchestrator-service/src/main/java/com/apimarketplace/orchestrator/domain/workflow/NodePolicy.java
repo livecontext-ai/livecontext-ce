@@ -104,11 +104,30 @@ public record NodePolicy(
         long retryBackoffMs,
         boolean continueOnFailure,
         long timeoutMs,
-        boolean executeOnce
+        boolean executeOnce,
+        /**
+         * How long ONE provider call made by this node may spend waiting out a rate-limit refusal,
+         * in SECONDS. Catalog tool steps only ({@code StepNode} is what carries it), and refused
+         * elsewhere by the builder tools.
+         *
+         * <p>{@code null} is the norm and means "the platform decides": a 429 carries a delay the
+         * provider asked for, and honouring it is the platform's job, not something every author
+         * should have to think about. {@code 0} hands the retrying back to the author, and is what
+         * a node that paces itself needs, because the two layers compose by MULTIPLYING: a node set
+         * to retry twice (three attempts) around a call the platform re-sends twice is up to nine
+         * requests to a provider that asked us to slow down.
+         *
+         * <p>{@link #retryCount} {@code > 0} implies {@code 0} without anyone setting it, and
+         * {@link #timeoutMs} bounds it, both applied by {@code StepNode}. This field exists because
+         * the other way an author paces a workflow (a loop with a wait and a back-edge) is invisible
+         * to any heuristic. It can only TIGHTEN the platform's budget: catalog caps it, because the
+         * step is waiting inside ONE HTTP call.
+         */
+        Integer providerRetryMaxWaitSec
 ) {
 
     /** No policy = exact current behavior: single attempt, no backoff, no timeout, failure cascades SKIPPED. */
-    public static final NodePolicy DEFAULT = new NodePolicy(0, 0L, false, 0L, false);
+    public static final NodePolicy DEFAULT = new NodePolicy(0, 0L, false, 0L, false, null);
 
     /** JSON key of the policy block on a plan node entry. */
     public static final String JSON_KEY = "nodePolicy";
@@ -123,6 +142,10 @@ public record NodePolicy(
         if (timeoutMs < 0) {
             throw new IllegalArgumentException("nodePolicy.timeoutMs must be >= 0 (got " + timeoutMs + ")");
         }
+        if (providerRetryMaxWaitSec != null && providerRetryMaxWaitSec < 0) {
+            throw new IllegalArgumentException(
+                    "nodePolicy.providerRetryMaxWaitSec must be >= 0 (got " + providerRetryMaxWaitSec + ")");
+        }
     }
 
     /**
@@ -131,7 +154,17 @@ public record NodePolicy(
      * the exact semantics those callers had before the widening.
      */
     public NodePolicy(int retryCount, long retryBackoffMs, boolean continueOnFailure) {
-        this(retryCount, retryBackoffMs, continueOnFailure, 0L, false);
+        this(retryCount, retryBackoffMs, continueOnFailure, 0L, false, null);
+    }
+
+    /**
+     * Back-compat overload of the shape before {@code providerRetryMaxWaitSec}: a node that says
+     * nothing about the provider retry leaves the platform's own budget in place, which is what
+     * every existing plan means.
+     */
+    public NodePolicy(int retryCount, long retryBackoffMs, boolean continueOnFailure,
+                      long timeoutMs, boolean executeOnce) {
+        this(retryCount, retryBackoffMs, continueOnFailure, timeoutMs, executeOnce, null);
     }
 
     /** True when a per-attempt timeout is configured (timeoutMs > 0). */
@@ -176,7 +209,15 @@ public record NodePolicy(
         boolean continueOnFailure = coerceBoolean(map.get("continueOnFailure"), "continueOnFailure", nodeKey);
         long timeoutMs = requireNonNegativeLong(map.get("timeoutMs"), "timeoutMs", 0L, nodeKey);
         boolean executeOnce = coerceBoolean(map.get("executeOnce"), "executeOnce", nodeKey);
-        return new NodePolicy(retryCount, retryBackoffMs, continueOnFailure, timeoutMs, executeOnce);
+        // Nullable on purpose: absent and 0 are different statements. Absent leaves the platform's
+        // own budget in place; 0 says the author owns the retrying and the platform must not add
+        // requests underneath them. Collapsing the two would make "off" unexpressible.
+        Integer providerRetryMaxWaitSec = map.get("providerRetryMaxWaitSec") == null
+                ? null
+                : requireNonNegativeInt(map.get("providerRetryMaxWaitSec"),
+                        "providerRetryMaxWaitSec", 0, nodeKey);
+        return new NodePolicy(retryCount, retryBackoffMs, continueOnFailure, timeoutMs, executeOnce,
+                providerRetryMaxWaitSec);
     }
 
     private static int requireNonNegativeInt(Object value, String field, int defaultValue, String nodeKey) {

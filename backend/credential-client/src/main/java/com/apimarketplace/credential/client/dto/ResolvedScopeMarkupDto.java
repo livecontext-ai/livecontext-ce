@@ -51,6 +51,17 @@ public class ResolvedScopeMarkupDto {
     private BigDecimal quantity;
 
     /**
+     * What the CHOICES in this call did to the published rate, echoed so the
+     * amount can be explained: a total that is not {@code rate x quantity} has
+     * no visible reason without it, and the first thing a reader suspects about
+     * an unexplained total is one of the two numbers printed beside it.
+     *
+     * <p>Null for a call at the published rate, which is every ordinary tool
+     * and every generation whose model declares no modifiers.
+     */
+    private BigDecimal priceMultiplier;
+
+    /**
      * True when this amount came from a price published for THIS endpoint,
      * false when it fell back to the credential-wide default.
      *
@@ -108,6 +119,9 @@ public class ResolvedScopeMarkupDto {
 
     public BigDecimal getQuantity() { return quantity; }
     public void setQuantity(BigDecimal quantity) { this.quantity = quantity; }
+
+    public BigDecimal getPriceMultiplier() { return priceMultiplier; }
+    public void setPriceMultiplier(BigDecimal priceMultiplier) { this.priceMultiplier = priceMultiplier; }
 
     public Boolean getPricedByPublishedRow() { return pricedByPublishedRow; }
     public void setPricedByPublishedRow(Boolean pricedByPublishedRow) { this.pricedByPublishedRow = pricedByPublishedRow; }

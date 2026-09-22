@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -39,6 +39,10 @@ vi.mock('@/components/marketplace/PublicationCard', () => ({
 }));
 
 import SuggestedAppsModal from '../SuggestedAppsModal';
+import {
+  WELCOME_GIFT_FLAG,
+  notifyWelcomeGiftDone,
+} from '@/lib/onboarding/welcomeGiftHandoff';
 
 function renderModal() {
   const queryClient = new QueryClient({
@@ -78,11 +82,12 @@ describe('SuggestedAppsModal', () => {
     sessionStorage.clear();
   });
 
-  // Also the regression for the removed hand-off: this modal used to wait for
-  // a `lc:welcome-gift-done` event from the credit-gift modal that ran before
-  // it. That modal is gone, so a modal still waiting would arm and then never
-  // open - a silent disappearance, since nothing errors and nothing logs.
-  it('arms on the onboarding flag alone, fetches and opens with suggestions', async () => {
+  // Also the regression for the hand-off that once went stale: this modal used
+  // to wait UNCONDITIONALLY for a `lc:welcome-gift-done` event from a
+  // credit-gift modal that had since been deleted, so it armed and then never
+  // opened - a silent disappearance, since nothing errors and nothing logs. It
+  // waits again today, but only while the flag says something is actually owed.
+  it('arms on the onboarding flag alone when no welcome gift is owed', async () => {
     sessionStorage.setItem('lc_show_app_suggestions', '1');
     mockGetSuggested.mockResolvedValue({ count: 1, publications: [SAMPLE_APP] });
 
@@ -145,5 +150,47 @@ describe('SuggestedAppsModal', () => {
     await Promise.resolve();
     expect(mockGetSuggested).not.toHaveBeenCalled();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('waits behind the welcome gift, then opens once the reader is done with it', async () => {
+    // Onboarding arms both. Opening on the same paint would put this on top of
+    // the card that states what the account's credits and AI allowance are,
+    // which is the thing a brand-new account should read first.
+    sessionStorage.setItem('lc_show_app_suggestions', '1');
+    sessionStorage.setItem(WELCOME_GIFT_FLAG, '1');
+    mockGetSuggested.mockResolvedValue({ count: 1, publications: [SAMPLE_APP] });
+
+    renderModal();
+
+    // Real time has to pass here, and that is the whole test. The direct path
+    // arms on a setTimeout(0) and then fetches, so an assertion that only
+    // flushed microtasks would hold against a modal that does not wait at all -
+    // it would simply be running before the timer. Waiting past it is what
+    // distinguishes "parked" from "not there yet".
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(mockGetSuggested).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    // And it has not spent its own flag while parked: a reader who reloads
+    // while reading the gift still gets both, in the same order.
+    expect(sessionStorage.getItem('lc_show_app_suggestions')).toBe('1');
+
+    notifyWelcomeGiftDone();
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('CRM Sync')).toBeInTheDocument();
+    // Claimed on arming, so it opens once and not again.
+    expect(sessionStorage.getItem('lc_show_app_suggestions')).toBeNull();
+  });
+
+  it('claims its flag on the direct path too, so it never re-fires', async () => {
+    sessionStorage.setItem('lc_show_app_suggestions', '1');
+    mockGetSuggested.mockResolvedValue({ count: 1, publications: [SAMPLE_APP] });
+
+    renderModal();
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(sessionStorage.getItem('lc_show_app_suggestions')).toBeNull();
   });
 });

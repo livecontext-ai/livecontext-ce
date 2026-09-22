@@ -1,5 +1,12 @@
 package com.apimarketplace.trigger.domain;
 
+import com.apimarketplace.common.security.token.EncryptedTokenConverter;
+import com.apimarketplace.common.security.token.HashedTokenEntity;
+import com.apimarketplace.common.security.token.HashedTokenListener;
+import com.apimarketplace.common.security.token.TokenSlot;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import java.util.List;
+
 import com.apimarketplace.common.scope.OrgScopedEntity;
 import com.apimarketplace.common.scope.OrgScopedEntityListener;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -9,10 +16,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@EntityListeners(OrgScopedEntityListener.class)
+@EntityListeners({OrgScopedEntityListener.class, HashedTokenListener.class})
 @Table(name = "standalone_chat_endpoints", schema = "trigger")
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-public class StandaloneChatEndpointEntity implements OrgScopedEntity {
+public class StandaloneChatEndpointEntity implements OrgScopedEntity, HashedTokenEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -31,8 +38,18 @@ public class StandaloneChatEndpointEntity implements OrgScopedEntity {
     @Column(name = "description", length = 1000)
     private String description;
 
-    @Column(name = "token", nullable = false, unique = true, length = 64)
+    /**
+     * The public endpoint token carried in the URL.
+     * Stored encrypted (ENC:...) through {@link EncryptedTokenConverter}; the entity always holds
+     * the plaintext. Lookups go through {@link #getTokenHash()}, never through this column.
+     */
+    @Convert(converter = EncryptedTokenConverter.class)
+    @Column(name = "token", nullable = false, unique = true, length = 255)
     private String token;
+
+    /** HMAC-SHA256 of the plaintext, filled by {@link HashedTokenListener}; the only lookup key. */
+    @Column(name = "token_hash", length = 64)
+    private String tokenHash;
 
     @Column(name = "workflow_id", nullable = false)
     private UUID workflowId;
@@ -132,4 +149,19 @@ public class StandaloneChatEndpointEntity implements OrgScopedEntity {
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+
+    @JsonIgnore
+    public String getTokenHash() {
+        return tokenHash;
+    }
+
+    public void setTokenHash(String tokenHash) {
+        this.tokenHash = tokenHash;
+    }
+
+    @Override
+    @JsonIgnore
+    public List<TokenSlot> tokenSlots() {
+        return List.of(new TokenSlot(this::getToken, this::setTokenHash));
+    }
 }

@@ -627,6 +627,13 @@ public class MonolithSecurityFilter implements Filter {
                path.equals("/api/organizations/invitations/info") ||
                path.startsWith("/api/auth/refresh") ||
                path.startsWith("/api/auth/logout") ||
+               // Password reset for embedded auth. Public by necessity: the caller
+               // has forgotten the credential this filter would ask them for. The
+               // reset token is the authorisation, checked in PasswordResetService.
+               // EXACT match, not a prefix: a prefix on /api/auth/reset-password
+               // would also open anything appended to it later.
+               path.equals("/api/auth/forgot-password") ||
+               path.equals("/api/auth/reset-password") ||
                path.startsWith("/api/auth/openid-configuration") ||
                path.equals("/.well-known/jwks.json") ||
                path.startsWith("/api/auth/health") ||

@@ -13,11 +13,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import type { StorageExplorerEntry } from '@/lib/api/storage-api';
 import { fileService } from '@/lib/api/orchestrator/file.service';
 import { openAuthedFileInNewTab, downloadAuthedFile } from '@/lib/utils/url-auth';
-import { useAuthedObjectUrl } from '@/hooks/useAuthedObjectUrl';
 import {
   parseAsset, assetFromUpload, assetFromStorageEntry, assetFromExternalUrl,
-  toStoredAsset, isImageAsset, type TableAsset,
+  toStoredAsset, assetPreviewKind, type AssetPreviewKind, type TableAsset,
 } from '@/lib/datatable/assetValue';
+import { AssetMediaPreview } from './AssetMediaPreview';
 import type { VisualCellProps } from './types';
 
 /**
@@ -42,19 +42,25 @@ const StorageExplorerTab = dynamic(
   { ssr: false },
 );
 
-function iconFor(mimeType: string) {
-  if (mimeType.startsWith('image/')) return ImageIcon;
-  if (mimeType.startsWith('video/')) return Video;
-  if (mimeType.startsWith('audio/')) return Music;
-  if (mimeType.includes('pdf') || mimeType.includes('document') || mimeType.includes('text')) return FileText;
+/**
+ * The icon and its colour come from the SAME classification as the preview above them, or the two
+ * halves of the cell contradict each other: a `.mp4` stored as application/octet-stream (most of
+ * what a workflow writes) would play as a video under a generic grey file icon. The mime-only
+ * arms below are what the kinds a cell does not preview still recognise.
+ */
+function iconFor(kind: AssetPreviewKind, mimeType: string) {
+  if (kind === 'image') return ImageIcon;
+  if (kind === 'video') return Video;
+  if (kind === 'audio') return Music;
+  if (kind === 'pdf' || mimeType.includes('document') || mimeType.includes('text')) return FileText;
   return File;
 }
 
-function iconBg(mimeType: string): string {
-  if (mimeType.startsWith('image/')) return 'bg-purple-500';
-  if (mimeType.startsWith('video/')) return 'bg-red-500';
-  if (mimeType.startsWith('audio/')) return 'bg-orange-500';
-  if (mimeType.includes('pdf')) return 'bg-red-600';
+function iconBg(kind: AssetPreviewKind): string {
+  if (kind === 'image') return 'bg-purple-500';
+  if (kind === 'video') return 'bg-red-500';
+  if (kind === 'audio') return 'bg-orange-500';
+  if (kind === 'pdf') return 'bg-red-600';
   return 'bg-slate-500';
 }
 
@@ -65,9 +71,23 @@ function formatSize(bytes?: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
-function canPreviewInBrowser(mimeType: string): boolean {
-  return mimeType.startsWith('image/') || mimeType.startsWith('video/') ||
-    mimeType.startsWith('audio/') || mimeType.includes('pdf') || mimeType.startsWith('text/');
+/**
+ * Whether opening this file in a tab shows something rather than starting a download.
+ *
+ * The four media kinds, resolved by name as well as by type - which is the point: a clip stored
+ * as application/octet-stream had no View button before, for the same reason it had no preview.
+ * Plain text keeps its own arm because it opens fine and is not a kind a row previews. The name
+ * is deliberately NOT consulted for text: our raw serve hands `.log`/`.py` back as a binary
+ * stream, so a View button on those would open a tab that downloads instead of showing.
+ *
+ * <p>This decides what is WORTH opening, never what is SAFE to open. Safety cannot be decided
+ * here: what executes is the type the server sends with the bytes, and a cell can hold a file
+ * with no stored type at all (most of what a workflow writes), so any deny-list at this layer
+ * passes exactly the cases it was written for. {@code openAuthedFileInNewTab} owns that, on the
+ * served type, where the bytes actually are.
+ */
+function canPreviewInBrowser(mimeType: string | undefined, kind: AssetPreviewKind): boolean {
+  return kind !== 'none' || (mimeType ?? '').toLowerCase().startsWith('text/');
 }
 
 export function AssetCell({ value, displayConfig, isEditing, onSaveAndExit, readOnly }: VisualCellProps) {
@@ -77,13 +97,6 @@ export function AssetCell({ value, displayConfig, isEditing, onSaveAndExit, read
   const [error, setError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [urlDraft, setUrlDraft] = useState<string | null>(null);
-  // A URL can resolve and still fail to decode (a renamed file, a truncated upload). Falling back
-  // to the type icon keeps the row readable instead of showing a broken-image glyph.
-  //
-  // Keyed by the URL that failed, NOT a boolean: the grid re-renders this component instance
-  // rather than remounting it, so a boolean latch would keep hiding the preview after the user
-  // replaced the broken file with a working one.
-  const [failedUrl, setFailedUrl] = useState<string | null>(null);
 
   const asset = useMemo(() => parseAsset(value), [value]);
 
@@ -98,20 +111,14 @@ export function AssetCell({ value, displayConfig, isEditing, onSaveAndExit, read
   const pickerFileType = variant === 'thumbnail' ? ('images' as const) : ('_all' as const);
   const acceptAttr = variant === 'thumbnail' ? 'image/*' : undefined;
 
+  // What the cell can show of this file: a picture, a clip, a sound, a page - or nothing but its
+  // type icon. One classification, the Files browser's, so a video is a video on both surfaces.
+  const detectedKind = asset ? assetPreviewKind(asset) : 'none';
   // A thumbnail column IS an image column: try to render the image whatever the metadata says.
   // Many real image URLs carry neither a mime type nor an extension (an unsplash or picsum link,
   // a signed CDN URL), and the old image cell rendered those fine because it never asked. The
-  // onError fallback below is what makes attempting it safe.
-  const isImage = asset ? (variant === 'thumbnail' || isImageAsset(asset)) : false;
-  const { url: previewUrl, error: previewError } = useAuthedObjectUrl(
-    asset && isImage && asset.internal && asset.url ? asset.url : null,
-  );
-  // An external image needs no token; an internal one is rendered from the in-memory blob.
-  const resolvedImageUrl = asset && isImage ? (asset.internal ? previewUrl : asset.url) : null;
-  // Keyed on the ASSET's own URL, not on the resolved blob: the blob is transient (it is re-created
-  // on every fetch) while the asset URL is the stable identity of the file that failed.
-  const imageFailed = !!asset && failedUrl === asset.url;
-  const shownImageUrl = imageFailed ? null : resolvedImageUrl;
+  // onError fallback inside the preview is what makes attempting it safe.
+  const previewKind = variant === 'thumbnail' && detectedKind === 'none' ? 'image' : detectedKind;
 
   const commit = useCallback((next: TableAsset | null) => {
     setError(null);
@@ -291,9 +298,18 @@ export function AssetCell({ value, displayConfig, isEditing, onSaveAndExit, read
     );
   }
 
+  // The type icon: what a cell shows when the file has no frame to show (an archive, a
+  // spreadsheet), and what it falls back to when the bytes never resolve.
+  // Built with createElement, not JSX: the React Compiler lint reads `<TypeIcon/>` as a component
+  // created during render, since it cannot see that iconFor returns one of five module-level
+  // lucide icons. Measured: the JSX form warns, this one does not.
+  const TypeIcon = iconFor(detectedKind, asset.mimeType || '');
+  const typeIcon = React.createElement(TypeIcon, { className: 'h-5 w-5 text-theme-secondary' });
+  const badgeIcon = React.createElement(TypeIcon, { className: 'h-3 w-3 text-white' });
+
   const actions = (
     <>
-      {canPreviewInBrowser(asset.mimeType || '') || !asset.internal ? (
+      {canPreviewInBrowser(asset.mimeType, detectedKind) || !asset.internal ? (
         <button onClick={handleView} className="p-1 rounded text-theme-secondary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors" title={t('view')}>
           <Eye className="h-3 w-3" />
         </button>
@@ -320,16 +336,17 @@ export function AssetCell({ value, displayConfig, isEditing, onSaveAndExit, read
             document page). rounded-xl is the control step of the app's radius ladder, one below
             the card surface this cell sits in. */}
         <div className="h-14 w-14 overflow-hidden rounded-xl bg-theme-secondary flex items-center justify-center">
-          {shownImageUrl && !previewError ? (
-            <img
-              src={shownImageUrl}
-              alt={asset.name}
-              className="h-full w-full object-cover"
-              onError={() => setFailedUrl(asset.url)}
+          {previewKind !== 'none' ? (
+            <AssetMediaPreview
+              kind={previewKind}
+              src={asset.url}
+              name={asset.name}
+              mimeType={asset.mimeType}
+              interactive={false}
+              containerClassName="h-full w-full flex items-center justify-center"
+              fallback={typeIcon}
             />
-          ) : (
-            React.createElement(iconFor(asset.mimeType || ''), { className: 'h-5 w-5 text-theme-secondary' })
-          )}
+          ) : typeIcon}
         </div>
         <div className="flex items-center gap-0.5 opacity-0 group-hover/asset:opacity-100 transition-opacity">
           {actions}
@@ -339,23 +356,22 @@ export function AssetCell({ value, displayConfig, isEditing, onSaveAndExit, read
   }
 
   // ---- Card (what a `file` column looked like) ----
-  const Icon = iconFor(asset.mimeType || '');
   return (
     <div className="group/asset relative w-full overflow-hidden" onClick={(e) => e.stopPropagation()}>
       <div className="rounded-lg border overflow-hidden bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700">
-        {isImage && shownImageUrl && !previewError && (
-          <div className="w-full bg-slate-100 dark:bg-slate-900/50 flex items-center justify-center">
-            <img
-              src={shownImageUrl}
-              alt={asset.name}
-              className="max-h-16 w-full object-contain"
-              onError={() => setFailedUrl(asset.url)}
-            />
-          </div>
+        {previewKind !== 'none' && (
+          <AssetMediaPreview
+            kind={previewKind}
+            src={asset.url}
+            name={asset.name}
+            mimeType={asset.mimeType}
+            interactive
+            containerClassName="w-full bg-slate-100 dark:bg-slate-900/50 flex items-center justify-center"
+          />
         )}
         <div className="flex items-center gap-1.5 p-1.5">
-          <div className={`flex-shrink-0 w-6 h-6 rounded flex items-center justify-center ${iconBg(asset.mimeType || '')}`}>
-            <Icon className="h-3 w-3 text-white" />
+          <div className={`flex-shrink-0 w-6 h-6 rounded flex items-center justify-center ${iconBg(detectedKind)}`}>
+            {badgeIcon}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[11px] font-medium text-theme-primary truncate leading-tight" title={asset.name}>

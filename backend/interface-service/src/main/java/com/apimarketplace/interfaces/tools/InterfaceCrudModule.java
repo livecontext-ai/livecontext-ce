@@ -957,11 +957,24 @@ public class InterfaceCrudModule implements ToolModule {
             + " or pass format='' on update to clear it back to that.";
     }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * Resolve the interface allow-list the same way every other resource module does:
+     * from {@code credentials}, through the shared resolver.
+     * <p>
+     * This used to read {@code context.variables()}, which made the scope unenforceable on
+     * any relay that does not populate that map. The relay the CE monolith serves this tool
+     * with builds the context with an empty variables map, so {@code getAllowedInterfaceIds}
+     * always returned null there, which reads as "unrestricted": an agent scoped to one
+     * interface could get, update and delete every interface in the workspace, with an
+     * HTTP 200 and no log line.
+     * <p>
+     * The write path in this same class already used {@code credentials}
+     * ({@code ToolAccessControl.grantCreatedResource}), so read and write disagreed inside a
+     * single file, and the auto-grant of a freshly created interface landed in a map this
+     * method never consulted. The shared resolver also stringifies ids, so a list forwarded
+     * as numbers still matches.
+     */
     private List<String> getAllowedInterfaceIds(ToolExecutionContext context) {
-        if (context == null || context.variables() == null) return null;
-        Object allowed = context.variables().get("allowedInterfaceIds");
-        if (allowed instanceof List) return (List<String>) allowed;
-        return null;
+        return InterfaceToolAccess.allowedInterfaceIds(context);
     }
 }

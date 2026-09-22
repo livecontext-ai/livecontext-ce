@@ -297,6 +297,12 @@ public class ColumnDefinitionService {
                 case TRIGGER -> addTriggerColumns(columns);
                 case DECISION -> addDecisionColumns(columns);
                 case SWITCH -> addSwitchColumns(columns);
+                // An option node had no column set at all, so even once its row carried
+                // evaluations there was nothing to draw them in. Its OWN set, not the
+                // decision one: an option never writes conditionExpression /
+                // conditionResolved / conditionResult, so borrowing that set would add
+                // three permanently blank columns, which is the defect being removed here.
+                case OPTION -> addOptionColumns(columns);
                 case LOOP_CONTROLLER -> addLoopColumns(columns);
                 case SPLIT_CONTROLLER -> addSplitColumns(columns);
                 case MERGE -> addMergeColumns(columns);
@@ -461,6 +467,29 @@ public class ColumnDefinitionService {
                 .build());
     }
 
+    private void addOptionColumns(List<ColumnDefinition> columns) {
+        columns.add(ColumnDefinition.builder()
+                .field("selectedBranch")
+                .header("Selected Choice")
+                .type(ColumnType.STRING)
+                .renderType(RenderType.BADGE)
+                .width(140)
+                .sortable(true)
+                .filterable(true)
+                .build());
+
+        columns.add(ColumnDefinition.builder()
+                .field("evaluations")
+                .header("Choice Evaluations")
+                .type(ColumnType.JSON)
+                .renderType(RenderType.EVALUATIONS_TABLE)
+                .width(400)
+                .sortable(false)
+                .filterable(false)
+                .expandable(true)
+                .build());
+    }
+
     private void addSwitchColumns(List<ColumnDefinition> columns) {
         columns.add(ColumnDefinition.builder()
                 .field("switchExpression")
@@ -505,6 +534,27 @@ public class ColumnDefinitionService {
     }
 
     private void addLoopColumns(List<ColumnDefinition> columns) {
+        columns.add(ColumnDefinition.builder()
+                .field("conditionResolved")
+                .header("Resolved")
+                .type(ColumnType.STRING)
+                .renderType(RenderType.CODE)
+                .width(150)
+                .sortable(false)
+                .filterable(false)
+                .build());
+
+        columns.add(ColumnDefinition.builder()
+                .field("evaluations")
+                .header("Branch Evaluations")
+                .type(ColumnType.JSON)
+                .renderType(RenderType.EVALUATIONS_TABLE)
+                .width(400)
+                .sortable(false)
+                .filterable(false)
+                .expandable(true)
+                .build());
+
         columns.add(ColumnDefinition.builder()
                 .field("loopProgress")
                 .header("Progress")

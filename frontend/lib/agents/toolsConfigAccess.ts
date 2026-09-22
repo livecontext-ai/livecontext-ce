@@ -110,6 +110,10 @@ export interface ToolsConfigShape {
   // workspace-wide rather than an id list. Absent ⇒ 'write' (see
   // getMemoryAccessMode).
   memoryAccessMode?: 'read' | 'write';
+  /** Mailbox tool: opt-in (absent or false = off). See AgentModuleResolver.isMailboxEnabled. */
+  mailbox?: boolean;
+  /** Mailbox read/write axis, like fileAccessMode. Absent = full access. */
+  mailboxAccessMode?: 'read' | 'write';
   [k: string]: unknown;
 }
 
@@ -200,7 +204,9 @@ export function getMemoryAccessMode(tc: unknown): 'read' | 'write' {
 export function getToolsMode(tc: unknown): ToolsMode {
   const obj = asObject(tc);
   const m = obj?.mode;
-  if (m === 'none' || m === 'custom') return m;
+  // 'off' means no tools at all and is a member of ToolsMode; collapsing it into 'all'
+  // made a tool-less agent render as "All tools" in the fleet view.
+  if (m === 'none' || m === 'custom' || m === 'off') return m;
   return 'all';
 }
 
@@ -223,6 +229,27 @@ export function isWebSearchEnabled(tc: unknown): boolean {
  */
 export function isGenerationEnabled(tc: unknown): boolean {
   return readOptIn(tc, 'generation');
+}
+
+/**
+ * The mailbox tool is opt-IN, defaulting to disabled when absent (mirrors backend
+ * `AgentModuleResolver.isMailboxEnabled`). The comparison that settles the default
+ * is web_search: that one reads the public web, this one reads someone's mail and
+ * can send from their address, to a person, with no undo.
+ */
+export function isMailboxEnabled(tc: unknown): boolean {
+  return readOptIn(tc, 'mailbox');
+}
+
+/**
+ * Mailbox read/write access mode. Same shape as files and memory: not a grant family,
+ * just the orthogonal read/write axis. Absent / null / unrecognized implies 'write',
+ * the backend default (ToolAccessControl reads a missing mode as full access). 'read'
+ * keeps read, folders and mark_read, and blocks send, delete, move, flag and mark_unread.
+ */
+export function getMailboxAccessMode(tc: unknown): 'read' | 'write' {
+  const obj = asObject(tc);
+  return obj?.mailboxAccessMode === 'read' ? 'read' : 'write';
 }
 
 /**
@@ -289,6 +316,10 @@ export function buildToolsConfigPayload(input: {
   skillAccessMode?: 'read' | 'write';
   fileAccessMode?: 'read' | 'write';
   memoryAccessMode?: 'read' | 'write';
+  /** Mailbox tool: opt-in (absent or false = off). See AgentModuleResolver.isMailboxEnabled. */
+  mailbox?: boolean;
+  /** Mailbox read/write axis, like fileAccessMode. Absent = full access. */
+  mailboxAccessMode?: 'read' | 'write';
 }): ToolsConfigShape {
   // For a `custom` grant the id list IS the scope; for `all`/`none`/absent the
   // list is a placeholder the backend keeps but never reads - emit `[]` so the
@@ -327,6 +358,9 @@ export function buildToolsConfigPayload(input: {
   // agent that had it ON could never be switched off).
   if (input.webSearch !== undefined) payload.webSearch = input.webSearch;
   if (input.generation !== undefined) payload.generation = input.generation;
+  // Opt-in like generation, and emitted on false for the same reason: the backend MERGES
+  // toolsConfig, so omitting it on a turn-OFF would leave the mailbox granted forever.
+  if (input.mailbox !== undefined) payload.mailbox = input.mailbox;
   // Per-family read/write access mode (axis 2) - emit for BOTH 'read' AND 'write'.
   // The pre-fix code emitted only on 'read' (omit-on-write); combined with the
   // backend's merge-on-update that made a read→write toggle never persist (the
@@ -344,5 +378,6 @@ export function buildToolsConfigPayload(input: {
   // returning a recall-only agent to full write access the next time anyone opens
   // the agent and saves.
   if (input.memoryAccessMode) payload.memoryAccessMode = input.memoryAccessMode;
+  if (input.mailboxAccessMode) payload.mailboxAccessMode = input.mailboxAccessMode;
   return payload;
 }

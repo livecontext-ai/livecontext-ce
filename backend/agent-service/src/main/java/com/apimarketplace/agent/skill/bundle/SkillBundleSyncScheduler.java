@@ -52,7 +52,18 @@ public class SkillBundleSyncScheduler {
     @Value("${skill.bundle.cloud-url:}")
     private String cloudUrl;
 
-    @Scheduled(cron = "${skill.bundle.sync.cron:0 */15 * * * *}")
+    // The default is drawn per process rather than fixed on the quarter hour:
+    // a wall-clock default makes the whole CE fleet download the payload in the
+    // same second whenever a new bundle is published. An operator who pins the
+    // property still gets exactly the expression they set. See PollSpread.
+    //
+    // One consequence to be honest about: the lock below no longer collapses
+    // replicas that used to fire together, because with a per-process slot they
+    // no longer do. It still serialises a scheduled tick against a manual "sync
+    // now", and still stops two runs overlapping. A multi-replica install would
+    // therefore poll once per replica per period; today CE runs a single
+    // process, and the cloud does not run these pollers at all.
+    @Scheduled(cron = "${skill.bundle.sync.cron:#{T(com.apimarketplace.common.scheduling.PollSpread).quarterHourlyCron()}}")
     @SchedulerLock(name = "skillBundleSync_tick",
                    lockAtMostFor = "PT5M",
                    lockAtLeastFor = "PT30S")

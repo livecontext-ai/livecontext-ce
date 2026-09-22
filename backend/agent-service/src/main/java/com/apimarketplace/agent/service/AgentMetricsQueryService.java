@@ -35,6 +35,29 @@ import java.util.UUID;
 @Transactional(readOnly = true)
 public class AgentMetricsQueryService {
 
+    /**
+     * When an execution HAPPENED, for aggregates that answer "when", not "how long".
+     *
+     * <p>These queries have always meant the moment the run landed in the table, because
+     * {@code started_at} used to BE that moment: the row is written once, at the end, and
+     * before 2026-09-17 {@code started_at} was stamped at persist time (which is how it
+     * came to sit AFTER {@code ended_at} on all 7,953 production rows). Now that
+     * {@code started_at} is a real start, reading it here would silently re-date every
+     * aggregate by the run's duration - a 20-minute browser-agent session would report
+     * "last run 22 minutes ago" one second after finishing, and a run crossing UTC
+     * midnight would move to the previous day's bucket.
+     *
+     * <p>So the aggregates move to {@code ended_at} and keep answering exactly what they
+     * answered yesterday. The execution LISTINGS deliberately do not: they stay ordered by
+     * {@code started_at} (see the block above the finders in {@code AgentExecutionRepository}).
+     * One visible consequence, accepted: in the fleet dashboard a summary's "last run" and
+     * the first child row's start sit in the same column, stacked, and for a long run they
+     * now differ by its duration. They used to agree because both were persist time. The {@code COALESCE} covers a row still in flight, which has no
+     * end yet - there is no such producer today (production holds zero {@code RUNNING}
+     * rows), and falling back to the start is the right answer if one ever appears.
+     */
+    private static final String OCCURRED_AT = "COALESCE(ae.ended_at, ae.started_at)";
+
     private final AgentExecutionRepository executionRepository;
     private final AgentExecutionMessageRepository messageRepository;
     private final AgentExecutionToolCallRepository toolCallRepository;
@@ -618,7 +641,7 @@ public class AgentMetricsQueryService {
             "COALESCE(SUM(ae.total_tool_calls), 0) AS total_tool_calls, " +
             "COALESCE(SUM(ae.duration_ms), 0) AS total_duration_ms, " +
             "ROUND(AVG(ae.duration_ms)::NUMERIC, 0) AS avg_duration_ms, " +
-            "MAX(ae.started_at) AS last_execution_at, " +
+            "MAX(" + OCCURRED_AT + ") AS last_execution_at, " +
             "COALESCE(SUM(ae.credits_consumed), 0) AS total_credits_consumed, " +
             "COALESCE(SUM(ae.total_cached_tokens), 0) AS total_cached_tokens " +
             "FROM agent_executions ae " +
@@ -676,7 +699,7 @@ public class AgentMetricsQueryService {
             "COALESCE(SUM(ae.total_tool_calls), 0) AS total_tool_calls, " +
             "COALESCE(SUM(ae.duration_ms), 0) AS total_duration_ms, " +
             "ROUND(AVG(ae.duration_ms)::NUMERIC, 0) AS avg_duration_ms, " +
-            "MAX(ae.started_at) AS last_execution_at, " +
+            "MAX(" + OCCURRED_AT + ") AS last_execution_at, " +
             "COALESCE(SUM(ae.credits_consumed), 0) AS total_credits_consumed, " +
             "COALESCE(SUM(ae.total_cached_tokens), 0) AS total_cached_tokens " +
             "FROM agent_executions ae " +
@@ -723,7 +746,7 @@ public class AgentMetricsQueryService {
         boolean orgScope = isOrgScope(organizationId);
         LocalDate since = LocalDate.now(ZoneOffset.UTC).minusDays(days);
         Query query = entityManager.createNativeQuery(
-            "SELECT DATE(ae.started_at AT TIME ZONE 'UTC') AS execution_date, ae.provider, ae.model, " +
+            "SELECT DATE(" + OCCURRED_AT + " AT TIME ZONE 'UTC') AS execution_date, ae.provider, ae.model, " +
             "COUNT(*) AS total_executions, " +
             "COUNT(*) FILTER (WHERE ae.status = 'COMPLETED') AS completed_count, " +
             "COUNT(*) FILTER (WHERE ae.status = 'FAILED' AND ae.stop_reason NOT IN ('CANCELLED', 'STOPPED_BY_USER', 'TIMEOUT')) AS failed_count, " +
@@ -736,9 +759,9 @@ public class AgentMetricsQueryService {
             "COALESCE(SUM(ae.total_cached_tokens), 0) AS total_cached_tokens " +
             "FROM agent_executions ae " +
             "WHERE ae.source = 'CHAT' AND ae.agent_entity_id IS NULL " +
-            "AND DATE(ae.started_at AT TIME ZONE 'UTC') >= :since " +
+            "AND DATE(" + OCCURRED_AT + " AT TIME ZONE 'UTC') >= :since " +
             "AND " + scopeWhereFor("ae", orgScope) + " " +
-            "GROUP BY DATE(ae.started_at AT TIME ZONE 'UTC'), ae.provider, ae.model " +
+            "GROUP BY DATE(" + OCCURRED_AT + " AT TIME ZONE 'UTC'), ae.provider, ae.model " +
             "ORDER BY execution_date DESC");
         query.setParameter("since", Date.valueOf(since));
         bindScopeParams(query, tenantId, organizationId, orgScope);
@@ -797,7 +820,7 @@ public class AgentMetricsQueryService {
         boolean orgScope = isOrgScope(organizationId);
         LocalDate since = LocalDate.now(ZoneOffset.UTC).minusDays(days);
         Query query = entityManager.createNativeQuery(
-            "SELECT DATE(ae.started_at AT TIME ZONE 'UTC') AS execution_date, ae.provider, ae.model, " +
+            "SELECT DATE(" + OCCURRED_AT + " AT TIME ZONE 'UTC') AS execution_date, ae.provider, ae.model, " +
             "COUNT(*) AS total_executions, " +
             "COUNT(*) FILTER (WHERE ae.status = 'COMPLETED') AS completed_count, " +
             "COUNT(*) FILTER (WHERE ae.status = 'FAILED' AND ae.stop_reason NOT IN ('CANCELLED', 'STOPPED_BY_USER', 'TIMEOUT')) AS failed_count, " +
@@ -809,9 +832,9 @@ public class AgentMetricsQueryService {
             "ROUND(AVG(ae.iteration_count)::NUMERIC, 1) AS avg_iterations, " +
             "COALESCE(SUM(ae.total_cached_tokens), 0) AS total_cached_tokens " +
             "FROM agent_executions ae " +
-            "WHERE DATE(ae.started_at AT TIME ZONE 'UTC') >= :since " +
+            "WHERE DATE(" + OCCURRED_AT + " AT TIME ZONE 'UTC') >= :since " +
             "AND " + scopeWhereFor("ae", orgScope) + " " +
-            "GROUP BY DATE(ae.started_at AT TIME ZONE 'UTC'), ae.provider, ae.model " +
+            "GROUP BY DATE(" + OCCURRED_AT + " AT TIME ZONE 'UTC'), ae.provider, ae.model " +
             "ORDER BY execution_date DESC");
         query.setParameter("since", Date.valueOf(since));
         bindScopeParams(query, tenantId, organizationId, orgScope);
@@ -828,7 +851,7 @@ public class AgentMetricsQueryService {
         boolean orgScope = isOrgScope(organizationId);
         LocalDate since = LocalDate.now(ZoneOffset.UTC).minusDays(days);
         Query query = entityManager.createNativeQuery(
-            "SELECT DATE(ae.started_at AT TIME ZONE 'UTC') AS execution_date, ae.provider, ae.model, " +
+            "SELECT DATE(" + OCCURRED_AT + " AT TIME ZONE 'UTC') AS execution_date, ae.provider, ae.model, " +
             "COUNT(*) AS total_executions, " +
             "COUNT(*) FILTER (WHERE ae.status = 'COMPLETED') AS completed_count, " +
             "COUNT(*) FILTER (WHERE ae.status = 'FAILED' AND ae.stop_reason NOT IN ('CANCELLED', 'STOPPED_BY_USER', 'TIMEOUT')) AS failed_count, " +
@@ -841,9 +864,9 @@ public class AgentMetricsQueryService {
             "COALESCE(SUM(ae.total_cached_tokens), 0) AS total_cached_tokens " +
             "FROM agent_executions ae " +
             "WHERE ae.agent_entity_id = :agentId " +
-            "AND DATE(ae.started_at AT TIME ZONE 'UTC') >= :since " +
+            "AND DATE(" + OCCURRED_AT + " AT TIME ZONE 'UTC') >= :since " +
             "AND " + scopeWhereFor("ae", orgScope) + " " +
-            "GROUP BY DATE(ae.started_at AT TIME ZONE 'UTC'), ae.provider, ae.model " +
+            "GROUP BY DATE(" + OCCURRED_AT + " AT TIME ZONE 'UTC'), ae.provider, ae.model " +
             "ORDER BY execution_date DESC");
         query.setParameter("agentId", agentId);
         query.setParameter("since", Date.valueOf(since));

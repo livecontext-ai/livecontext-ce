@@ -1359,6 +1359,80 @@ class OAuth2ServiceTest {
         }
 
         @Test
+        @DisplayName("Splits a COMMA-delimited grant into individual scopes (LinkedIn)")
+        void storesCommaDelimitedGrantAsSeparateScopes() throws Exception {
+            // LinkedIn's token response returns the granted list comma-delimited:
+            //   "scope":"r_basicprofile,w_member_social,rw_organization_admin"
+            // The callback used to split on whitespace only, so it stored ONE element
+            // holding the whole blob. Nothing failed here; the damage surfaced later in
+            // catalog-service's preflightScopeCheck, whose missing.removeAll(granted)
+            // then matched nothing and refused every endpoint declaring requiredScopes on
+            // a credential that genuinely held the scope. This asserts the CALL SITE, not
+            // just the helper: reverting handleCallback to split("\\s+") must turn it red.
+            final String state = "state-scope-comma";
+            final String requested = "r_basicprofile w_member_social rw_organization_admin";
+            final String granted = "r_basicprofile,w_member_social,rw_organization_admin";
+
+            var stateRecord = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State(
+                    USER_ID, "template-linkedin", "LinkedIn Credential",
+                    "cid", "csec",
+                    "https://www.linkedin.com/oauth/v2/authorization",
+                    "https://www.linkedin.com/oauth/v2/accessToken",
+                    requested,
+                    "Production", "linkedin", "/icons/services/linkedin.svg",
+                    null, Instant.parse("2026-09-09T10:00:00Z"),
+                    null
+            );
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.get("oauth2:state:" + state))
+                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    oAuth2Service, "restTemplate", mockRest);
+
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody =
+                    new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+            tokenBody.put("access_token", "fake-at");
+            tokenBody.put("refresh_token", "fake-rt");
+            tokenBody.put("token_type", "Bearer");
+            tokenBody.put("expires_in", 5184000);
+            tokenBody.put("scope", granted);
+            when(mockRest.postForEntity(
+                    anyString(),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenBody,
+                            org.springframework.http.HttpStatus.OK));
+            when(encryptionService.encrypt(anyString()))
+                    .thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+            when(credentialService.createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), anyList(), anyList(),
+                    anyString(), anyString()))
+                    .thenReturn(buildCredential(1L, USER_ID, Map.of()));
+
+            oAuth2Service.handleCallback("code", state);
+
+            @SuppressWarnings("unchecked")
+            org.mockito.ArgumentCaptor<List<String>> scopesCaptor =
+                    org.mockito.ArgumentCaptor.forClass(List.class);
+            verify(credentialService).createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), scopesCaptor.capture(), anyList(),
+                    anyString(), anyString());
+
+            assertThat(scopesCaptor.getValue())
+                    .as("a comma-delimited grant must be stored as separate scopes, or "
+                            + "preflightScopeCheck refuses every gated endpoint")
+                    .containsExactly("r_basicprofile", "w_member_social", "rw_organization_admin");
+        }
+
+        @Test
         @DisplayName("Falls back to REQUESTED scopes when provider returns no scope field")
         void fallsBackToRequestedWhenProviderSilent() throws Exception {
             final String state = "state-scope-silent";
@@ -2218,6 +2292,223 @@ class OAuth2ServiceTest {
                     .contains("gmail.labels")
                     .contains("gmail.readonly")
                     .contains("gmail.modify");
+        }
+
+        // ===== Slack second scope family: `scope` carries bot scopes, `user_scope` carries user
+        // ones. A user-token scope sent in `scope` fails the WHOLE install with invalid_scope. =====
+
+        private static final String SLACK_TEMPLATE_JSON = """
+                {
+                  "id": "template-slack",
+                  "credential_name": "slack",
+                  "icon_slug": "slack",
+                  "display_name": "Slack",
+                  "auth_type": "oauth2",
+                  "metadata": {
+                    "oauth2Config": {
+                      "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+                      "tokenUrl": "https://slack.com/api/oauth.v2.access",
+                      "scopes": ["chat:write", "channels:read"],
+                      "byokOnlyScopes": ["search:read", "dnd:write"],
+                      "userScopeParam": "user_scope",
+                      "userScopes": ["search:read", "dnd:write"]
+                    }
+                  }
+                }
+                """;
+
+        private com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential slackRow(
+                String clientId) {
+            return new com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential(
+                    4L, "slack", "Slack",
+                    com.apimarketplace.auth.credential.domain.PlatformCredentialModels.AuthType.OAUTH2,
+                    clientId, "slack-csec", null, null, null,
+                    "https://slack.com/oauth/v2/authorize", "https://slack.com/api/oauth.v2.access", null,
+                    "slack", "Communication", "desc",
+                    true, Map.of(), java.math.BigDecimal.ZERO, 0,
+                    Instant.now(), Instant.now(), null, null);
+        }
+
+        /**
+         * Characterization, not a regression test: the platform path never widens to
+         * byokOnlyScopes, so this passes on the pre-fix engine too. What it pins is the SEED
+         * shape - if the five user-only scopes were ever moved back into `scopes`, this is the
+         * test that fails. The engine-side regression is
+         * {@link #slackWidenedFlowRoutesUserScopesToTheirOwnParam()}.
+         */
+        @Test
+        @DisplayName("Slack platform flow requests the bot scopes only, with no user_scope parameter")
+        void slackPlatformFlowRequestsBotScopesOnly() throws Exception {
+            stubCatalogTemplateJson(SLACK_TEMPLATE_JSON);
+            when(platformCredentialService.getRawOAuth2Credential("slack", USER_ID, null))
+                    .thenReturn(Optional.of(slackRow("slack-platform-cid")));
+
+            var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                    "template-slack", "Platform Slack", null, null, "Production", null, "/app/settings/credentials");
+
+            String url = oAuth2Service.initiate(request, USER_ID).authorizationUrl();
+
+            assertThat(url).contains("slack-platform-cid");
+            assertThat(url)
+                    .as("bot scopes travel in the standard scope parameter")
+                    .contains("chat%3Awrite")
+                    .contains("channels%3Aread");
+            assertThat(url)
+                    .as("the user family is byok-only here, so nothing to route and no parameter")
+                    .doesNotContain("user_scope");
+            assertThat(url)
+                    .as("a user-token scope anywhere in this URL is the invalid_scope bug")
+                    .doesNotContain("search%3Aread")
+                    .doesNotContain("dnd%3Awrite");
+        }
+
+        @Test
+        @DisplayName("Slack CE/BYOK flow routes the widened user scopes through user_scope, never through scope")
+        void slackWidenedFlowRoutesUserScopesToTheirOwnParam() throws Exception {
+            stubCatalogTemplateJson(SLACK_TEMPLATE_JSON);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "authMode", "embedded");
+            when(platformCredentialService.getRawOAuth2Credential("slack", USER_ID, null))
+                    .thenReturn(Optional.of(slackRow("slack-ce-cid")));
+
+            var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                    "template-slack", "CE Slack", null, null, "Production", null, "/app/settings/credentials");
+
+            String url = oAuth2Service.initiate(request, USER_ID).authorizationUrl();
+            String scopeParam = queryParam(url, "scope");
+            String userScopeParam = queryParam(url, "user_scope");
+
+            assertThat(url).contains("slack-ce-cid");
+            assertThat(userScopeParam)
+                    .as("CE widens to scopes + byokOnlyScopes, and the user family leaves through user_scope")
+                    .contains("search:read")
+                    .contains("dnd:write");
+            assertThat(scopeParam)
+                    .as("the bot scopes stay where they were")
+                    .contains("chat:write")
+                    .contains("channels:read");
+            assertThat(scopeParam)
+                    .as("byokOnlyScopes re-adds them to the request, but NOT to this parameter - "
+                            + "putting one here is what made Slack refuse every installation")
+                    .doesNotContain("search:read")
+                    .doesNotContain("dnd:write");
+        }
+
+        @Test
+        @DisplayName("the OAuth state records BOTH families, so the granted-scope fallback is not truncated to the bot half")
+        void slackWidenedFlowRecordsBothFamiliesOnTheState() throws Exception {
+            stubCatalogTemplateJson(SLACK_TEMPLATE_JSON);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "authMode", "embedded");
+            when(platformCredentialService.getRawOAuth2Credential("slack", USER_ID, null))
+                    .thenReturn(Optional.of(slackRow("slack-ce-cid")));
+            ArgumentCaptor<String> stateJson = ArgumentCaptor.forClass(String.class);
+
+            var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                    "template-slack", "CE Slack", null, null, "Production", null, "/app/settings/credentials");
+            oAuth2Service.initiate(request, USER_ID);
+
+            verify(valueOperations).set(anyString(), stateJson.capture(), any());
+            // handleCallback falls back to this string when the provider echoes no scope, and
+            // splitting the request across two parameters must not shrink the record of what was
+            // asked for: joinedScopes() stays both families, only the URL is split.
+            assertThat(stateJson.getValue())
+                    .contains("chat:write")
+                    .contains("search:read")
+                    .contains("dnd:write");
+        }
+
+        @Test
+        @DisplayName("a family with no parameter to carry it drops its members AND says so in the log")
+        void slackFamilyWithoutParamIsDroppedAndWarned() throws Exception {
+            // The seed validator refuses this shape, but credential metadata also arrives through
+            // the signed catalog bundle, which no validator inspects. Dropping is what keeps the
+            // connect working; the WARN is what keeps the missing capability findable instead of
+            // being a silently narrower grant on a green connect. SCHEMA.md names this log as the
+            // mitigation for the bundle path, so it has to actually fire.
+            stubCatalogTemplateJson(SLACK_TEMPLATE_JSON.replace("\"userScopeParam\": \"user_scope\",", ""));
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "authMode", "embedded");
+            when(platformCredentialService.getRawOAuth2Credential("slack", USER_ID, null))
+                    .thenReturn(Optional.of(slackRow("slack-ce-cid")));
+
+            ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                    org.slf4j.LoggerFactory.getLogger(OAuth2Service.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            String url;
+            try {
+                var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                        "template-slack", "CE Slack", null, null, "Production", null, "/app/settings/credentials");
+                url = oAuth2Service.initiate(request, USER_ID).authorizationUrl();
+            } finally {
+                logger.detachAppender(appender);
+            }
+
+            assertThat(queryParam(url, "scope"))
+                    .as("the members are held OUT of the bot parameter even with nowhere to send them, "
+                            + "while the bot scopes are still requested - asserting only the absences "
+                            + "would stay green if `scope` went missing entirely")
+                    .contains("chat:write")
+                    .contains("channels:read")
+                    .doesNotContain("search:read")
+                    .doesNotContain("dnd:write");
+            assertThat(url).doesNotContain("user_scope");
+            assertThat(appender.list)
+                    .as("and the drop is reported, naming the scopes that were dropped")
+                    .anyMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN
+                            && e.getFormattedMessage().contains("dropped from the authorize request")
+                            && e.getFormattedMessage().contains("search:read"));
+        }
+
+        @Test
+        @DisplayName("an ordinary provider never warns: the drop path is inert when no family is declared")
+        void providerWithoutAFamilyNeverWarns() throws Exception {
+            stubCatalogTemplateJson(GMAIL_TEMPLATE_JSON);
+            when(platformCredentialService.getRawOAuth2Credential("gmail", USER_ID, null))
+                    .thenReturn(Optional.of(gmailRow("gmail-cid")));
+
+            ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                    org.slf4j.LoggerFactory.getLogger(OAuth2Service.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                        "template-gmail", "Gmail", null, null, "Production", null, "/app/settings/credentials");
+                oAuth2Service.initiate(request, USER_ID);
+            } finally {
+                logger.detachAppender(appender);
+            }
+
+            // 175 of the 176 OAuth seeds declare no family. A warning on any of them would be
+            // noise in every connect the platform performs.
+            assertThat(appender.list)
+                    .noneMatch(e -> e.getFormattedMessage().contains("dropped from the authorize request"));
+        }
+
+        private com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential gmailRow(
+                String clientId) {
+            return new com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential(
+                    3L, "gmail", "Gmail",
+                    com.apimarketplace.auth.credential.domain.PlatformCredentialModels.AuthType.OAUTH2,
+                    clientId, "gmail-csec", null, null, null,
+                    "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token", null,
+                    "gmail", "Communication", "desc",
+                    true, Map.of(), java.math.BigDecimal.ZERO, 0,
+                    Instant.now(), Instant.now(), null, null);
+        }
+
+        /** Decoded value of a single query parameter, or empty string when it is absent. */
+        private String queryParam(String url, String name) {
+            for (String pair : url.substring(url.indexOf('?') + 1).split("&")) {
+                int eq = pair.indexOf('=');
+                if (eq > 0 && pair.substring(0, eq).equals(name)) {
+                    return java.net.URLDecoder.decode(
+                            pair.substring(eq + 1), java.nio.charset.StandardCharsets.UTF_8);
+                }
+            }
+            return "";
         }
 
         @Test
@@ -3375,6 +3666,71 @@ class OAuth2ServiceTest {
         }
 
         @Test
+        @DisplayName("client_credentials splits a COMMA-delimited grant into separate scopes")
+        void clientCredentialsSplitsCommaDelimitedGrant() throws Exception {
+            // The second granted-scope call site. It is not a theoretical branch: its own
+            // fallback is providerConfig.joinedScopes(), which joins with the per-provider
+            // scopeDelimiter, so a comma-delimiter provider really does produce a
+            // comma-joined string here. Splitting it on whitespace stored one blob, and
+            // preflightScopeCheck then refused every endpoint declaring requiredScopes.
+            // Reverting this call site to split("\\s+") must turn this test red.
+            com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig cfg =
+                    com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig.fromJson(objectMapper.readTree("""
+                { "tokenUrl": "https://example.com/token",
+                  "grantType": "client_credentials", "scopes": [], "scopeDelimiter": "," }
+                """));
+            var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                    "tpl-cc", "Comma Provider", "cid", "csec", "Production", "commaprovider", null,
+                    Map.of());
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "restTemplate", mockRest);
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "cc-at");
+            tokenBody.put("token_type", "Bearer");
+            tokenBody.put("expires_in", 3600);
+            tokenBody.put("scope", "read:all,write:all,admin:all");
+            when(mockRest.postForEntity(anyString(),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenBody,
+                            org.springframework.http.HttpStatus.OK));
+            when(encryptionService.encrypt(anyString())).thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+            when(credentialService.createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), anyList(), anyList(), anyString(), anyString()))
+                    .thenReturn(buildCredential(1L, USER_ID, Map.of()));
+
+            java.lang.reflect.Method m = OAuth2Service.class.getDeclaredMethod(
+                    "initiateClientCredentials",
+                    com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest.class,
+                    String.class, String.class,
+                    com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig.class, String.class, String.class,
+                    com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential.class,
+                    com.fasterxml.jackson.databind.JsonNode.class, String.class, String.class, String.class);
+            m.setAccessible(true);
+            m.invoke(oAuth2Service, request, USER_ID, null, cfg, "cid", "csec", null,
+                    objectMapper.createObjectNode(), "Comma Provider", "commaprovider", "icon.svg");
+
+            @SuppressWarnings("unchecked")
+            org.mockito.ArgumentCaptor<List<String>> scopesCaptor =
+                    org.mockito.ArgumentCaptor.forClass(List.class);
+            verify(credentialService).createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), scopesCaptor.capture(), anyList(),
+                    anyString(), anyString());
+
+            assertThat(scopesCaptor.getValue())
+                    .as("client_credentials must store a comma-delimited grant as separate "
+                            + "scopes, or preflightScopeCheck refuses every gated endpoint")
+                    .containsExactly("read:all", "write:all", "admin:all");
+        }
+
+        @Test
         @DisplayName("callback persists the host var (shop) into credential_data for runtime substitution")
         void callbackPersistsHostVarIntoCredentialData() throws Exception {
             final String state = "state-shop";
@@ -3415,6 +3771,56 @@ class OAuth2ServiceTest {
             // that HttpExecutionService.replaceUrlTemplateVariables can rebuild the base URL at runtime.
             assertThat(urlCaptor.getValue()).isEqualTo("https://acme.myshopify.com/admin/oauth/access_token");
             assertThat(captureCreatedCredentialData().getValue()).containsEntry("shop", "acme");
+        }
+    }
+
+    @Nested
+    @DisplayName("parseGrantedScopes - granted-scope delimiter tolerance")
+    class ParseGrantedScopes {
+
+        @Test
+        @DisplayName("splits the space-delimited form RFC 6749 specifies")
+        void splitsSpaceDelimited() {
+            assertThat(OAuth2Service.parseGrantedScopes("read write admin"))
+                    .containsExactly("read", "write", "admin");
+        }
+
+        @Test
+        @DisplayName("splits the comma-delimited form LinkedIn actually returns")
+        void splitsCommaDelimited() {
+            // LinkedIn's token response carries "scope":"r_basicprofile,w_member_social,...".
+            // Splitting on whitespace alone stored ONE element holding the whole blob, and
+            // HttpExecutionService.preflightScopeCheck (missing.removeAll(granted)) then
+            // matched nothing, refusing every endpoint that declares requiredScopes on a
+            // credential which genuinely held the scope.
+            List<String> scopes = OAuth2Service.parseGrantedScopes(
+                    "r_basicprofile,w_member_social,rw_organization_admin");
+
+            assertThat(scopes)
+                    .containsExactly("r_basicprofile", "w_member_social", "rw_organization_admin");
+        }
+
+        @Test
+        @DisplayName("handles a comma-and-space mix and drops the empty fragments")
+        void handlesMixedDelimitersAndBlanks() {
+            // A LEADING separator is the case that makes the empty-fragment filter
+            // load-bearing: Java's split discards trailing empties on its own, but keeps
+            // the leading one, so ",read" would otherwise yield a phantom "" scope.
+            assertThat(OAuth2Service.parseGrantedScopes(",read, write ,  admin,"))
+                    .containsExactly("read", "write", "admin");
+        }
+
+        @Test
+        @DisplayName("null and blank yield an empty list rather than a phantom scope")
+        void nullAndBlankYieldEmpty() {
+            assertThat(OAuth2Service.parseGrantedScopes(null)).isEmpty();
+            assertThat(OAuth2Service.parseGrantedScopes("   ")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a single scope survives untouched")
+        void singleScope() {
+            assertThat(OAuth2Service.parseGrantedScopes("openid")).containsExactly("openid");
         }
     }
 }

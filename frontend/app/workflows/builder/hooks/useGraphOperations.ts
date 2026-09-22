@@ -285,6 +285,7 @@ export function useGraphOperations(
       const defaultNoteColor = '#fef3c7';
       const defaultNoteBorder = '#fbbf24';
       const defaultNoteText = '#92400e';
+      const initialData = item.initialData || {};
 
       const isInterfacePreview = item.nodeType === 'interfaceNode';
       const newNode: Node<BuilderNodeData> = {
@@ -295,6 +296,7 @@ export function useGraphOperations(
         style: nodeStyle,
         ...(isInterfacePreview ? { width: 400, height: 250 } : {}),
         data: {
+          ...initialData,
           id,
           label: item.label,
           description: item.description,

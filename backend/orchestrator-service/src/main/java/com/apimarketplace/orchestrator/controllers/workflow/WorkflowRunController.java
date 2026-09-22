@@ -621,9 +621,14 @@ public class WorkflowRunController {
     public ResponseEntity<?> cancelWorkflow(
             @PathVariable("runId") String runId,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
             if (tenantId == null || tenantId.isBlank()) return ResponseEntity.status(401).build();
+            if (isViewerRole(orgId, orgRole)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "VIEWER role cannot cancel workflow runs"));
+            }
             Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findByRunIdPublic(runId);
             if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
                 return ResponseEntity.notFound().build();
@@ -648,6 +653,11 @@ public class WorkflowRunController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("error", "Failed to cancel workflow: " + e.getMessage()));
         }
+    }
+
+    /** Backward-compatible direct-call overload used by controller unit tests. */
+    public ResponseEntity<?> cancelWorkflow(String runId, String tenantId, String orgId) {
+        return cancelWorkflow(runId, tenantId, orgId, null);
     }
 
     /**
@@ -714,9 +724,14 @@ public class WorkflowRunController {
     public ResponseEntity<?> reactivateWorkflow(
             @PathVariable("runId") String runId,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
             if (tenantId == null || tenantId.isBlank()) return ResponseEntity.status(401).build();
+            if (isViewerRole(orgId, orgRole)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "VIEWER role cannot reactivate workflow runs"));
+            }
             Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findByRunIdPublic(runId);
             if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
                 return ResponseEntity.notFound().build();
@@ -739,6 +754,15 @@ public class WorkflowRunController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("error", "Failed to reactivate workflow: " + e.getMessage()));
         }
+    }
+
+    /** Backward-compatible direct-call overload used by controller unit tests. */
+    public ResponseEntity<?> reactivateWorkflow(String runId, String tenantId, String orgId) {
+        return reactivateWorkflow(runId, tenantId, orgId, null);
+    }
+
+    private static boolean isViewerRole(String orgId, String orgRole) {
+        return orgId != null && orgRole != null && "VIEWER".equalsIgnoreCase(orgRole.trim());
     }
 
     /**

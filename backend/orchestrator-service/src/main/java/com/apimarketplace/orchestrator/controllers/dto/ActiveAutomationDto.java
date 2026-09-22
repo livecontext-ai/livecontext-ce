@@ -65,7 +65,8 @@ import java.util.UUID;
  *
  * <p>{@code resourceType} drives the click target on the frontend
  * (workflows → /app/workflow/{id}, applications → /app/applications/{publicationId},
- * agents → /app/agent/{id}).
+ * agents → /app/agent?openAgent={id} - agents have no page of their own, they open in the
+ * right-side panel, and /app/agent/{id} is a 404).
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ActiveAutomationDto(
@@ -78,6 +79,8 @@ public record ActiveAutomationDto(
         WebhookInfo webhook,
         Instant lastRunAt,
         Boolean isPinned,
+        /** Whether the production resource itself is paused, independently of its trigger. */
+        Boolean resourcePaused,
         /**
          * The pinned workflow's / application's current production run public id
          * ({@code workflow_runs.run_id_public}) - only set for WORKFLOW and
@@ -116,8 +119,30 @@ public record ActiveAutomationDto(
          * describes the same event as {@code lastRunAt}. Absent on AGENT rows:
          * agents have no pinned production run.
          */
-        String lastRunStatus
+        String lastRunStatus,
+        /** Exact normalized plan key, for example {@code trigger:daily_report}. */
+        String triggerId,
+        /** Human-readable label of this trigger in the published plan. */
+        String triggerLabel
 ) {
+
+    /** Backward-compatible constructor for callers that predate exact trigger identity. */
+    public ActiveAutomationDto(ResourceType resourceType, UUID resourceId, String name, String avatarUrl,
+                               TriggerType triggerType, ScheduleInfo schedule, WebhookInfo webhook,
+                               Instant lastRunAt, Boolean isPinned, Boolean resourcePaused,
+                               String productionRunIdPublic, String publicationId, String lastRunStatus) {
+        this(resourceType, resourceId, name, avatarUrl, triggerType, schedule, webhook, lastRunAt,
+                isPinned, resourcePaused, productionRunIdPublic, publicationId, lastRunStatus, null, null);
+    }
+
+    /** Backward-compatible constructor for callers that predate resource pause state. */
+    public ActiveAutomationDto(ResourceType resourceType, UUID resourceId, String name, String avatarUrl,
+                               TriggerType triggerType, ScheduleInfo schedule, WebhookInfo webhook,
+                               Instant lastRunAt, Boolean isPinned, String productionRunIdPublic,
+                               String publicationId, String lastRunStatus) {
+        this(resourceType, resourceId, name, avatarUrl, triggerType, schedule, webhook, lastRunAt,
+                isPinned, false, productionRunIdPublic, publicationId, lastRunStatus, null, null);
+    }
 
     public enum ResourceType { WORKFLOW, APPLICATION, AGENT }
 

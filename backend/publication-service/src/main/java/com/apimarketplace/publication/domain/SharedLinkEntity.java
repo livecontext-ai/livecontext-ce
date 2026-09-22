@@ -1,5 +1,12 @@
 package com.apimarketplace.publication.domain;
 
+import com.apimarketplace.common.security.token.EncryptedTokenConverter;
+import com.apimarketplace.common.security.token.HashedTokenEntity;
+import com.apimarketplace.common.security.token.HashedTokenListener;
+import com.apimarketplace.common.security.token.TokenSlot;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import java.util.List;
+
 import com.apimarketplace.common.scope.OrgScopedEntity;
 import com.apimarketplace.common.scope.OrgScopedEntityListener;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -13,23 +20,43 @@ import java.util.Map;
 import java.util.UUID;
 
 @Entity
-@EntityListeners(OrgScopedEntityListener.class)
+@EntityListeners({OrgScopedEntityListener.class, HashedTokenListener.class})
 @Table(name = "shared_links")
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-public class SharedLinkEntity implements OrgScopedEntity {
+public class SharedLinkEntity implements OrgScopedEntity, HashedTokenEntity {
 
     @Id
     private UUID id;
 
-    @Column(name = "token", nullable = false, unique = true, length = 64)
+    /**
+     * The public share-link token (sl_...).
+     * Stored encrypted (ENC:...) through {@link EncryptedTokenConverter}; the entity always holds
+     * the plaintext. Lookups go through {@link #getTokenHash()}, never through this column.
+     */
+    @Convert(converter = EncryptedTokenConverter.class)
+    @Column(name = "token", nullable = false, unique = true, length = 255)
     private String token;
+
+    /** HMAC-SHA256 of the plaintext, filled by {@link HashedTokenListener}; the only lookup key. */
+    @Column(name = "token_hash", length = 64)
+    private String tokenHash;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "resource_type", nullable = false, length = 30)
     private ResourceType resourceType;
 
-    @Column(name = "resource_token", nullable = false, length = 64)
+    /**
+     * The token of the underlying resource (a chat/form endpoint token), itself a secret.
+     * Stored encrypted (ENC:...) through {@link EncryptedTokenConverter}; the entity always holds
+     * the plaintext. Lookups go through {@link #getResourceTokenHash()}, never through this column.
+     */
+    @Convert(converter = EncryptedTokenConverter.class)
+    @Column(name = "resource_token", nullable = false, length = 255)
     private String resourceToken;
+
+    /** HMAC-SHA256 of the plaintext, filled by {@link HashedTokenListener}; the only lookup key. */
+    @Column(name = "resource_token_hash", length = 64)
+    private String resourceTokenHash;
 
     @Column(name = "resource_id")
     private UUID resourceId;
@@ -135,4 +162,28 @@ public class SharedLinkEntity implements OrgScopedEntity {
 
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+
+    @JsonIgnore
+    public String getTokenHash() {
+        return tokenHash;
+    }
+
+    public void setTokenHash(String tokenHash) {
+        this.tokenHash = tokenHash;
+    }
+
+    @JsonIgnore
+    public String getResourceTokenHash() {
+        return resourceTokenHash;
+    }
+
+    public void setResourceTokenHash(String resourceTokenHash) {
+        this.resourceTokenHash = resourceTokenHash;
+    }
+
+    @Override
+    @JsonIgnore
+    public List<TokenSlot> tokenSlots() {
+        return List.of(new TokenSlot(this::getToken, this::setTokenHash), new TokenSlot(this::getResourceToken, this::setResourceTokenHash));
+    }
 }

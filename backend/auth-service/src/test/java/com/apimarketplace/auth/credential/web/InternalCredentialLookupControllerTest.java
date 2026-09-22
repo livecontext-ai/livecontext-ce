@@ -187,10 +187,68 @@ class InternalCredentialLookupControllerTest {
         assertThat(identity.name()).isEqualTo("Cred 10");
         assertThat(identity.integration()).isEqualTo("instagram");
         assertThat(identity.status()).isEqualTo("active");
-        // The record has exactly four components; a fifth one carrying material
+        // Deciding WHICH account was meant now includes deciding which one can run a
+        // given endpoint, so the type, the granted scopes and the default flag are part
+        // of the identity. None of them can carry material: a scope is a permission label
+        // the user consented to on the provider screen and already sees in their
+        // credentials list, and it unlocks nothing by itself.
+        assertThat(identity.type()).isEqualTo("OAuth2");
+        assertThat(identity.isDefault()).isTrue();
+        // The record has exactly seven components; an eighth one carrying material
         // would make this fail rather than ship silently.
         assertThat(InternalCredentialLookupController.CredentialIdentity.class.getRecordComponents())
-                .hasSize(4);
+                .hasSize(7);
+        assertThat(InternalCredentialLookupController.CredentialIdentity.class.getRecordComponents())
+                .extracting(java.lang.reflect.RecordComponent::getName)
+                .as("a component that can carry a secret defeats the whole reason this endpoint exists")
+                .doesNotContain("credentialData", "credential_data");
+    }
+
+    @Test
+    @DisplayName("identities carry the granted scopes, which is what decides whether an account can run a given endpoint")
+    void identitiesCarryGrantedScopes() {
+        // Before this, the only internal listing that held scopes was /all, which answers
+        // with decrypted secrets for every row - including the ones the caller is about to
+        // reject. Working out which account can run an endpoint had to go through it or
+        // not happen at all, and it did not happen at all.
+        when(credentialRepository.findAllByTenantId(OWNER)).thenReturn(List.of(
+                credWithScopes(20L, OWNER, "gmail",
+                        List.of("https://www.googleapis.com/auth/gmail.send"))));
+
+        InternalCredentialLookupController.CredentialIdentity identity =
+                controller.getCredentialIdentities(OWNER, null).getBody().get(0);
+
+        assertThat(identity.scopes())
+                .containsExactly("https://www.googleapis.com/auth/gmail.send");
+    }
+
+    @Test
+    @DisplayName("the default flag crosses the wire as is_default, which is the spelling the client reads")
+    void defaultFlagKeepsItsWireName() throws Exception {
+        // A record component named isDefault serialises as "isDefault" unless it is
+        // annotated, and the client field is annotated "is_default". Get that pair wrong
+        // and every account deserialises as NOT default - which silently turns every
+        // capability answer into the "your default cannot run this" branch.
+        when(credentialRepository.findAllByTenantId(OWNER))
+                .thenReturn(List.of(cred(30L, OWNER, null, "gmail", CredentialStatus.active, true)));
+
+        String json = new com.fasterxml.jackson.databind.ObjectMapper()
+                .writeValueAsString(controller.getCredentialIdentities(OWNER, null).getBody().get(0));
+
+        assertThat(json).contains("\"is_default\":true").doesNotContain("\"isDefault\"");
+    }
+
+    @Test
+    @DisplayName("a credential with no scopes answers with an empty list, never null")
+    void nullScopesBecomeAnEmptyList() {
+        // A null would cross the wire as an absent field and read, on the other side, as
+        // "this account was granted nothing" - which is what a revoked one looks like.
+        when(credentialRepository.findAllByTenantId(OWNER))
+                .thenReturn(List.of(credWithScopes(21L, OWNER, "stripe", null)));
+
+        assertThat(controller.getCredentialIdentities(OWNER, null).getBody().get(0).scopes())
+                .isNotNull()
+                .isEmpty();
     }
 
     @Test
@@ -207,6 +265,20 @@ class InternalCredentialLookupControllerTest {
         assertThat(response.getBody()).extracting(InternalCredentialLookupController.CredentialIdentity::id)
                 .containsExactly(11L);
         verify(credentialRepository, never()).findAllByTenantId(OWNER);
+    }
+
+    private static Credential credWithScopes(Long id, String tenantId, String integration,
+                                            List<String> scopes) {
+        Instant now = Instant.now();
+        return new Credential(
+                id, tenantId, null, "Cred " + id, integration,
+                CredentialType.OAuth2, CredentialEnvironment.Production,
+                CredentialStatus.active, "desc",
+                Map.of("access_token", "tok"),
+                scopes, List.of(),
+                tenantId, "icon", true,
+                null, now, now
+        );
     }
 
     private static Credential cred(Long id, String tenantId, String orgId, String integration,

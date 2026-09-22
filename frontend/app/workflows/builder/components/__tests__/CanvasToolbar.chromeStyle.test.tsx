@@ -54,6 +54,7 @@ import {
 } from '@/components/ui/canvas-chrome';
 import { CanvasToolbar } from '../CanvasToolbar';
 import { FileStripExpansionProvider } from '@/contexts/FileStripExpansionContext';
+import { __resetRunCameraFollowForTests } from '../../services/runCameraFollowStore';
 
 const baseProps = () => ({
   isRunMode: false,
@@ -95,6 +96,9 @@ const iconButtons = (container: HTMLElement) =>
 // says "expanded", so every case here starts from "nothing stored" to compare against
 // the inactive shared class.
 beforeEach(() => {
+  // The run-follow toggle reads a MODULE store that caches after its first read, so
+  // clearing localStorage alone would not put it back to its default here.
+  __resetRunCameraFollowForTests();
   window.localStorage.clear();
 });
 
@@ -109,12 +113,16 @@ describe('CanvasToolbar - canvas chrome style', () => {
   it('gives every control the shared chrome button style, not a local copy', () => {
     const { container } = render(<CanvasToolbar {...baseProps()} />);
     const buttons = iconButtons(container);
-    // Undo, redo, zoom in/out, fit, auto-layout, lock, settings, relations, AI assistant.
+    // Undo, redo, zoom in/out, fit, run-follow, auto-layout, lock, settings, relations,
+    // AI assistant. The run-follow toggle sits in the Focus group and uses the shared
+    // class unchanged, so it belongs in this count. It renders because the
+    // WorkflowModeContext MOCK at the top of this file reports isEditMode false, not
+    // because of baseProps, which sets isRunMode false.
     // The file-strip toggle is NOT among them: it renders nothing without a
     // FileStripExpansionProvider, and it is the one control with a documented
     // deviation from the shared class, so it gets its own case below rather than
     // silently escaping this one.
-    expect(buttons).toHaveLength(10);
+    expect(buttons).toHaveLength(11);
     // None of them is in its active state under these props.
     for (const button of buttons) {
       expect(button.className, `${button.getAttribute('title')} is off the shared style`)
@@ -161,6 +169,21 @@ describe('CanvasToolbar - canvas chrome style', () => {
     // One divider on the group's right edge, and none inside it.
     expect(settings.parentElement!.className).toContain('border-r');
     expect(trigger!.previousElementSibling).toBe(settings);
+  });
+
+  it('keeps the run-follow toggle on the toolbar in BOTH modes, beside Focus', () => {
+    // A run-only feature whose only control disappears during a run is unusable, and
+    // counting buttons cannot see it: wrapping the View-controls group in a run-mode
+    // condition leaves every count unchanged. The toggle removes ITSELF in edit mode
+    // (it reads the mode directly), which is why the toolbar must not decide for it.
+    for (const isRunMode of [false, true]) {
+      const { container, unmount } = render(<CanvasToolbar {...baseProps()} isRunMode={isRunMode} />);
+      const toggle = container.querySelector('[data-testid="canvas-toggle-run-follow"]');
+      expect(toggle, `run mode: ${isRunMode}`).not.toBeNull();
+      // Beside Focus, not adrift in another group.
+      expect(toggle!.previousElementSibling?.getAttribute('title')).toBe('fitView');
+      unmount();
+    }
   });
 
   it('offers the relations menu in BOTH modes, and never in a preview', () => {

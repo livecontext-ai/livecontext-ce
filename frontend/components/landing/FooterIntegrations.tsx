@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { integrationPath } from '@/lib/integrations/integrations';
-import { WELL_KNOWN_INTEGRATIONS } from '@/lib/integrations/wellKnownIntegrations';
+import { FOOTER_INTEGRATION_COUNT, WELL_KNOWN_INTEGRATIONS } from '@/lib/integrations/wellKnownIntegrations';
 
 /**
  * The footer's Integrations column: the integrations a visitor recognises, each linking to
@@ -30,16 +30,21 @@ import { WELL_KNOWN_INTEGRATIONS } from '@/lib/integrations/wellKnownIntegration
  * one component and the column can go back to being data-driven without moving it.
  */
 
-/** Enough to be a useful shortcut, few enough to sit beside the other columns. */
-const FOOTER_INTEGRATION_COUNT = 8;
-
-export default function FooterIntegrations({ siteBaseUrl }: { siteBaseUrl?: string }) {
+export default function FooterIntegrations({ siteBaseUrl, heading = 'Integrations', allLabel = 'All integrations' }: {
+  siteBaseUrl?: string;
+  /** The column heading. The default is the English the column always had; the sole render
+   *  site always passes one, so it is a safety net rather than a path anything takes. */
+  heading?: string;
+  /** The last entry, which opens the full catalogue. The connector NAMES stay as they are:
+   *  they are product names, not copy. */
+  allLabel?: string;
+}) {
   const href = (path: string) => (siteBaseUrl ? `${siteBaseUrl}${path}` : path);
 
   return (
     <div>
       <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>
-        Integrations
+        {heading}
       </p>
       <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
         {WELL_KNOWN_INTEGRATIONS.slice(0, FOOTER_INTEGRATION_COUNT).map((integration) => (
@@ -51,7 +56,7 @@ export default function FooterIntegrations({ siteBaseUrl }: { siteBaseUrl?: stri
         ))}
         <li>
           <Link href={href('/integrations')} prefetch={false}>
-            All integrations
+            {allLabel}
           </Link>
         </li>
       </ul>

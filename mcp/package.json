@@ -2,7 +2,7 @@
   "name": "agent-cli-mcp",
   "version": "1.0.0",
   "private": true,
-  "license": "AGPL-3.0-only",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {
     "test": "npm --prefix bridge test"

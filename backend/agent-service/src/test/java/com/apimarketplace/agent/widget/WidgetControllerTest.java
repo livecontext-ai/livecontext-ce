@@ -108,6 +108,68 @@ class WidgetControllerTest {
         }
 
         @Test
+        @DisplayName("refuses with 402 and spends nothing when the agent has spent its own cap")
+        void refusesWhenTheAgentIsOverItsOwnBudget() {
+            // The most exposed surface this agent has: a public endpoint, an anonymous visitor,
+            // and the owner's cap as the only thing standing between a script and their wallet.
+            // The in-run guard does stop the spend, but only after a conversation is opened and
+            // a run started, once per attempt.
+            AgentEntity cappedOut = activeAgent();
+            cappedOut.setCreditBudget(new java.math.BigDecimal("1"));
+            cappedOut.setCreditsConsumed(new java.math.BigDecimal("3"));
+            cappedOut.setBudgetResetMode("cumulative");
+
+            when(widgetConfigService.findActiveByWidgetToken(TOKEN)).thenReturn(Optional.of(activeWidget()));
+            when(widgetConfigService.validateOrigin(any(), any())).thenReturn(true);
+            when(sessionService.validateSession(SESSION_ID, null)).thenReturn(true);
+            when(sessionService.getSession(SESSION_ID)).thenReturn(validSession());
+            when(agentRepository.findById(AGENT_ID)).thenReturn(Optional.of(cappedOut));
+            when(request.getHeader("X-Forwarded-For")).thenReturn(null);
+            when(request.getRemoteAddr()).thenReturn(null);
+
+            ResponseEntity<?> response = controller.chat(TOKEN, SESSION_ID, Map.of("message", "Hello"), request);
+
+            // 402, not 500: a payment condition the embedded widget can tell from a fault.
+            assertThat(response.getStatusCode().value()).isEqualTo(402);
+            WidgetResponse body = (WidgetResponse) response.getBody();
+            assertThat(body).isNotNull();
+            // And NOT the detailed sentence: this endpoint is public and the reader is a
+            // stranger, so the cap, the spend against it and the date it lifts stay out of
+            // the response. Advice addressed to the owner would be doubly wrong here.
+            assertThat(body.message()).doesNotContain("credit budget");
+            assertThat(body.message()).doesNotContain("3 of 1");
+            assertThat(body.message()).isNotBlank();
+            verify(sessionService, never()).sendMessage(anyString(), anyString(), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("a monthly agent whose period has rolled over still answers")
+        void answersOnceThePeriodHasRolledOver() {
+            // The consumed counter is only zeroed when the agent next RUNS, so refusing on the
+            // stored figure would take a public widget offline for a whole month after its
+            // allowance came back.
+            AgentEntity rolledOver = activeAgent();
+            rolledOver.setCreditBudget(new java.math.BigDecimal("1"));
+            rolledOver.setCreditsConsumed(new java.math.BigDecimal("3"));
+            rolledOver.setBudgetResetMode("monthly");
+            rolledOver.setBudgetLastReset(
+                    java.time.Instant.now().minus(45, java.time.temporal.ChronoUnit.DAYS));
+
+            when(widgetConfigService.findActiveByWidgetToken(TOKEN)).thenReturn(Optional.of(activeWidget()));
+            when(widgetConfigService.validateOrigin(any(), any())).thenReturn(true);
+            when(sessionService.validateSession(SESSION_ID, null)).thenReturn(true);
+            when(sessionService.getSession(SESSION_ID)).thenReturn(validSession());
+            when(agentRepository.findById(AGENT_ID)).thenReturn(Optional.of(rolledOver));
+            when(sessionService.sendMessage(eq("tenant-1"), eq("conv-1"), eq("Hello"), any()))
+                    .thenReturn(Map.of("success", true, "content", "Hi there!"));
+            when(request.getHeader("X-Forwarded-For")).thenReturn(null);
+            when(request.getRemoteAddr()).thenReturn(null);
+
+            ResponseEntity<?> response = controller.chat(TOKEN, SESSION_ID, Map.of("message", "Hello"), request);
+
+            assertThat(response.getStatusCode().value()).isEqualTo(200);
+        }
+        @Test
         @DisplayName("should return 500 when agent execution fails")
         void shouldReturn500OnFailure() {
             when(widgetConfigService.findActiveByWidgetToken(TOKEN)).thenReturn(Optional.of(activeWidget()));

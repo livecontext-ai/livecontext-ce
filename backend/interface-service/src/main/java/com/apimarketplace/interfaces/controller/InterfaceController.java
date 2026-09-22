@@ -115,6 +115,7 @@ public class InterfaceController {
     @GetMapping("/paged")
     public ResponseEntity<Map<String, Object>> listInterfacesPaged(
             @RequestParam(value = "type", required = false) String interfaceType,
+            @RequestParam(value = "excludeType", required = false) String excludedInterfaceType,
             @RequestParam(value = "excludeTableAttached", required = false) Boolean excludeTableAttached,
             @RequestParam(value = "q", required = false) String q,
             @RequestParam(value = "page", defaultValue = "0") int page,
@@ -132,7 +133,7 @@ public class InterfaceController {
 
         InterfaceService.InterfacePage pageResult = interfaceService.listInterfacesPaged(
                 tenantId, interfaceType, excludeTableAttached, q, orgId, orgRole, page, size, sort,
-                visibility, folderId, includeFolders);
+                visibility, folderId, includeFolders, excludedInterfaceType);
 
         Map<String, Object> body = new java.util.LinkedHashMap<>();
         body.put("items", pageResult.items().stream()

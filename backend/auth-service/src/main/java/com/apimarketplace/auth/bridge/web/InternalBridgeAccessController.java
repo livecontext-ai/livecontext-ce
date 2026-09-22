@@ -1,5 +1,6 @@
 package com.apimarketplace.auth.bridge.web;
 
+import com.apimarketplace.common.web.AdminRoleGuard;
 import com.apimarketplace.auth.bridge.domain.BridgeAccessModels.AccessDecision;
 import com.apimarketplace.auth.bridge.service.BridgeAccessService;
 import com.apimarketplace.auth.service.UserService;
@@ -64,7 +65,12 @@ public class InternalBridgeAccessController {
     }
 
     private static boolean headerClaimsAdmin(String roles) {
-        return roles != null && roles.toUpperCase().contains("ADMIN");
+        // Exact CSV-token match, same rule as AdminRoleGuard.isAdmin. The previous
+        // substring test accepted any role whose NAME contains "ADMIN" (e.g. NOT_ADMIN,
+        // ADMIN_READONLY), so this predicate and the platform guard disagreed on the
+        // same header. The persisted check is authoritative, which is why no bypass was
+        // reachable, but two admin predicates must not answer differently.
+        return AdminRoleGuard.isAdmin(roles);
     }
 
     /**

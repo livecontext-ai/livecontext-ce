@@ -13,13 +13,17 @@ import { GenerateEntryButton } from '@/components/chat/GenerateEntryButton';
 import { CreateGenerationModal } from '@/components/chat/CreateGenerationModal';
 import { WelcomeTitle } from '@/app/shared/components';
 import { ModelSelectorDropdown, PROVIDER_ICON_MAP } from '@/components/chat/ModelSelectorDropdown';
+import { modelFilterLabelsFrom } from '@/components/chat/modelFilterLabels';
 import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { UpgradeRequiredNotice } from '@/components/billing/UpgradeRequiredBadge';
+import { ComposerFreeTierBadge } from '@/components/billing/FreeTierBadge';
 import { useMonthlyCreditsCannotPay } from '@/lib/hooks/useMonthlyCreditsCannotPay';
+import { resolveFreeTierPreferredModel } from '@/lib/hooks/usePreferFreeTierModel';
 import { useStreaming } from '@/contexts/StreamingContext';
 import { useVisibleModels, AIModel, SelectedModel, EMPTY_SELECTED_MODEL, modelMatches, selectedModelFromAIModel, selectedModelEquals, getEffectiveDefaultSelectedModel } from '@/hooks/useModels';
 import { useUnifiedAppSafe } from '@/contexts/UnifiedAppContext';
 import { conversationApi, type Message } from '@/lib/api/conversationApi';
+import { reconcileMessageIdentity } from '@/lib/utils/messageUtils';
 import { consumeDraftChatConfig, usePrimeUserChatDefaults } from '@/hooks/useChatConfig';
 import { useTranslations } from 'next-intl';
 import { usePathname } from 'next/navigation';
@@ -58,7 +62,8 @@ export function ChatPanelContent() {
   const modelsResolvedEmpty = !modelsLoading && !modelsError;
   // Asked once for the whole menu: the answer is about the account, not
   // about any one model.
-  const { blocked: creditsCannotPay } = useMonthlyCreditsCannotPay();
+  const { blocked: creditsCannotPay, blockedForModel, freeTierForModel, prefersFreeTierModels, verdictReady } =
+    useMonthlyCreditsCannotPay();
   const appContext = useUnifiedAppSafe();
   const pathname = usePathname();
   // Seed the side-panel composer's new conversations with the user's per-workspace defaults (V312).
@@ -67,9 +72,16 @@ export function ChatPanelContent() {
   const setSelectedModel = appContext?.setSelectedModel ?? ((_: SelectedModel) => {});
   const appSelectedModel: SelectedModel = appContext?.state.selectedModel ?? EMPTY_SELECTED_MODEL;
 
+  // V494: a free-tier account opens on a model its allowance covers, when one
+  // exists. Without this the composer opens on the admin's global #1 and the very
+  // first turn of a fresh signup can be refused - the moment the allowance is for.
   const defaultAIModel: AIModel | undefined = useMemo(
-    () => (defaultModel ? models.find(m => m.id === defaultModel) : undefined) ?? models[0],
-    [models, defaultModel],
+    () => resolveFreeTierPreferredModel(
+      models,
+      (defaultModel ? models.find(m => m.id === defaultModel) : undefined) ?? models[0],
+      prefersFreeTierModels,
+    ),
+    [models, defaultModel, prefersFreeTierModels],
   );
   const effectiveDefault: SelectedModel = useMemo(
     () => (defaultAIModel ? selectedModelFromAIModel(defaultAIModel) : getEffectiveDefaultSelectedModel()),
@@ -80,10 +92,16 @@ export function ChatPanelContent() {
 
   useEffect(() => {
     if (!appContext || isValidModel || !effectiveDefault.id) return;
+    // V494: wait for the plan verdict before WRITING. prefersFreeTierModels is false
+    // while the balance request is in flight, which is indistinguishable from a paid
+    // account - and if the models land first, this effect pins the catalogue default,
+    // isValidModel flips true, and the free-tier answer arriving a tick later never
+    // applies. The selection is persisted, so that wrong default is permanent.
+    if (!verdictReady) return;
     if (!selectedModelEquals(appSelectedModel, effectiveDefault)) {
       setSelectedModel(effectiveDefault);
     }
-  }, [isValidModel, effectiveDefault, appSelectedModel, setSelectedModel, appContext]);
+  }, [isValidModel, effectiveDefault, appSelectedModel, setSelectedModel, appContext, verdictReady]);
 
   const [showModelSelector, setShowModelSelector] = useState(false);
 
@@ -113,9 +131,14 @@ export function ChatPanelContent() {
       setSelectedModel={setSelectedModel}
       changeModelTitle={t('actions.changeModel')}
       noModelsLabel={modelsResolvedEmpty ? t('aiProviders.noProviderCta.noModels') : undefined}
+      filterLabels={modelFilterLabelsFrom(t)}
       emptyState={modelsResolvedEmpty ? <NoProviderCta variant="menu" /> : undefined}
       upgradeRequired={creditsCannotPay}
+      blockedForModel={blockedForModel}
+      freeTierForModel={freeTierForModel}
+      prefersFreeTierModels={prefersFreeTierModels}
       upgradeNotice={<UpgradeRequiredNotice blocked={creditsCannotPay} />}
+      freeTierBadge={<ComposerFreeTierBadge />}
     />
   );
 
@@ -159,7 +182,9 @@ export function ChatPanelContent() {
               streaming.checkAndReconnect(conv.id, {
                 onStreamComplete: async (cid) => {
                   const reloaded = await conversationApi.getRecentMessagesAsc(cid);
-                  if (Array.isArray(reloaded)) setMessages(reloaded);
+                  // Identity-preserving: the reconciliation must not repaint the thread the
+                  // user is reading (see reconcileMessageIdentity).
+                  if (Array.isArray(reloaded)) setMessages(prev => reconcileMessageIdentity(prev, reloaded));
                 },
               });
               return;
@@ -262,7 +287,9 @@ export function ChatPanelContent() {
           onStreamComplete: async (convId) => {
             try {
               const reloaded = await conversationApi.getRecentMessagesAsc(convId);
-              if (Array.isArray(reloaded)) setMessages(reloaded);
+              // Identity-preserving: an unchanged thread reconciles to the same array, so the
+              // end-of-stream reconciliation commits nothing and is invisible.
+              if (Array.isArray(reloaded)) setMessages(prev => reconcileMessageIdentity(prev, reloaded));
             } catch (err) {
               console.error('[ChatPanelContent] Failed to reload messages:', err);
             }

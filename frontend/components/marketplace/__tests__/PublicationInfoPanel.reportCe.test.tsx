@@ -18,6 +18,9 @@ import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 // every report-tab link through cloudWebUrl, landing them on the cloud origin.
 vi.mock('@/lib/edition', () => ({
   IS_CE: true,
+  // The verified badge on the publisher and reviewer rows reads this. A self-hosted
+  // install is never managed cloud, so the badge stays dark here.
+  IS_MANAGED_CLOUD: false,
   cloudWebUrl: (pathOrUrl: string) => {
     if (!pathOrUrl) return pathOrUrl;
     try {

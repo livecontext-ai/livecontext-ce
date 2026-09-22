@@ -298,6 +298,145 @@ class OAuth2EngineTest {
             assertThat(url).startsWith("https://example.com/authorize");
         }
 
+        // ─── second scope family: Slack's bot `scope` vs user `user_scope` ───
+
+        /**
+         * Slack-shaped config: {@code botScopes} go in {@code scope}, and any of the declared
+         * user-family members present in the effective scope list go in {@code user_scope}.
+         */
+        private OAuth2ProviderConfig slackConfig(List<String> effectiveScopes) {
+            return new OAuth2ProviderConfig(
+                    "https://slack.com/oauth/v2/authorize",
+                    "https://slack.com/api/oauth.v2.access",
+                    null,
+                    effectiveScopes,
+                    " ",
+                    AuthMethod.POST,
+                    OAuth2ProviderConfig.TokenParamsLocation.FORM,
+                    false,
+                    Map.of(),
+                    OAuth2ProviderConfig.RefreshConfig.STANDARD,
+                    "authorizationCode",
+                    "client_id",
+                    OAuth2ProviderConfig.TokenExchangeConfig.STANDARD,
+                    null,
+                    new OAuth2ProviderConfig.UserScopeConfig(
+                            "user_scope", List.of("search:read", "dnd:write", "users.profile:write"))
+            );
+        }
+
+        @Test
+        @DisplayName("platform path: no user-family member requested, so scope carries the bot scopes and user_scope is absent")
+        void userScopeFamilyOmittedWhenNoMemberRequested() {
+            Map<String, String> params = parseQuery(engine.buildAuthorizationUrl(
+                    slackConfig(List.of("chat:write", "channels:read")), "c", "s", CALLBACK, null));
+
+            assertThat(params).containsEntry("scope", "chat:write channels:read");
+            assertThat(params).doesNotContainKey("user_scope");
+        }
+
+        @Test
+        @DisplayName("BYOK path: a user-family member in the scope list leaves through user_scope, never through scope")
+        void userScopeFamilyRoutedToItsOwnParam() {
+            Map<String, String> params = parseQuery(engine.buildAuthorizationUrl(
+                    slackConfig(List.of("chat:write", "search:read", "channels:read", "dnd:write")),
+                    "c", "s", CALLBACK, null));
+
+            // The bug this guards: Slack rejects the whole install with invalid_scope when a
+            // user-token scope appears in `scope`, so the split must be exact on BOTH sides.
+            assertThat(params).containsEntry("scope", "chat:write channels:read");
+            assertThat(params).containsEntry("user_scope", "search:read dnd:write");
+        }
+
+        @Test
+        @DisplayName("user-only request: every scope belongs to the user family, so scope is omitted entirely")
+        void scopeParamOmittedWhenEveryScopeIsUserFamily() {
+            Map<String, String> params = parseQuery(engine.buildAuthorizationUrl(
+                    slackConfig(List.of("search:read", "dnd:write")), "c", "s", CALLBACK, null));
+
+            assertThat(params).containsEntry("user_scope", "search:read dnd:write");
+            assertThat(params).doesNotContainKey("scope");
+        }
+
+        @Test
+        @DisplayName("no family declared: the authorize URL is unchanged, scopes all in scope and no extra param")
+        void noUserScopeFamilyLeavesUrlUnchanged() {
+            OAuth2ProviderConfig plain = new OAuth2ProviderConfig(
+                    "https://example.com/authorize",
+                    "https://example.com/token",
+                    null,
+                    List.of("search:read", "read"),
+                    " ",
+                    AuthMethod.POST,
+                    false,
+                    Map.of(),
+                    OAuth2ProviderConfig.RefreshConfig.STANDARD
+            );
+
+            Map<String, String> params =
+                    parseQuery(engine.buildAuthorizationUrl(plain, "c", "s", CALLBACK, null));
+
+            // "search:read" is only special to Slack: a provider that declares no family must see
+            // its scopes untouched, which is what keeps this change a no-op for the other 175 APIs.
+            assertThat(params).containsEntry("scope", "search:read read");
+            assertThat(params).doesNotContainKey("user_scope");
+        }
+
+        @Test
+        @DisplayName("a declared family with no param DROPS its members rather than letting them fall back into scope")
+        void familyWithoutParamDropsItsMembers() {
+            OAuth2ProviderConfig noParam = new OAuth2ProviderConfig(
+                    "https://slack.com/oauth/v2/authorize",
+                    "https://slack.com/api/oauth.v2.access",
+                    null,
+                    List.of("chat:write", "search:read"),
+                    " ",
+                    AuthMethod.POST,
+                    OAuth2ProviderConfig.TokenParamsLocation.FORM,
+                    false,
+                    Map.of(),
+                    OAuth2ProviderConfig.RefreshConfig.STANDARD,
+                    "authorizationCode",
+                    "client_id",
+                    OAuth2ProviderConfig.TokenExchangeConfig.STANDARD,
+                    null,
+                    new OAuth2ProviderConfig.UserScopeConfig(null, List.of("search:read"))
+            );
+
+            Map<String, String> params =
+                    parseQuery(engine.buildAuthorizationUrl(noParam, "c", "s", CALLBACK, null));
+
+            // Fails CLOSED on purpose. Letting "search:read" fall back into `scope` is the exact
+            // shape of the two-month outage, and it costs every user their connection; dropping it
+            // costs one capability for the one install whose seed is misdeclared. The seed
+            // validator refuses this shape at authoring time, but the same DB row is also written
+            // by the signed catalog-bundle path, where no validator runs.
+            assertThat(params).containsEntry("scope", "chat:write");
+            assertThat(params).doesNotContainKey("null");
+            assertThat(params.values()).noneMatch(v -> v.contains("search:read"));
+            assertThat(noParam.unroutableUserScopes())
+                    .as("the drop is reported rather than silent")
+                    .containsExactly("search:read");
+        }
+
+        @Test
+        @DisplayName("UserScopeConfig normalizes a blank param to null and a null scope list to empty")
+        void userScopeConfigNormalizesItsInputs() {
+            var blankParam = new OAuth2ProviderConfig.UserScopeConfig("   ", List.of("search:read"));
+            var nullScopes = new OAuth2ProviderConfig.UserScopeConfig("user_scope", null);
+
+            // Both normalizations are load-bearing: a blank param would be concatenated into the
+            // URL as "=search%3Aread", and a null list would NPE on the first membership test.
+            assertThat(blankParam.param()).isNull();
+            assertThat(blankParam.canRoute()).isFalse();
+            assertThat(blankParam.contains("search:read"))
+                    .as("membership is independent of the param, which is what makes the drop work")
+                    .isTrue();
+            assertThat(nullScopes.scopes()).isEmpty();
+            assertThat(nullScopes.isEmpty()).isTrue();
+            assertThat(nullScopes.canRoute()).isFalse();
+        }
+
         @Test
         @DisplayName("pkce gating: even with PKCE enabled in config, a null challenge argument omits code_challenge (engine gates on the argument, not config.pkceEnabled)")
         void pkceGatingContract() {

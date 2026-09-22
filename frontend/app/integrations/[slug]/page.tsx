@@ -25,7 +25,7 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://livecontext.ai';
  * <p>There is no build-time list of slugs to pre-render: the catalog grows
  * whenever a batch of APIs is imported, and a new integration must be reachable
  * without a deploy. `dynamicParams` therefore stays at its default (true),
- * unlike `/compare` and `/blog`, whose content lives in the repo.
+ * unlike `/compare`, whose content lives in the repo.
  */
 // Literal on purpose: Next requires route segment config to be statically
 // analyzable, so importing PUBLIC_INTEGRATIONS_REVALIDATE_SECONDS here fails the
@@ -54,7 +54,12 @@ export async function generateMetadata({
   const noIndex = IS_CE || !isIndexableIntegration(integration);
 
   return {
-    title,
+    // `absolute` because this title already names the brand. Left as a plain
+    // string it is fed to the root layout's `title.template` ("%s - LiveContext")
+    // and every one of the ~980 integration pages rendered "<name> integration -
+    // LiveContext - LiveContext". The share blocks below take no template, so
+    // they keep the plain string.
+    title: { absolute: title },
     description,
     alternates: { canonical: url },
     // Both blocks spelled out in full: Next merges metadata shallowly per

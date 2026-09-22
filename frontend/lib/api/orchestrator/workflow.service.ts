@@ -7,6 +7,7 @@
 
 import { apiClient } from '../api-client';
 import type { Workflow, WorkflowRun, WorkflowStep, PagedStepsResponse, WorkflowBoardResponse, WorkflowsPage, ApplicationRunVersionEntry, WorkflowRelations } from './types';
+import { notifyResourceDeleted } from '@/lib/resources/resourceDeleted';
 
 export interface WorkflowsListOptions {
   /** Zero-based page index. */
@@ -27,6 +28,18 @@ export interface WorkflowsListOptions {
   folderId?: string | null;
   /** Ask for the folder tiles of that level (and the trail leading to it) alongside the rows. */
   includeFolders?: boolean;
+  /**
+   * Keep only workflows containing one of these node types (`mcp:gmail`, `core:loop`,
+   * `interface`, ...). ANY-of, not all-of: ticking two integrations asks for the
+   * workflows touching either. Empty or omitted means no node-type filter.
+   */
+  nodeTypes?: string[];
+  /**
+   * Ask for the node-type facets (the picker's options, with counts) alongside the rows.
+   * Off by default: counting walks every workflow's plan, and the node pickers that also
+   * read this endpoint have no filter UI to feed.
+   */
+  includeNodeTypeFacets?: boolean;
 }
 
 export class WorkflowService {
@@ -43,6 +56,10 @@ export class WorkflowService {
     if (options.visibility) params.visibility = options.visibility;
     if (options.folderId !== undefined && options.folderId !== null) params.folderId = options.folderId;
     if (options.includeFolders) params.includeFolders = 'true';
+    if (options.includeNodeTypeFacets) params.includeNodeTypeFacets = 'true';
+    if (options.nodeTypes && options.nodeTypes.length > 0) {
+      params.nodeTypes = options.nodeTypes.join(',');
+    }
     const data = await apiClient.get<any>('/workflows', { params });
     return {
       workflows: data.workflows ?? [],
@@ -55,6 +72,7 @@ export class WorkflowService {
       // The folder we asked for is gone (deleted, or another workspace's): the server
       // answered with the top level and the page should drop its filter.
       folderMissing: data.folderMissing === true,
+      nodeTypeFacets: data.nodeTypeFacets ?? [],
     };
   }
 
@@ -145,7 +163,8 @@ export class WorkflowService {
    * Delete a workflow
    */
   async deleteWorkflow(id: string): Promise<void> {
-    return apiClient.delete<void>(`/v2/workflows/dag/${id}`);
+    await apiClient.delete<void>(`/v2/workflows/dag/${id}`);
+    notifyResourceDeleted('workflow', id);
   }
 
   /**

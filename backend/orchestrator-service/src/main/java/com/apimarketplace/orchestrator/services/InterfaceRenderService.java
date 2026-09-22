@@ -15,6 +15,8 @@ import com.apimarketplace.orchestrator.persistence.WorkflowStepDataRepository;
 import com.apimarketplace.orchestrator.repository.EpochItemProjection;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import com.apimarketplace.orchestrator.services.context.RunContextService;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
+import com.apimarketplace.orchestrator.services.template.ResolvedValuePreview;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,6 +48,14 @@ import java.util.stream.Collectors;
 public class InterfaceRenderService implements InterfaceRenderer {
 
     private static final Logger logger = LoggerFactory.getLogger(InterfaceRenderService.class);
+
+    /**
+     * Rows loaded per variable by {@link #resolveVariablesForReporting}. One, because that
+     * path answers "what does this variable hold" rather than "what does the page show",
+     * and the count comes back in {@code __total} regardless. It is not zero: a page of
+     * zero rows would lose the element TYPE, and "a list of something" is half the answer.
+     */
+    private static final int REPORTING_ROWS_PER_VARIABLE = 1;
 
     @Autowired
     private InterfaceClient interfaceClient;
@@ -490,6 +500,51 @@ public class InterfaceRenderService implements InterfaceRenderer {
     }
 
     /**
+     * Resolves a variable mapping the way a render of this run would, for a caller that
+     * needs to REPORT what the variables hold rather than display them.
+     *
+     * <p>{@code InterfaceNode} reports its {@code variable_mapping} in the run's Params
+     * column, and the value it reports has to be the one the screen gets. This is the
+     * same resolution {@link #render} performs per item - narrowed loading, the render
+     * caps, the SQL-paginated path - reached without fetching the templates, which the
+     * node already holds no opinion about. Resolving through any other path would be a
+     * SECOND resolver, and two resolvers answering one question differently is the exact
+     * failure this reporting exists to remove.
+     *
+     * <p>On the SQL-paginated path it loads {@link #REPORTING_ROWS_PER_VARIABLE} row of each
+     * variable rather than the render's full page: that path returns the TRUE element count
+     * in {@code <name>__total} whatever the page size, so a caller that needs the count and
+     * not the data pays one row instead of two hundred. Which means the value under a
+     * variable's own name is a PAGE, not the whole collection - read {@code __total} beside
+     * it before reporting a size, or you report the page as the total.
+     *
+     * <p>An expression the SQL path cannot take (anything but a pure array reference) still
+     * goes through the full narrowed load and the render's own row cap: the early truncation
+     * there happens BEFORE the count is known, so shrinking it would trade the cost for a
+     * total that is no longer true. That branch therefore costs what a render costs.
+     *
+     * <p>Callers get the raw resolved map, including the {@code <name>__truncated} /
+     * {@code __total} companions. Read the variable names you asked for; treat everything
+     * else as render bookkeeping.
+     *
+     * @param mappings variable name to expression, as the plan declares it
+     * @param runId    the run whose data the expressions address
+     * @param tenantId the caller's tenant (the run owner's is resolved from it)
+     * @return the resolved variables, empty when there is nothing to resolve
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> resolveVariablesForReporting(
+            Map<String, String> mappings, String runId, String tenantId,
+            int epoch, int spawn, int itemIndex) {
+        if (mappings == null || mappings.isEmpty() || runId == null) {
+            return Map.of();
+        }
+        String ownerTenantId = resolveRunOwnerTenantId(runId, tenantId);
+        return resolveVariablesWithPagination(mappings, runId, epoch, spawn, itemIndex,
+            ownerTenantId, Map.of(), REPORTING_ROWS_PER_VARIABLE);
+    }
+
+    /**
      * Result for a single item, optimized for per-item lazy loading.
      */
     public record SingleItemResult(int epoch, int itemIndex, Map<String, Object> data) {}
@@ -583,14 +638,20 @@ public class InterfaceRenderService implements InterfaceRenderer {
         // Post-SpEL clamp + cumulative byte budget short-circuit. Mutates {@code resolved}
         // in-place rebuilt into a new map so iteration order is preserved.
         resolved = clampResolvedVariables(resolved);
-
         for (var entry : resolved.entrySet()) {
-            Object val = entry.getValue();
-            String preview = val == null ? "null"
-                    : val instanceof java.util.Collection<?> c ? c.getClass().getSimpleName() + "(size=" + c.size() + ")"
-                    : val instanceof Map<?,?> m ? "Map(keys=" + m.keySet() + ")"
-                    : String.valueOf(val).length() > 80 ? String.valueOf(val).substring(0, 80) + "..." : String.valueOf(val);
-            logger.info("[InterfaceRender] var {} = {}", entry.getKey(), preview);
+            // The panel's rendering AND the panel's two masking rules. `describe` is not a
+            // masking function: for a short string it returns the value verbatim, so this
+            // line printed in clear what the Params column withholds - a variable wired to
+            // {{$vars.stripe_key}} read `<withheld: workspace variable>` in the panel and
+            // its value in logs/orchestrator-service.log. It got worse before it got better:
+            // the cap moved 80 -> 120 chars, and reportVariableMapping made this fire on
+            // every interface execution rather than only on a render.
+            String name = entry.getKey();
+            Object shown = ReportedParams.isCredentialKey(name)
+                ? ReportedParams.WITHHELD_CREDENTIAL
+                : ReportedParams.valueFrom(mappings.get(name), entry.getValue());
+            logger.info("[InterfaceRender] var {} = {}", name,
+                shown instanceof String text ? text : ResolvedValuePreview.describe(shown));
         }
 
         Set<String> missing = new java.util.LinkedHashSet<>(mappings.keySet());
@@ -623,12 +684,31 @@ public class InterfaceRenderService implements InterfaceRenderer {
             int itemIndex,
             String tenantId,
             Map<String, Integer> variablePages) {
+        return resolveVariablesWithPagination(mappings, runId, epoch, spawn, itemIndex, tenantId,
+            variablePages, renderLimits.getMaxRowsPerVariable());
+    }
+
+    /**
+     * @param varPageSize how many rows of each variable to actually load. A render wants the
+     *                    page it displays; a caller that only needs to REPORT what a variable
+     *                    holds wants the smallest page there is, because the SQL path returns
+     *                    the true {@code __total} whatever the page size, and loading 200 rows
+     *                    to print a count is the whole cost of that call.
+     */
+    private Map<String, Object> resolveVariablesWithPagination(
+            Map<String, String> mappings,
+            String runId,
+            int epoch,
+            int spawn,
+            int itemIndex,
+            String tenantId,
+            Map<String, Integer> variablePages,
+            int varPageSize) {
 
         if (mappings == null || mappings.isEmpty() || runId == null) {
             return Map.of();
         }
 
-        int varPageSize = renderLimits.getMaxRowsPerVariable();
         Map<String, Integer> requestedPages = variablePages != null ? variablePages : Map.of();
 
         // Split mappings: paginated vs standard

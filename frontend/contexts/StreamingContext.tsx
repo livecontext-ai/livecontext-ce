@@ -27,12 +27,16 @@ function isApiKeyError(message: string): boolean {
 import { showInsufficientCreditsModal } from '@/components/billing/InsufficientCreditsModal';
 import { showInsufficientStorageModal } from '@/components/billing/InsufficientStorageModal';
 import { showMissingApiKeyModal } from '@/components/billing/MissingApiKeyModal';
+// The user's OWN saved key was refused, as opposed to nothing being configured at all: two
+// different pages to send the reader to, told apart by the sentence the provider wrote.
+import { isOwnKeyRejection } from '@/lib/billing/ownKeyRejection';
 import { showAgentErrorModal } from '@/components/billing/AgentErrorModal';
 import { handleCeRelayError } from '@/lib/billing/ceRelayErrorModals';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { getModelsCache, getEffectiveDefaultModel, getEffectiveDefaultProvider } from '@/hooks/useModels';
 import { wsClient } from '@/lib/websocket';
 import { useChannel } from '@/lib/websocket/use-channel';
+import { selectLiveChannelIds, PLACEHOLDER_CONVERSATION_PREFIX } from './streamingChannels';
 import {
   markPendingToolsAsSuccess,
   markThinkingAsSuccess,
@@ -296,6 +300,17 @@ export interface ServiceApprovalInfo {
   toolName?: string;     // e.g., "List Messages"
   toolId?: string;       // Tool UUID
   description?: string;  // Why needed
+  /**
+   * Set when this service is CONNECTED and provably short of the scopes the failing
+   * call named. The card then says what the account was not granted instead of asking
+   * for a connection it already has, and offers the user's own OAuth client where the
+   * shared one can never grant the scope (Gmail read access is the standing example).
+   * Absent for every ordinary "connect this" request.
+   */
+  requiredScopes?: string[];
+  grantedScopes?: string[];
+  missingScopes?: string[];
+  credentialType?: string;
 }
 
 export interface PendingServiceApproval {
@@ -320,6 +335,33 @@ export interface PendingServiceApproval {
   timestamp: number;
 }
 
+/**
+ * What an authorization card is ABOUT, as the backend extracted it from the gated call.
+ *
+ * "Run this action?" is not answerable; "put THIS workflow live?" is. The backend fills this
+ * from the call's own arguments, so it describes exactly what would run. Every field is
+ * optional because a card must render without it: an older backend, a rule that names
+ * nothing, or an argument the agent omitted all arrive here as `undefined`, and the card
+ * falls back to copy that names no subject rather than showing a blank.
+ *
+ * `name` is absent for a workflow (agent-service cannot resolve it - no orchestrator client),
+ * which is why the card fetches it by `id`.
+ */
+export interface ToolAuthorizationSubject {
+  /** 'workflow' (pin/unpin) or 'agent' (a cron being armed). */
+  kind?: string;
+  /** Workflow id, or agent id on an update. What the card resolves a name from. */
+  id?: string;
+  /** Already-known name - the agent tool carries one on create; a workflow never does. */
+  name?: string;
+  /** The version being pinned. Absent on unpin. */
+  version?: number;
+  /** The cron being armed, verbatim as the agent wrote it. */
+  cron?: string;
+  /** IANA zone the cron fires in ('UTC' when the call omitted it, mirroring the backend). */
+  timezone?: string;
+}
+
 // Tool-authorization request info (when the agent calls a sensitive action gated by
 // ToolAuthorizationGuard, e.g. application:acquire). Distinct from service/credential approval.
 export interface PendingToolAuthorization {
@@ -329,6 +371,7 @@ export interface PendingToolAuthorization {
   toolCallId?: string;   // LLM tool-call id (correlation)
   argsSummary?: string;  // short human-readable summary of the call arguments
   applicationId?: string; // publication id - only for application:acquire (opens install modal)
+  subject?: ToolAuthorizationSubject; // what the card is about - see the type
   /** See PendingServiceApproval.blocking. */
   blocking?: boolean;
   gateKey?: string;
@@ -547,7 +590,7 @@ type StreamingAction =
   | { type: 'AGENT_BROWSE_STEP'; conversationId: string; toolId: string; sessionId: string; cdpToken: string; cdpWsUrl: string; currentUrl: string; runId: string; nodeId: string; stepIndex: number }
   | { type: 'SERVICE_APPROVAL_REQUIRED'; conversationId: string; services: ServiceApprovalInfo[]; reason?: string; needsAttention?: boolean; blocking?: boolean; gateKey?: string }
   | { type: 'CLEAR_SERVICE_APPROVAL'; conversationId: string; key?: string }
-  | { type: 'TOOL_AUTHORIZATION_REQUIRED'; conversationId: string; rule: string; toolName?: string; action?: string; toolCallId?: string; argsSummary?: string; applicationId?: string; blocking?: boolean; gateKey?: string }
+  | { type: 'TOOL_AUTHORIZATION_REQUIRED'; conversationId: string; rule: string; toolName?: string; action?: string; toolCallId?: string; argsSummary?: string; applicationId?: string; subject?: ToolAuthorizationSubject; blocking?: boolean; gateKey?: string }
   | { type: 'CLEAR_TOOL_AUTHORIZATION'; conversationId: string; key?: string }
   | { type: 'ASK_USER_REQUIRED'; conversationId: string; toolCallId: string; questions: PendingAskUserQuestion['questions']; blocking?: boolean; gateKey?: string; streamId?: string | null }
   | { type: 'CLEAR_ASK_USER'; conversationId: string; key?: string }
@@ -980,6 +1023,7 @@ function streamingReducer(state: StreamingState, action: StreamingAction): Strea
             toolCallId: action.toolCallId,
             argsSummary: action.argsSummary,
             applicationId: action.applicationId,
+            subject: action.subject,
             blocking: action.blocking,
             gateKey: action.gateKey,
             timestamp: Date.now(),
@@ -1555,6 +1599,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
               toolCallId: mapped.toolAuthorization.toolCallId,
               argsSummary: mapped.toolAuthorization.argsSummary,
               applicationId: mapped.toolAuthorization.applicationId,
+              subject: mapped.toolAuthorization.subject,
               blocking: mapped.toolAuthorization.blocking,
               gateKey: mapped.toolAuthorization.gateKey,
             });
@@ -1659,7 +1704,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
           if (handleCeRelayError(errorMsg)) {
             error.retryable = false;
           } else if (isApiKeyError(errorMsg)) {
-            showMissingApiKeyModal();
+            showMissingApiKeyModal(isOwnKeyRejection(errorMsg) ? 'own-key' : 'platform');
             error.retryable = false;
           } else {
             // Generic unexpected agent/relay error (e.g. "Provider not configured", a
@@ -1760,7 +1805,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
     const { message, model, provider = getEffectiveDefaultProvider() ?? '', conversationId, history, agentId, defaultSkillIds, chatConfig, source, taskId, reasoningEffort, keepPendingActions } = params;
 
     // Start streaming (status = 'streaming', content = '' means loading)
-    const tempId = conversationId || `temp-${Date.now()}`;
+    const tempId = conversationId || `${PLACEHOLDER_CONVERSATION_PREFIX}${Date.now()}`;
     const refs = getStreamRefs(tempId);
 
     // Take ownership of this conversation's refs: any in-flight checkAndReconnect
@@ -1876,7 +1921,9 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
 
       const errorMsg = error?.message || 'Failed to send message';
       if (isApiKeyError(errorMsg)) {
-        showMissingApiKeyModal();
+        // The non-stream POST failure path, classified the same way as the stream above: the
+        // same rejection can arrive either way and must not send the reader to two pages.
+        showMissingApiKeyModal(isOwnKeyRejection(errorMsg) ? 'own-key' : 'platform');
         const errorConvId = conversationId || tempId;
         dispatch({ type: 'ERROR', conversationId: errorConvId, error: { message: errorMsg, retryable: false } });
         return null;
@@ -2125,6 +2172,7 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
                 toolCallId: mapped.toolAuthorization.toolCallId,
                 argsSummary: mapped.toolAuthorization.argsSummary,
                 applicationId: mapped.toolAuthorization.applicationId,
+                subject: mapped.toolAuthorization.subject,
                 blocking: mapped.toolAuthorization.blocking,
                 gateKey: mapped.toolAuthorization.gateKey,
               });
@@ -2322,14 +2370,9 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
   // streaming (or just-completed, so a terminal snapshot still lands) plus any server-reported
   // active streams (reload-while-streaming). Sorted + stable so the array identity only changes
   // when the SET of ids changes - never on per-token content mutations - avoiding subscribe churn.
-  const activeChannelIds = useMemo(() => {
-    const ids = new Set<string>();
-    state.streams.forEach((s, id) => {
-      if (s.status === 'streaming' || s.status === 'completed') ids.add(id);
-    });
-    (state.serverActiveStreams as Set<string> | string[] | undefined)?.forEach((id: string) => ids.add(id));
-    return Array.from(ids).sort();
-  }, [state.streams, state.serverActiveStreams]);
+  const activeChannelIds = useMemo(
+    () => selectLiveChannelIds(state.streams, state.serverActiveStreams),
+    [state.streams, state.serverActiveStreams]);
 
   return (
     <StreamingContext.Provider value={value}>

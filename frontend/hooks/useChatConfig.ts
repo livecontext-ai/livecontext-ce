@@ -57,6 +57,21 @@ export interface ChatConfig {
    */
   generation?: GenerationConfig;
   /**
+   * Mailbox toggle: read and send email on the account's connected mailbox, through
+   * IMAP and SMTP (opt-IN, default OFF).
+   *
+   * <p>Same two shapes as `generation` on the wire, and off for the same kind of
+   * reason turned up one notch: this one does not spend money, it reaches a real
+   * inbox and can send from its address, to a person, with no undo.
+   */
+  mailbox?: GenerationConfig;
+  /**
+   * Read/write axis for the mailbox above. Absent implies 'write' (full access),
+   * which is what every family defaults to, so a chat granted the mailbox with no
+   * mode stated can SEND. 'read' keeps listing, folders and marking read.
+   */
+  mailboxAccessMode?: 'read' | 'write';
+  /**
    * Per-conversation blanket grant: run sensitive tool actions (install / execute /
    * agent / catalog) without showing the authorization card. Opt-IN - default OFF.
    * The backend turns this into a "*" wildcard in __approvedToolActions__.
@@ -179,6 +194,11 @@ export function buildDraftChatConfigBody(
     // The unified generation grant is editable as a workspace default AND accepted
     // by the conversation patch - seed it so the default reaches new conversations.
     'generation',
+    // Both halves of the mailbox. These lists are hand-maintained, and a key missing from
+    // one is a control that moves, saves, and changes nothing on that surface. The axis
+    // travels with the grant because an absent mode reads as FULL access.
+    'mailbox',
+    'mailboxAccessMode',
     'autoAuthorizeTools',
     'defaultSkillIds',
   ];
@@ -366,6 +386,40 @@ function extractGeneration(source: Record<string, unknown> | null | undefined): 
   };
 }
 
+/**
+ * The mailbox grant, read back the same way. Without it the panel starts from an empty
+ * config, and since the builders rebuild the WHOLE chatConfig from that, any unrelated edit
+ * (web search, auto-authorize) would drop a granted mailbox on the floor.
+ */
+function extractMailbox(source: Record<string, unknown> | null | undefined): GenerationConfig | undefined {
+  const grant = extractOptInGrant(source, 'mailbox');
+  if (!grant) return undefined;
+  // Same shape as extractGeneration, field for field: GenerationConfig declares exactly
+  // { enabled, model }, and the panel spreads the stored object when it toggles, so reading
+  // back fewer fields than the type declares would drop one the writer put there.
+  return { enabled: grant.enabled, model: optionalString(grant.fields, 'model') };
+}
+
+/**
+ * Re-read the opt-in grants out of a config that came straight off the wire.
+ *
+ * <p>The server keeps an opt-in grant in the shape it was SENT, so the same key can arrive as
+ * a boolean or as an object. Every reader in the UI tests `?.enabled`, so a boolean reads as
+ * off: a granted capability renders as ungranted, and saving from that screen then revokes it.
+ *
+ * <p>Applied on EVERY writer of the shared defaults cache (hydration, priming, and the save
+ * response), since any of them can be the one that filled it for the surface the user is
+ * looking at. Counting them is the point: two of the three were missed in turn.
+ */
+export function normalizeOptInGrants(config: ChatConfig): ChatConfig {
+  const raw = config as unknown as Record<string, unknown>;
+  return {
+    ...config,
+    generation: extractGeneration(raw) ?? config.generation,
+    mailbox: extractMailbox(raw) ?? config.mailbox,
+  };
+}
+
 export function configFromAgent(agent: Agent): ChatConfig {
   const toolsCfg = (agent.toolsConfig ?? {}) as Record<string, unknown>;
   // Summariser-model pair (flat AgentEntity columns) - both-or-neither: a
@@ -407,6 +461,9 @@ export function configFromConversation(raw: { chatConfig?: Record<string, unknow
     webSearch: cfg.webSearch === false ? false : cfg.webSearch === true ? true : undefined,
     autoAuthorizeTools: cfg.autoAuthorizeTools === true ? true : cfg.autoAuthorizeTools === false ? false : undefined,
     generation: extractGeneration(cfg),
+    mailbox: extractMailbox(cfg),
+    mailboxAccessMode: cfg.mailboxAccessMode === 'read' ? 'read'
+      : cfg.mailboxAccessMode === 'write' ? 'write' : undefined,
     defaultSkillIds: Array.isArray(cfg.defaultSkillIds)
       ? cfg.defaultSkillIds.filter((id): id is string => typeof id === 'string')
       : undefined,
@@ -506,6 +563,11 @@ export function buildConversationPatch(
     'toolsMode',
     'webSearch',
     'generation',
+    // Both halves of the mailbox. These lists are hand-maintained, and a key missing from
+    // one is a control that moves, saves, and changes nothing on that surface. The axis
+    // travels with the grant because an absent mode reads as FULL access.
+    'mailbox',
+    'mailboxAccessMode',
     'autoAuthorizeTools',
     'defaultSkillIds',
   ];
@@ -607,8 +669,15 @@ export function useChatConfig(options: UseChatConfigOptions): UseChatConfigResul
       setLocalConfig(configFromConversation(conversationQuery.data));
       hydratedRef.current = true;
     } else if (target === 'user-default' && userDefaultsQuery.data) {
-      setLocalConfig(userDefaultsQuery.data as ChatConfig);
-      setUserDefaultChatConfigCache(userDefaultsQuery.data as ChatConfig);
+      // Normalised, not cast. The server stores an opt-in grant in whichever shape it was
+      // sent (UserChatDefaultsService copies ALLOWED_KEYS values verbatim), so a boolean
+      // `mailbox: true` reaches `config.mailbox?.enabled` as undefined: the switch reads OFF
+      // while the grant is ON, and the user cannot turn off what the panel says is already
+      // off. This is the ONE surface that owns that switch, so it is the one that must not
+      // guess.
+      const normalized = normalizeOptInGrants(userDefaultsQuery.data as ChatConfig);
+      setLocalConfig(normalized);
+      setUserDefaultChatConfigCache(normalized);
       hydratedRef.current = true;
     } else if (target === 'draft' && !hydratedRef.current) {
       // Show the persisted per-(user, workspace) defaults as the base (populated by
@@ -691,7 +760,7 @@ export function useChatConfig(options: UseChatConfigOptions): UseChatConfigResul
         // the stored config, so stripping an unset/blank pair also clears it.
         const merged = stripUnsetCompactionModelPair({ ...localConfig, ...patch });
         const saved = await conversationApi.updateUserChatDefaults(merged as Record<string, unknown>);
-        setUserDefaultChatConfigCache(saved as ChatConfig);
+        setUserDefaultChatConfigCache(normalizeOptInGrants(saved as ChatConfig));
         queryClient.setQueryData(['user-chat-defaults'], saved);
       } else if (target === 'draft') {
         // Draft target: persist the merged config (not just the patch) in memory so
@@ -780,7 +849,11 @@ export function usePrimeUserChatDefaults(): void {
   });
 
   useEffect(() => {
-    if (data) setUserDefaultChatConfigCache(data as ChatConfig);
+    // Normalised here too, and this is the writer that matters most: this hook is the one
+    // mounted on the chat surfaces, so the cache it fills is what the draft row reads. The
+    // Settings page normalises on its own path; leaving this one a raw cast would fix the
+    // screen nobody had the problem on and leave the screens that do.
+    if (data) setUserDefaultChatConfigCache(normalizeOptInGrants(data as ChatConfig));
   }, [data]);
 
   useOrgScopedReset(() => {

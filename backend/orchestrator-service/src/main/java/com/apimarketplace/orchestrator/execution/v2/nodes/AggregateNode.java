@@ -5,6 +5,7 @@ import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
 import com.apimarketplace.orchestrator.execution.v2.split.SplitContextManager;
 import com.apimarketplace.orchestrator.services.TemplateEngine;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -323,56 +324,69 @@ public class AggregateNode extends BaseNode {
         }
     }
 
+    /**
+     * What an aggregate reports, built ONCE for both producers.
+     *
+     * <p>An aggregate's parameters are written in two places: here, and by
+     * {@code SplitAggregateHandler} on the path a split reaches it through. They used to be
+     * two copies of one shape, and the copies drifted the moment one of them was put through
+     * {@link ReportedParams#forReport} and the other was not: a field an author labelled
+     * {@code token} reported {@code <withheld: credential>} on the split path and its
+     * expression on the node path, so one key meant two things depending on how the node was
+     * reached. That is the exact defect {@code SplitParamsReport} was created to remove for
+     * split, and sharing the implementation is the only fix that cannot drift again.
+     *
+     * <p>Bounded per entry, NOT masked by key name, and the distinction is the point. The
+     * keys are the AUTHOR'S labels and the values are the configured EXPRESSIONS: a
+     * {@code {{...}}} template is not a credential whatever the field is called, so reading
+     * those labels with the credential rules produces only false positives - and a false
+     * positive here is not cosmetic, because {@code StepOutputService} publishes every
+     * reported key as {@code input.<key>}, so a masked label hands the literal string
+     * {@code <withheld: credential>} to whatever downstream node reads
+     * {@code {{core:<agg>.input.<label>}}}.
+     */
+    public static Map<String, Object> buildReportedParams(List<AggregateField> fields, String nodeId) {
+        Map<String, Object> resolvedParams = new LinkedHashMap<>();
+        if (fields == null || fields.isEmpty()) {
+            return resolvedParams;
+        }
+        List<Map<String, Object>> declared = new ArrayList<>();
+        for (AggregateField field : fields) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("label", field.label());
+            entry.put("expression", ReportedParams.value(field.expression()));
+            declared.add(entry);
+        }
+        resolvedParams.put("fields", declared);
+        for (AggregateField field : fields) {
+            if ("fields".equals(field.label())) {
+                // A field the author labelled "fields" collides with the declaration above,
+                // and the declaration wins: without it the reader gets values and no way to
+                // tell which expression produced them. The cost is real and is stated rather
+                // than hidden - THAT ONE field's expression is not reported, and
+                // {{core:<agg>.input.fields}} addresses the declaration list. Logged from
+                // the one place both producers share, because a diagnostic that depends on
+                // which path the node was reached through is no diagnostic.
+                logger.warn("Aggregate field labelled 'fields' collides with the declaration "
+                    + "key; its expression is not reported: nodeId={}", nodeId);
+                continue;
+            }
+            resolvedParams.put(field.label(), ReportedParams.value(field.expression()));
+        }
+        // Bounded, never masked by name: see ReportedParams.boundedWithoutMasking. Unifying
+        // the two producers dropped the bound the split path used to have, which is the
+        // half of forReport an aggregate does need.
+        return ReportedParams.boundedWithoutMasking(resolvedParams);
+    }
+
+
     private Map<String, Object> buildAggregatedOutput(String batchKey, ExecutionContext context) {
         Map<String, Object> output = new HashMap<>();
 
-        // Build resolved_params snapshot for inspector visibility.
-        // `fields`, under the plan's own key: without it a reader sees collected
-        // values but nothing saying which fields were configured, and an aggregate
-        // whose expressions all resolve to nothing looks like one that was never
-        // set up.
-        Map<String, Object> resolvedParams = new LinkedHashMap<>();
-        List<Map<String, Object>> declaredFields = new ArrayList<>();
-        for (AggregateField field : fields) {
-            Map<String, Object> declared = new LinkedHashMap<>();
-            declared.put("label", field.label());
-            declared.put("expression", field.expression());
-            declaredFields.add(declared);
-        }
-        resolvedParams.put("fields", declaredFields);
-        // One key per author label as well: `StepOutputService` publishes every
-        // reported key as `input.<key>`, so dropping them would silently break
-        // `{{core:<agg>.input.<label>}}` in workflows that already address them.
-        //
-        // The VALUE under those keys changes with this: it used to be a resolved
-        // string, it is now the expression. A workflow reading
-        // `{{core:agg.input.total}}` gets the template text where it used to get
-        // resolved text. That is deliberate (see below) and it is a behaviour
-        // change, not just a restoration.
-        //
-        // The value is the configured EXPRESSION, not a resolved one, and that is
-        // deliberate on both counts. Resolving here used the NODE context while
-        // the values were actually collected against
-        // EvalContextBuilder.buildAggregateEvalContext, so a per-item expression
-        // reported something the node never aggregated - and resolveTemplateString
-        // coerces to String, so `input.<label>` was a String while
-        // `output.<label>` is a typed List. Reporting the expression is honest,
-        // and it is what SplitAggregateHandler reports on the path an aggregate is
-        // normally reached through, so the two producers now agree.
-        for (AggregateField field : fields) {
-            if ("fields".equals(field.label())) {
-                // A field the author labelled "fields" collides with the declaration
-                // above, and the declaration wins: without it the reader gets values
-                // and no way to tell which expression produced them. The cost is real
-                // and is stated rather than hidden - THAT ONE field's resolved value
-                // is not reported, and {{core:<agg>.input.fields}} addresses the
-                // declaration list. Every other field is unaffected.
-                logger.warn("Aggregate field labelled 'fields' collides with the declaration "
-                    + "key; its resolved value is not reported: nodeId={}", nodeId);
-                continue;
-            }
-            resolvedParams.put(field.label(), field.expression());
-        }
+        // Build resolved_params snapshot for inspector visibility, through the ONE builder
+        // both producers share - see buildReportedParams for why the author's labels are
+        // bounded but never masked, and for what drifted when they were two copies.
+        Map<String, Object> resolvedParams = buildReportedParams(fields, nodeId);
         output.put("resolved_params", resolvedParams);
 
         Map<String, List<Object>> batchData = collectedData.get(batchKey);

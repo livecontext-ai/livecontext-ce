@@ -19,6 +19,13 @@ export interface PublicProfile {
   avatarUrl?: string | null;
   bio?: string | null;
   joinedAt?: string | null;
+  /**
+   * Whether this account carries the verified badge (the blue check next to the
+   * name). Resolved live by the backend from the ADMIN role plus the manual grant,
+   * and always false on a self-hosted deployment - the badge is a managed-cloud
+   * feature. Unrelated to e-mail verification, which is never exposed publicly.
+   */
+  verified?: boolean;
 }
 
 /**
@@ -32,6 +39,29 @@ export interface AccountDeletionStatus {
   deactivatedAt: string | null;
   deletionAt: string | null;
   gracePeriodDays: number;
+}
+
+/**
+ * Outcome of an admin verified-badge change (POST /admin/verified-accounts/set).
+ *
+ * `verifiedByRole` is true when the target is a platform admin, who carries the badge
+ * from the role alone: revoking the manual flag then leaves the badge showing, and the
+ * admin screen says so instead of implying a change nobody can see. `profileWithdrawn`
+ * is the mirror case: the grant is stored but shows nowhere.
+ */
+export interface AdminVerifiedAccountResponse {
+  userId: number;
+  email: string | null;
+  verified: boolean;
+  verifiedByRole: boolean;
+  /**
+   * What a reader actually sees after the write. NOT `verified || verifiedByRole`: a
+   * withdrawn profile page suppresses both, and the screen must not report a badge
+   * nobody can see.
+   */
+  effectivelyVerified: boolean;
+  /** The target set their profile to PRIVATE, so the grant is stored and dormant. */
+  profileWithdrawn?: boolean;
 }
 
 export class UserApiService {
@@ -137,6 +167,35 @@ export class UserApiService {
    */
   async getPublicProfileById(userId: string | number): Promise<PublicProfile> {
     return apiClient.get<PublicProfile>(`/users/public/by-id/${userId}`);
+  }
+
+  /**
+   * Grant or revoke a user's verified badge. Platform admins already carry it from
+   * their role, so this is how everyone else gets one. Admin-only and cloud-only:
+   * the backend answers 403 without the ADMIN role and 503 on a self-hosted install.
+   */
+  async adminSetVerified(payload: {
+    target_email?: string;
+    target_user_id?: number;
+    verified: boolean;
+  }): Promise<AdminVerifiedAccountResponse> {
+    return apiClient.post<AdminVerifiedAccountResponse>('/admin/verified-accounts/set', payload);
+  }
+
+  /**
+   * Which of these users carry the verified badge - one request for a whole rendered
+   * list. Answers only the ids that qualify; unknown and unverified ids are absent.
+   *
+   * Call it through `loadVerifiedFlag` (lib/api/verifiedUsers) rather than directly:
+   * that wrapper is what collects a list's ids into a single batch.
+   */
+  async getVerifiedUserIds(userIds: Array<string | number>): Promise<string[]> {
+    if (userIds.length === 0) return [];
+    const response = await apiClient.get<{ verified: Array<string | number> }>(
+      '/users/public/verified-badges',
+      { params: { ids: userIds.join(',') } },
+    );
+    return (response?.verified ?? []).map((id) => String(id));
   }
 
   /**

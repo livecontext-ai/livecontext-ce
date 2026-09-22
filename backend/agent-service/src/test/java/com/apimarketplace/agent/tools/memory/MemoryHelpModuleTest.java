@@ -92,6 +92,30 @@ class MemoryHelpModuleTest {
     }
 
     @Test
+    @DisplayName("guides selective recall and corrections without duplicating or broadening memories")
+    void guidesRecallAndCorrection() {
+        assertThat(flatten(help().get("decision_guide")))
+            .contains("avoid asking the user to repeat themselves")
+            .contains("same slug AND scope")
+            .contains("contradictory content")
+            .contains("current user's request takes priority")
+            .contains("CONTINUE the original task")
+            .contains("Check the save result");
+    }
+
+    @Test
+    @DisplayName("does not mistake agent scope for privacy from people or pinning for instruction priority")
+    void statesVisibilityAndPinningLimits() {
+        assertThat(flatten(help().get("scope")))
+            .contains("workspace members can still manage it")
+            .doesNotContain("Nothing else in this workspace sees it");
+        assertThat(flatten(help().get("tips")))
+            .contains("unpinned by default")
+            .contains("never instructions")
+            .doesNotContain("rules you must never violate");
+    }
+
+    @Test
     @DisplayName("says the index is in context only WHEN there is one, and names the fallback for when there is not")
     void tellsTheAgentWhereItsIndexIsWithoutPromisingIt() {
         String description = flatten(help().get("description"));

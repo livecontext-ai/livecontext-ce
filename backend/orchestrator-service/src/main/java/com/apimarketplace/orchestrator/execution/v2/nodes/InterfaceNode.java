@@ -9,6 +9,8 @@ import com.apimarketplace.orchestrator.execution.v2.services.UnifiedSignalServic
 import com.apimarketplace.orchestrator.services.InterfaceRenderService;
 import com.apimarketplace.orchestrator.services.InterfaceRenderService.ResolvedTemplateSnapshot;
 import com.apimarketplace.orchestrator.services.interfaces.InterfaceScreenshotService;
+import com.apimarketplace.orchestrator.services.template.ResolvedValuePreview;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,6 +34,14 @@ public class InterfaceNode extends BaseNode {
 
     private final String interfaceId;
     private final Map<String, String> actionMapping;
+    /**
+     * The interface's {@code variable_mapping}, set by the node factory from the plan.
+     *
+     * <p>Not a constructor argument: the constructor already carries fourteen positional
+     * flags behind five back-compat overloads, and this is plan data the engine hands
+     * over, like {@link #setDagTriggerId} and {@link #setEpoch} beside it.
+     */
+    private Map<String, String> variableMapping = Map.of();
     private final boolean isEntryInterface;
     private final boolean generateScreenshot;
     private final boolean exposeRenderedSource;
@@ -163,6 +173,20 @@ public class InterfaceNode extends BaseNode {
             String effectiveDagTriggerId = SignalContextResolver.resolveDagTriggerId(nodeId, dagTriggerId, context);
             int effectiveEpoch = SignalContextResolver.resolveEpoch(epoch, context);
 
+            // What each template variable is wired to, and what it held when this node ran.
+            // Without it an interface that renders an empty screen reports nothing a reader
+            // can act on: the mapping is the one thing between the workflow's data and the
+            // page, and the failure it hides has a documented shape - a mapping written
+            // {"result": "{{core:normalize.output}}"} resolves to {result: {...}}, so the page
+            // reads __RESOLVED_DATA__.result.result, finds nothing, and renders its empty
+            // state with no error anywhere. `Map(keys=[result])` beside the expression is that
+            // diagnosis, in one line.
+            //
+            // Inside the try, and BEFORE the first failure branch, so every path from here on
+            // carries the report while an epoch that cannot be resolved still fails the way it
+            // always did (as this node's own failure, not as an engine-level throw).
+            reportVariableMapping(resolvedParams, context, effectiveEpoch);
+
             boolean hasContinue = actionMapping.containsValue("__continue");
 
             // For blocking interfaces (__continue), signal service is required - without it
@@ -170,7 +194,11 @@ public class InterfaceNode extends BaseNode {
             if (signalService == null && hasContinue) {
                 logger.warn("Interface node has no signal service for blocking interface, failing: nodeId={}", nodeId);
                 Map<String, Object> failOutput = new HashMap<>();
-                failOutput.put("resolved_params", resolvedParams);
+                // Through the gate like the success path: a PreGated that is NOT unwrapped is
+                // serialised by Jackson as {"value": {...}}, which adds a level to the very
+                // path this report exists to make readable - and a failed interface is when
+                // it is read. The map is also unmasked and unbounded without it.
+                failOutput.put("resolved_params", ReportedParams.forReport(resolvedParams));
                 failOutput.put("interface_id", interfaceId);
                 failOutput.put("action_mapping", actionMapping);
                 failOutput.put("is_entry_interface", isEntryInterface);
@@ -189,13 +217,22 @@ public class InterfaceNode extends BaseNode {
                 // the interface UI gets its per-item context from the render API's
                 // (epoch, spawn, itemIndex)-tagged items, so duplicating the item on
                 // the signal would only bloat the signals/snapshot payloads.
-                signalService.registerSignal(
-                    runId, itemId, nodeId, effectiveDagTriggerId, effectiveEpoch,
-                    SignalType.INTERFACE_SIGNAL, signalConfig, null);
+                // The variable mapping and the rest of the node's configuration travel with
+                // the signal. A blocking interface is the ONLY kind that pauses a run, and a
+                // pause persists no step row, so without this the mapping report - the whole
+                // point of it - reached the panel on the auto-advance path alone.
+                signalService.recordReportedParams(
+                    signalService.registerSignal(
+                        runId, itemId, nodeId, effectiveDagTriggerId, effectiveEpoch,
+                        SignalType.INTERFACE_SIGNAL, signalConfig, null),
+                    resolvedParams);
             }
 
             Map<String, Object> output = new HashMap<>();
-            output.put("resolved_params", resolvedParams);
+            // Through the same gate the signal path applies (UnifiedSignalService.recordReportedParams),
+            // so a blocking interface and an auto-advancing one report the SAME thing. They
+            // did not: a variable named `token` was masked on one path and printed on the other.
+            output.put("resolved_params", ReportedParams.forReport(resolvedParams));
             output.put("interface_id", interfaceId);
             output.put("action_mapping", actionMapping);
             output.put("is_entry_interface", isEntryInterface);
@@ -258,14 +295,138 @@ public class InterfaceNode extends BaseNode {
 
         } catch (Exception e) {
             logger.error("Interface node failed: nodeId={}, error={}", nodeId, e.getMessage(), e);
+            // Same gate as the two paths above, for the same reason: an unwrapped PreGated
+            // reaches the row as {"value": {...}}.
             Map<String, Object> failOutput = new HashMap<>();
-            failOutput.put("resolved_params", resolvedParams);
+            failOutput.put("resolved_params", ReportedParams.forReport(resolvedParams));
             failOutput.put("interface_id", interfaceId);
             failOutput.put("action_mapping", actionMapping);
             failOutput.put("is_entry_interface", isEntryInterface);
             failOutput.put("error", e.getMessage());
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failOutput, 0L);
         }
+    }
+
+    /**
+     * Reports the interface's variable mapping under the plan's own key, one entry per
+     * variable: the expression the author wired, what it held when this node ran, and
+     * which of those two answers the reader is looking at.
+     *
+     * <p>The resolved value comes from {@code InterfaceRenderService}, the service the
+     * SCREEN resolves through, so the panel and the page cannot disagree about what a
+     * variable holds. It is a DESCRIPTION, never the value: an interface variable is a
+     * page of rows, and {@code resolved_params} is persisted per step row.
+     *
+     * <p>Two honest limits, both visible in the report rather than hidden:
+     * <ul>
+     *   <li>It says what was true WHEN THE NODE RAN. An interface fed by nodes that run
+     *       after it (the action-then-display shape) reports those variables
+     *       {@code unresolved} here and still displays them once they exist; that is the
+     *       same statement every other node's Params column makes about itself.</li>
+     *   <li>With no render service wired, or when the resolution throws, every variable
+     *       reports {@code not_evaluated} and the reason is reported beside them. A
+     *       status that says nothing was measured is worth more than a blank that reads
+     *       like a measurement.</li>
+     * </ul>
+     */
+    private void reportVariableMapping(Map<String, Object> resolvedParams,
+                                       ExecutionContext context, int effectiveEpoch) {
+        if (variableMapping.isEmpty()) {
+            return;
+        }
+
+        Map<String, Object> resolved = null;
+        String failure = null;
+        if (renderService == null) {
+            // WARN for the same reason the screenshot/PDF toggles do: "the bean is missing"
+            // is invisible from the panel, and the panel is where the question is asked.
+            logger.warn("[InterfaceNode] no InterfaceRenderService is wired - variable mapping "
+                + "reported without its resolved values: nodeId={}", nodeId);
+            failure = "no render service is wired";
+        } else {
+            try {
+                resolved = renderService.resolveVariablesForReporting(
+                    variableMapping, context.runId(), context.tenantId(),
+                    effectiveEpoch, context.spawn(), context.itemIndex());
+            } catch (Exception e) {
+                // Continue-on-failure, like every other reporting path on this node: a
+                // diagnosis that breaks the run it explains is worse than no diagnosis.
+                logger.warn("[InterfaceNode] variable resolution for reporting failed "
+                    + "(continuing): nodeId={}, error={}", nodeId, e.getMessage());
+                failure = e.getMessage();
+            }
+            if (resolved == null && failure == null) {
+                // A resolution that answered null rather than throwing. Unreachable from the
+                // service today, and pinned here rather than assumed: the alternative is a
+                // report that says `not_evaluated` while claiming nothing went wrong.
+                failure = "the resolution returned nothing";
+            }
+        }
+
+        // The render's byte budget can DROP variables it has not got to yet, flagging the
+        // map rather than the variable. Reading only the variable's own absence would call
+        // that "unresolved", which this report defines as "it held nothing" - the opposite
+        // of "it held too much to measure".
+        boolean budgetExhausted = resolved != null
+            && Boolean.TRUE.equals(resolved.get("__resolved_variables_truncated"));
+
+        Map<String, Object> report = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : variableMapping.entrySet()) {
+            Map<String, Object> variable = new java.util.LinkedHashMap<>();
+            variable.put("expression", entry.getValue());
+            if (resolved == null) {
+                variable.put("resolved", null);
+                variable.put("status", "not_evaluated");
+            } else {
+                Object value = resolved.get(entry.getKey());
+                variable.put("resolved", describeResolved(resolved, entry.getKey(), value, entry.getValue()));
+                variable.put("status", value != null ? "resolved"
+                    : budgetExhausted ? "not_evaluated" : "unresolved");
+            }
+            report.put(entry.getKey(), variable);
+        }
+        if (budgetExhausted && failure == null) {
+            failure = "the render's variable byte budget was exhausted; "
+                + "the variables reported not_evaluated were dropped before they were read";
+        }
+        // Wrapped so the gate knows this value is already gated entry by entry. The gate
+        // unwraps it, so what lands on the row is the plain map under the same key.
+        resolvedParams.put("variableMapping", new ReportedParams.PreGated(report));
+        if (failure != null) {
+            resolvedParams.put("variableMappingError", ResolvedValuePreview.shorten(failure));
+        }
+    }
+
+    /**
+     * How a variable reads when its expression pulls a WORKSPACE variable. The rule itself
+     * lives in {@link ReportedParams}, shared with every other node that reports a value an
+     * author's expression produced.
+     */
+    static final String WITHHELD = ReportedParams.WITHHELD_WORKSPACE_VARIABLE;
+
+    /**
+     * Describes one resolved variable, reading the size from the resolution's own
+     * {@code <name>__total} companion when there is one.
+     *
+     * <p>The value under a variable's name is a PAGE: the render service loads a bounded
+     * number of rows and states the real element count beside it. Describing the page would
+     * report "200 rows" for a variable holding ten thousand, and a size that is not the size
+     * is the failure mode this whole report exists to remove.
+     */
+    private static Object describeResolved(Map<String, Object> resolved, String name, Object value,
+                                           String expression) {
+        if (value == null) {
+            return null;
+        }
+        // The shared rule, not a second copy of it: see ReportedParams.withholdsWorkspaceScalar.
+        if (ReportedParams.withholdsWorkspaceScalar(expression, value)) {
+            return WITHHELD;
+        }
+        Object total = resolved.get(name + "__total");
+        if (total instanceof Number size) {
+            return ResolvedValuePreview.describeWithKnownSize(value, size.longValue());
+        }
+        return ResolvedValuePreview.describe(value);
     }
 
     private Optional<ResolvedTemplateSnapshot> resolveRenderedSource(ExecutionContext context, int effectiveEpoch) {
@@ -436,6 +597,15 @@ public class InterfaceNode extends BaseNode {
 
     public Map<String, String> getActionMapping() {
         return actionMapping;
+    }
+
+    public Map<String, String> getVariableMapping() {
+        return variableMapping;
+    }
+
+    /** Plan data, handed over by the node factory. Null reads as "none declared". */
+    public void setVariableMapping(Map<String, String> variableMapping) {
+        this.variableMapping = variableMapping != null ? variableMapping : Map.of();
     }
 
     public boolean isGenerateScreenshot() {

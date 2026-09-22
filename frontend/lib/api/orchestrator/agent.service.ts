@@ -6,6 +6,7 @@
  */
 
 import { apiClient } from '../api-client';
+import { notifyResourceDeleted } from '@/lib/resources/resourceDeleted';
 import type { ResourceFolder, ResourceFolderTile } from './resource-folder.service';
 import type { Agent, AgentUpdateInput, AgentWebhook, CreateAgentWebhookRequest, AgentSchedule, CreateAgentScheduleRequest, AgentWidgetConfig, CreateAgentWidgetRequest } from './types';
 import type {
@@ -174,7 +175,8 @@ export class AgentService {
    * Delete an agent
    */
   async deleteAgent(id: string): Promise<void> {
-    return apiClient.delete<void>(`/agents/${id}`);
+    await apiClient.delete<void>(`/agents/${id}`);
+    notifyResourceDeleted('agent', id);
   }
 
   /**

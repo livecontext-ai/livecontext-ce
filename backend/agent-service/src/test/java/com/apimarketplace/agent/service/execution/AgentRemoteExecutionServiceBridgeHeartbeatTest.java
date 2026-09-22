@@ -22,6 +22,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
@@ -79,20 +80,20 @@ class AgentRemoteExecutionServiceBridgeHeartbeatTest {
     @Test
     @DisplayName("conversation-format bridge run registers the stream heartbeat BEFORE dispatch and unregisters after")
     void conversationBridgeRunIsHeartbeatProtectedForTheWholeDispatch() {
-        when(bridgeDispatcher.dispatchRaw(any(), any())).thenReturn(response());
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean())).thenReturn(response());
 
         service.executeAgent(bridgeRequest("conversation", "stream-42"), null);
 
         InOrder inOrder = inOrder(activeStreamRegistry, bridgeDispatcher);
         inOrder.verify(activeStreamRegistry).register(eq("stream-42"), any(Runnable.class));
-        inOrder.verify(bridgeDispatcher).dispatchRaw(any(), any());
+        inOrder.verify(bridgeDispatcher).dispatchRaw(any(), any(), anyBoolean());
         inOrder.verify(activeStreamRegistry).unregister("stream-42");
     }
 
     @Test
     @DisplayName("the heartbeat is released even when the bridge dispatch throws (no leaked registration)")
     void heartbeatReleasedWhenDispatchThrows() {
-        when(bridgeDispatcher.dispatchRaw(any(), any())).thenThrow(new RuntimeException("bridge down"));
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean())).thenThrow(new RuntimeException("bridge down"));
 
         AgentExecutionResponseDto result = service.executeAgent(bridgeRequest("conversation", "stream-err"), null);
 
@@ -104,7 +105,7 @@ class AgentRemoteExecutionServiceBridgeHeartbeatTest {
     @Test
     @DisplayName("the heartbeat is released when the bridge guard denies the run (typed rethrow path)")
     void heartbeatReleasedOnBridgeAccessDenied() {
-        when(bridgeDispatcher.dispatchRaw(any(), any()))
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean()))
             .thenThrow(new BridgeAccessDeniedException("claude-code", "POLICY_DISABLED"));
 
         assertThatThrownBy(() -> service.executeAgent(bridgeRequest("conversation", "stream-denied"), null))
@@ -117,7 +118,7 @@ class AgentRemoteExecutionServiceBridgeHeartbeatTest {
     @Test
     @DisplayName("workflow-format bridge run does NOT register: its streamChannelId is a run channel, not a conversation Stream row")
     void workflowFormatBridgeRunIsNotRegistered() {
-        when(bridgeDispatcher.dispatchRaw(any(), any())).thenReturn(response());
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean())).thenReturn(response());
 
         service.executeAgent(bridgeRequest("workflow", "run-7"), null);
 
@@ -128,7 +129,7 @@ class AgentRemoteExecutionServiceBridgeHeartbeatTest {
     @Test
     @DisplayName("conversation format without a streamChannelId does NOT register (nothing to protect)")
     void conversationFormatWithoutChannelIsNotRegistered() {
-        when(bridgeDispatcher.dispatchRaw(any(), any())).thenReturn(response());
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean())).thenReturn(response());
 
         service.executeAgent(bridgeRequest("conversation", null), null);
 
@@ -138,7 +139,7 @@ class AgentRemoteExecutionServiceBridgeHeartbeatTest {
     @Test
     @DisplayName("the shutdown-drain handle is inert (logs only): the worker cannot rescue a bridge run's partials itself")
     void drainHandleDoesNotThrow() {
-        when(bridgeDispatcher.dispatchRaw(any(), any())).thenReturn(response());
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean())).thenReturn(response());
         ArgumentCaptor<Runnable> handle = ArgumentCaptor.forClass(Runnable.class);
 
         service.executeAgent(bridgeRequest("conversation", "stream-drain"), null);

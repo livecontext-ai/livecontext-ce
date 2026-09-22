@@ -12,6 +12,7 @@ import com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshErrorCla
 import com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshTerminalException;
 import com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshTransientException;
 import com.apimarketplace.common.security.CredentialEncryptionService;
+import com.apimarketplace.common.scope.GrantedScopes;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -318,6 +319,19 @@ public class OAuth2Service {
             }
         }
 
+        // A declared second scope family with no parameter to carry it: the members are dropped
+        // from the request (see OAuth2ProviderConfig.unroutableUserScopes). Nothing in the seed
+        // corpus is in this state, and the seed validator refuses it, but credential metadata also
+        // arrives through the signed catalog bundle, which no validator inspects. Log it, because
+        // the symptom otherwise is a capability that is quietly absent from a green connect.
+        List<String> unroutable = providerConfig.unroutableUserScopes();
+        if (!unroutable.isEmpty()) {
+            log.warn("OAuth2 {}: {} declared user-scope(s) dropped from the authorize request - "
+                            + "userScopes is declared in a form nothing can route (no userScopeParam, "
+                            + "or userScopes is not an array): {}",
+                    integrationName, unroutable.size(), unroutable);
+        }
+
         // Generate PKCE challenge if the provider requires it.
         PkceService.PkceChallenge pkce = engine.shouldUsePkce(providerConfig)
                 ? pkceService.generate()
@@ -467,9 +481,7 @@ public class OAuth2Service {
         credentialData.put(TEMPLATE_ID_FIELD, request.credentialTemplateId());
         rememberCredentialTemplateReference(credentialData, template);
 
-        List<String> scopes = grantedScope != null && !grantedScope.isBlank()
-                ? Arrays.asList(grantedScope.split("\\s+"))
-                : List.of();
+        List<String> scopes = parseGrantedScopes(grantedScope);
         Credential credential = credentialService.createCredential(
                 userId,
                 organizationId,
@@ -692,9 +704,7 @@ public class OAuth2Service {
             credentialData.put(TEMPLATE_ID_FIELD, oAuth2State.credentialTemplateId());
             rememberCredentialTemplateReference(credentialData, template);
 
-            List<String> scopes = grantedScope != null
-                    ? Arrays.asList(grantedScope.split("\\s+"))
-                    : List.of();
+            List<String> scopes = parseGrantedScopes(grantedScope);
 
             // PR19 - thread the org context captured at initiate-time. Without
             // this, an OAuth flow started from an org workspace would land
@@ -1847,6 +1857,34 @@ public class OAuth2Service {
         LinkedHashSet<String> scopes = new LinkedHashSet<>(providerConfig.scopes());
         scopes.addAll(extractByokOnlyScopes(template));
         return new ArrayList<>(scopes);
+    }
+
+    /**
+     * Split a granted-scope string into individual scopes, tolerating BOTH the
+     * space-delimited form RFC 6749 §5.1 specifies and the comma-delimited form several
+     * providers actually return.
+     *
+     * <p>LinkedIn is the reference case: its token response carries
+     * {@code "scope":"r_basicprofile,w_member_social,..."}. Splitting that on whitespace
+     * alone yields ONE element holding the whole comma-joined blob, which is then stored
+     * as the credential's granted-scope list. Nothing fails at connect time; the damage
+     * shows up later and elsewhere, in
+     * {@code HttpExecutionService.preflightScopeCheck}, whose {@code missing.removeAll(granted)}
+     * matches nothing, so EVERY endpoint declaring {@code requiredScopes} is refused with
+     * {@code insufficient_scopes} on a credential that genuinely holds the scope. The
+     * request side already honours a per-provider delimiter
+     * ({@code OAuth2ProviderConfig.joinedScopes()}); the response side had no equivalent,
+     * and a provider is free to answer in a different form than it was asked in.
+     *
+     * <p>The rule itself now lives in {@link GrantedScopes}, because parsing it here was only
+     * half the fix: this method runs when a credential is CREATED and never on refresh, so a
+     * row written before the comma was understood keeps its blob for ever and no redeploy
+     * repairs it. catalog-service therefore re-normalizes the stored list at comparison time
+     * through the same class. See its javadoc for why both delimiters are split for every
+     * provider, and for the one space-bearing scope in the catalog.
+     */
+    static List<String> parseGrantedScopes(String grantedScope) {
+        return GrantedScopes.parse(grantedScope);
     }
 
     /**

@@ -102,6 +102,29 @@ class ExecutionNodeFactoryTest {
         }
 
         @Test
+        @DisplayName("the variable mapping from the plan reaches the InterfaceNode, which is the only place it can report it from")
+        void interfaceDefVariableMappingReachesTheNode() {
+            // The node never resolves these to render - the render API does, per viewer -
+            // so nothing else would have caught the mapping not being threaded here, and
+            // the node's own tests would have stayed green over an empty report in prod.
+            Map<String, String> mapping = Map.of("rows", "{{core:fetch.output.items}}");
+            InterfaceDef def = new InterfaceDef(
+                "11111111-2222-3333-4444-555555555555", "Listing Page",
+                Map.of(), mapping, true, Map.of(),
+                /* isEntryInterface */ false, /* generateScreenshot */ false);
+
+            WorkflowPlan plan = org.mockito.Mockito.mock(WorkflowPlan.class);
+            when(plan.getInterfaces()).thenReturn(List.of(def));
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            factory.createInterfaceNodes(nodeMap, plan);
+
+            InterfaceNode iface = (InterfaceNode) nodeMap.get("interface:listing_page");
+            assertNotNull(iface, "interface node must be registered under its normalized key");
+            assertEquals(mapping, iface.getVariableMapping());
+        }
+
+        @Test
         @DisplayName("generateVideo + videoPreset + videoMaxDurationSeconds from the plan reach the InterfaceNode")
         void interfaceDefVideoFieldsReachTheNode() {
             InterfaceDef def = new InterfaceDef(

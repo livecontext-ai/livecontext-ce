@@ -149,4 +149,26 @@ class InternalBridgeAccessControllerTest {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         verify(service, never()).checkAccess(anyString(), anyBoolean(), eq("claude-code"), anyBoolean());
     }
+
+    @Test
+    @DisplayName("a role merely CONTAINING 'ADMIN' is not admin - exact CSV token, same rule as AdminRoleGuard")
+    void roleContainingAdminIsNotAdmin() {
+        // Regression: this predicate used roles.toUpperCase().contains("ADMIN"), so any role
+        // whose NAME contains the word passed here while failing AdminRoleGuard everywhere
+        // else. Two admin predicates reading the same header must not disagree.
+        when(userService.findById(7L)).thenReturn(Optional.of(userWithRoles("USER")));
+
+        controller.check("claude-code", true, "7", "NOT_ADMIN");
+
+        assertThat(capturedIsAdmin()).isFalse();
+    }
+
+    @Test
+    @DisplayName("an exact ADMIN token in a CSV list is still admin")
+    void exactAdminTokenStillAdmin() {
+        controller.check("claude-code", true, "42", "USER,ADMIN");
+
+        assertThat(capturedIsAdmin()).isTrue();
+    }
+
 }

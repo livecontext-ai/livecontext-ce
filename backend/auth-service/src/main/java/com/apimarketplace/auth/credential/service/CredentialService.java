@@ -511,6 +511,49 @@ public class CredentialService {
                 && integrationKey.equals(IconSlugNormalizer.normalizeForKey(stripped));
     }
 
+    /** The two routes an {@code llm_<provider>} credential can take (see {@link #setLlmKeyModeForScope}). */
+    public static final Set<String> LLM_KEY_MODES = Set.of("no_proxy", "proxy");
+
+    /**
+     * Switch whose key serves the caller's executions on one provider: {@code no_proxy} =
+     * the saved key (their billing, a flat platform fee per turn), {@code proxy} = the
+     * platform key (platform billing). The key stays saved either way, so switching back is
+     * one click and never a re-paste.
+     *
+     * <p>Only an {@code llm_<provider>} credential in the caller's workspace can be switched:
+     * anything else is refused as invalid, never silently given a {@code mode}.
+     *
+     * @return the credential after the switch, empty when out of scope or gone
+     * @throws IllegalArgumentException for a mode outside {@link #LLM_KEY_MODES} or a
+     *         credential that is not an LLM key
+     */
+    @Transactional
+    public Optional<Credential> setLlmKeyModeForScope(Long id,
+                                                      String tenantId,
+                                                      String organizationId,
+                                                      String mode) {
+        TenantResolver.requireOrgId(organizationId);
+        if (mode == null || !LLM_KEY_MODES.contains(mode)) {
+            throw new IllegalArgumentException("'mode' must be one of " + LLM_KEY_MODES);
+        }
+        Optional<Credential> existing = credentialRepository.findById(id)
+                .filter(cred -> matchesScope(cred, tenantId, organizationId));
+        if (existing.isEmpty()) {
+            return Optional.empty();
+        }
+        Credential credential = existing.get();
+        if (credential.integration() == null || !credential.integration().startsWith("llm_")) {
+            throw new IllegalArgumentException("Only an LLM provider key has a route to switch");
+        }
+        if (credentialRepository.updateLlmMode(id, organizationId, mode) == 0) {
+            return Optional.empty(); // deleted between the read and the write
+        }
+        log.info("Credential {} ({}) switched to mode '{}' by {} in org {}",
+                id, credential.integration(), mode, tenantId, organizationId);
+        return credentialRepository.findById(id)
+                .filter(cred -> matchesScope(cred, tenantId, organizationId));
+    }
+
     /**
      * Rename a credential in the caller's active workspace. Strict isolation:
      * returns empty when the row does not exist or lives in another scope,
@@ -1015,11 +1058,11 @@ public class CredentialService {
      *
      * @return the number of deleted credentials
      */
-    public int deleteByIntegration(String integration) {
+    public int markNeedsReauthByIntegration(String integration) {
         if (integration == null || integration.trim().isEmpty()) {
             throw new IllegalArgumentException("integration cannot be null or empty");
         }
-        return credentialRepository.deleteByIntegration(integration.trim());
+        return credentialRepository.markNeedsReauthByIntegration(integration.trim());
     }
 
     /**

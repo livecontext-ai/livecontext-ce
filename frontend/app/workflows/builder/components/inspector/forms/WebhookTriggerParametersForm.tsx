@@ -11,6 +11,7 @@ import type { BuilderNodeData } from '../../../types';
 import { useTranslations } from 'next-intl';
 import { usePopoverPosition } from '../../../hooks/ui/usePopoverPosition';
 import { webhookSettingsService } from '@/lib/api/orchestrator';
+import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import type { StandaloneWebhook } from '@/lib/api/orchestrator';
 import { CurlExamplePopover } from '@/components/webhook/CurlExamplePopover';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -180,6 +181,10 @@ export function WebhookTriggerParametersForm({
 }: WebhookTriggerParametersFormProps) {
   const t = useTranslations('webhookTrigger');
   const ts = useTranslations('webhookSettings');
+  // Creating, editing or deleting a trigger changes what the notification bell lists as armed
+  // and when its rows say they next fire. That payload is invalidated by nothing, so it has to
+  // be asked for here, as every other producer of a row does.
+  const refreshAutomations = useRefreshHomeStatus();
 
   // Use the REAL run mode from context (not the prop which is effectiveRunModeForForms=false)
   // Webhook config lives on the backend entity - editing in run mode has no effect
@@ -253,6 +258,7 @@ export function WebhookTriggerParametersForm({
     const sourceNodeId = buildStandaloneSourceNodeId('webhook', nodeDataId);
     webhookSettingsService.create({ name: `Webhook #${webhookNumber}`, sourceNodeId })
       .then((webhook) => {
+        refreshAutomations();
         setStandaloneWebhook(webhook);
         setAllWebhooks((prev) => [...prev, webhook]);
         onUpdateRef.current({

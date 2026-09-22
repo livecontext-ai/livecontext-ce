@@ -1,12 +1,12 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Plus, Search, AppWindow, Monitor, Table, Workflow, ChevronLeft, ChevronRight, Bot, FolderOpen, MessageSquare, Briefcase, FileText } from 'lucide-react';
+import { Plus, Search, AppWindow, Monitor, Table, Workflow, ChevronLeft, ChevronRight, Bot, FolderOpen, MessageSquare, Briefcase, FileText, CalendarClock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { orchestratorApi } from '@/lib/api';
 import { publicationService } from '@/lib/api/orchestrator/publication.service';
 import { interfaceService } from '@/lib/api/orchestrator/interface.service';
@@ -23,12 +23,18 @@ import { conversationApi } from '@/lib/api/conversationApi';
 import { projectService } from '@/lib/api/orchestrator/project.service';
 import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 import { AvatarDisplay } from '@/components/agents/AvatarPicker';
-import { applicationPanelTabId, parseTabResource, workflowPanelTabId } from '@/lib/sidePanel/tabResource';
+import { AGENDA_PANEL_TAB_ID, applicationPanelTabId, parseTabResource, workflowPanelTabId } from '@/lib/sidePanel/tabResource';
+import { openAgendaPanel } from '@/lib/sidePanel/openAgendaPanel';
+import { S3_FILES_FILTER, storageApi } from '@/lib/api/storage-api';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import type { WorkflowRun } from '@/lib/api/orchestrator';
+import { useWorkflowLogsSidePanel } from '@/components/workflow/useWorkflowLogsSidePanel';
+import { RunHistoryList } from '@/components/workflow/run-panel/RunHistoryList';
 
 interface PickerItem {
   id: string;
   label: string;
-  category: 'application' | 'interface' | 'table' | 'workflow' | 'agent' | 'conversation' | 'project' | 'files';
+  category: 'agenda' | 'application' | 'interface' | 'table' | 'workflow' | 'logs' | 'agent' | 'conversation' | 'project' | 'files';
   publicationId?: string;
   avatarUrl?: string;
   iconKey?: string;
@@ -36,31 +42,64 @@ interface PickerItem {
 }
 
 type CategoryType = PickerItem['category'];
+type CategoryCounts = Record<CategoryType, number>;
 
 interface AddTabPickerProps {
   variant?: 'tab-bar' | 'header';
 }
 
 const ITEMS_PER_PAGE = 10;
+const PICKER_API_PAGE_SIZE = 100;
 const CACHE_TTL_MS = 30_000; // Reuse fetched data for 30 seconds
 
-const CATEGORY_ORDER: CategoryType[] = ['application', 'interface', 'table', 'workflow', 'agent', 'conversation', 'project', 'files'];
+const CATEGORY_ORDER: CategoryType[] = ['agenda', 'application', 'interface', 'table', 'workflow', 'logs', 'agent', 'conversation', 'project', 'files'];
+const EMPTY_CATEGORY_COUNTS: CategoryCounts = {
+  agenda: 0,
+  application: 0,
+  interface: 0,
+  table: 0,
+  workflow: 0,
+  logs: 0,
+  agent: 0,
+  conversation: 0,
+  project: 0,
+  files: 0,
+};
+
+type ServerPagedCategory = 'interface' | 'workflow' | 'conversation';
+const SERVER_PAGED_CATEGORIES = new Set<CategoryType>(['interface', 'workflow', 'conversation']);
+const INITIAL_LOADED_PAGES: Record<ServerPagedCategory, number> = {
+  interface: 0,
+  workflow: 0,
+  conversation: 0,
+};
 
 export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
   const sidePanel = useSidePanelSafe();
   const t = useTranslations('sidePanel');
+  const tSidebarNav = useTranslations('sidebar.nav');
+  const locale = useLocale();
+  const countFormatter = useMemo(() => new Intl.NumberFormat(locale), [locale]);
+  const { openWorkflowLogs } = useWorkflowLogsSidePanel();
 
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 250);
   const [items, setItems] = useState<PickerItem[]>([]);
+  const [categoryCounts, setCategoryCounts] = useState<CategoryCounts>(EMPTY_CATEGORY_COUNTS);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Navigation: categories → items | projectCategories → projectItems
-  const [view, setView] = useState<'categories' | 'items' | 'projectCategories' | 'projectItems'>('categories');
+  const [view, setView] = useState<'categories' | 'items' | 'projectCategories' | 'projectItems' | 'logWorkflows' | 'logRuns'>('categories');
   const [selectedCategory, setSelectedCategory] = useState<CategoryType | null>(null);
   const [categorySearch, setCategorySearch] = useState('');
+  const debouncedCategorySearch = useDebouncedValue(categorySearch, 250);
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
+  const [loadedPages, setLoadedPages] = useState(INITIAL_LOADED_PAGES);
+  const [loadingMoreCategory, setLoadingMoreCategory] = useState(false);
+  const [serverSearchItems, setServerSearchItems] = useState<PickerItem[]>([]);
+  const searchRequestIdRef = useRef(0);
 
   // Project drill-down state
   const [selectedProject, setSelectedProject] = useState<PickerItem | null>(null);
@@ -69,9 +108,12 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
   const [selectedProjectCategory, setSelectedProjectCategory] = useState<CategoryType | null>(null);
   const [projectCategorySearch, setProjectCategorySearch] = useState('');
 
+  // Logs drill-down: workflow -> run -> logs child view.
+  const [selectedLogWorkflow, setSelectedLogWorkflow] = useState<PickerItem | null>(null);
+
   // Cache: avoid re-fetching all 8 APIs on every popover open.
   // Trade-off: resources created in the last 30s won't appear until TTL expires.
-  const cacheRef = useRef<{ items: PickerItem[]; ts: number } | null>(null);
+  const cacheRef = useRef<{ items: PickerItem[]; counts: CategoryCounts; ts: number } | null>(null);
   const skipFetchRef = useRef(false);
 
   // Reset navigation state on popover open/close
@@ -83,6 +125,7 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
       setProjectResources([]);
       setSelectedProjectCategory(null);
       setProjectCategorySearch('');
+      setSelectedLogWorkflow(null);
       setSearch('');
       setCategorySearch('');
       setVisibleCount(ITEMS_PER_PAGE);
@@ -94,10 +137,13 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
 
       if (isCacheFresh) {
         setItems(cache!.items);
+        setCategoryCounts(cache!.counts);
         setIsLoading(false);
         setError(null);
       } else {
         setItems([]);
+        setCategoryCounts(EMPTY_CATEGORY_COUNTS);
+        setLoadedPages(INITIAL_LOADED_PAGES);
         setIsLoading(true);
       }
     }
@@ -114,16 +160,27 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
     Promise.all([
       publicationService.getMyPublications(true).catch(() => ({ publications: [] as WorkflowPublication[] })),
       publicationService.getAcquiredApplications().catch(() => ({ applications: [] as { sourcePublicationId: string; name: string }[] })),
-      interfaceService.getInterfacesPage({ size: 100, includeTemplates: false }).then(result => result.items).catch(() => []),
+      interfaceService.getInterfacesPage({
+        page: 0,
+        size: PICKER_API_PAGE_SIZE,
+        includeTemplates: false,
+        excludeType: 'web_search',
+      }).catch(() => ({ items: [], totalCount: 0 })),
       orchestratorApi.getDataSources().catch(() => []),
-      orchestratorApi.getWorkflows({ size: 100 }).catch(() => []),
+      orchestratorApi.getWorkflowsPage({ page: 0, size: PICKER_API_PAGE_SIZE })
+        .catch(() => ({ workflows: [], totalCount: 0 })),
       orchestratorApi.getAgents().catch(() => []),
-      conversationApi.getConversations(0, 100).catch(() => ({ content: [] })),
+      conversationApi.getConversations(0, PICKER_API_PAGE_SIZE)
+        .catch(() => ({ content: [], totalElements: 0 })),
       projectService.getProjects().catch(() => []),
-    ]).then(([myPubs, acquired, interfaces, dataSources, workflows, agents, conversationsData, projects]) => {
+      storageApi.getExplorerEntries({ page: 0, size: 1, ...S3_FILES_FILTER })
+        .catch(() => ({ totalElements: 0 })),
+    ]).then(([myPubs, acquired, interfacesPage, dataSources, workflowsPage, agents, conversationsData, projects, filesPage]) => {
       if (cancelled) return;
 
       const pickerItems: PickerItem[] = [];
+      const interfaces = interfacesPage.items;
+      const workflows = workflowsPage.workflows;
 
       // Merge my publications + acquired, deduplicate by publicationId
       const seenPubIds = new Set<string>();
@@ -188,14 +245,11 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
         }
       }
 
-      // Conversations: handle paginated response or plain array
-      const conversations: any[] = Array.isArray(conversationsData)
-        ? conversationsData
-        : (conversationsData as any)?.content || [];
+      const conversations = conversationsData.content;
       for (const conv of conversations) {
         pickerItems.push({
           id: `conversation-${conv.id}`,
-          label: conv.title || 'Untitled',
+          label: conv.title || t('untitled'),
           category: 'conversation',
         });
       }
@@ -212,8 +266,22 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
         }
       }
 
-      cacheRef.current = { items: pickerItems, ts: Date.now() };
+      const counts: CategoryCounts = {
+        agenda: 0,
+        application: seenPubIds.size,
+        interface: interfacesPage.totalCount ?? interfaces.length,
+        table: dataSources.length,
+        workflow: workflowsPage.totalCount ?? workflows.length,
+        logs: workflowsPage.totalCount ?? workflows.length,
+        agent: agents.length,
+        conversation: conversationsData.totalElements,
+        project: projects.length,
+        files: filesPage.totalElements ?? 0,
+      };
+
+      cacheRef.current = { items: pickerItems, counts, ts: Date.now() };
       setItems(pickerItems);
+      setCategoryCounts(counts);
       setIsLoading(false);
     }).catch(() => {
       if (!cancelled) {
@@ -225,9 +293,80 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
     return () => { cancelled = true; };
   }, [open, sidePanel, t]);
 
+  // Search the server-backed families over the whole workspace. The picker still filters the
+  // already-loaded families locally, while these queries make resources beyond page 1 findable.
+  useEffect(() => {
+    const requestId = ++searchRequestIdRef.current;
+    if (!open) return;
+    const isGlobalSearch = view === 'categories';
+    const isLogWorkflowSearch = view === 'logWorkflows';
+    const query = (isGlobalSearch ? debouncedSearch : debouncedCategorySearch).trim();
+    const searchableCategory = isLogWorkflowSearch
+      ? 'workflow'
+      : selectedCategory && SERVER_PAGED_CATEGORIES.has(selectedCategory)
+      ? selectedCategory as ServerPagedCategory
+      : null;
+
+    if (!query || (!isGlobalSearch && !searchableCategory)) {
+      setServerSearchItems([]);
+      return;
+    }
+
+    const categories: ServerPagedCategory[] = isGlobalSearch
+      ? ['interface', 'workflow', 'conversation']
+      : [searchableCategory!];
+
+    const requests = categories.map(async category => {
+      if (category === 'interface') {
+        const page = await interfaceService.getInterfacesPage({
+          page: 0,
+          size: PICKER_API_PAGE_SIZE,
+          q: query,
+          includeTemplates: false,
+          excludeType: 'web_search',
+        });
+        return page.items.map(iface => ({
+          id: `interface-${iface.id}`,
+          label: iface.name,
+          category: 'interface' as const,
+        }));
+      }
+      if (category === 'workflow') {
+        const page = await orchestratorApi.getWorkflowsPage({
+          page: 0,
+          size: PICKER_API_PAGE_SIZE,
+          q: query,
+        });
+        return page.workflows.map(workflow => ({
+          id: workflowPanelTabId(workflow.id),
+          label: workflow.name,
+          category: 'workflow' as const,
+        }));
+      }
+      const page = await conversationApi.searchConversations(
+        query,
+        'title',
+        0,
+        PICKER_API_PAGE_SIZE,
+      );
+      return page.content.map(conversation => ({
+        id: `conversation-${conversation.id}`,
+        label: conversation.title || t('untitled'),
+        category: 'conversation' as const,
+      }));
+    });
+
+    Promise.all(requests.map(request => request.catch(() => [])))
+      .then(results => {
+        if (requestId !== searchRequestIdRef.current) return;
+        setServerSearchItems(results.flat());
+      });
+  }, [debouncedCategorySearch, debouncedSearch, open, selectedCategory, view]);
+
   // Items grouped by category (unfiltered, for counts)
   const itemsByCategory = useMemo(() => {
     const map: Record<CategoryType, PickerItem[]> = {
+      agenda: [],
       application: [],
       interface: [],
       table: [],
@@ -236,6 +375,7 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
       conversation: [],
       project: [],
       files: [],
+      logs: [],
     };
     for (const item of items) {
       map[item.category].push(item);
@@ -247,8 +387,11 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
   const searchFiltered = useMemo(() => {
     if (!search.trim()) return items;
     const q = search.toLowerCase();
-    return items.filter(item => item.label.toLowerCase().includes(q));
-  }, [items, search]);
+    const localMatches = items.filter(item => item.label.toLowerCase().includes(q));
+    return Array.from(new Map(
+      [...localMatches, ...serverSearchItems].map(item => [item.id, item]),
+    ).values());
+  }, [items, search, serverSearchItems]);
 
   const searchApplications = useMemo(() => searchFiltered.filter(i => i.category === 'application'), [searchFiltered]);
   const searchInterfaces = useMemo(() => searchFiltered.filter(i => i.category === 'interface'), [searchFiltered]);
@@ -258,15 +401,132 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
   const searchConversations = useMemo(() => searchFiltered.filter(i => i.category === 'conversation'), [searchFiltered]);
   const searchProjects = useMemo(() => searchFiltered.filter(i => i.category === 'project'), [searchFiltered]);
   const searchFiles = useMemo(() => searchFiltered.filter(i => i.category === 'files'), [searchFiltered]);
+  const searchAgenda = useMemo<PickerItem[]>(() => {
+    const label = tSidebarNav('agenda');
+    return search.trim() && label.toLowerCase().includes(search.trim().toLowerCase())
+      ? [{ id: AGENDA_PANEL_TAB_ID, label, category: 'agenda' }]
+      : [];
+  }, [search, tSidebarNav]);
 
   // Items for the selected category (filtered by category search)
   const categoryItems = useMemo(() => {
     if (!selectedCategory) return [];
-    const catItems = itemsByCategory[selectedCategory];
-    if (!categorySearch.trim()) return catItems;
+    const remoteCategoryItems = serverSearchItems.filter(item => item.category === selectedCategory);
+    const localCategoryItems = itemsByCategory[selectedCategory];
+    if (!categorySearch.trim()) return localCategoryItems;
     const q = categorySearch.toLowerCase();
-    return catItems.filter(item => item.label.toLowerCase().includes(q));
-  }, [selectedCategory, itemsByCategory, categorySearch]);
+    const localMatches = localCategoryItems.filter(item => item.label.toLowerCase().includes(q));
+    return Array.from(new Map(
+      [...localMatches, ...remoteCategoryItems].map(item => [item.id, item]),
+    ).values());
+  }, [selectedCategory, itemsByCategory, categorySearch, serverSearchItems]);
+
+  const loadNextCategoryPage = useCallback(async (category: ServerPagedCategory): Promise<boolean> => {
+    if (loadingMoreCategory) return false;
+    setLoadingMoreCategory(true);
+
+    try {
+      const nextPage = loadedPages[category] + 1;
+      let pageItems: PickerItem[] = [];
+      let totalCount = categoryCounts[category];
+
+      if (category === 'interface') {
+        const page = await interfaceService.getInterfacesPage({
+          page: nextPage,
+          size: PICKER_API_PAGE_SIZE,
+          includeTemplates: false,
+          excludeType: 'web_search',
+        });
+        totalCount = page.totalCount;
+        pageItems = page.items.map(iface => ({
+          id: `interface-${iface.id}`,
+          label: iface.name,
+          category: 'interface',
+        }));
+      } else if (category === 'workflow') {
+        const page = await orchestratorApi.getWorkflowsPage({
+          page: nextPage,
+          size: PICKER_API_PAGE_SIZE,
+        });
+        totalCount = page.totalCount;
+        pageItems = page.workflows.map(workflow => ({
+          id: workflowPanelTabId(workflow.id),
+          label: workflow.name,
+          category: 'workflow',
+        }));
+      } else {
+        const page = await conversationApi.getConversations(nextPage, PICKER_API_PAGE_SIZE);
+        totalCount = page.totalElements;
+        pageItems = page.content.map(conversation => ({
+          id: `conversation-${conversation.id}`,
+          label: conversation.title || t('untitled'),
+          category: 'conversation',
+        }));
+      }
+
+      const currentIds = new Set(items.map(item => item.id));
+      const uniquePageItems = pageItems.filter(item => {
+        if (currentIds.has(item.id)) return false;
+        currentIds.add(item.id);
+        return true;
+      });
+      const nextItems = [...items, ...uniquePageItems];
+      const nextCounts = {
+        ...categoryCounts,
+        [category]: totalCount,
+        ...(category === 'workflow' ? { logs: totalCount } : {}),
+      };
+
+      setItems(nextItems);
+      setCategoryCounts(nextCounts);
+      setLoadedPages(previous => ({ ...previous, [category]: nextPage }));
+      cacheRef.current = { items: nextItems, counts: nextCounts, ts: Date.now() };
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setLoadingMoreCategory(false);
+    }
+  }, [categoryCounts, items, loadedPages, loadingMoreCategory]);
+
+  const handleShowMore = useCallback(async () => {
+    if (!selectedCategory) return;
+    const nextVisibleCount = visibleCount + ITEMS_PER_PAGE;
+    const needsAnotherServerPage = !categorySearch.trim()
+      && SERVER_PAGED_CATEGORIES.has(selectedCategory)
+      && nextVisibleCount > itemsByCategory[selectedCategory].length
+      && itemsByCategory[selectedCategory].length < categoryCounts[selectedCategory];
+
+    if (needsAnotherServerPage) {
+      const loaded = await loadNextCategoryPage(selectedCategory as ServerPagedCategory);
+      if (!loaded) return;
+    }
+    setVisibleCount(nextVisibleCount);
+  }, [categoryCounts, categorySearch, itemsByCategory, loadNextCategoryPage, selectedCategory, visibleCount]);
+
+  const logWorkflowItems = useMemo(() => {
+    const workflows = itemsByCategory.workflow;
+    if (!categorySearch.trim()) return workflows;
+    const query = categorySearch.toLowerCase();
+    const localMatches = workflows.filter((item) => item.label.toLowerCase().includes(query));
+    const remoteMatches = serverSearchItems.filter((item) => item.category === 'workflow');
+    return Array.from(new Map(
+      [...localMatches, ...remoteMatches].map((item) => [item.id, item]),
+    ).values());
+  }, [categorySearch, itemsByCategory.workflow, serverSearchItems]);
+
+  const handleShowMoreLogWorkflows = useCallback(async () => {
+    const nextVisibleCount = visibleCount + ITEMS_PER_PAGE;
+    const needsAnotherServerPage = !categorySearch.trim()
+      && nextVisibleCount > itemsByCategory.workflow.length
+      && itemsByCategory.workflow.length < categoryCounts.workflow;
+
+    if (needsAnotherServerPage) {
+      const loaded = await loadNextCategoryPage('workflow');
+      if (!loaded) return;
+    }
+    setVisibleCount(nextVisibleCount);
+  }, [categoryCounts.workflow, categorySearch, itemsByCategory.workflow.length, loadNextCategoryPage, visibleCount]);
 
   const handleProjectDrillDown = useCallback((item: PickerItem) => {
     const projId = item.id.replace('project-', '');
@@ -333,6 +593,28 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
     });
   }, []);
 
+  const handleLogWorkflowSelect = useCallback((item: PickerItem) => {
+    const workflowId = parseTabResource(item.id)?.id ?? '';
+    if (!workflowId) return;
+
+    setSelectedLogWorkflow(item);
+    setView('logRuns');
+    setCategorySearch('');
+  }, []);
+
+  const handleLogRunSelect = useCallback((run: WorkflowRun) => {
+    if (!selectedLogWorkflow) return;
+    const workflowId = parseTabResource(selectedLogWorkflow.id)?.id ?? '';
+    if (!workflowId) return;
+
+    setOpen(false);
+    openWorkflowLogs({
+      workflowId,
+      runId: run.runId || run.id,
+      workflowName: selectedLogWorkflow.label,
+    });
+  }, [openWorkflowLogs, selectedLogWorkflow]);
+
   const handleSelect = useCallback((item: PickerItem) => {
     if (!sidePanel) return;
 
@@ -345,6 +627,9 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
     setOpen(false);
 
     switch (item.category) {
+      case 'agenda':
+        openAgendaPanel(sidePanel, item.label);
+        break;
       case 'application':
         sidePanel.openTab({
           id: item.id,
@@ -432,6 +717,11 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
     // Activity category removed 2026-05-08 - right-side-panel ActivityFeed +
     // ActivityLog backend stack deleted with the bell Activity-tab cleanup.
     // Files category opens the tab directly (global storage explorer)
+    if (category === 'agenda' && sidePanel) {
+      setOpen(false);
+      openAgendaPanel(sidePanel, tSidebarNav('agenda'));
+      return;
+    }
     if (category === 'files' && sidePanel) {
       setOpen(false);
       sidePanel.openTab({
@@ -443,13 +733,33 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
       });
       return;
     }
+    if (category === 'logs') {
+      setSelectedCategory(category);
+      setView('logWorkflows');
+      setCategorySearch('');
+      setVisibleCount(ITEMS_PER_PAGE);
+      return;
+    }
     setSelectedCategory(category);
     setView('items');
     setCategorySearch('');
+    setServerSearchItems([]);
     setVisibleCount(ITEMS_PER_PAGE);
-  }, [sidePanel, t]);
+  }, [sidePanel, t, tSidebarNav]);
 
   const handleBack = useCallback(() => {
+    if (view === 'logRuns') {
+      setView('logWorkflows');
+      setSelectedLogWorkflow(null);
+      setCategorySearch('');
+      return;
+    }
+    if (view === 'logWorkflows') {
+      setView('categories');
+      setSelectedCategory(null);
+      setCategorySearch('');
+      return;
+    }
     if (view === 'projectItems') {
       // Back to project resource categories
       setView('projectCategories');
@@ -467,6 +777,7 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
     setView('categories');
     setSelectedCategory(null);
     setCategorySearch('');
+    setServerSearchItems([]);
     setVisibleCount(ITEMS_PER_PAGE);
   }, [view]);
 
@@ -474,10 +785,12 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
   if (!sidePanel) return null;
 
   const categoryIcon: Record<CategoryType, React.ReactNode> = {
+    agenda: <CalendarClock className="h-3.5 w-3.5 text-theme-secondary" />,
     application: <AppWindow className="h-3.5 w-3.5 text-theme-secondary" />,
     interface: <Monitor className="h-3.5 w-3.5 text-theme-secondary" />,
     table: <Table className="h-3.5 w-3.5 text-theme-secondary" />,
     workflow: <Workflow className="h-3.5 w-3.5 text-theme-secondary" />,
+    logs: <FileText className="h-3.5 w-3.5 text-theme-secondary" />,
     agent: <Bot className="h-3.5 w-3.5 text-theme-secondary" />,
     conversation: <MessageSquare className="h-3.5 w-3.5 text-theme-secondary" />,
     project: <Briefcase className="h-3.5 w-3.5 text-theme-secondary" />,
@@ -497,10 +810,12 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
   };
 
   const categoryLabel: Record<CategoryType, string> = {
+    agenda: tSidebarNav('agenda'),
     application: t('applications'),
     interface: t('interfaces'),
     table: t('tables'),
     workflow: t('workflows'),
+    logs: t('logs'),
     agent: t('agents'),
     conversation: t('conversations'),
     project: t('projects'),
@@ -509,6 +824,7 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
 
   const renderSearchResults = () => {
     const groups = [
+      { label: tSidebarNav('agenda'), items: searchAgenda },
       { label: t('applications'), items: searchApplications },
       { label: t('interfaces'), items: searchInterfaces },
       { label: t('tables'), items: searchTables },
@@ -552,14 +868,10 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
     );
   };
 
-  // Categories that open a tab directly (not item-based lists)
-  const directOpenCategories = new Set<CategoryType>(['files']);
-
   const renderCategoryButtons = () => (
     <div className="space-y-1">
       {CATEGORY_ORDER.map(cat => {
-        const count = itemsByCategory[cat].length;
-        const isDirect = directOpenCategories.has(cat);
+        const count = categoryCounts[cat];
         return (
           <div
             key={cat}
@@ -568,8 +880,12 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
           >
             {categoryIcon[cat]}
             <span className="flex-1 text-sm text-left text-theme-secondary group-hover:text-theme-primary transition-colors">{categoryLabel[cat]}</span>
-            {!isDirect && <span className="text-xs text-theme-tertiary tabular-nums">{count}</span>}
-            <ChevronRight className="h-3.5 w-3.5 text-theme-tertiary group-hover:text-theme-primary transition-colors" />
+            {cat !== 'agenda' && (
+              <>
+                <span className="text-xs text-theme-tertiary tabular-nums text-right">{countFormatter.format(count)}</span>
+                <ChevronRight className="h-3.5 w-3.5 text-theme-tertiary group-hover:text-theme-primary transition-colors" />
+              </>
+            )}
           </div>
         );
       })}
@@ -578,7 +894,11 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
 
   const renderItemsView = () => {
     const visibleItems = categoryItems.slice(0, visibleCount);
-    const remaining = categoryItems.length - visibleCount;
+    const totalForView = categorySearch.trim() || !selectedCategory
+      ? categoryItems.length
+      : categoryCounts[selectedCategory];
+    const displayedCount = Math.min(visibleCount, categoryItems.length);
+    const remaining = Math.max(0, totalForView - displayedCount);
 
     return (
       <div className="space-y-1">
@@ -604,7 +924,8 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
             {remaining > 0 && (
               <button
                 type="button"
-                onClick={() => setVisibleCount(prev => prev + ITEMS_PER_PAGE)}
+                onClick={() => void handleShowMore()}
+                disabled={loadingMoreCategory}
                 className="w-full px-2 py-1.5 text-sm text-theme-secondary hover:text-theme-primary text-center transition-colors"
               >
                 {t('showMore', { count: remaining })}
@@ -612,6 +933,62 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
             )}
           </>
         )}
+      </div>
+    );
+  };
+
+  const renderLogWorkflowsView = () => {
+    const visibleItems = logWorkflowItems.slice(0, visibleCount);
+    const totalForView = categorySearch.trim() ? logWorkflowItems.length : categoryCounts.workflow;
+    const displayedCount = Math.min(visibleCount, logWorkflowItems.length);
+    const remaining = Math.max(0, totalForView - displayedCount);
+
+    if (logWorkflowItems.length === 0) {
+      return (
+        <div className="p-3 text-center text-sm text-theme-secondary">
+          {categorySearch.trim() ? t('noResults') : t('noItems')}
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-1">
+        {visibleItems.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => handleLogWorkflowSelect(item)}
+            className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-gray-100 dark:hover:bg-gray-800"
+          >
+            <Workflow className="h-3.5 w-3.5 flex-shrink-0 text-theme-secondary" />
+            <span className="min-w-0 flex-1 truncate text-sm text-theme-secondary transition-colors group-hover:text-theme-primary">
+              {item.label}
+            </span>
+            <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-theme-tertiary transition-colors group-hover:text-theme-primary" />
+          </button>
+        ))}
+        {remaining > 0 && (
+          <button
+            type="button"
+            onClick={() => void handleShowMoreLogWorkflows()}
+            disabled={loadingMoreCategory}
+            className="w-full px-2 py-1.5 text-center text-sm text-theme-secondary transition-colors hover:text-theme-primary"
+          >
+            {t('showMore', { count: remaining })}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const renderLogRunsView = () => {
+    if (!selectedLogWorkflow) return null;
+    const workflowId = parseTabResource(selectedLogWorkflow.id)?.id ?? '';
+    if (!workflowId) return null;
+
+    return (
+      <div className="h-80">
+        <RunHistoryList workflowId={workflowId} onSelectRun={handleLogRunSelect} />
       </div>
     );
   };
@@ -670,7 +1047,7 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
             >
               <Icon className="h-3.5 w-3.5 text-theme-secondary" />
               <span className="flex-1 text-sm text-left text-theme-secondary group-hover:text-theme-primary transition-colors">{t(rt.labelKey)}</span>
-              <span className="text-xs text-theme-tertiary tabular-nums">{count}</span>
+              <span className="text-xs text-theme-tertiary tabular-nums text-right">{countFormatter.format(count)}</span>
               <ChevronRight className="h-3.5 w-3.5 text-theme-tertiary group-hover:text-theme-primary transition-colors" />
             </div>
           );
@@ -721,17 +1098,25 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
       );
     }
 
-    if (items.length === 0) {
-      return (
-        <div className="p-3 text-sm text-theme-secondary text-center">{t('noItems')}</div>
-      );
-    }
-
     if (view === 'categories') {
       if (search.trim()) {
         return renderSearchResults();
       }
       return renderCategoryButtons();
+    }
+
+    if (view === 'logWorkflows') {
+      return renderLogWorkflowsView();
+    }
+
+    if (view === 'logRuns') {
+      return renderLogRunsView();
+    }
+
+    if (items.length === 0) {
+      return (
+        <div className="p-3 text-sm text-theme-secondary text-center">{t('noItems')}</div>
+      );
     }
 
     if (view === 'projectCategories') {
@@ -779,12 +1164,30 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-theme-secondary" />
               <Input
                 value={search}
-                onChange={e => setSearch(e.target.value)}
+                onChange={e => {
+                  searchRequestIdRef.current += 1;
+                  setSearch(e.target.value);
+                  setServerSearchItems([]);
+                }}
                 placeholder={t('searchPlaceholder')}
                 className="h-8 pl-7 text-sm bg-transparent border-theme"
                 autoFocus
               />
             </div>
+          </div>
+        ) : view === 'logRuns' && selectedLogWorkflow ? (
+          <div className="border-b border-theme">
+            <button
+              type="button"
+              onClick={handleBack}
+              className="flex w-full items-center gap-2 px-3 py-2 transition-colors hover:bg-theme-secondary/30"
+            >
+              <ChevronLeft className="h-3.5 w-3.5 text-theme-secondary" />
+              <Workflow className="h-3.5 w-3.5 flex-shrink-0 text-theme-secondary" />
+              <span className="truncate text-sm font-medium text-theme-primary">
+                {selectedLogWorkflow.label}
+              </span>
+            </button>
           </div>
         ) : view === 'projectCategories' && selectedProject ? (
           <div className="border-b border-theme">
@@ -847,7 +1250,11 @@ export function AddTabPicker({ variant = 'tab-bar' }: AddTabPickerProps) {
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-theme-secondary" />
                 <Input
                   value={categorySearch}
-                  onChange={e => setCategorySearch(e.target.value)}
+                  onChange={e => {
+                    searchRequestIdRef.current += 1;
+                    setCategorySearch(e.target.value);
+                    setServerSearchItems([]);
+                  }}
                   placeholder={t('filterPlaceholder')}
                   className="h-8 pl-7 text-sm bg-transparent border-theme"
                   autoFocus

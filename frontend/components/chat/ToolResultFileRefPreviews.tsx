@@ -13,6 +13,8 @@ import {
   fileRefToUrl,
 } from '@/lib/api/orchestrator/file.service';
 import { useAuthedObjectUrl } from '@/hooks/useAuthedObjectUrl';
+import { mimeEssence } from '@/lib/files/filePreview';
+import { executesWhenOpened } from '@/lib/utils/url-auth';
 
 /**
  * Renders previews for any {@link FileRef} found in a tool result.
@@ -66,15 +68,34 @@ function FileRefCard({ fileRef }: { fileRef: FileRef }) {
   // <script>/<foreignObject>/onload attributes. Rendering one as <img> is
   // safe (the browser blocks script execution there), but a click that
   // opens the SVG document directly would let the browser parse it AS A
-  // DOCUMENT and execute embedded JS in the storage origin. Force route
-  // SVGs through a download chip with `download` attribute so the click
-  // saves the file rather than opening it.
-  const isSvg = fileRef.mimeType === 'image/svg+xml' || fileRef.mimeType === 'image/svg';
+  // DOCUMENT and execute embedded JS - and `previewUrl` above is a blob this
+  // app minted, so that document lands on THIS origin, with the session in
+  // reach, not on some storage origin. Force route SVGs through a download
+  // chip with `download` attribute so the click saves the file rather than
+  // opening it.
+  //
+  // Compared on the ESSENCE, not the raw string: a served type carries
+  // parameters (`image/svg+xml;charset=utf-8`) and case is not guaranteed, and
+  // an exact match answers "not an SVG" for both - which is this entire gate
+  // gone, silently, for the spellings a real server sends.
+  const svgMime = mimeEssence(fileRef.mimeType);
+  const isSvg = svgMime === 'image/svg+xml' || svgMime === 'image/svg';
+
+  // And an SVG is not the only thing that executes when it is opened. The chip below is a plain
+  // anchor on the same app-origin blob, and an anchor re-types nothing, so the neutralisation
+  // that protects the View action elsewhere cannot reach it: html, xhtml and xml need the same
+  // treatment for the same reason, and from the SAME list, or the two drift apart and whichever
+  // one is behind becomes the way in. A tool result carrying a scraped or agent-written HTML
+  // file is the ordinary case here, not a corner.
+  const opensAsCode = isSvg || executesWhenOpened(fileRef.mimeType);
 
   // mime-driven renderer choice keeps the same visual contract for all
   // catalog binary outputs - image preview, audio player, video player,
   // generic download chip otherwise. No bespoke per-type card.
-  if (isImageFile(fileRef) && !isSvg) {
+  // Excluded on the same predicate the chip uses, not on `isSvg` alone: the two agree today only
+  // because the executable list happens to contain exactly one image type, which is a fact about
+  // the list rather than a property of this branch.
+  if (isImageFile(fileRef) && !opensAsCode) {
     // The image preview <a> opens in a new tab. The bottom download chip is a
     // SECOND anchor over the same card with the `download` attribute so the
     // browser saves instead of opens - common pattern for chat-card binaries
@@ -151,24 +172,25 @@ function FileRefCard({ fileRef }: { fileRef: FileRef }) {
     );
   }
 
-  // Generic download chip - covers PDF, ZIP, SVG (forced through here for
-  // XSS reasons), anything unknown.
+  // Generic download chip - covers PDF, ZIP, SVG and html/xml (all forced
+  // through here for XSS reasons), anything unknown.
   //
-  // The `download` attribute is applied SVG-only: SVG must be saved (not
-  // opened) because parsing one as a document executes embedded JS in the
-  // storage origin. For PDF / ZIP / other types, omitting `download`
-  // restores the friendlier "open in new tab" behaviour (browser previews
-  // the PDF, the OS preview dialog opens the ZIP, etc.). Same-origin
-  // proxy URL means the `download` attribute is honoured by the browser
-  // when present.
+  // The `download` attribute is applied to everything that EXECUTES when it
+  // is opened: such a file must be saved rather than opened, because parsing
+  // it as a document runs its script on THIS origin - `downloadUrl` is a blob
+  // this app minted, not a link to some storage origin - with the session in
+  // reach. For PDF / ZIP / other types, omitting `download` restores the
+  // friendlier "open in new tab" behaviour (browser previews the PDF, the OS
+  // preview dialog opens the ZIP, etc.). Same-origin blob URL means the
+  // `download` attribute is honoured by the browser when present.
   return (
     <a
       href={downloadUrl || '#'}
       target="_blank"
       rel="noopener noreferrer"
-      {...(isSvg ? { download: fileRef.name || '' } : {})}
+      {...(opensAsCode ? { download: fileRef.name || '' } : {})}
       aria-disabled={downloadUrl ? undefined : true}
-      aria-label={`${isSvg ? 'Download' : 'Open'} ${fileRef.name || 'file'} (${fileRef.mimeType}, ${formatBytes(fileRef.size)})`}
+      aria-label={`${opensAsCode ? 'Download' : 'Open'} ${fileRef.name || 'file'} (${fileRef.mimeType}, ${formatBytes(fileRef.size)})`}
       className={`flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 ${downloadUrl ? 'hover:border-blue-400 dark:hover:border-blue-500' : 'opacity-60 cursor-not-allowed'} transition-colors`}
       onClick={downloadUrl ? undefined : (e) => e.preventDefault()}
     >

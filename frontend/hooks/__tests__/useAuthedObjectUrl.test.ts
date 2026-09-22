@@ -167,6 +167,20 @@ describe('useAuthedObjectUrl', () => {
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBeUndefined();
   });
 
+  it('treats a generic type as generic even when it arrives with parameters', async () => {
+    // `application/octet-stream;charset=binary` is just as unable to drive a <video>, and an
+    // exact-match check would call it specific and leave the clip undecodable.
+    let captured: Blob | null = null;
+    URL.createObjectURL = vi.fn((b: Blob) => { captured = b; return 'blob:obj-1'; });
+    mockFetchWithType('application/octet-stream;charset=binary');
+
+    const { result } = renderHook(() =>
+      useAuthedObjectUrl('/api/proxy/files/by-id/abc/raw', 'video/mp4'),
+    );
+    await waitFor(() => expect(result.current.url).toBe('blob:obj-1'));
+    expect(captured!.type).toBe('video/mp4');
+  });
+
   it('keeps a specific server Content-Type even when a hint is provided (no re-type)', async () => {
     let captured: Blob | null = null;
     URL.createObjectURL = vi.fn((b: Blob) => { captured = b; return 'blob:obj-1'; });
@@ -177,5 +191,46 @@ describe('useAuthedObjectUrl', () => {
     );
     await waitFor(() => expect(result.current.url).toBe('blob:obj-1'));
     expect(captured!.type).toBe('video/mp4'); // a specific server type wins; the hint is ignored
+  });
+
+  it('overrides even a specific server type when the caller forces it, so a framed document is one', async () => {
+    // The served type comes from the storage row, and a blob URL inherits the app's origin: a
+    // row stored as text/html under a `.pdf` name would become a same-origin document running
+    // its own script inside the <iframe> that previews it. Callers that FRAME bytes force the
+    // type; forced, that payload renders as a broken PDF instead of executing.
+    let captured: Blob | null = null;
+    URL.createObjectURL = vi.fn((b: Blob) => { captured = b; return 'blob:obj-1'; });
+    mockFetchWithType('text/html');
+
+    const { result } = renderHook(() =>
+      useAuthedObjectUrl('/api/proxy/files/by-id/abc/raw', undefined, 'application/pdf'),
+    );
+    await waitFor(() => expect(result.current.url).toBe('blob:obj-1'));
+    expect(captured!.type).toBe('application/pdf');
+  });
+
+  it('refetches when the caller starts forcing, so the blob cannot keep a stale type', async () => {
+    // The forced type decides what the BLOB is, not just what is rendered, so it has to be part
+    // of what the effect keys on. Left out, a component that starts hinting and then forces
+    // would keep serving the first, unforced blob.
+    const types = ['text/html', 'text/html'];
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve({
+      ok: true, blob: () => Promise.resolve(new Blob(['x'], { type: types[call++] })),
+    })));
+    const seen: Blob[] = [];
+    URL.createObjectURL = vi.fn((b: Blob) => { seen.push(b); return `blob:obj-${seen.length}`; });
+
+    const { result, rerender } = renderHook(({ force }: { force?: string }) =>
+      useAuthedObjectUrl('/api/proxy/files/by-id/abc/raw', undefined, force), {
+      initialProps: {} as { force?: string },
+    });
+    await waitFor(() => expect(result.current.url).toBe('blob:obj-1'));
+    expect(seen[0].type).toBe('text/html');
+
+    rerender({ force: 'application/pdf' });
+
+    await waitFor(() => expect(result.current.url).toBe('blob:obj-2'));
+    expect(seen[1].type).toBe('application/pdf');
   });
 });

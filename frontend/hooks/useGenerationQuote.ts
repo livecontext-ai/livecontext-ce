@@ -4,6 +4,8 @@ import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { orchestratorApi } from '@/lib/api';
 import { platformQuantityFor } from '@/app/workflows/builder/utils/generateParams';
+import { priceMultiplierFor } from '@/lib/generation/priceModifiers';
+import { generationQuoteKey } from '@/lib/generation/quoteKey';
 import type { GenerationModel } from '@/lib/api/orchestrator/generation.service';
 import type { PlatformCredentialPublicInfo } from '@/lib/api/orchestrator/types';
 
@@ -33,37 +35,74 @@ export function useGenerationQuote(
   settled: boolean;
   /** True while the amount in hand belongs to a quantity the request has already moved past. */
   stale: boolean;
+  /**
+   * What this call's own choices do to the model's published rate, as the
+   * request in flight states it: 1 when they change nothing, which is every
+   * model that declares no modifiers.
+   *
+   * <p>This is what was ASKED. What was ANSWERED is `quote.priceMultiplier`,
+   * and a surface explaining an amount must read that one: a server that did
+   * not apply the factor (an older self-hosted build, a relay that dropped it)
+   * returns a total at the published rate, and a badge drawn from this number
+   * would claim a surcharge the amount beside it does not contain.
+   */
+  multiplier: number;
 } {
-  // `quantity` below is the one that feeds QUERY KEYS, and it is deliberately the debounced,
-  // bucketed value rather than the exact one. Handing the exact value to another surface that
-  // quotes the same call (the payer control, through CredentialSection) would key a SECOND cache
-  // entry: two requests for one generation, and two amounts that can disagree on screen.
   // What the published rate multiplies. Not converted into the price's unit here: the published row
   // owns that conversion and answers in the unit it priced in.
   const exactQuantity = model
     ? platformQuantityFor(model.price?.unit, quantitySource, model.defaultQuantity)
     : null;
 
-  // The quantity is part of the query key, and on a model billed per CHARACTER it is the prompt's
-  // length - so every keystroke would mint a new key and fire a request that `staleTime` cannot
-  // help. The key is therefore bucketed, and the bucket is coarse enough that ordinary typing does
-  // not move it while staying fine enough that the amount on screen tracks what will be charged.
-  const keyQuantity = React.useMemo(
-    () => bucketQuantity(exactQuantity, model?.price?.unit),
-    [exactQuantity, model?.price?.unit],
+  // The EXACT size, asked exactly as the other three surfaces ask it.
+  //
+  // This used to round a character count up to the next 50, on the argument that a prompt's length
+  // changes on every keystroke and would mint a query key per keystroke. The debounce below is
+  // what actually stops that: the key cannot move until typing has paused, whatever the size. All
+  // the bucket added was a number that is not the one being charged - a 62 character prompt was
+  // quoted as 100, about 60% high - and, worse, a number only THIS surface used. The workflow
+  // inspector and the chat dialog send the exact count, so the same call was two cache entries and
+  // two different amounts on screen, which is the single thing the shared key exists to prevent.
+  const keyQuantity = exactQuantity;
+  // What the CHOICES in this call do to the rate, from the model's own declared
+  // table and whatever is in the form.
+  const exactMultiplier = React.useMemo(
+    () => priceMultiplierFor(model, quantitySource),
+    [model, quantitySource],
   );
-  const debouncedQuantity = useDebouncedValue(keyQuantity, QUOTE_DEBOUNCE_MS);
+
+  // Both halves of the question move together and are debounced together.
+  //
+  // A factor usually moves on a deliberate step (a dropdown, a file), but it
+  // does not have to: a modifier can sit on a parameter the reader TYPES, and
+  // an undebounced factor in the query key would then fire one request per
+  // keystroke past a debounce written to stop exactly that. Debouncing them as
+  // one pair also keeps `stale` a single, honest statement - with two clocks,
+  // the amount on screen could belong to this quantity and the previous factor,
+  // and nothing would say so.
+  const debounced = useDebouncedValue(
+    React.useMemo(
+      () => ({ quantity: keyQuantity, multiplier: exactMultiplier }),
+      [keyQuantity, exactMultiplier],
+    ),
+    QUOTE_DEBOUNCE_MS,
+  );
+  const debouncedQuantity = debounced.quantity;
+  const multiplier = debounced.multiplier;
 
   const { data, isFetched, isError, isFetching } = useQuery({
-    queryKey: [
-      'platform-credential-public-info',
-      model?.integrationName?.toLowerCase() ?? '',
-      model?.apiToolId ?? null,
-      model?.model ?? null,
-      debouncedQuantity,
-      true,
-      model?.measuredUnit ?? null,
-    ] as const,
+    // The shared shape, so this hook and the payer control inside the picker land on ONE cache
+    // entry for one call. The factor is part of it, or a reader who switches to 1080p keeps the
+    // 720p amount on screen next to a button that spends the larger one.
+    queryKey: generationQuoteKey({
+      integrationName: model?.integrationName,
+      apiToolId: model?.apiToolId,
+      modelId: model?.model,
+      quantity: debouncedQuantity,
+      generation: true,
+      quantityUnit: model?.measuredUnit,
+      priceMultiplier: multiplier,
+    }),
     queryFn: () => orchestratorApi.getPlatformCredentialPublicInfo(
       model!.integrationName as string,
       model!.apiToolId,
@@ -75,6 +114,7 @@ export function useGenerationQuote(
         quantity: debouncedQuantity,
         generation: true,
         quantityUnit: model!.measuredUnit,
+        priceMultiplier: multiplier,
       },
     ),
     // A model whose API has no platform credential has nothing to quote: asking would 404 on every
@@ -98,25 +138,13 @@ export function useGenerationQuote(
   //
   // A model with nothing to quote is never stale: no question is pending, so there is no answer to
   // wait for.
-  const stale = !!model?.integrationName && (keyQuantity !== debouncedQuantity || isFetching);
-  return { quote: data, quantity: debouncedQuantity, settled, stale };
+  const stale = !!model?.integrationName
+    && (keyQuantity !== debouncedQuantity || exactMultiplier !== multiplier || isFetching);
+  return { quote: data, quantity: debouncedQuantity, settled, stale, multiplier };
 }
 
 /** How long the quantity must hold still before it is worth asking the server again. */
 const QUOTE_DEBOUNCE_MS = 600;
-
-/**
- * Round a character count to something that does not change on every keystroke.
- *
- * <p>Only characters are bucketed: a duration in seconds or a count of images changes in whole
- * steps a reader chose deliberately, and each of those is worth an exact quote. A prompt's length
- * changes continuously and nobody is watching the third digit of it.
- */
-function bucketQuantity(quantity: number | null, unit: string | undefined): number | null {
-  if (quantity == null || unit !== 'character') return quantity;
-  const bucket = 50;
-  return Math.max(bucket, Math.ceil(quantity / bucket) * bucket);
-}
 
 /** Hold a value still until it has stopped changing. */
 function useDebouncedValue<T>(value: T, delayMs: number): T {

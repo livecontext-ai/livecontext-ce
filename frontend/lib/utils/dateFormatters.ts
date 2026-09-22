@@ -215,6 +215,31 @@ export function formatUtcDateTime(
 }
 
 /**
+ * A formatted UTC date, or {@code null} when the input cannot be read as one.
+ *
+ * <p>The difference from {@link formatUtcDate} is the ability to say NOTHING, which its
+ * {@code fallback} cannot express: that option is read as {@code options?.fallback || '-'}, so
+ * an empty string is falsy and comes back as a literal "-". A caller that wants to omit a whole
+ * sentence rather than print a placeholder inside it therefore has to parse first, and two
+ * callers had started doing that by hand. "+10,000 credits on -" is the sentence this exists to
+ * prevent.
+ */
+export function formatUtcDateOrNull(
+  dateString: string | Date | null | undefined,
+  options?: { locale?: string }
+): string | null {
+  if (!dateString) return null;
+  // `parseUtcAware` hands back anything that is not a string UNCHANGED, so a truthy non-Date
+  // (the [y,M,d] array a mis-configured mapper serves, say) would reach `.getTime()` and throw,
+  // taking the page down instead of rendering nothing. A helper whose whole contract is "or
+  // null when the input cannot be read as one" must not crash on precisely that input, and a
+  // caller who trusts the name would not add a guard of their own.
+  const date = toDate(dateString);
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  return formatUtcDate(date, options);
+}
+
+/**
  * Date only in UTC. Example: "21 Jan 2026 UTC".
  */
 export function formatUtcDate(

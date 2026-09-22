@@ -570,4 +570,48 @@ class PendingActionServiceTest {
             assertThat(PendingActionService.extractOriginalRequest(null)).isNull();
         }
     }
+
+    @Nested
+    @DisplayName("tool-authorization subject (what the card names)")
+    class ToolAuthorizationSubject {
+
+        @Test
+        @DisplayName("The subject is stored, so a reload rebuilds a card that still names its workflow")
+        void subjectIsStored() {
+            // The card is rebuilt from this row after a refresh. Drop the subject here and the
+            // user comes back to "run this action?" about a pin - a question they cannot answer.
+            Map<String, Object> subject = Map.of("kind", "workflow", "id", "w-1", "version", 12);
+
+            Map<String, Object> action = PendingActionService.buildToolAuthorizationAction(
+                    "workflow:pin", "workflow", "pin", "call-1", "{}", null, subject);
+
+            assertThat(action).containsEntry("waiting_for", "tool_authorization")
+                    .containsEntry("rule", "workflow:pin")
+                    .containsEntry("subject", subject);
+        }
+
+        @Test
+        @DisplayName("A null or empty subject leaves the key out entirely")
+        void absentSubjectIsNotStored() {
+            // Storing an empty map would make the card believe it has a subject and render
+            // the NAMED copy with nothing in it.
+            assertThat(PendingActionService.buildToolAuthorizationAction(
+                    "workflow:execute", "workflow", "execute", "call-2", "{}", null, null))
+                    .doesNotContainKey("subject");
+            assertThat(PendingActionService.buildToolAuthorizationAction(
+                    "workflow:execute", "workflow", "execute", "call-2", "{}", null, Map.of()))
+                    .doesNotContainKey("subject");
+        }
+
+        @Test
+        @DisplayName("The 6-argument overload still builds the same row, minus the subject")
+        void backCompatOverloadIsUnchanged() {
+            Map<String, Object> action = PendingActionService.buildToolAuthorizationAction(
+                    "application:acquire", "application", "acquire", "call-3", "{}", "pub-1");
+
+            assertThat(action).containsEntry("rule", "application:acquire")
+                    .containsEntry("application_id", "pub-1")
+                    .doesNotContainKey("subject");
+        }
+    }
 }

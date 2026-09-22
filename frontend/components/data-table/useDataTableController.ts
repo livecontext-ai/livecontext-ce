@@ -82,6 +82,10 @@ export function useDataTableController({ dataSourceId, jsonPath, workflowContext
     showIdColumn,
     addToast,
     setPagination,
+    // The order the fetch reads back from the server lands in the SAME state the
+    // grid renders from. It used to be a private state of useDataFetching, so
+    // every saved order was loaded and then dropped on the floor.
+    setColumnOrder,
     snapshotData,
   });
 
@@ -568,6 +572,7 @@ export function useDataTableController({ dataSourceId, jsonPath, workflowContext
 
     // Loading and errors
     tableLoading,
+    error,
 
     // Toast
     removeToast,

@@ -1,5 +1,8 @@
 package com.apimarketplace.orchestrator.services.approvalchannel.telegram;
 
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.common.security.CredentialEncryptionService;
+
 import com.apimarketplace.orchestrator.domain.execution.ApprovalChannelDeliveryEntity;
 import com.apimarketplace.orchestrator.domain.execution.ApprovalChannelDeliveryEntity.DeliveryStatus;
 import com.apimarketplace.orchestrator.domain.execution.SignalResolution;
@@ -44,6 +47,12 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("TelegramApprovalCallbackHandler")
 class TelegramApprovalCallbackHandlerTest {
+
+    /** Token columns are hashed through TokenAtRest; a unit test must install the material itself. */
+    @org.junit.jupiter.api.BeforeAll
+    static void installTokenAtRest() {
+        TokenAtRest.install(new CredentialEncryptionService("test-password-123", "0123456789abcdef"));
+    }
 
     private static final String TOKEN = "AbCdEfGhIjKlMnOpQrStUv"; // 22 base64url chars
     private static final String RUN_ID = "run_pub_abc";
@@ -148,7 +157,7 @@ class TelegramApprovalCallbackHandlerTest {
         @DisplayName("approve click resolves APPROVED as telegram:<from.id> with the delivery's epoch/itemId, then acks Approved")
         void approveClickResolvesApproved() {
             ApprovalChannelDeliveryEntity delivery = sentDelivery();
-            when(deliveryRepository.findByCallbackToken(TOKEN)).thenReturn(Optional.of(delivery));
+            when(deliveryRepository.findByCallbackTokenHash(TokenAtRest.hash(TOKEN))).thenReturn(Optional.of(delivery));
             when(runSignalResolutionService.resolveApproval(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(okOutcome("APPROVED"));
 
@@ -170,7 +179,7 @@ class TelegramApprovalCallbackHandlerTest {
         @DisplayName("reject click resolves REJECTED and acks Rejected")
         void rejectClickResolvesRejected() {
             ApprovalChannelDeliveryEntity delivery = sentDelivery();
-            when(deliveryRepository.findByCallbackToken(TOKEN)).thenReturn(Optional.of(delivery));
+            when(deliveryRepository.findByCallbackTokenHash(TokenAtRest.hash(TOKEN))).thenReturn(Optional.of(delivery));
             when(runSignalResolutionService.resolveApproval(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(okOutcome("REJECTED"));
 
@@ -185,7 +194,7 @@ class TelegramApprovalCallbackHandlerTest {
         @Test
         @DisplayName("unknown token (stale or forged) resolves nothing and answers nothing")
         void unknownTokenResolvesNothing() {
-            when(deliveryRepository.findByCallbackToken(TOKEN)).thenReturn(Optional.empty());
+            when(deliveryRepository.findByCallbackTokenHash(TokenAtRest.hash(TOKEN))).thenReturn(Optional.empty());
 
             handler.handle(callbackPayload("lcapr:" + TOKEN + ":a", 777));
 
@@ -200,7 +209,7 @@ class TelegramApprovalCallbackHandlerTest {
         void terminalDeliveryShortCircuits() {
             ApprovalChannelDeliveryEntity delivery = sentDelivery();
             delivery.setStatus(DeliveryStatus.RESOLVED);
-            when(deliveryRepository.findByCallbackToken(TOKEN)).thenReturn(Optional.of(delivery));
+            when(deliveryRepository.findByCallbackTokenHash(TokenAtRest.hash(TOKEN))).thenReturn(Optional.of(delivery));
 
             handler.handle(callbackPayload("lcapr:" + TOKEN + ":a", 777));
 
@@ -214,7 +223,7 @@ class TelegramApprovalCallbackHandlerTest {
         void nonAllowedUserRefused() {
             ApprovalChannelDeliveryEntity delivery = sentDelivery();
             delivery.setAllowedUserIds(List.of("111", "222"));
-            when(deliveryRepository.findByCallbackToken(TOKEN)).thenReturn(Optional.of(delivery));
+            when(deliveryRepository.findByCallbackTokenHash(TokenAtRest.hash(TOKEN))).thenReturn(Optional.of(delivery));
 
             handler.handle(callbackPayload("lcapr:" + TOKEN + ":a", 777));
 
@@ -228,7 +237,7 @@ class TelegramApprovalCallbackHandlerTest {
         void allowedUserResolves() {
             ApprovalChannelDeliveryEntity delivery = sentDelivery();
             delivery.setAllowedUserIds(List.of("777"));
-            when(deliveryRepository.findByCallbackToken(TOKEN)).thenReturn(Optional.of(delivery));
+            when(deliveryRepository.findByCallbackTokenHash(TokenAtRest.hash(TOKEN))).thenReturn(Optional.of(delivery));
             when(runSignalResolutionService.resolveApproval(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(okOutcome("APPROVED"));
 
@@ -243,7 +252,7 @@ class TelegramApprovalCallbackHandlerTest {
         @DisplayName("resolution outcome !ok (timeout race / double click) answers already-decided")
         void notOkOutcomeAnswersAlreadyDecided() {
             ApprovalChannelDeliveryEntity delivery = sentDelivery();
-            when(deliveryRepository.findByCallbackToken(TOKEN)).thenReturn(Optional.of(delivery));
+            when(deliveryRepository.findByCallbackTokenHash(TokenAtRest.hash(TOKEN))).thenReturn(Optional.of(delivery));
             when(runSignalResolutionService.resolveApproval(any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(notFoundOutcome());
 
@@ -265,7 +274,7 @@ class TelegramApprovalCallbackHandlerTest {
         @Test
         @DisplayName("everything is swallowed: a repository failure never propagates (Telegram would retry non-2xx)")
         void repositoryFailureSwallowed() {
-            when(deliveryRepository.findByCallbackToken(anyString()))
+            when(deliveryRepository.findByCallbackTokenHash(anyString()))
                     .thenThrow(new RuntimeException("db down"));
 
             assertThatCode(() -> handler.handle(callbackPayload("lcapr:" + TOKEN + ":a", 777)))

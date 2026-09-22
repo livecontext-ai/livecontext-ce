@@ -93,6 +93,7 @@ class GenerateNodeTest {
         data.put("file", fileRef);
         data.put("billed_quantity", new BigDecimal("10"));
         data.put("billed_unit", "second");
+        data.put("billed_credits", new BigDecimal("600"));
         data.put("provider_response", Map.of("id", "job-77"));
         return new GenerationResult(true, data, null);
     }
@@ -206,6 +207,9 @@ class GenerateNodeTest {
             assertEquals("Seedance", output.get("provider"));
             assertEquals(new BigDecimal("10"), output.get("billed_quantity"));
             assertEquals("second", output.get("billed_unit"));
+            // What it COST, reported rather than left to be reconstructed from the size and a rate
+            // that can be republished between the run and the reading.
+            assertEquals(new BigDecimal("600"), output.get("billed_credits"));
 
             @SuppressWarnings("unchecked")
             Map<String, Object> file = (Map<String, Object>) output.get("file");

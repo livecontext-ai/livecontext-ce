@@ -28,6 +28,8 @@ import { storageApi, S3_FILES_FILTER, type StorageExplorerEntry } from '@/lib/ap
 import { useAuthToken } from '@/hooks/useAuthToken';
 import { getActiveOrgHeaderForRequest, useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { fileService } from '@/lib/api/orchestrator/file.service';
+import { is413StorageError } from '@/lib/api/error-utils';
+import { showInsufficientStorageModal } from '@/components/billing/InsufficientStorageModal';
 import { FileDetailView } from '@/components/app/FileDetailView';
 import { FilesExplorerBody } from './FilesExplorerBody';
 import { FilesMoveToFolderDialog } from './FilesMoveToFolderDialog';
@@ -718,7 +720,8 @@ export function FileBrowser() {
     if (arr.length === 0) return;
     setUploading(true);
     let ok = 0;
-    let failed = 0;
+    let failedQuota = 0;
+    let failedOther = 0;
     for (const f of arr) {
       try {
         // V313: land the upload in the current manual folder (null = root; never a
@@ -727,14 +730,30 @@ export function FileBrowser() {
         ok++;
       } catch (err) {
         console.error('Upload failed:', err);
-        failed++;
+        // A quota refusal is counted apart so it gets the storage modal instead of the
+        // generic toast, which says only "upload failed" and leaves the user with no idea
+        // that they are full or what to do about it. Not breaking out of the loop: the
+        // backend refuses per file against the remaining room, so a smaller file can still
+        // fit after a large one was rejected.
+        //
+        // Detection runs on the MESSAGE, and it must stay that way. uploadGeneric throws a
+        // plain Error carrying the response body and no status, which is what makes this
+        // correct: the upload endpoint answers 413 for TWO unrelated reasons, quota
+        // ("Storage quota exceeded") and a single oversized file ("File too large. Maximum
+        // size: N MB"). is413StorageError short-circuits on a `status` property when one is
+        // present, so attaching the status here would look like a robustness improvement
+        // and would in fact pop "you are out of space, here are the plans" at someone who
+        // has room to spare and simply picked too big a file. Only the quota body matches.
+        if (is413StorageError(err)) failedQuota++;
+        else failedOther++;
       }
     }
     setUploading(false);
     track('file_uploaded', {
       file_count: arr.length,
       success_count: ok,
-      failed_count: failed,
+      failed_count: failedQuota + failedOther,
+      quota_failed_count: failedQuota,
       in_folder: Boolean(currentManualFolderId),
       total_bytes: arr.reduce((sum, f) => sum + f.size, 0),
     });
@@ -742,8 +761,13 @@ export function FileBrowser() {
       refresh();
       addToast({ type: 'success', title: t('uploadedTitle'), message: t('uploadedMessage', { count: ok }) });
     }
-    if (failed > 0) {
-      addToast({ type: 'error', title: t('uploadFailedTitle'), message: t('uploadFailedMessage', { count: failed }) });
+    // Only the failures the modal does NOT explain get the generic toast, so a purely
+    // quota-driven failure shows one clear message rather than a modal plus a vague toast.
+    if (failedOther > 0) {
+      addToast({ type: 'error', title: t('uploadFailedTitle'), message: t('uploadFailedMessage', { count: failedOther }) });
+    }
+    if (failedQuota > 0) {
+      showInsufficientStorageModal();
     }
   }, [canMutate, refresh, addToast, t, currentManualFolderId]);
 

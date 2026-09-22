@@ -4,6 +4,7 @@ import com.apimarketplace.agent.credential.CachedLlmCredentialResolver;
 import com.apimarketplace.agent.credential.LlmCredentialRepository;
 import com.apimarketplace.agent.factory.BridgeAvailabilityFilter;
 import com.apimarketplace.agent.factory.LLMProviderFactory;
+import com.apimarketplace.agent.service.ModelCatalogService;
 import com.apimarketplace.common.web.AdminRoleGuard;
 import com.apimarketplace.agent.provider.LLMProvider;
 import lombok.RequiredArgsConstructor;
@@ -30,12 +31,68 @@ public class LlmProviderStatusController {
     private final LLMProviderFactory llmProviderFactory;
     private final LlmCredentialRepository credentialRepository;
     private final CachedLlmCredentialResolver credentialResolver;
+    private final ModelCatalogService modelCatalogService;
 
     @Value("${conversation.bridge.url:}")
     private String bridgeUrl;
 
     /** Allowlist of CLI ids the bridge knows about. Mirrors mcp/bridge/cli-detector.mjs CLI_IDS. */
     static final Set<String> SUPPORTED_CLIS = Set.of("claudeCode", "codex", "geminiCli", "mistralVibe");
+
+    /**
+     * Per-user budget for {@code POST /validate}: a signed-in user pasting their own keys
+     * needs a handful of checks an hour; a script testing stolen keys through the platform
+     * needs thousands. Sliding window, in memory (per replica, which is enough to blunt it).
+     */
+    static final int KEY_CHECKS_PER_HOUR = 30;
+    private final KeyCheckBudget keyCheckBudget = new KeyCheckBudget(KEY_CHECKS_PER_HOUR, Duration.ofHours(1));
+
+    static final class KeyCheckBudget {
+        private final int limit;
+        private final long windowMs;
+        private final Map<String, java.util.ArrayDeque<Long>> stamps = new java.util.concurrent.ConcurrentHashMap<>();
+
+        KeyCheckBudget(int limit, Duration window) {
+            this.limit = limit;
+            this.windowMs = window.toMillis();
+        }
+
+        /**
+         * Memory is bounded by (distinct users per replica) x limit stamps, and a user's
+         * stamps age out of the deque as the window slides; the map entry itself is kept
+         * (a few bytes per user who ever pasted a key on this replica).
+         */
+        boolean tryAcquire(String userId) {
+            long now = System.currentTimeMillis();
+            java.util.ArrayDeque<Long> window = stamps.computeIfAbsent(userId, k -> new java.util.ArrayDeque<>());
+            synchronized (window) {
+                while (!window.isEmpty() && now - window.peekFirst() > windowMs) {
+                    window.pollFirst();
+                }
+                if (window.size() >= limit) {
+                    return false;
+                }
+                window.addLast(now);
+                return true;
+            }
+        }
+    }
+
+    /**
+     * GET /api/llm-providers/offering-models - the providers worth bringing a key for.
+     *
+     * <p>Deliberately NOT admin-gated, unlike {@code /status} beside it: it carries no
+     * credential state whatever, only which providers this install exposes models for. The
+     * own-keys panel needs exactly that, and needs it for providers the caller holds no key
+     * for, which is precisely what the picker catalogue hides from them. A provider whose
+     * models an admin has all switched off is absent here, so the panel never invites a key
+     * that would serve nothing and never names a provider the user cannot use. CLI bridges are
+     * never listed.
+     */
+    @GetMapping("/offering-models")
+    public ResponseEntity<List<String>> getProvidersOfferingModels() {
+        return ResponseEntity.ok(modelCatalogService.providersOfferingModels());
+    }
 
     /**
      * Get status of all LLM providers: configured state, source (db/env/none).
@@ -95,7 +152,56 @@ public class LlmProviderStatusController {
     }
 
     /**
-     * Invalidate cached credentials (called after save/delete in admin UI).
+     * Self-scoped invalidation: drops the CALLER's own cached key and hasDbKey slot for one
+     * provider, after they saved, removed or switched their own key. No admin role needed
+     * because it can only touch the caller's slots (the user id is the gateway-injected
+     * header). Without this a toggle lies for the cache TTL on this replica.
+     */
+    /**
+     * Whether a key the caller is about to save is accepted by its vendor. Any signed-in
+     * user may ask (it is THEIR key); the key is neither stored nor logged here. "Rejected"
+     * is a 401/403 from the vendor; "unverified" means the vendor could not be asked, which
+     * the caller must not treat as a bad key.
+     */
+    @PostMapping("/validate")
+    public ResponseEntity<?> validateKey(@RequestHeader(value = "X-User-ID", required = false) String userId,
+                                         @RequestBody Map<String, Object> body) {
+        String providerName = body.get("provider") instanceof String s ? s.trim().toLowerCase() : "";
+        String apiKey = body.get("apiKey") instanceof String s ? s : "";
+        if (providerName.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "'provider' is required", "code", "provider_required"));
+        }
+        if (apiKey.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "'apiKey' is required", "code", "api_key_required"));
+        }
+        if (!keyCheckBudget.tryAcquire(userId == null || userId.isBlank() ? "anonymous" : userId)) {
+            return ResponseEntity.status(429).body(Map.of(
+                    "error", "Too many key checks, try again later", "code", "rate_limited"));
+        }
+        return llmProviderFactory.findProvider(providerName)
+                .<ResponseEntity<?>>map(provider -> {
+                    LLMProvider.KeyCheck check = provider.validateApiKey(apiKey);
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("valid", check.valid());
+                    result.put("verified", check.verified());
+                    result.put("error", check.error() == null ? "" : check.error());
+                    return ResponseEntity.ok(result);
+                })
+                .orElseGet(() -> ResponseEntity.status(404)
+                        .body(Map.of("error", "Unknown provider: " + providerName, "code", "unknown_provider")));
+    }
+
+    @PostMapping("/invalidate-cache/mine")
+    public ResponseEntity<?> invalidateMyCache(
+            @RequestHeader("X-User-ID") String userId,
+            @RequestParam String provider) {
+        credentialResolver.invalidate(userId, provider);
+        credentialRepository.clearHasDbKeyCache(userId, provider);
+        return ResponseEntity.ok(Map.of("success", true));
+    }
+
+    /**
+     * Invalidate cached credentials platform-wide (called after save/delete in the admin UI).
      */
     @PostMapping("/invalidate-cache")
     public ResponseEntity<?> invalidateCache(

@@ -99,6 +99,23 @@ public class CreditLedgerEntry {
     private Long pinId;
 
     /**
+     * V506: the key route this row was billed under. {@code OWN_KEY} = the tenant's own
+     * provider key served the turn and the platform charged a flat fee per turn; NULL (or
+     * {@code PLATFORM}) = the platform key, billed at the token rate, the meaning of every
+     * pre-V506 row.
+     */
+    @Column(name = "key_route", length = 16)
+    private String keyRoute;
+
+    /**
+     * V506, own-key rows only: the tokens at the provider's LIST rate, in credits
+     * (1 credit = $0.001). The estimate of what the user's provider bills for this turn,
+     * shown next to the fee. Never added to any balance; NULL on every other row.
+     */
+    @Column(name = "provider_cost_credits", precision = 15, scale = 4)
+    private BigDecimal providerCostCredits;
+
+    /**
      * Reservation expiry (per-call TTL). Set by {@code tryReserveMarkup} based
      * on the caller's scope:
      * <ul>
@@ -127,6 +144,21 @@ public class CreditLedgerEntry {
      */
     @Column(name = "payg_portion", nullable = false, precision = 15, scale = 4)
     private BigDecimal paygPortion = BigDecimal.ZERO;
+
+    /**
+     * How much of this debit the monthly AI allowance paid (V494). Positive on an
+     * AI-funded LLM row, zero everywhere else.
+     *
+     * <p>{@code amount} is what the buckets ACTUALLY gave up (the full cost, except on
+     * the one path where a free-tier tail is absorbed rather than booked as debt - see
+     * {@code CreditService.applyDebit}), while the allowance sits outside
+     * {@code Subscription.getTotalBalance()}, so that part of the movement never
+     * touches the wallet the reconciliation compares the ledger against. Recording it
+     * is what lets {@code CreditReconciliationService} add it back instead of
+     * reporting a real drift. Same role, and the same shape, as {@link #paygPortion}.
+     */
+    @Column(name = "ai_portion", nullable = false, precision = 15, scale = 4)
+    private BigDecimal aiPortion = BigDecimal.ZERO;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -168,9 +200,15 @@ public class CreditLedgerEntry {
     public void setDescription(String description) { this.description = description; }
     public Long getPinId() { return pinId; }
     public void setPinId(Long pinId) { this.pinId = pinId; }
+    public String getKeyRoute() { return keyRoute; }
+    public void setKeyRoute(String keyRoute) { this.keyRoute = keyRoute; }
+    public BigDecimal getProviderCostCredits() { return providerCostCredits; }
+    public void setProviderCostCredits(BigDecimal providerCostCredits) { this.providerCostCredits = providerCostCredits; }
     public LocalDateTime getExpiresAt() { return expiresAt; }
     public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }
     public BigDecimal getPaygPortion() { return paygPortion == null ? BigDecimal.ZERO : paygPortion; }
     public void setPaygPortion(BigDecimal paygPortion) { this.paygPortion = paygPortion == null ? BigDecimal.ZERO : paygPortion; }
+    public BigDecimal getAiPortion() { return aiPortion == null ? BigDecimal.ZERO : aiPortion; }
+    public void setAiPortion(BigDecimal aiPortion) { this.aiPortion = aiPortion == null ? BigDecimal.ZERO : aiPortion; }
     public LocalDateTime getCreatedAt() { return createdAt; }
 }

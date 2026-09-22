@@ -1,6 +1,6 @@
 package com.apimarketplace.conversation.controller;
 
-import com.apimarketplace.conversation.repository.ConversationRepository;
+import com.apimarketplace.conversation.service.ConversationSharingService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,15 +20,15 @@ import java.util.Map;
 @RequestMapping("/api/internal/share")
 public class InternalShareValidationController {
 
-    private final ConversationRepository conversationRepository;
+    private final ConversationSharingService sharingService;
 
-    public InternalShareValidationController(ConversationRepository conversationRepository) {
-        this.conversationRepository = conversationRepository;
+    public InternalShareValidationController(ConversationSharingService sharingService) {
+        this.sharingService = sharingService;
     }
 
     @GetMapping("/validate/{token}")
     public ResponseEntity<Map<String, String>> validate(@PathVariable String token) {
-        return conversationRepository.findByShareToken(token)
+        return sharingService.findByShareToken(token)
                 .filter(c -> c.getShareMode() != null && !"off".equals(c.getShareMode()))
                 .map(c -> ResponseEntity.ok(Map.of("userId", c.getUserId())))
                 .orElse(ResponseEntity.notFound().build());

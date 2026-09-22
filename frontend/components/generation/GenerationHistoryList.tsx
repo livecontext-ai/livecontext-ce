@@ -2,11 +2,12 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { ChevronLeft, ChevronRight, Loader2, RotateCcw, WandSparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, WandSparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { FileThumb } from '@/components/files/FileCard';
+import { GenerationCard } from '@/components/generation/GenerationCard';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
-import { formatIcon, FORMAT_ORDER, ProviderIcon } from '@/lib/generation/formats';
+import { formatIcon, FORMAT_ORDER } from '@/lib/generation/formats';
 import { useGenerationModels } from '@/hooks/useGenerationModels';
 import {
   GENERATION_HISTORY_PAGE_SIZE,
@@ -39,6 +40,23 @@ export interface GenerationHistoryListProps {
   onOpen?: (entry: GenerationHistoryEntry) => void;
   /** Pass false while the surface is hidden, so a closed panel costs no request. */
   enabled?: boolean;
+  /**
+   * Title above the list, for a surface that shows it as one section among several.
+   *
+   * <p>Rendered here rather than by the caller so that it disappears WITH the list when
+   * {@link hideWhenEmpty} applies: a heading left behind over nothing is the empty shelf that rule
+   * exists to avoid.
+   */
+  heading?: string;
+  /**
+   * Render nothing at all when this workspace has generated nothing.
+   *
+   * <p>For a surface where the list is an addition rather than the point of the page. The studio
+   * and the Home applications row already work this way: a section that can be empty announces
+   * itself only once it has something to say. The dialog and the Files browser pass false, because
+   * there the empty state IS the answer to what the reader opened.
+   */
+  hideWhenEmpty?: boolean;
   className?: string;
 }
 
@@ -46,6 +64,8 @@ export function GenerationHistoryList({
   onReuse,
   onOpen,
   enabled = true,
+  heading,
+  hideWhenEmpty = false,
   className,
 }: GenerationHistoryListProps) {
   const t = useTranslations('generationHistory');
@@ -88,8 +108,23 @@ export function GenerationHistoryList({
     [tGeneration],
   );
 
+  // Nothing generated, on a surface that only wanted to show it if there was. Three things are
+  // deliberately NOT this case, and each of them is a way of hiding something the reader still
+  // needs. Loading: hiding while the answer is on its way makes the section appear late and jump
+  // the page. An error: a failed request is the one thing that does not tell us the history is
+  // empty. A chosen format, or a page past the first: the emptiness is then the reader's own
+  // filtering, and taking the controls away with the grid strands them there - `page` survives, so
+  // the Previous button they needed disappears until the component remounts.
+  const emptiedByTheReader = kind !== null || page > 0;
+  if (hideWhenEmpty && !isLoading && !isError && entries.length === 0 && !emptiedByTheReader) {
+    return null;
+  }
+
   return (
     <div className={className}>
+      {heading && (
+        <h2 className="mb-3 text-sm font-semibold tracking-tight text-theme-primary">{heading}</h2>
+      )}
       {availableKinds.length > 1 && (
         <div className="flex flex-wrap items-center gap-1.5 mb-3">
           <FilterChip active={kind === null} onClick={() => chooseKind(null)} label={t('allFormats')} />
@@ -211,11 +246,10 @@ function FilterChip({
 }
 
 /**
- * One past generation: the asset, what it was made from, and the way back into the form.
+ * One past generation, through the card every other generation surface draws.
  *
- * <p>The PROMPT is the title, not the file name. A generated file is called something like
- * {@code 20260824_elevenlabs-text-to-speech.mp3}, which says nothing a reader was thinking about
- * when they made it; the words they wrote are how they recognise it.
+ * <p>What this adds to it is the reading of the entry: which model made it (and whether that model
+ * still exists), and what it cost.
  */
 function GenerationHistoryCard({
   entry, model, onReuse, onOpen,
@@ -234,41 +268,21 @@ function GenerationHistoryCard({
   const reusable = Boolean(model);
 
   return (
-    <li className="group flex flex-col overflow-hidden rounded-xl border border-theme bg-theme-secondary">
-      <button
-        type="button"
-        onClick={onOpen ? () => onOpen(entry) : undefined}
-        disabled={!onOpen}
-        aria-label={onOpen ? t('open', { name: title }) : undefined}
-        className="flex aspect-[4/3] items-center justify-center overflow-hidden bg-theme-tertiary disabled:cursor-default"
-      >
-        <FileThumb entry={entry} />
-      </button>
-
-      <div className="flex flex-1 flex-col gap-1.5 border-t border-theme px-2.5 py-2">
-        <p className="text-sm text-theme-primary line-clamp-2 break-words" title={title}>{title}</p>
-        <p className="flex items-center gap-1.5 text-xs text-theme-muted">
-          <ProviderIcon slug={model?.iconSlug} className="h-3 w-3 flex-shrink-0 rounded-sm" />
-          <span className="truncate">{model?.label ?? provenance.model}</span>
-        </p>
-        <p className="text-xs text-theme-muted">{formatUtcDate(entry.createdAt)}</p>
-
-        {onReuse && (
-          <div className="mt-auto pt-1" title={reusable ? undefined : t('reuseUnavailable')}>
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full"
-              disabled={!reusable}
-              onClick={() => onReuse(entry)}
-            >
-              <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-              {t('reuse')}
-            </Button>
-          </div>
-        )}
-      </div>
-    </li>
+    <GenerationCard
+      as="li"
+      thumb={<FileThumb entry={entry} />}
+      title={title}
+      modelLine={model?.label ?? provenance.model}
+      iconSlug={model?.iconSlug}
+      kind={provenance.kind}
+      date={formatUtcDate(entry.createdAt)}
+      billedCredits={provenance.billedCredits}
+      onOpen={onOpen ? () => onOpen(entry) : undefined}
+      openLabel={t('open', { name: title })}
+      onModify={onReuse ? () => onReuse(entry) : undefined}
+      modifyDisabled={!reusable}
+      modifyTitle={reusable ? undefined : t('reuseUnavailable')}
+    />
   );
 }
 

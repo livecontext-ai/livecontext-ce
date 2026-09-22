@@ -152,6 +152,64 @@ class AgentAsyncCompletionServiceObservabilityTest {
     }
 
     @Test
+    @DisplayName("BILLING regression: a queued classify carries its key route as a top-level field of the worker DTO, and the row is billed under it (it used to be billed the platform token rate on the production path)")
+    void classifyKeyRouteReachesTheRow() throws Exception {
+        Agent planAgent = classifyPlanAgent();
+        WorkflowExecution exec = executionWith(planAgent, "00000000-0000-0000-0000-000000000019");
+        PendingAgent p = pending("agent:categorize_message", "classify");
+
+        Map<String, Object> resultMap = new HashMap<>();
+        resultMap.put("success", true);
+        resultMap.put("tokensUsed", 120);
+        resultMap.put("promptTokens", 80);
+        resultMap.put("completionTokens", 40);
+        resultMap.put("durationMs", 500L);
+        resultMap.put("keyRoute", "OWN_KEY");
+
+        AgentResultMessage msg = new AgentResultMessage(
+            "corr-1", p.runId(), p.nodeId(), resultMap, true, null, "classify", Instant.now());
+        StepExecutionResult stepResult = StepExecutionResult.success(p.nodeId(), resultMap, 500L);
+
+        invokeRecordAsyncObservability(exec, p, msg, stepResult);
+
+        ArgumentCaptor<AgentObservabilityRequest> captor = ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient).recordObservability(captor.capture());
+        assertThat(captor.getValue().getKeyRoute()).isEqualTo("OWN_KEY");
+    }
+
+    @Test
+    @DisplayName("BILLING: a queued guardrail carries its key route the same way")
+    void guardrailKeyRouteReachesTheRow() throws Exception {
+        Agent planAgent = new Agent(
+            null, "guardrail", "check_safety", null, true,
+            "openai", "gpt-4", null, "prompt", 0.7, 1024, 10, 5,
+            List.of(), null, Map.of(),
+            List.of(), null,
+            List.of(Map.of("id", "rule-1", "description", "no pii")), null, null);
+        WorkflowExecution exec = executionWith(planAgent, "00000000-0000-0000-0000-000000000020");
+        PendingAgent p = pending("agent:check_safety", "guardrail");
+
+        Map<String, Object> resultMap = new HashMap<>();
+        resultMap.put("success", true);
+        resultMap.put("passed", true);
+        resultMap.put("tokensUsed", 10);
+        resultMap.put("promptTokens", 8);
+        resultMap.put("completionTokens", 2);
+        resultMap.put("durationMs", 50L);
+        resultMap.put("keyRoute", "OWN_KEY");
+
+        AgentResultMessage msg = new AgentResultMessage(
+            "corr-1", p.runId(), p.nodeId(), resultMap, true, null, "guardrail", Instant.now());
+        StepExecutionResult stepResult = StepExecutionResult.success(p.nodeId(), resultMap, 50L);
+
+        invokeRecordAsyncObservability(exec, p, msg, stepResult);
+
+        ArgumentCaptor<AgentObservabilityRequest> captor = ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient).recordObservability(captor.capture());
+        assertThat(captor.getValue().getKeyRoute()).isEqualTo("OWN_KEY");
+    }
+
+    @Test
     @DisplayName("classify: records row with workflow context + token fields from flat camelCase result")
     void classifyRecordsRow() throws Exception {
         Agent planAgent = classifyPlanAgent();
@@ -214,6 +272,77 @@ class AgentAsyncCompletionServiceObservabilityTest {
         assertThat(req.getMessages().get(2).getIterationNumber()).isEqualTo(1);
         assertThat(req.getWorkflowId()).isNotNull(); // parsed from plan id
         assertThat(req.getWorkflowRunId()).isNotNull(); // parsed from runId
+    }
+
+
+    @Test
+    @DisplayName("BILLING: a classify turn's cache counters reach the billed row")
+    void classifyCacheCountersReachTheBilledRow() throws Exception {
+        // The async twin of the inline path. This method's output IS what bills a
+        // classify node, so counters that stop here are counters nobody charges: over a
+        // model execution link the whole context was billed at full input rate (6.1x its
+        // cost, measured) and without one the cache was free.
+        //
+        // The other half of that transport, that the same map must NOT be persisted with
+        // cacheUsage still in it, is asserted where injectAgentMetadata is driven:
+        // AgentAsyncCompletionServiceOutputShapeTest.BillingFieldsAreNotPersisted.
+        Agent planAgent = classifyPlanAgent();
+        WorkflowExecution exec = executionWith(planAgent, "00000000-0000-0000-0000-000000000010");
+        PendingAgent p = pending("agent:categorize_message", "classify");
+
+        Map<String, Object> cacheUsage = new HashMap<>();
+        cacheUsage.put("cacheCreationInputTokens", 18_945);
+        cacheUsage.put("cacheReadInputTokens", 79_368);
+
+        Map<String, Object> resultMap = new HashMap<>();
+        resultMap.put("success", true);
+        resultMap.put("tokensUsed", 1_921);
+        resultMap.put("promptTokens", 6);
+        resultMap.put("completionTokens", 1_915);
+        resultMap.put("durationMs", 500L);
+        resultMap.put("cacheUsage", cacheUsage);
+
+        AgentResultMessage msg = new AgentResultMessage(
+            "corr-cache", p.runId(), p.nodeId(), resultMap, true, null, "classify", Instant.now());
+        StepExecutionResult stepResult = StepExecutionResult.success(p.nodeId(), resultMap, 500L);
+
+        invokeRecordAsyncObservability(exec, p, msg, stepResult);
+
+        ArgumentCaptor<AgentObservabilityRequest> captor = ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient).recordObservability(captor.capture());
+        AgentObservabilityRequest req = captor.getValue();
+
+        assertThat(req.getCacheCreationTokens()).isEqualTo(18_945L);
+        assertThat(req.getCacheReadTokens()).isEqualTo(79_368L);
+        // The prompt stays the PLAIN input the service converted it to: billed once.
+        assertThat(req.getPromptTokens()).isEqualTo(6L);
+    }
+
+    @Test
+    @DisplayName("BILLING: a classify turn with no reported cache leaves the counters at zero")
+    void classifyWithoutCacheLeavesCountersAtZero() throws Exception {
+        Agent planAgent = classifyPlanAgent();
+        WorkflowExecution exec = executionWith(planAgent, "00000000-0000-0000-0000-000000000010");
+        PendingAgent p = pending("agent:categorize_message", "classify");
+
+        Map<String, Object> resultMap = new HashMap<>();
+        resultMap.put("success", true);
+        resultMap.put("tokensUsed", 120);
+        resultMap.put("promptTokens", 80);
+        resultMap.put("completionTokens", 40);
+        resultMap.put("durationMs", 500L);
+
+        AgentResultMessage msg = new AgentResultMessage(
+            "corr-nocache", p.runId(), p.nodeId(), resultMap, true, null, "classify", Instant.now());
+        StepExecutionResult stepResult = StepExecutionResult.success(p.nodeId(), resultMap, 500L);
+
+        invokeRecordAsyncObservability(exec, p, msg, stepResult);
+
+        ArgumentCaptor<AgentObservabilityRequest> captor = ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient).recordObservability(captor.capture());
+
+        assertThat(captor.getValue().getCacheCreationTokens()).isZero();
+        assertThat(captor.getValue().getCacheReadTokens()).isZero();
     }
 
     @Test
@@ -563,6 +692,66 @@ class AgentAsyncCompletionServiceObservabilityTest {
     }
 
     @Test
+    @DisplayName("BILLING regression: the key route on the worker metrics reaches the row - the queued path is the production one, and without it an own-key run was billed the platform token rate")
+    void agentKeyRouteOnMetricsReachesTheRow() throws Exception {
+        Agent planAgent = regularPlanAgent();
+        WorkflowExecution exec = executionWith(planAgent, "00000000-0000-0000-0000-000000000017");
+        PendingAgent p = pending("agent:writer", "agent");
+
+        Map<String, Object> usage = new HashMap<>();
+        usage.put("promptTokens", 150);
+        usage.put("completionTokens", 75);
+        Map<String, Object> metrics = new HashMap<>();
+        metrics.put("keyRoute", "OWN_KEY");
+
+        Map<String, Object> resultMap = new HashMap<>();
+        resultMap.put("success", true);
+        resultMap.put("totalUsage", usage);
+        resultMap.put("iterations", 1);
+        resultMap.put("metrics", metrics);
+        resultMap.put("durationMs", 600L);
+
+        AgentResultMessage msg = new AgentResultMessage(
+            "corr-1", p.runId(), p.nodeId(), resultMap, true, null, "agent", Instant.now());
+        StepExecutionResult stepResult = StepExecutionResult.success(p.nodeId(), resultMap, 600L);
+
+        invokeRecordAsyncObservability(exec, p, msg, stepResult);
+
+        ArgumentCaptor<AgentObservabilityRequest> captor = ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient).recordObservability(captor.capture());
+        assertThat(captor.getValue().getKeyRoute()).isEqualTo("OWN_KEY");
+    }
+
+    @Test
+    @DisplayName("agent: metrics without a key route (pre-route worker, or a blank stamp) leave the row unpinned rather than inventing one")
+    void agentWithoutKeyRouteLeavesTheRowUnpinned() throws Exception {
+        Agent planAgent = regularPlanAgent();
+        WorkflowExecution exec = executionWith(planAgent, "00000000-0000-0000-0000-000000000018");
+        PendingAgent p = pending("agent:writer", "agent");
+
+        Map<String, Object> metrics = new HashMap<>();
+        metrics.put("budgetScope", "agent");
+        metrics.put("keyRoute", "  ");
+        Map<String, Object> resultMap = new HashMap<>();
+        resultMap.put("success", true);
+        resultMap.put("totalUsage", Map.of("promptTokens", 1, "completionTokens", 1));
+        resultMap.put("iterations", 1);
+        resultMap.put("metrics", metrics);
+        resultMap.put("durationMs", 10L);
+
+        AgentResultMessage msg = new AgentResultMessage(
+            "corr-1", p.runId(), p.nodeId(), resultMap, true, null, "agent", Instant.now());
+        StepExecutionResult stepResult = StepExecutionResult.success(p.nodeId(), resultMap, 10L);
+
+        invokeRecordAsyncObservability(exec, p, msg, stepResult);
+
+        ArgumentCaptor<AgentObservabilityRequest> captor = ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient).recordObservability(captor.capture());
+        assertThat(captor.getValue().getKeyRoute()).isNull();
+        assertThat(captor.getValue().getBudgetScope()).isEqualTo("agent");
+    }
+
+    @Test
     @DisplayName("agent: totalTokens absent → falls back to prompt+completion sum")
     void agentFallsBackToSumWhenTotalTokensAbsent() throws Exception {
         Agent planAgent = regularPlanAgent();
@@ -891,5 +1080,97 @@ class AgentAsyncCompletionServiceObservabilityTest {
 
         invokeRecordAsyncObservability(exec, p, msg, stepResult);
         verify(agentClient, never()).recordObservability(any());
+    }
+
+    @Test
+    @DisplayName("METRICS: a decision-model classify is billed and counted as typesafe/jev-latest, not as the plan's chat pair")
+    void classifyOnADecisionModelRecordsTheDecisionPair() throws Exception {
+        // This row IS the metrics tab and the ledger at once: agent > metrics sums
+        // agent_executions.credits_consumed grouped by agent_type, and the credits are
+        // computed downstream from exactly the provider/model/token fields captured here
+        // (AgentObservabilityService.consumeCredits). So a decision-model classify that
+        // lands under the PLAN's chat pair is not a cosmetic mislabel: it prices 1,150
+        // input tokens at the chat model's rate, and the decision engine never appears in
+        // the dashboard at all.
+        //
+        // The plan agent deliberately still says openai/gpt-4, because that is the shape
+        // that catches the bug: a node can be authored on one pair and run on another,
+        // and only the worker's own answer knows which one was really called.
+        Agent planAgent = classifyPlanAgent();
+        WorkflowExecution exec = executionWith(planAgent, "00000000-0000-0000-0000-000000000016");
+        PendingAgent p = pending("agent:categorize_message", "classify");
+
+        Map<String, Object> resultMap = new HashMap<>();
+        resultMap.put("success", true);
+        resultMap.put("provider", "typesafe");
+        resultMap.put("model", "jev-latest");
+        // A decision model bills input only: the output side is free, and reporting zero
+        // there is what keeps it free. The counts are the measured classify step.
+        resultMap.put("tokensUsed", 1150);
+        resultMap.put("promptTokens", 1150);
+        resultMap.put("completionTokens", 0);
+        resultMap.put("durationMs", 90L);
+        resultMap.put("selectedCategory", "billing");
+        resultMap.put("conversationMessages", List.of(
+            Map.of("role", "ASSISTANT", "content", "billing")
+        ));
+
+        AgentResultMessage msg = new AgentResultMessage(
+            "corr-decision", p.runId(), p.nodeId(), resultMap, true, null, "classify", Instant.now());
+        StepExecutionResult stepResult = StepExecutionResult.success(p.nodeId(), resultMap, 90L);
+
+        invokeRecordAsyncObservability(exec, p, msg, stepResult);
+
+        ArgumentCaptor<AgentObservabilityRequest> captor = ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient).recordObservability(captor.capture());
+        AgentObservabilityRequest req = captor.getValue();
+
+        // The pair the dashboard shows in the model column and the ledger prices against.
+        assertThat(req.getProvider()).isEqualTo("typesafe");
+        assertThat(req.getModel()).isEqualTo("jev-latest");
+        // The counts the credit debit is computed from. A zero prompt count here would
+        // bill nothing and show nothing, which is indistinguishable from "it never ran".
+        assertThat(req.getPromptTokens()).isEqualTo(1150L);
+        assertThat(req.getCompletionTokens()).isZero();
+        assertThat(req.getTotalTokens()).isEqualTo(1150L);
+        // And it is still filed under the classify bucket the dashboard queries.
+        assertThat(req.getAgentType()).isEqualTo("classify");
+        assertThat(req.getStatus()).isEqualTo("COMPLETED");
+        assertThat(req.getIterationCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("METRICS: a free output side is reported as zero, never left for the 50/50 token split to invent")
+    void decisionModelReportsAnExplicitZeroOutput() throws Exception {
+        // AgentObservabilityService splits totalTokens 50/50 when BOTH counts are zero and
+        // no cache counters are present. On a model that bills no output that fallback
+        // would invent 575 completion tokens out of 1,150 - harmless at a zero output rate
+        // today, and a silent overcharge the day the vendor starts charging for output.
+        // Carrying an explicit prompt count is what keeps the split from ever engaging.
+        Agent planAgent = classifyPlanAgent();
+        WorkflowExecution exec = executionWith(planAgent, "00000000-0000-0000-0000-000000000017");
+        PendingAgent p = pending("agent:categorize_message", "classify");
+
+        Map<String, Object> resultMap = new HashMap<>();
+        resultMap.put("success", true);
+        resultMap.put("provider", "typesafe");
+        resultMap.put("model", "jev-latest");
+        resultMap.put("tokensUsed", 1150);
+        resultMap.put("promptTokens", 1150);
+        resultMap.put("completionTokens", 0);
+
+        AgentResultMessage msg = new AgentResultMessage(
+            "corr-zero-output", p.runId(), p.nodeId(), resultMap, true, null, "classify", Instant.now());
+        StepExecutionResult stepResult = StepExecutionResult.success(p.nodeId(), resultMap, 90L);
+
+        invokeRecordAsyncObservability(exec, p, msg, stepResult);
+
+        ArgumentCaptor<AgentObservabilityRequest> captor = ArgumentCaptor.forClass(AgentObservabilityRequest.class);
+        verify(agentClient).recordObservability(captor.capture());
+
+        assertThat(captor.getValue().getPromptTokens())
+                .as("a non-zero prompt count is what keeps the 50/50 split from engaging")
+                .isEqualTo(1150L);
+        assertThat(captor.getValue().getCompletionTokens()).isZero();
     }
 }

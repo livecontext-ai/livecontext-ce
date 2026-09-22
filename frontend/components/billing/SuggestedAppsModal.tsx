@@ -13,6 +13,11 @@ import { publicationService } from '@/lib/api/orchestrator/publication.service';
 import type { OnboardingStatus } from '@/components/security/onboardingStatus';
 import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
+import {
+  APP_SUGGESTIONS_FLAG,
+  WELCOME_GIFT_DONE_EVENT,
+  isWelcomeGiftPending,
+} from '@/lib/onboarding/welcomeGiftHandoff';
 import { isCeMode } from '@/lib/format-cost';
 
 /**
@@ -26,13 +31,27 @@ import { isCeMode } from '@/lib/format-cost';
  * exact same {@link PublicationCard} used in /app/marketplace - clicking it
  * opens the publication's marketplace preview page.
  *
- * Sequencing: onboarding sets {@code lc_show_app_suggestions} and this modal
- * arms on that flag, full stop. It used to additionally wait for a
- * {@code lc:welcome-gift-done} hand-off from a credit-gift modal that ran
- * first; that modal is gone, and waiting on an event nobody dispatches would
- * have left this one armed forever without ever opening.
+ * <p><b>Sequencing.</b> Onboarding arms two things: the welcome gift (what the
+ * account's credits and AI allowance are) and this. The gift goes first, so this
+ * one waits for {@link WELCOME_GIFT_DONE_EVENT} when a gift is still pending,
+ * and opens straight away when none is.
+ *
+ * <p>The wait is conditional on the flag for a reason this modal has already
+ * paid for once: it once waited unconditionally on this very hand-off during a
+ * period when the gift modal had been deleted, so it sat armed forever and never
+ * opened. Reading the flag means it only ever waits while something is actually
+ * still owed, and the gift's owner clears that flag on every path it can take,
+ * including the ones where it shows nothing.
+ *
+ * <p><b>Its own flag is consumed when it ARMS, not when it mounts.</b> The two
+ * are the same instant on the direct path and minutes apart behind the gift,
+ * which is long enough for a reader to reload: consuming at mount would drop
+ * these suggestions on the floor while the gift, whose flag is still set,
+ * replayed. Claiming the flag late also survives an effect that mounts twice
+ * (React's development double-invoke), where consume-at-mount armed a timer and
+ * then threw away the flag its own second pass needed.
  */
-const SHOW_FLAG = 'lc_show_app_suggestions';
+const SHOW_FLAG = APP_SUGGESTIONS_FLAG;
 const SUGGESTION_LIMIT = 4;
 
 export default function SuggestedAppsModal() {
@@ -44,13 +63,46 @@ export default function SuggestedAppsModal() {
   const [armed, setArmed] = useState(false);
   const [open, setOpen] = useState(false);
 
-  // Arm once when onboarding set the flag. Consume it unconditionally (even in
-  // CE) so it never lingers in sessionStorage.
+  // Arm once when onboarding set the flag, and claim the flag at that moment.
   useEffect(() => {
-    const flagged = sessionStorage.getItem(SHOW_FLAG) === '1';
-    if (flagged) sessionStorage.removeItem(SHOW_FLAG);
-    if (isCeMode || !flagged) return;
-    const timer = window.setTimeout(() => setArmed(true), 0);
+    // Every access is guarded: this is mounted on every app page, and a tab with
+    // site data blocked throws on read as well as on write. An unguarded read
+    // here would throw at mount on each navigation, for a modal that only ever
+    // shows once.
+    const claimed = () => {
+      try {
+        sessionStorage.removeItem(SHOW_FLAG);
+      } catch {
+        // Nothing stored means nothing to claim.
+      }
+    };
+    let flagged = false;
+    try {
+      flagged = sessionStorage.getItem(SHOW_FLAG) === '1';
+    } catch {
+      flagged = false;
+    }
+    if (!flagged) return;
+    if (isCeMode) {
+      // Nothing to show self-hosted, so claim it now rather than let it linger.
+      claimed();
+      return;
+    }
+
+    const arm = () => {
+      claimed();
+      setArmed(true);
+    };
+
+    // Behind the welcome gift when one is still owed: two overlays opening on
+    // the same paint would stack, and the one a new account should read first
+    // is what its plan already grants.
+    if (isWelcomeGiftPending()) {
+      window.addEventListener(WELCOME_GIFT_DONE_EVENT, arm, { once: true });
+      return () => window.removeEventListener(WELCOME_GIFT_DONE_EVENT, arm);
+    }
+
+    const timer = window.setTimeout(arm, 0);
     return () => window.clearTimeout(timer);
   }, []);
 

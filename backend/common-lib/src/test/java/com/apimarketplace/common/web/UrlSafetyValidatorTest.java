@@ -359,4 +359,38 @@ class UrlSafetyValidatorTest {
                 () -> UrlSafetyValidator.validateUrl("http://localhost/{path}"));
         }
     }
+
+    @Test
+    @DisplayName("a base URL whose first segment is a variable is accepted: the variable carries the scheme")
+    void aLeadingVariableCarriesTheScheme() {
+        // The shape that was impossible to declare. Every templated base URL had to hard-code
+        // https and any port around the variable, so a self-hosted product reachable only over
+        // http, or on a port the template did not anticipate, could not be expressed at all and
+        // the user had to rebuild the whole integration as a custom API.
+        assertDoesNotThrow(() -> UrlSafetyValidator.validateUrlFormat("{instance_url}/api/v1"));
+        assertDoesNotThrow(() -> UrlSafetyValidator.validateUrlFormat("{base}"));
+        assertDoesNotThrow(() -> UrlSafetyValidator.validateUrlFormat("  {base}/v2  "));
+    }
+
+    @Test
+    @DisplayName("the relaxation is for the TEMPLATE only: a resolved URL still needs a real scheme")
+    void aResolvedUrlStillNeedsItsOwnScheme() {
+        // Nothing is loosened for real traffic. The leading-variable form is a declaration; once
+        // the value is substituted the URL is validated in full, which is where the scheme and
+        // the address are actually enforced.
+        assertThrows(IllegalArgumentException.class,
+                () -> UrlSafetyValidator.validateUrlFormat("mcpui.garzalabs.com/api/v1"));
+        assertThrows(IllegalArgumentException.class,
+                () -> UrlSafetyValidator.validateUrl("ftp://example.com/x"));
+        assertThrows(IllegalArgumentException.class,
+                () -> UrlSafetyValidator.validateUrl("file:///etc/passwd"));
+    }
+
+    @Test
+    @DisplayName("a variable in the middle of a URL is unaffected by the leading-variable rule")
+    void aMidUrlVariableIsUnchanged() {
+        assertDoesNotThrow(() -> UrlSafetyValidator.validateUrlFormat("https://{domain}/api"));
+        assertThrows(IllegalArgumentException.class,
+                () -> UrlSafetyValidator.validateUrlFormat("ftp://{domain}/api"));
+    }
 }

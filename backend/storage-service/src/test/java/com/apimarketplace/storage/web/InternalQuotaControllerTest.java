@@ -34,14 +34,27 @@ class InternalQuotaControllerTest {
     }
 
     @Test
-    @DisplayName("org-limits delegates to QuotaService.updateOrganizationLimits")
+    @DisplayName("org-limits delegates to QuotaService.updateOrganizationLimits, carrying the owning account")
     void setOrganizationLimitsDelegates() {
         ResponseEntity<Map<String, Object>> resp =
-                controller.setOrganizationLimits("00000000", 10_737_418_240L, 0.8);
+                controller.setOrganizationLimits("00000000", 10_737_418_240L, 0.8, "42");
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).containsEntry("organizationId", "00000000");
-        verify(quotaService).updateOrganizationLimits("00000000", 10_737_418_240L, 0.8);
+        // The account is what lets the quota gate enforce ONE allowance across the workspaces
+        // this customer owns; dropping it here would silently leave the workspace with a
+        // private allowance of its own.
+        verify(quotaService).updateOrganizationLimits("00000000", 10_737_418_240L, 0.8, "42");
+    }
+
+    @Test
+    @DisplayName("an omitted account is passed through as null, which LEAVES an existing attribution alone")
+    void omittedAccountIsPassedThroughAsNull() {
+        // Not the same as clearing it: an older caller that does not know the owner must not be
+        // able to demote a workspace out of its account's pool and back to a private allowance.
+        controller.setOrganizationLimits("00000000", 10_737_418_240L, 0.8, null);
+
+        verify(quotaService).updateOrganizationLimits("00000000", 10_737_418_240L, 0.8, null);
     }
 
     @Test
@@ -55,7 +68,7 @@ class InternalQuotaControllerTest {
     @DisplayName("maxBytes <= 0 is rejected (400) and never reaches QuotaService - can't nuke a quota to zero")
     void rejectsNonPositiveMaxBytes() {
         ResponseEntity<Map<String, Object>> tenantResp = controller.setTenantLimits("42", 0L, 0.8);
-        ResponseEntity<Map<String, Object>> orgResp = controller.setOrganizationLimits("o1", -5L, 0.8);
+        ResponseEntity<Map<String, Object>> orgResp = controller.setOrganizationLimits("o1", -5L, 0.8, "42");
 
         assertThat(tenantResp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(orgResp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);

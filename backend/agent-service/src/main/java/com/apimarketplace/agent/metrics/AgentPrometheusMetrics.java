@@ -24,6 +24,8 @@ public class AgentPrometheusMetrics {
     public static final String ITERATIONS_TOTAL = "agent_iterations_total";
     public static final String CREDITS_CONSUMED = "agent_credits_consumed";
     public static final String LOOP_DETECTED_TOTAL = "agent_loop_detected_total";
+    public static final String EXECUTION_LINK_FALLBACK_TOTAL = "agent_execution_link_fallback_total";
+    public static final String UNREPORTED_USAGE_TOTAL = "agent_unreported_usage_total";
 
     private final MeterRegistry registry;
 
@@ -124,6 +126,50 @@ public class AgentPrometheusMetrics {
                 .description("Credits consumed by agent executions (tagged by credit-ledger source type)")
                 .register(registry)
                 .increment(credits);
+    }
+
+    /**
+     * Record an execution-link bridge dispatch that failed BEFORE producing any visible
+     * output (no content, no tool results) and was silently retried on the billed pair's
+     * direct API instead of surfacing the failure. The fallback is invisible to the end
+     * user by design, so this counter is the only signal that a CLI bridge is unhealthy -
+     * without it, every fallback pays the direct API's full price with nobody alerted.
+     */
+    public void recordExecutionLinkFallback(String billedProvider, String billedModel, String bridgeProvider) {
+        Counter.builder(EXECUTION_LINK_FALLBACK_TOTAL)
+                .tags(Tags.of(
+                        "billed_provider",  safeTag(billedProvider),
+                        "billed_model",     safeTag(billedModel),
+                        "bridge_provider",  safeTag(bridgeProvider)))
+                .description("Execution-link bridge dispatches that failed pre-output and fell back to the billed pair's direct API")
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Record an execution that demonstrably did work - it made at least one tool call -
+     * and yet reported no token usage at all, so nothing could be billed for it.
+     *
+     * The known producer is a CLI killed mid-turn: a provider that reports usage only when
+     * a turn completes hands back zeros when it is stopped. Those runs used to be
+     * indistinguishable from runs where no model call ever happened, and were written off
+     * in silence. This counter is what makes the write-off countable: a rise on a
+     * (provider, model) pair means that provider is costing money nobody is charged for.
+     *
+     * "Did work" is read from the row's tool calls, never from its iteration count: the
+     * loop counts an iteration before calling the provider, so an iteration proves an
+     * attempt, not an answer, and a provider outage would spike this counter on runs that
+     * cost nothing.
+     */
+    public void recordUnreportedUsage(String provider, String model, String stopReason) {
+        Counter.builder(UNREPORTED_USAGE_TOTAL)
+                .tags(Tags.of(
+                        "provider",    safeTag(provider),
+                        "model",       safeTag(model),
+                        "stop_reason", safeTag(stopReason)))
+                .description("Agent executions that did work but reported no token usage, so nothing was billed")
+                .register(registry)
+                .increment();
     }
 
     private static String safeTag(String v) {

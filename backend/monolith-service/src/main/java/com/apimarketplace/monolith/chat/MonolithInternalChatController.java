@@ -1,5 +1,6 @@
 package com.apimarketplace.monolith.chat;
 
+import com.apimarketplace.common.credit.ChatCreditRefusal;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.apimarketplace.conversation.dto.ChatRequest;
 import com.apimarketplace.conversation.dto.MessageDto;
@@ -65,22 +66,25 @@ public class MonolithInternalChatController {
         }
 
         // Source-type-scoped gate (cloud parity): FREE monthly workflow credits
-        // must not admit a scheduled/webhook chat turn. No-op in CE unlimited
-        // mode where the check always allows.
+        // must not admit a scheduled/webhook chat turn, and the AI allowance may fund
+        // one when the model is open to the free tier (V494). No-op in CE unlimited
+        // mode where the check always allows, but kept identical to the cloud gate so
+        // the two editions cannot answer the same request differently.
         if (!creditClient.checkCredits(userId,
-                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION)) {
+                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION,
+                request.getProvider(), request.getModel())) {
             // Persist the attempt + a typed error message in the conversation so the
             // user sees the schedule was skipped, instead of an empty conv that
             // looks broken. Mirrors the cloud InternalChatController fix so CE
             // schedule/webhook/task/widget runs leave the same audit trail.
-            String errorContent = "[Error] Insufficient credits - this scheduled run was skipped. "
+            String errorContent = "[Error] " + ChatCreditRefusal.MESSAGE + " - this scheduled run was skipped. "
                 + "Top up your wallet to resume scheduled execution.";
             messageService.persistAttemptAndError(conversationId, request.getMessage(), errorContent);
             // Also record a FAILED execution row for Agent Performance / Agent
             // Fleet visibility (stop reason BUDGET_EXHAUSTED). Mirror of cloud.
             observabilityClient.recordFailureAsync(userId, organizationId,
                 request.getAgentId(), request.getSource(), conversationId,
-                "BUDGET_EXHAUSTED", "Insufficient credits",
+                "BUDGET_EXHAUSTED", ChatCreditRefusal.MESSAGE,
                 request.getMessage(), errorContent,
                 request.getProvider(), request.getModel());
             // Mirror of cloud: flash the Fleet view so the throttled fire is
@@ -90,7 +94,7 @@ public class MonolithInternalChatController {
                 request.getSource(), request.getTaskId(),
                 "FAILED", 0L);
             return ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
-                .body(Map.of("success", false, "error", "Insufficient credits", "conversationId", conversationId));
+                .body(Map.of("success", false, "error", ChatCreditRefusal.MESSAGE, "conversationId", conversationId));
         }
 
         MessageDto userMessage = new MessageDto();

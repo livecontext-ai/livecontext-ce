@@ -21,8 +21,14 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 
 vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
 vi.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  useQueryClient: () => ({ invalidateQueries: vi.fn(), fetchQuery: vi.fn() }),
   useQuery: () => ({ data: undefined, isPending: false }),
+  // Two real reasons, kept together: the panel creates a trigger shortcut through a mutation
+  // and reads isPending/isError to render that row's spinner and error, and the palette reaches
+  // a trigger node whose bell-automation hook module declares a mark-all-read mutation. A
+  // partial mock of this package does not fail one assertion, it throws while rendering (or at
+  // import) on whatever it left out, so every test in the file dies at once.
+  useMutation: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(async () => undefined), isPending: false, isError: false }),
 }));
 vi.mock('@/contexts/WorkflowModeContext', () => ({ useWorkflowMode: () => ({ isRunMode: false }) }));
 vi.mock('@/lib/api', () => ({ orchestratorApi: { getAgents: vi.fn().mockResolvedValue([]) } }));

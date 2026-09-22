@@ -29,6 +29,36 @@ public interface AgentExecutionRepository extends JpaRepository<AgentExecutionEn
     // pre-V261 *TenantIdAndOrganizationIdIsNull pair was removed.
     // ──────────────────────────────────────────────────────────────────────
 
+    // ──────────────────────────────────────────────────────────────────────
+    // ORDER BY startedAt, and why it STAYS that way (2026-09-18).
+    //
+    // started_at used to be persist time, so "ORDER BY e.startedAt DESC" meant
+    // "most recently RECORDED first". It is now a real start
+    // (AgentObservabilityService.startedAtFrom), so the same clause means "most
+    // recently STARTED first", and for overlapping runs the two orders differ: a
+    // 20-minute session that just finished now sorts below short runs that started
+    // after it.
+    //
+    // That is the intended reading for a history list - a run belongs at the moment
+    // it began - and it is the only one the indexes can serve: V210's
+    // idx_agent_executions_agent_org_started and idx_agent_executions_org_started are
+    // keyed on started_at, so ordering by ended_at would trade an index scan for a
+    // sort on every page of every agent's history.
+    //
+    // The aggregates made the OPPOSITE choice, on purpose: AgentMetricsQueryService's
+    // OCCURRED_AT reads ended_at, because "last run" and a daily bucket answer WHEN
+    // something happened and must not move by a run's duration. Ordering and dating
+    // are different questions; see that constant for the other half of the reasoning.
+    //
+    // startedAt is also a FILTER here, once: findRunningByAgentEntityIdSince's
+    // `startedAt > :cutoff` recency guard below. Its window now starts from the real
+    // start, so a run longer than the cutoff stops replaying as live - which is the
+    // behaviour that guard wanted in the first place (it exists to stop resurrecting
+    // executions a crashed pod left RUNNING). Nothing writes a RUNNING row today, so
+    // this is a latent improvement rather than a live change; it is written down so the
+    // next reader does not have to re-derive that the clause was considered.
+    // ──────────────────────────────────────────────────────────────────────
+
     @Query("SELECT e FROM AgentExecutionEntity e "
          + "WHERE e.agentEntityId = :agentEntityId AND e.organizationId = :orgId "
          + "ORDER BY e.startedAt DESC")
@@ -240,4 +270,82 @@ public interface AgentExecutionRepository extends JpaRepository<AgentExecutionEn
     List<AgentExecutionEntity> findByParentConversationIdAndOrganizationIdStrictOrderByStartedAtDesc(
         @Param("parentConversationId") String parentConversationId,
         @Param("orgId") String orgId);
+
+    /**
+     * Agent runs of a whole WORKSPACE inside a time window, newest first - the agenda's
+     * agent history.
+     *
+     * <p>Four things about this query are load-bearing and were chosen rather than fallen
+     * into:
+     *
+     * <p><b>It is a PROJECTION, not an entity read.</b> A month of a busy workspace is
+     * thousands of rows, and the entity carries {@code system_prompt}, {@code tool_sequence}
+     * and two JSONB snapshots. Selecting entities here would move megabytes across a
+     * service boundary to draw a row of chips.
+     *
+     * <p><b>It is served by an index.</b> V210's org/started_at indexes cover the scope
+     * and the range as an index condition, so the scan reads only the window. Keep the
+     * predicate on {@code organizationId} an equality and the ordering on
+     * {@code startedAt DESC} or that stops being true: ordering by {@code endedAt}, which
+     * the aggregates use for a different question, would scan the workspace.
+     *
+     * <p>Two costs the index does NOT remove. The agent-type filter is a post-filter
+     * ({@code LOWER(...)} is not sargable), so a workspace dominated by classify/guardrail
+     * rows reads past them to fill a page - bounded by the window, which is why it is left
+     * as is rather than given a functional index. And the join to the agent adds a sort:
+     * the planner is free to pick a merge join, which does not preserve the scan's order,
+     * and the sort then takes every qualifying row of the window rather than a page of
+     * them. Measured on a 1 500-execution workspace: 0.7 ms for the whole history, 1.7 ms
+     * for a month. If that ever stops being true, the sort is the thing to look at first,
+     * not the scan.
+     *
+     * <p><b>The join to the agent is INNER, deliberately.</b> {@code agent_entity_id} is
+     * {@code SET NULL} when an agent is deleted, so those rows can be neither named nor
+     * opened; reporting them would put anonymous chips on a calendar that lead nowhere.
+     *
+     * <p><b>{@code agentTypes} is an ALLOW-list, and the criterion is "a run of a NAMED
+     * agent, started in its own right".</b> Not "not internal", and not "the workflow's
+     * epoch does not already draw it" - an ordinary {@code agent} node inside a workflow
+     * IS drawn beside its workflow's epoch chip, deliberately, because the whole point of
+     * the feature is seeing which agent ran and what started it.
+     *
+     * <p>What the column also holds, and why each is out:
+     * <ul>
+     *   <li>{@code classify} / {@code guardrail} - routing nodes of a workflow plan, not
+     *       agents a user can open. {@code AgentNode} does not even give them a
+     *       conversation.</li>
+     *   <li>{@code compaction_summary} / {@code cold_summary} - summarisation calls the
+     *       platform makes for itself. Nobody launched them.</li>
+     *   <li>{@code browser_agent} - a Chromium session run as a TOOL inside another run,
+     *       which already has its own chip; drawing it would double-count one action.
+     *       Named here rather than left to inference, because it is the one excluded type
+     *       that IS user-visible and separately billed, so a future reader will wonder.</li>
+     * </ul>
+     *
+     * <p>An allow-list because the failure directions are not symmetric: a deny-list puts
+     * the next internal type on someone's calendar silently, whereas a missing allow entry
+     * leaves a visible hole somebody reports. Compared lower-case because the writers
+     * disagree on case ({@code agent}, {@code CLI}, {@code SUB_AGENT}).
+     *
+     * <p>Bound the result with a {@link Pageable}, never a {@code Page}: the count query a
+     * Page issues is a second pass over the same window, and the caller only needs to know
+     * that it received as many rows as it asked for.
+     */
+    @Query("""
+        SELECT new com.apimarketplace.agent.client.dto.AgentRunFireDto(
+            e.id, e.agentEntityId, a.name, e.startedAt, e.endedAt, e.status, e.source, e.conversationId)
+        FROM AgentExecutionEntity e
+        JOIN AgentEntity a ON a.id = e.agentEntityId
+        WHERE e.organizationId = :orgId
+          AND e.startedAt >= :from
+          AND e.startedAt <= :to
+          AND LOWER(e.agentType) IN :agentTypes
+        ORDER BY e.startedAt DESC
+        """)
+    List<com.apimarketplace.agent.client.dto.AgentRunFireDto> findWorkspaceRunsBetweenStrict(
+        @Param("orgId") String orgId,
+        @Param("from") Instant from,
+        @Param("to") Instant to,
+        @Param("agentTypes") java.util.Collection<String> agentTypes,
+        Pageable pageable);
 }

@@ -333,8 +333,8 @@ public class StepDataPersistenceService {
                 case TRIGGER -> enrichTriggerFields(entity, output, metadata);
                 case DECISION -> enrichDecisionFields(entity, output, metadata);
                 case SWITCH -> enrichSwitchFields(entity, output, metadata);
+                case LOOP_CONTROLLER -> enrichLoopFields(entity, output, metadata);
                 case OPTION -> enrichOptionFields(entity, output, metadata);
-                case LOOP_CONTROLLER -> {} // Loop nodes no longer used
                 case SPLIT_CONTROLLER -> enrichSplitFields(entity, output, metadata);
                 case MERGE -> enrichMergeFields(entity, output, metadata);
                 case FORK -> enrichForkFields(entity, output, metadata);
@@ -413,8 +413,43 @@ public class StepDataPersistenceService {
         putIfNotNull(metadata, "switch_expression", output.get("switch_expression"));
         putIfNotNull(metadata, "switch_value", output.get("switch_value"));
         putIfNotNull(metadata, "selected_case", output.get("selected_case"));
-        putIfNotNull(metadata, "cases", output.get("cases"));
+        // SwitchNode has always emitted `evaluations`, never `cases`, so reading `cases`
+        // left the inspector's Cases column empty on every switch ever run.
+        putIfNotNull(metadata, "evaluations", output.get("evaluations"));
         putIfNotNull(metadata, "skipped_branches", output.get("skipped_branches"));
+    }
+
+    /**
+     * A loop reported nothing about the condition that decided its path: no case existed
+     * here, so the inspector's Condition / Resolved / Result / Iteration columns for a
+     * loop read from metadata that nothing ever wrote.
+     *
+     * <p><b>Side effect worth knowing about.</b> Loop rows now carry
+     * {@code loop_exit_reason}, {@code condition_result} and {@code loop_iteration} for
+     * the first time. {@code MergeNodeAnalyzer.addCompletedLoopConditionCheckers} tests
+     * exactly {@code getLoopExitReason() != null || FALSE.equals(getConditionResult())},
+     * so that branch was unreachable for loops and is now reachable. It has no production
+     * caller today, which is why this is a note rather than a behaviour change, but the
+     * next caller it gets will see loops it never saw before.
+     */
+    private void enrichLoopFields(WorkflowStepDataEntity entity, Map<String, Object> output, Map<String, Object> metadata) {
+        if (output.get("condition_expression") != null) {
+            entity.setConditionExpression(output.get("condition_expression").toString());
+        }
+        if (output.get("condition_result") instanceof Boolean conditionResult) {
+            entity.setConditionResult(conditionResult);
+        }
+        if (output.get("iteration") instanceof Number iteration) {
+            entity.setLoopIteration(iteration.intValue());
+        }
+        if (output.get("reason") != null) {
+            entity.setLoopExitReason(output.get("reason").toString());
+        }
+
+        putIfNotNull(metadata, "loop_condition", output.get("loop_condition"));
+        putIfNotNull(metadata, "max_iterations", output.get("max_iterations"));
+        putIfNotNull(metadata, "condition_resolved", output.get("condition_resolved"));
+        putIfNotNull(metadata, "evaluations", output.get("evaluations"));
     }
 
     private void enrichOptionFields(WorkflowStepDataEntity entity, Map<String, Object> output, Map<String, Object> metadata) {

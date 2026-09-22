@@ -630,6 +630,29 @@ public class PlatformCredentialPricingService {
     @Transactional(readOnly = true)
     public Optional<Quote> quoteLatest(Long credentialId, UUID apiToolId,
                                         String modelId, BigDecimal quantity) {
+        return quoteLatest(credentialId, apiToolId, modelId, quantity, null);
+    }
+
+    /**
+     * Same quote, for a call whose CHOICES move it off the published rate.
+     *
+     * <p>The surface that shows a price before the spend has to reach the same
+     * amount the billing path will charge, and since a 1080p render or an
+     * attached reference image changes that amount, the quote has to be told
+     * about them. The factor is computed by the caller that holds the
+     * parameters, against the same declared modifiers the billing path reads,
+     * so the two cannot drift.
+     *
+     * <p>A quote is a display, not a charge: nothing here is trusted for
+     * billing, and a surface that asked for a smaller factor would only
+     * misquote a price to itself.
+     *
+     * @param multiplier factor the call's choices apply to the published rate,
+     *                   or null for a call at that rate
+     */
+    @Transactional(readOnly = true)
+    public Optional<Quote> quoteLatest(Long credentialId, UUID apiToolId,
+                                        String modelId, BigDecimal quantity, BigDecimal multiplier) {
         Optional<PlatformCredentialPricingVersion> latest = versionRepo.findLatest(credentialId);
         if (latest.isEmpty()) {
             return Optional.empty();
@@ -644,7 +667,7 @@ public class PlatformCredentialPricingService {
         // published at 480 credits per minute quoted 8 and charged 480. The rule
         // for a missing measurement is written once, in the policy, and this
         // method's job is to not have a second opinion about it.
-        BigDecimal credits = policy.resolveEffectivePrice(latest.get(), entry, quantity);
+        BigDecimal credits = policy.resolveEffectivePrice(latest.get(), entry, quantity, multiplier);
         // Report the quantity in the unit the quote is expressed in, not the one
         // the caller measured: a surface that prints "480 credits per minute" next
         // to a quantity of 60 seconds contradicts the number right beside it.
@@ -662,7 +685,8 @@ public class PlatformCredentialPricingService {
         // resolveScopeMarkup, the billing half of this file, answers null here
         // for the same input. The two agree.
         return Optional.of(new Quote(credits, latest.get().getId(), entry.orElse(null),
-                quantity == null ? null : policy.billableQuantity(entry, quantity)));
+                quantity == null ? null : policy.billableQuantity(entry, quantity),
+                multiplier));
     }
 
     /**
@@ -677,9 +701,21 @@ public class PlatformCredentialPricingService {
      *                         nothing. A surface reads null as "the size of this
      *                         call is not known yet" and quotes the rate alone,
      *                         so it must never be filled in with an assumption.
+     * @param multiplier       factor the call's own choices applied to the
+     *                         published rate, echoed so a surface can explain
+     *                         why the total is not simply rate x quantity. Null
+     *                         for a call at the published rate, which is the
+     *                         only thing a quote could say before modifiers.
      */
     public record Quote(BigDecimal credits, Long pricingVersionId,
-                         PricingVersionEntry entry, BigDecimal quantity) {}
+                         PricingVersionEntry entry, BigDecimal quantity, BigDecimal multiplier) {
+
+        /** The shape every caller built before a call's choices could move its price. */
+        public Quote(BigDecimal credits, Long pricingVersionId,
+                      PricingVersionEntry entry, BigDecimal quantity) {
+            this(credits, pricingVersionId, entry, quantity, null);
+        }
+    }
 
     /**
      * True when the latest pricing version of {@code credentialId} has any
@@ -882,6 +918,31 @@ public class PlatformCredentialPricingService {
                                                         UUID apiToolId,
                                                         String modelId,
                                                         BigDecimal quantity) {
+        return resolveScopeMarkup(scopeKind, scopeId, userId, credentialId, apiToolId,
+                modelId, quantity, null);
+    }
+
+    /**
+     * Same resolution, for a call whose CHOICES move it off the published rate.
+     *
+     * <p>A published price scales on the size of the call and on nothing else,
+     * which is right until the caller picks something the provider charges
+     * extra for: a higher resolution, a reference image inlined into the
+     * request. The factor is derived by catalog-service, which holds the
+     * parameters and the model's declared modifiers, and applied here to the
+     * amount, where the rate and the clamps already live.
+     *
+     * @param multiplier factor for this call, or null for one at the published
+     *                   rate. Both leave the amount exactly as it was before
+     *                   modifiers existed.
+     */
+    @Transactional
+    public Optional<ResolvedMarkup> resolveScopeMarkup(String scopeKind, String scopeId,
+                                                        Long userId, Long credentialId,
+                                                        UUID apiToolId,
+                                                        String modelId,
+                                                        BigDecimal quantity,
+                                                        BigDecimal multiplier) {
         Optional<PlatformCredentialPricingVersion> latest = versionRepo.findLatest(credentialId);
         if (latest.isEmpty()) {
             return Optional.empty();
@@ -897,13 +958,14 @@ public class PlatformCredentialPricingService {
             return Optional.empty();
         }
         Optional<PricingVersionEntry> entry = resolveEntry(pinnedVersionId, apiToolId, modelId);
-        BigDecimal effective = policy.resolveEffectivePrice(pinnedVersion.get(), entry, quantity);
+        BigDecimal effective = policy.resolveEffectivePrice(pinnedVersion.get(), entry, quantity, multiplier);
         // Report what was actually billed on, in the published unit, so a caller
         // logging or explaining the charge cannot restate the raw measurement as
         // if it were the number of units charged.
         return Optional.of(new ResolvedMarkup(pin.getId(), pinnedVersionId, effective,
                 entry.orElse(null),
-                quantity == null ? null : policy.billableQuantity(entry, quantity)));
+                quantity == null ? null : policy.billableQuantity(entry, quantity),
+                multiplier));
     }
 
     /**
@@ -931,11 +993,18 @@ public class PlatformCredentialPricingService {
      * units were charged, never the raw measurement the caller sent.
      */
     public record ResolvedMarkup(Long pinId, Long pricingVersionId, BigDecimal effectiveMarkup,
-                                  PricingVersionEntry entry, BigDecimal quantity) {
+                                  PricingVersionEntry entry, BigDecimal quantity,
+                                  BigDecimal multiplier) {
 
         /** Pre-V428 shape, kept so existing construction sites stay valid. */
         public ResolvedMarkup(Long pinId, Long pricingVersionId, BigDecimal effectiveMarkup) {
-            this(pinId, pricingVersionId, effectiveMarkup, null, null);
+            this(pinId, pricingVersionId, effectiveMarkup, null, null, null);
+        }
+
+        /** The shape callers built before a call's choices could move its price. */
+        public ResolvedMarkup(Long pinId, Long pricingVersionId, BigDecimal effectiveMarkup,
+                               PricingVersionEntry entry, BigDecimal quantity) {
+            this(pinId, pricingVersionId, effectiveMarkup, entry, quantity, null);
         }
     }
 

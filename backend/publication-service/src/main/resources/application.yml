@@ -115,3 +115,11 @@ management:
     distribution:
       slo:
         http.server.requests: 100ms, 500ms, 1s, 3s, 5s
+
+# Token-at-rest material (share/link tokens are AES-encrypted + HMAC-hashed in the DB).
+# Same variables as every other service; outside Kubernetes a blank value falls back to
+# ephemeral in-memory material (dev only), inside Kubernetes a blank value refuses to boot.
+credential:
+  encryption:
+    password: ${CREDENTIAL_ENCRYPTION_PASSWORD:}
+    salt: ${CREDENTIAL_ENCRYPTION_SALT:}

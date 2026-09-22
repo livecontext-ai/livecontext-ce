@@ -17,10 +17,12 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
- * Single entry-point for keeping {@code storage.tenant_storage_quota.max_bytes}
- * in sync with {@code auth.plan.included_storage_bytes}.
+ * The one place that keeps storage quota max_bytes (tenant-scoped and org-scoped) in sync with
+ * {@code auth.plan.included_storage_bytes}. Every write goes through here; see the two entry
+ * points below for which scope each one covers.
  *
  * <p>This class exists because several distinct sites in auth-service mutate a
  * {@code Subscription.plan} reference but historically NONE propagated the
@@ -35,6 +37,19 @@ import java.util.List;
  * Routing them all through {@link #syncAfterCommit(Long, Plan)} eliminates the
  * "we fixed three sites but the fourth still drifts" failure mode that previous
  * iterations of this fix were vulnerable to.
+ *
+ * <h2>Two entry points, two different scopes</h2>
+ * <ul>
+ *   <li>{@link #syncAfterCommit(Long, Plan)} - the plan CHANGED. Sweeps the tenant quota and
+ *       every organization the user owns, because the new plan governs all of them. Callers are
+ *       the five sites listed above.</li>
+ *   <li>{@link #syncOrgAfterCommit(Long, UUID, Plan)} - a workspace was BORN. Writes that one
+ *       organization and nothing else. Caller: {@code OrganizationService} on both creation
+ *       paths. This closes the gap the list above never covered: an organization created after
+ *       its owner's last plan change received no allowance at all and was left on the FREE
+ *       default that {@code QuotaService.createDefaultOrganizationQuota} writes. See that
+ *       method's javadoc for why the scope must stay narrow.</li>
+ * </ul>
  *
  * <h2>Why post-commit</h2>
  * The auth tx has already mutated billing-critical state by the time we want to
@@ -124,16 +139,60 @@ public class PlanStorageQuotaSyncer {
         // Snapshot inside the active JPA session - see class javadoc.
         final String planCode = plan.getCode();
         final long maxBytes = plan.getIncludedStorageBytes(); // guarded non-null by isSyncRequired
-        final Runnable sync = () -> doSync(userId, planCode, maxBytes);
+        runAfterCommit(() -> doSync(userId, planCode, maxBytes));
+    }
 
+    /**
+     * Apply the plan allowance to ONE organization, the one just created.
+     *
+     * <p>Separate from {@link #syncAfterCommit} on purpose, and the difference is the whole point:
+     * that method sweeps the tenant quota plus every org {@code findByOwnerId} returns, which is
+     * right when a plan CHANGES (every workspace the plan governs must follow it) and wrong at
+     * workspace creation. At creation the caller's resolved plan can legitimately be narrower than
+     * the one those rows already hold: a {@code past_due} owner resolves to FREE through
+     * {@code SubscriptionRepository.findActiveByUserId}, and sweeping would then rewrite healthy
+     * 100 GB rows down to 100 MB. Writing only the new organization removes that hazard by
+     * construction: the row does not exist yet, so there is no value to lose, and the worst case
+     * is the 100 MB the lazy path would have written anyway.
+     *
+     * <p>Same deferral and best-effort semantics as {@link #syncAfterCommit}: post-commit when a
+     * transaction is active, and a failed write warns rather than propagating, so a storage outage
+     * can never fail the creation itself.
+     */
+    public void syncOrgAfterCommit(Long userId, UUID organizationId, Plan plan) {
+        if (organizationId == null) {
+            log.warn("Cannot sync org storage quota for user {}: organizationId is null", userId);
+            return;
+        }
+        if (!isSyncRequired(userId, plan)) return;
+
+        // Snapshot inside the active JPA session - see class javadoc.
+        final String planCode = plan.getCode();
+        final long maxBytes = plan.getIncludedStorageBytes(); // guarded non-null by isSyncRequired
+        final String orgId = organizationId.toString();
+        runAfterCommit(() -> {
+            try {
+                writeOrgLimit(orgId, maxBytes, QuotaService.DEFAULT_SOFT_LIMIT_RATIO, String.valueOf(userId));
+                log.info("Storage quota (new org {}) seeded for user {}: plan={}, maxBytes={}, via={}",
+                        orgId, userId, planCode, maxBytes, writePath());
+            } catch (Exception e) {
+                log.warn("New-org storage quota seed failed for user {} org {} (plan {}): {}",
+                        userId, orgId, planCode, e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * Defer a storage write until the caller's transaction commits, or run it inline when there is
+     * no transaction (admin scripts, test paths) - that loses the "isolated from the outer tx"
+     * guarantee, which non-tx callers accept explicitly.
+     */
+    private void runAfterCommit(Runnable sync) {
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override public void afterCommit() { sync.run(); }
             });
         } else {
-            // Non-tx context - run inline. Loses the "isolated from outer tx"
-            // guarantee but callers in non-tx contexts (e.g. admin scripts)
-            // accept that trade-off explicitly.
             sync.run();
         }
     }
@@ -199,7 +258,7 @@ public class PlanStorageQuotaSyncer {
             if (org.getId() == null) continue;
             String orgId = org.getId().toString();
             try {
-                writeOrgLimit(orgId, maxBytes, ratio);
+                writeOrgLimit(orgId, maxBytes, ratio, String.valueOf(userId));
                 log.info("Storage quota (org {}) synced for user {}: plan={}, maxBytes={}, via={}",
                         orgId, userId, planCode, maxBytes, writePath());
             } catch (Exception e) {
@@ -228,13 +287,18 @@ public class PlanStorageQuotaSyncer {
         }
     }
 
-    private void writeOrgLimit(String organizationId, long maxBytes, double ratio) {
+    /**
+     * @param accountId the workspace owner, stamped on the quota row so storage can enforce ONE
+     *                  allowance across every workspace this account owns. auth-service is the
+     *                  only service that knows it and the only writer of these rows.
+     */
+    private void writeOrgLimit(String organizationId, long maxBytes, double ratio, String accountId) {
         if (storageClient != null) {
-            if (!storageClient.updateOrganizationStorageLimits(organizationId, maxBytes, ratio)) {
+            if (!storageClient.updateOrganizationStorageLimits(organizationId, maxBytes, ratio, accountId)) {
                 throw new IllegalStateException("storage-service did not acknowledge org limit update");
             }
         } else {
-            writeInNewTx(() -> quotaService.updateOrganizationLimits(organizationId, maxBytes, ratio));
+            writeInNewTx(() -> quotaService.updateOrganizationLimits(organizationId, maxBytes, ratio, accountId));
         }
     }
 

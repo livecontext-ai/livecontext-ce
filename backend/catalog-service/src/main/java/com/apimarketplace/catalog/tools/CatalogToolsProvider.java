@@ -152,6 +152,18 @@ public class CatalogToolsProvider implements ToolsProvider {
                 .type("object")
                 .required(false)
                 .build(),
+            stringParam("credential_name",
+                "Run this execute on ONE named account instead of the default one (for "
+                    + "action='execute'). Copy the name from credential(action='list') or "
+                    + "get_connected_services exactly; matching ignores capitalisation and "
+                    + "surrounding spaces and nothing else. Use it when the endpoint contract "
+                    + "says the default account cannot run this one. A name that matches no "
+                    + "active account of this integration, or that two of them share, FAILS the "
+                    + "call rather than falling back - that is deliberate, so a call never "
+                    + "succeeds against an account you did not choose. A value that is a "
+                    + "positive whole number is read as a credential id rather than as a name, "
+                    + "exactly as it is in a workflow step's credential_selector. Omit it to use "
+                    + "the default account.", false),
             stringParam("api_id", "API UUID (for action='update_api', 'delete_api')", false),
             arrayParam("topics", "Help topics (for action='help'): 'register' (API registration fields), 'schema' (response schema & SpEL), 'shaping' (response shaping - expand, max_items, digest, nextAction), 'file_storage' (how file outputs are persisted & rendered). Omit for general overview. Example: ['shaping']", false)
         );
@@ -170,6 +182,14 @@ public class CatalogToolsProvider implements ToolsProvider {
                   (paths + SpEL examples) for mapping into a next step, and `credential`
                   (type: api_key | oauth2 | bearer_token | basic_auth | none; requiredScopes) = what
                   credential(action='require') would ask the user to connect ('none' = no credential, just execute).
+                  `credential` also answers whether THIS user can run it: `accounts` lists their
+                  accounts of the integration with `canRunThis` and any `missingScopes`,
+                  `runnableWith` names the ones that can (pass one as credential_name),
+                  `standardConnectionGrantsThis` is false when the endpoint needs a scope a normal
+                  Connect can never grant, and `remedy` is the single sentence to act on. `remedy`
+                  is ABSENT when the call will work as-is. Read this before executing an endpoint
+                  that declares requiredScopes: it is the difference between naming the account
+                  that works and burning a call to be told the default one does not.
                 - execute: run a tool with the user's credentials. catalog(action='execute', tool_id='<uuid>', params={...}).
                   In an interactive chat this call can pause on the user: it needs their authorization, and if
                   the service is not connected it shows them a Connect card. Both asks happen INSIDE your call,
@@ -189,8 +209,16 @@ public class CatalogToolsProvider implements ToolsProvider {
                   invalid. (Only here. On 'approval_needed' the call already asked for that service, so
                   asking again adds nothing.)
                   UPSTREAM_REJECTED = the service refused the call, so change it before resending.
-                  TOOL_CALL_FAILED = the call never completed for a reason nothing in it can fix; send it once
-                  more at most.
+                  CREDENTIALS_INSUFFICIENT = a key WAS sent and the provider refused it for what that account
+                  was granted, so connecting another key is not the fix and neither is resending. The sentence
+                  names what the account is missing and what lifts it. When it says the scopes cannot be
+                  granted by an ordinary connection, relay that and call credential(action='require',
+                  services=['<the integration the sentence names>'], scopes=[<the scopes it names>],
+                  reason='...'): passing scopes puts the right card on their screen with no force needed.
+                  TOOL_CALL_FAILED = the call did not complete, and whether it took effect is
+                  UNKNOWN: it covers a reply that could not be read after the provider had already
+                  answered. Send it once more at most, and on anything that writes or sends, treat
+                  that repeat as a possible duplicate and say so rather than assuming neither ran.
                 - register_api / update_api / delete_api / list_custom_apis: manage your own custom APIs.
                   register_api needs api_definition (apiName, baseUrl, endpoints with outputSchema each);
                   call catalog(action='help', topics=['register']) FIRST for the field reference.

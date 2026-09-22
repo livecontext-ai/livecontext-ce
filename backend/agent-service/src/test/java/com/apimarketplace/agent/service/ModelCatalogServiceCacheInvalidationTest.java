@@ -140,7 +140,9 @@ class ModelCatalogServiceCacheInvalidationTest {
         Map<String, Object> base = new LinkedHashMap<>();
         base.put("providers", new ArrayList<>(List.of(openaiProvider, bridgeProvider)));
         when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(base);
-        when(credentialRepository.hasDbKey(any())).thenReturn(true);
+        // No hasDbKey stub: the display-name lookup reads the FULL catalogue, unconfigured
+        // providers included, so it no longer asks whether a key exists. That is the point
+        // of the change, and strict stubs would flag a stub kept out of habit.
         when(repository.findByProviderAndModelId(any(), any())).thenReturn(Optional.empty());
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 

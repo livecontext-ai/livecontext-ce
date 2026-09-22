@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.controllers.agent;
 
 import com.apimarketplace.agent.config.AgentModuleResolver;
+import com.apimarketplace.agent.config.ToolAccessControl;
 import com.apimarketplace.agent.registry.AgentToolDefinition;
 import com.apimarketplace.agent.registry.AgentToolRegistry;
 import com.apimarketplace.agent.registry.ToolCategory;
@@ -84,15 +85,7 @@ public class AgentToolsController {
                 credentials.put(allowedKey, request.get(allowedKey));
             }
         }
-        for (String accessModeKey : List.of(
-                "tableAccessMode",
-                "workflowAccessMode",
-                "interfaceAccessMode",
-                "agentAccessMode",
-                "applicationAccessMode",
-                "skillAccessMode",
-                "fileAccessMode",
-                "memoryAccessMode")) {
+        for (String accessModeKey : ToolAccessControl.ACCESS_MODE_KEYS) {
             if (request.get(accessModeKey) != null) {
                 credentials.put(accessModeKey, request.get(accessModeKey));
             }
@@ -334,9 +327,7 @@ public class AgentToolsController {
             credentials.put("allowedFileIds", request.get("allowedFileIds"));
         }
         // Access mode keys for ToolAccessControl (read/write per resource)
-        for (String am : List.of("tableAccessMode", "workflowAccessMode", "interfaceAccessMode",
-                "agentAccessMode", "applicationAccessMode", "skillAccessMode", "fileAccessMode",
-                "memoryAccessMode")) {
+        for (String am : ToolAccessControl.ACCESS_MODE_KEYS) {
             if (request.get(am) != null) {
                 credentials.put(am, request.get(am));
             }
@@ -353,7 +344,24 @@ public class AgentToolsController {
         String orgId = httpRequest.getHeader("X-Organization-ID");
         String orgRole = httpRequest.getHeader("X-Organization-Role");
         if (orgId == null) orgId = (String) request.get("orgId");
-        if (orgRole == null) orgRole = (String) request.get("orgRole");
+        // The ROLE is never taken from the request body. This endpoint is gateway-routed, and the
+        // gateway strips the caller's own identity HEADERS but not the body, so a user whose
+        // gateway resolved no active org could name a workspace AND assert OWNER in it in one
+        // request. Every legitimate internal caller already sends X-Organization-Role as a HEADER
+        // from the same source it filled the body field with (RemoteToolExecutionService
+        // .applyOrgHeaders, and the conversation relay's own forwarding), so dropping the body
+        // read costs them nothing. An absent role resolves to MEMBER, the safe direction.
+        //
+        // The role GRANTS as well as refuses, which is why this is not cosmetic:
+        // OrgAccessGuardImpl.getRestrictedResourceIds and getWriteRestrictedResourceIds return
+        // Set.of() for OWNER/ADMIN, skipping the auth-service lookup entirely, so a body-asserted
+        // OWNER did not merely avoid the VIEWER refusal, it bypassed that workspace's whole
+        // restricted-resource list. Do not re-read this as "the role only ever refuses" and
+        // restore the fallback.
+        //
+        // orgId is STILL read from the body, and that is a compatibility decision, not a safety
+        // one: it is forgeable by the same route. Closing it needs the internal callers to name
+        // the workspace by header first, which is a separate change.
 
         ToolsProvider.ToolExecutionContext context = new ToolsProvider.ToolExecutionContext(
             tenantId, credentials, Map.of(), approvedServices,
@@ -404,7 +412,24 @@ public class AgentToolsController {
         String orgId = httpRequest.getHeader("X-Organization-ID");
         String orgRole = httpRequest.getHeader("X-Organization-Role");
         if (orgId == null) orgId = (String) request.get("orgId");
-        if (orgRole == null) orgRole = (String) request.get("orgRole");
+        // The ROLE is never taken from the request body. This endpoint is gateway-routed, and the
+        // gateway strips the caller's own identity HEADERS but not the body, so a user whose
+        // gateway resolved no active org could name a workspace AND assert OWNER in it in one
+        // request. Every legitimate internal caller already sends X-Organization-Role as a HEADER
+        // from the same source it filled the body field with (RemoteToolExecutionService
+        // .applyOrgHeaders, and the conversation relay's own forwarding), so dropping the body
+        // read costs them nothing. An absent role resolves to MEMBER, the safe direction.
+        //
+        // The role GRANTS as well as refuses, which is why this is not cosmetic:
+        // OrgAccessGuardImpl.getRestrictedResourceIds and getWriteRestrictedResourceIds return
+        // Set.of() for OWNER/ADMIN, skipping the auth-service lookup entirely, so a body-asserted
+        // OWNER did not merely avoid the VIEWER refusal, it bypassed that workspace's whole
+        // restricted-resource list. Do not re-read this as "the role only ever refuses" and
+        // restore the fallback.
+        //
+        // orgId is STILL read from the body, and that is a compatibility decision, not a safety
+        // one: it is forgeable by the same route. Closing it needs the internal callers to name
+        // the workspace by header first, which is a separate change.
 
         ToolsProvider.ToolExecutionContext context = new ToolsProvider.ToolExecutionContext(
             tenantId, credentials, Map.of(), approvedServices, viewingWorkflowId, viewingWorkflowName, orgId, orgRole

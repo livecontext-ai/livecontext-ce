@@ -55,9 +55,11 @@ describe('ChatConfigPanel - Chat defaults (user-default) row layout', () => {
 
   it('renders the toggles as platform Switches', () => {
     render(<ChatConfigPanel userDefault />);
-    // web search + generation + run-sensitive-actions + context-compaction enable.
-    // (The retired image-generation toggle used to make a 5th.)
-    expect(screen.getAllByRole('switch')).toHaveLength(4);
+    // web search + generation + mailbox + run-sensitive-actions + context-compaction enable.
+    // The mailbox PERMISSIONS row is deliberately absent here: it renders only once the
+    // mailbox is on, since a mode for a capability the chat has not got reads as a setting
+    // that does nothing. (The retired image-generation toggle used to make another.)
+    expect(screen.getAllByRole('switch')).toHaveLength(5);
   });
 
   it('surfaces Advanced limits as an always-visible section (no collapse toggle)', () => {
@@ -96,12 +98,12 @@ describe('ChatConfigPanel - Chat defaults (user-default) row layout', () => {
 
   it('shows ⓘ info tooltips on every row like the numeric fields (no inline description paragraphs)', () => {
     render(<ChatConfigPanel userDefault />);
-    // 6 in the top section (system prompt, temperature, tools mode, web search,
-    // generation, auto-authorize) + 7 NumericInputs (4 main: max tokens,
+    // 7 in the top section (system prompt, temperature, tools mode, web search,
+    // generation, mailbox, auto-authorize) + 7 NumericInputs (4 main: max tokens,
     // max iterations, execution timeout, inactivity timeout; + 3 advanced)
     // + the context-compaction enable row (its after-N-turns field is hidden while disabled).
     // One fewer than before: the retired image-generation row is gone.
-    expect(document.querySelectorAll('svg.lucide-info')).toHaveLength(14);
+    expect(document.querySelectorAll('svg.lucide-info')).toHaveLength(15);
   });
 
   it('renders the temperature slider full-width (not boxed in a 220px right column)', () => {

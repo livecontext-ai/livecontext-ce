@@ -23,7 +23,16 @@ import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
 import { ShareLinkDialog } from '@/components/sharing/ShareLinkDialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ShareWorkflowModal } from '@/components/workflow';
-import { processApps, type AppSortKey, type AppSourceFilter, type AppVisibilityFilter } from './applicationSort';
+import {
+  processApps,
+  filterApps,
+  filterByVisibility,
+  nodeTypeFacets as computeNodeTypeFacets,
+  type AppSortKey,
+  type AppSourceFilter,
+  type AppVisibilityFilter,
+} from './applicationSort';
+import { NodeTypeFilter } from '@/components/NodeTypeFilter';
 import { deriveFavoritePubIds, favoriteTargetFor } from './applicationFavorites';
 import { FolderPlus } from 'lucide-react';
 import { ApplicationFolderFace, APPLICATION_FACE_CELLS } from '@/components/folders/ApplicationFolderFace';
@@ -79,6 +88,10 @@ function ApplicationsPageContent() {
   const [sourceFilter, setSourceFilter] = useState<AppSourceFilter>('all');
   // Visibility filter - narrows OWN published apps to Public / Private (all = no restriction).
   const [visibilityFilter, setVisibilityFilter] = useState<AppVisibilityFilter>('all');
+  // Node-type filter. Client-side like every other refinement on this page: the
+  // union of published + acquired apps is already fully loaded here, so both the
+  // filter and its option counts are exact without another round-trip.
+  const [nodeTypeFilter, setNodeTypeFilter] = useState<string[]>([]);
   // Applications are workspace-scoped (owner = active org). Key the fetch on the active org so
   // switching workspace re-fetches - otherwise the previous workspace's list stays cached and its
   // cards 404 on open (the detail fetch IS org-scoped). Mirrors the quota/storage pages.
@@ -253,7 +266,7 @@ function ApplicationsPageContent() {
   // changes - the visible set is different so the current page index may be out of range.
   useEffect(() => {
     setPage(0);
-  }, [debouncedSearch, sourceFilter, visibilityFilter, sortBy]);
+  }, [debouncedSearch, sourceFilter, visibilityFilter, sortBy, nodeTypeFilter]);
 
   // Apply the provenance + visibility filters + sort over the deduped union, THEN
   // paginate. totalCount = size of the processed (filtered) set so pagination tracks it.
@@ -274,6 +287,9 @@ function ApplicationsPageContent() {
   const [folderRows, setFolderRows] = useState<ResourceFolder[]>([]);
   const [memberships, setMemberships] = useState<Map<string, string>>(new Map());
   const searching = debouncedSearch.trim().length > 0;
+  // The user narrowed the list themselves, by any means. Drives the empty state:
+  // 'nothing matched' rather than 'you have nothing here'.
+  const refining = searching || nodeTypeFilter.length > 0;
 
   const loadFolderState = useCallback(async () => {
     try {
@@ -315,9 +331,29 @@ function ApplicationsPageContent() {
   }, [loadFolderState, currentOrgId]);
 
   const processed = useMemo(
-    () => processApps(allItems, sourceFilter, visibilityFilter, sortBy, favoritePubIds),
-    [allItems, sourceFilter, visibilityFilter, sortBy, favoritePubIds],
+    () => processApps(allItems, sourceFilter, visibilityFilter, sortBy, favoritePubIds, nodeTypeFilter),
+    [allItems, sourceFilter, visibilityFilter, sortBy, favoritePubIds, nodeTypeFilter],
   );
+
+  // Counted over the set the node-type filter applies to, with the filter itself
+  // left out - so an option keeps its count while it is ticked instead of every
+  // other option dropping to zero the moment you pick one.
+  //
+  // The folder level counts too, unless a search is active (which looks
+  // everywhere): inside a folder, an option whose apps all live elsewhere would
+  // otherwise advertise a count and then produce an empty grid - the one thing
+  // the picker promises cannot happen.
+  //
+  // The provenance/visibility filters only, not processApps: counting does not
+  // care about order, so sorting and floating favorites here would be work
+  // thrown away on every render.
+  const nodeTypeFacets = useMemo(() => {
+    const scoped = filterByVisibility(filterApps(allItems, sourceFilter), visibilityFilter);
+    const atThisLevel = searching
+      ? scoped
+      : scoped.filter((app) => (memberships.get(app.pub.id) ?? null) === folders.currentFolderId);
+    return computeNodeTypeFacets(atThisLevel);
+  }, [allItems, sourceFilter, visibilityFilter, searching, memberships, folders.currentFolderId]);
 
   // A search looks through every folder; otherwise the level narrows the list.
   const atLevel = useMemo(() => {
@@ -653,6 +689,13 @@ function ApplicationsPageContent() {
                     bordered select shape (not a custom pill) so they conform to the
                     select used everywhere else in the app. */}
                 <div className="flex items-center gap-2">
+                  {/* Node types - narrows to the apps built with a given integration or node */}
+                  <NodeTypeFilter
+                    facets={nodeTypeFacets}
+                    value={nodeTypeFilter}
+                    onChange={setNodeTypeFilter}
+                  />
+
                   {/* Visibility - narrows OWN published apps to Public / Private */}
                   <Select value={visibilityFilter} onValueChange={(v) => setVisibilityFilter(v as AppVisibilityFilter)}>
                     <SelectTrigger className="w-auto gap-1.5" aria-label={t('filterByVisibility')}>
@@ -755,12 +798,15 @@ function ApplicationsPageContent() {
               tiles, and without it this page tells you it has no applications directly above
               the folder holding them. */}
           {!isLoading && filtered.length === 0 && folders.tiles.length === 0 && !error && (
+            /* `refining`, not just the search: a node-type filter empties the list the
+               same way, so it must read the same way - 'nothing matched', not 'you have
+               no applications' with a marketplace button under it. */
             <EmptyState
               icon={<AppWindow className="h-7 w-7 text-theme-muted" />}
-              title={debouncedSearch.trim().length > 0 ? t('noSearchResults') : t('empty')}
-              subtitle={debouncedSearch.trim().length > 0 ? t('tryDifferentSearch') : t('emptyHint')}
+              title={refining ? t('noSearchResults') : t('empty')}
+              subtitle={refining ? t('tryDifferentSearch') : t('emptyHint')}
               size="md"
-              actions={debouncedSearch.trim().length === 0 ? (
+              actions={!refining ? (
                 <Button
                   variant="default"
                   onClick={() => router.push('/app/marketplace')}

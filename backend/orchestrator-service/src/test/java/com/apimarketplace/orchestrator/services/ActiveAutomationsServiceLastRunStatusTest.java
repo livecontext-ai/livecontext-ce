@@ -176,6 +176,85 @@ class ActiveAutomationsServiceLastRunStatusTest {
     }
 
     @Test
+    @DisplayName("Agenda exposes every exact trigger from the immutable production plan")
+    void agendaUsesExactProductionTriggersInsteadOfTheDraft() {
+        WorkflowEntity wf = pinnedWorkflow();
+        wf.setProductionRunId(PRODUCTION_RUN_ID);
+        wf.setPlan(planWith(Map.of("draft_only", "manual")));
+        wf.setNodeIcons(List.of(Map.of("nodeKind", "entry", "nodeId", "manual-trigger")));
+        stubOrgQueries(List.of(wf));
+
+        WorkflowRunEntity run = productionRun(wf, RunStatus.WAITING_TRIGGER);
+        ReflectionTestUtils.setField(run, "id", PRODUCTION_RUN_ID);
+        run.setPlanVersion(wf.getPinnedVersion());
+        run.setPlan(planWith(Map.of("first_manual", "manual", "second_manual", "manual")));
+        when(runRepository.findProductionRunsBatch(eq(List.of(WORKFLOW_ID)))).thenReturn(List.of(run));
+        when(epochService.getLatestEpochOutcomeByRunIds(anyList())).thenReturn(Map.of());
+
+        List<ActiveAutomationDto> result = service.getAgendaAutomations(TENANT_ID, ORG_ID, ORG_ROLE);
+
+        assertThat(result).hasSize(2)
+                .extracting(ActiveAutomationDto::triggerId)
+                .containsExactlyInAnyOrder("trigger:first_manual", "trigger:second_manual");
+        assertThat(result).extracting(ActiveAutomationDto::triggerLabel)
+                .containsExactlyInAnyOrder("first_manual", "second_manual");
+    }
+
+    @Test
+    @DisplayName("Agenda refuses a stale production FK instead of cataloguing triggers from a scanned editor run")
+    void agendaRefusesTriggersWhenTheProductionIdentityIsNotVerifiable() {
+        WorkflowEntity wf = pinnedWorkflow();
+        wf.setProductionRunId(PRODUCTION_RUN_ID);
+        stubOrgQueries(List.of(wf));
+
+        WorkflowRunEntity staleFk = productionRun(wf, RunStatus.WAITING_TRIGGER);
+        ReflectionTestUtils.setField(staleFk, "id", PRODUCTION_RUN_ID);
+        staleFk.setPlanVersion(wf.getPinnedVersion() - 1);
+        staleFk.setPlan(planWith(Map.of("stale_manual", "manual")));
+        WorkflowRunEntity scannedEditor = productionRun(wf, RunStatus.WAITING_TRIGGER);
+        scannedEditor.setPlanVersion(wf.getPinnedVersion());
+        scannedEditor.setPlan(planWith(Map.of("editor_manual", "manual")));
+        when(runRepository.findProductionRunsBatch(eq(List.of(WORKFLOW_ID))))
+                .thenReturn(List.of(scannedEditor));
+        when(runRepository.findAllById(eq(List.of(PRODUCTION_RUN_ID)))).thenReturn(List.of(staleFk));
+
+        assertThat(service.getAgendaAutomations(TENANT_ID, ORG_ID, ORG_ROLE)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Agenda exposes only webhook triggers backed by an active token")
+    void agendaFiltersWebhookTriggersByTheirExactActiveToken() {
+        WorkflowEntity wf = pinnedWorkflow();
+        wf.setProductionRunId(PRODUCTION_RUN_ID);
+        stubOrgQueries(List.of(wf));
+
+        WorkflowRunEntity run = productionRun(wf, RunStatus.WAITING_TRIGGER);
+        ReflectionTestUtils.setField(run, "id", PRODUCTION_RUN_ID);
+        run.setPlanVersion(wf.getPinnedVersion());
+        run.setPlan(planWith(Map.of("active_hook", "webhook", "paused_hook", "webhook")));
+        when(runRepository.findProductionRunsBatch(eq(List.of(WORKFLOW_ID)))).thenReturn(List.of(run));
+        when(triggerClient.findActiveTriggerIdsByWorkflow(eq(List.of(WORKFLOW_ID))))
+                .thenReturn(Map.of(WORKFLOW_ID, Set.of("trigger:active_hook")));
+        when(epochService.getLatestEpochOutcomeByRunIds(anyList())).thenReturn(Map.of());
+
+        assertThat(service.getAgendaAutomations(TENANT_ID, ORG_ID, ORG_ROLE)).singleElement()
+                .extracting(ActiveAutomationDto::triggerId)
+                .isEqualTo("trigger:active_hook");
+    }
+
+    @Test
+    @DisplayName("A cancelled production run exposes the workflow as paused")
+    void cancelledProductionRunMarksTheResourcePaused() {
+        WorkflowEntity wf = pinnedWorkflow();
+        stubOrgQueries(List.of(wf));
+        givenProductionRun(wf, RunStatus.CANCELLED, epoch(null, true));
+
+        assertThat(service.getActiveAutomations(TENANT_ID, ORG_ID, ORG_ROLE)).singleElement()
+                .extracting(ActiveAutomationDto::resourcePaused)
+                .isEqualTo(true);
+    }
+
+    @Test
     @DisplayName("A SCHEDULE row takes the epoch when the epoch is ITS OWN trigger's fire")
     void scheduleRowTakesTheEpochOfItsOwnTrigger() {
         // Same-trigger case: the epoch and the schedule's lastExecutionAt are the same fire
@@ -323,6 +402,7 @@ class ActiveAutomationsServiceLastRunStatusTest {
         fkRun.setWorkflow(wf);
         fkRun.setRunIdPublic("run_<id>_production");
         fkRun.setStatus(RunStatus.WAITING_TRIGGER);
+        fkRun.setPlanVersion(wf.getPinnedVersion());
         when(runRepository.findProductionRunsBatch(eq(List.of(WORKFLOW_ID)))).thenReturn(List.of(editorRun));
         when(runRepository.findAllById(eq(List.of(PRODUCTION_RUN_ID)))).thenReturn(List.of(fkRun));
         // Only the FK run has an outcome; keying by the editor run would find nothing.
@@ -334,8 +414,8 @@ class ActiveAutomationsServiceLastRunStatusTest {
 
         assertThat(result).singleElement()
                 .extracting(ActiveAutomationDto::lastRunStatus).isEqualTo("FAILED");
-        // The click target is deliberately left on the scan's answer, unchanged by this feature.
-        assertThat(result.get(0).productionRunIdPublic()).isEqualTo(RUN_ID_PUBLIC);
+        // Resource controls must target the FK run that triggers actually fire into.
+        assertThat(result.get(0).productionRunIdPublic()).isEqualTo("run_<id>_production");
     }
 
     @Test
@@ -428,6 +508,7 @@ class ActiveAutomationsServiceLastRunStatusTest {
         AgentDto agent = new AgentDto();
         agent.setId(agentId);
         agent.setName("Morning briefing");
+        agent.setIsActive(false);
         ScheduledExecutionDto agentSchedule = schedule(SCHEDULE_ID, NIGHTLY_TRIGGER_ID, agentFiredAt);
         agentSchedule.setWorkflowId(null);
         agentSchedule.setAgentEntityId(agentId);
@@ -441,8 +522,8 @@ class ActiveAutomationsServiceLastRunStatusTest {
 
         assertThat(result).singleElement()
                 .extracting(ActiveAutomationDto::resourceType, ActiveAutomationDto::lastRunAt,
-                        ActiveAutomationDto::lastRunStatus)
-                .containsExactly(ActiveAutomationDto.ResourceType.AGENT, agentFiredAt, null);
+                        ActiveAutomationDto::lastRunStatus, ActiveAutomationDto::resourcePaused)
+                .containsExactly(ActiveAutomationDto.ResourceType.AGENT, agentFiredAt, null, true);
     }
 
     @Test

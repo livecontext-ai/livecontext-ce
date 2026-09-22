@@ -30,6 +30,17 @@ public record PublicProfileDto(
          * <p>Exposed because the page that renders this profile is the only place
          * that can emit the noindex directive, and it must not have to guess.
          */
-        boolean searchIndexable
+        boolean searchIndexable,
+        /**
+         * Whether this account carries the verified badge (the blue check next to
+         * the name). Resolved live by {@code VerifiedAccountService} from the ADMIN
+         * role plus the manual grant, so a badge granted after a listing was
+         * published shows up everywhere at once instead of only on new rows.
+         *
+         * <p>Always false on a self-hosted deployment: the badge is a managed-cloud
+         * feature. Not to be confused with e-mail verification, which is never
+         * exposed here.
+         */
+        boolean verified
 ) {
 }

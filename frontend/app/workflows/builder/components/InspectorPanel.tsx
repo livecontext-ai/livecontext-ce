@@ -38,10 +38,11 @@ import { AI_TYPES, CORE_LOGIC_TYPES, CORE_DIRECT_TYPES, TRIGGER_TYPES } from './
 import { InspectorMultiSelection } from './inspector/InspectorMultiSelection';
 import { useInspectorViewMode } from './inspector/useInspectorViewMode';
 import {
-  useInspectorLayout,
-  shouldUseTabbedLayout,
-  shouldRenderMinimizedPill,
   shouldConstrainPanelToContainer,
+  shouldForceCompactPanel,
+  shouldRenderMinimizedPill,
+  shouldUseTabbedLayout,
+  useInspectorLayout,
 } from './inspector/useInspectorLayout';
 import { useInspectorValidation } from './inspector/useInspectorValidation';
 import { useDataSourceColumnsInit } from './inspector/useDataSourceColumnsInit';
@@ -53,7 +54,7 @@ import { useApprovalReviewLayout } from './inspector/useApprovalReviewLayout';
 import { InspectorMobileContent } from './inspector/InspectorMobileContent';
 import { InspectorDesktopContent } from './inspector/InspectorDesktopContent';
 import { inspectorGeometryClass } from './inspector/inspectorGeometry';
-import { extractAliasFromNodeId, extractStepAliasFromNode } from '../services/idMatcherUtils';
+import { extractStepAliasFromNode } from '../services/idMatcherUtils';
 import { isReviewTargetForNode, useApprovalReviewTarget } from '../services/approvalReviewStore';
 import { normalizeLabel } from '../utils/labelNormalizer';
 import { InterfaceMappingsColumn } from './inspector/InterfaceMappingsColumn';
@@ -71,10 +72,8 @@ import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { useRun } from '@/contexts/WorkflowRunContext';
 import { buildNodeReportHref } from '../utils/nodeReportLink';
 import { useNodeExecutionStatus, useStepByStep } from '../contexts/StepByStepContext';
-import { NodeResultDataTable } from './inspector/NodeResultDataTable';
 import { InspectorFooter } from './inspector/InspectorFooter';
-import { InspectorModals } from './inspector/InspectorModals';
-import { ViewMode } from './inspector/ViewModeTabs';
+import { useWorkflowLogsSidePanel } from '@/components/workflow/useWorkflowLogsSidePanel';
 
 interface InspectorPanelProps {
   node: Node<BuilderNodeData> | null;
@@ -120,6 +119,7 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
   // Use context runId if available (set after workflow execution), fallback to prop
   const runId = contextRunId || propRunId;
   const isMultiSelection = selectedNodeIds.length > 1;
+  const { openWorkflowLogs } = useWorkflowLogsSidePanel();
   // Docked into the side panel: the host sizes us, and drag / minimize-to-pill
   // are meaningless there (the panel has its own resize handle and close button).
   const isDocked = dockMode === 'panel';
@@ -183,14 +183,7 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
     setInputWidth: columns.setInputWidth,
   });
 
-  // État pour le breadcrumb dans le mode result
-  const [breadcrumbItems, setBreadcrumbItems] = React.useState<Array<{ label: string; onClick?: () => void }>>([]);
-
-  // État pour la modal de résultats
-  const [isResultsModalOpen, setIsResultsModalOpen] = React.useState(false);
-  const [modalBreadcrumbItems, setModalBreadcrumbItems] = React.useState<Array<{ label: string; onClick?: () => void; icon?: React.ComponentType<{ className?: string }> }>>([]);
-
-  // View mode management (configuration vs result)
+  // Execution-data view management
   const isInterfaceNodeEarly = node?.data?.kind === 'interface';
   // A node "has run data" when it carries non-empty statusCounts for the current run.
   // Nodes that never executed open the inspector in Configuration view, not Run data.
@@ -211,7 +204,7 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
     || isNodeUnderApprovalReview
     || stepByStepStatus.isRunning
     || stepByStepStatus.isAwaitingSignal;
-  const { viewMode, handleViewModeChange, showExecutionData, handleShowExecutionDataChange } = useInspectorViewMode({
+  const { showExecutionData, handleShowExecutionDataChange } = useInspectorViewMode({
     isRunMode,
     runId,
     isInterfaceNode: isInterfaceNodeEarly,
@@ -373,13 +366,8 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
     isToolNode,
     isMcpGenericNode,
     isMcpNode,
-    isWebhookTrigger,
-    isScheduleTrigger,
-    isManualTrigger,
     isTablesTrigger,
     isWorkflowsTrigger,
-    isChatTrigger,
-    isFormTrigger,
     isTriggerGenericNode,
     isGenericEntryTrigger,
     isTriggerNode,
@@ -387,7 +375,6 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
     isAiSummarize,
     isGuardrail,
     isClassify,
-    isAiGenericNode,
     isAiNode,
     isCoreGenericNode,
     isLogicSubcategory,
@@ -400,7 +387,6 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
     isTransform,
     isMerge,
     isWait,
-    isCoreNode,
     isInterfaceNode,
     nodeId,
     nodeKind,
@@ -504,25 +490,14 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
     mcpSelectedApiSlug,
     isMcpNode,
   });
-  // Only API and generic MCP nodes should be forced to small mode (not Tool nodes)
-  // If it is a tool node (even if it started as mcp-), don't force small mode.
-  // Also force small mode for nodes with navigation (triggers, AI, Core)
-  // hasNavigation should only be true for nodes that actually have navigation (generic nodes, not specific types)
-  // Exclude datasources and tables that are already selected (they should show parameter view, not navigation)
   const dataSourceData = (node?.data as any)?.dataSourceData;
-  const workflowData = (node?.data as any)?.workflowData;
-  const isDataSourceSelected = isTablesTrigger && dataSourceData?.dataSourceId && !dataSourceData?.tableName;
   const isTableSelected = isTablesTrigger && dataSourceData?.dataSourceId && dataSourceData?.tableName;
-  const isWorkflowSelected = isWorkflowsTrigger && workflowData?.workflowId;
-  // hasNavigation should exclude tool nodes (they can use fullscreen)
-  // Also exclude manual, chat, webhook, and schedule triggers - they don't have navigation, they're already configured
-  // Also exclude workflows trigger when a workflow is already selected
-  const hasTriggerNavigation = isTriggerNode && !isDataSourceSelected && !isTableSelected && !isWorkflowSelected && !isManualTrigger && !isChatTrigger && !isWebhookTrigger && !isScheduleTrigger && !isFormTrigger;
-  const hasNavigation = !isToolNode && (hasTriggerNavigation || isAiGenericNode || isCoreNode || isMcpNode);
-  const shouldForceSmallMode = (isApiNode || isMcpGenericNode || hasNavigation) && !isToolNode;
+  // The one screen that still needs the panel to itself: the MCP api/tool picker.
+  // See shouldForceCompactPanel for what this gate used to cover and why none of it is left.
+  const shouldForceSmallMode = shouldForceCompactPanel({ isApiNode, isMcpGenericNode, isToolNode });
 
-  // What this inspector actually renders. API nodes, generic MCP nodes and anything with a
-  // navigation step have no three-column view to show, so they are always compact.
+  // What this inspector actually renders. An MCP node still choosing its api and tool
+  // has no three-column view to show, so it stays compact.
   //
   // Resolved HERE rather than by calling `onAdvancedChange(false)`, which is what it used
   // to do, and that was a per-NODE constraint writing a per-SESSION value: the flag it
@@ -558,12 +533,13 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
   // on a normal node, glances at a forced-small one and comes back, finds Output again.
   const activeTabForNode = shouldForceSmallMode ? 'parameter' : activeTab;
 
-  // Prevent fullscreen mode for nodes with navigation (like API and MCP)
+  // Prevent fullscreen for a node still on the MCP api/tool picker: a one-column
+  // picker has nothing to fill a full screen with.
   React.useEffect(() => {
-    if (hasNavigation && isFullscreen && onFullscreenChange) {
+    if (shouldForceSmallMode && isFullscreen && onFullscreenChange) {
       onFullscreenChange(false);
     }
-  }, [hasNavigation, isFullscreen, onFullscreenChange]);
+  }, [shouldForceSmallMode, isFullscreen, onFullscreenChange]);
 
   const [showOptionalParams, setShowOptionalParams] = React.useState(false);
 
@@ -688,6 +664,16 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
     }
   }, [node, workflowId, runId, isRunMode, allNodes, edges, reportT]);
 
+  const handleOpenNodeLogs = React.useCallback(() => {
+    if (!node || !workflowId || !runId) return;
+    openWorkflowLogs({
+      workflowId,
+      runId,
+      initialStepAlias: extractStepAliasFromNode(node) || undefined,
+      reuseActiveWorkflowTab: true,
+    });
+  }, [node, openWorkflowLogs, runId, workflowId]);
+
   // Expression and condition management moved to useInspectorExpressions and useInspectorConditions hooks
 
   // Si pas de nœud et pas de multi-sélection, ne rien afficher
@@ -807,6 +793,7 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
           isRunMode={isRunMode}
           isFullscreen={isFullscreen}
           isAdvanced={isAdvanced}
+          isTabbedLayout={isMobile}
           isTriggerNode={isTriggerNode}
           isInterfaceNode={isInterfaceNode}
           shouldForceSmallMode={shouldForceSmallMode}
@@ -815,8 +802,6 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
           triggerNavigationLevel={triggerNavigationLevel}
           selectedDataSourceId={selectedDataSourceId}
           dataSources={dataSources}
-          viewMode={viewMode as ViewMode}
-          onViewModeChange={handleViewModeChange}
           showExecutionData={showExecutionData}
           onShowExecutionDataChange={handleShowExecutionDataChange}
           canShowExecutionDataToggle={isRunMode && !isInterfaceNode && !!runId && !!workflowId}
@@ -831,6 +816,7 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
           onDragHandleMouseDown={onDragHandleMouseDown}
           onMinimize={isDocked ? undefined : () => onMinimizedChange?.(true)}
           onReportNode={handleReportNode}
+          onOpenLogs={isRunMode && !!workflowId && !!runId ? handleOpenNodeLogs : undefined}
         />
         {/* Approval review: approve/reject the targeted pending item without
             leaving the inspector; auto-advances to the next pending item.
@@ -875,14 +861,11 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
               isAiAgent={isAiAgent}
               activeTab={activeTabForNode}
               setActiveTab={setActiveTab}
-              viewMode={viewMode as ViewMode}
-              onViewModeChange={handleViewModeChange}
               runId={runId}
               workflowId={workflowId}
               onSelectNode={onSelectNode}
               toolDetails={toolDetails}
               onUpdate={onUpdate}
-              onBreadcrumbChange={setBreadcrumbItems}
               connectionProps={connectionPropsBundle}
               getEditorExpression={getEditorExpression}
               handleEditorExpressionChange={handleEditorExpressionChange}
@@ -976,7 +959,6 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
               effectiveRunModeForForms={effectiveRunModeForForms}
               runId={runId}
               workflowId={workflowId}
-              viewMode={viewMode}
               showExecutionData={showExecutionData}
               isAdvanced={isAdvanced}
               isFullscreen={isFullscreen}
@@ -1073,15 +1055,14 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
               approvalDelegation={approvalDelegation}
               getEditorExpression={getEditorExpression}
               handleEditorExpressionChange={handleEditorExpressionChange}
-              onBreadcrumbChange={setBreadcrumbItems}
               webhookTokens={webhookTokens}
             />
           )}
           {/* Basic mode mobile content is now fully handled by InspectorMobileContent via ParameterColumn (embedded) */}
         </div>
 
-        {/* Footer with validation errors - only show in configuration mode */}
-        {node && viewMode === 'configuration' && (
+        {/* Footer with validation errors */}
+        {node && (
           <InspectorFooter
             errors={nodeValidation.errors}
             errorCount={nodeValidation.errorCount}
@@ -1105,17 +1086,6 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
         />
       )}
 
-      {/* Modals (Logs) */}
-      <InspectorModals
-        node={node}
-        workflowId={workflowId}
-        runId={runId}
-        isResultsModalOpen={isResultsModalOpen}
-        onResultsModalOpenChange={setIsResultsModalOpen}
-        modalBreadcrumbItems={modalBreadcrumbItems}
-        onModalBreadcrumbChange={setModalBreadcrumbItems}
-      />
-      {/* Preload component removed - was causing duplicate DataTable instances */}
     </div >
   );
 }

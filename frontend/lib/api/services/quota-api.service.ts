@@ -23,6 +23,14 @@ export interface CreditBalance {
    */
   paygBalance?: number;
   /**
+   * V494+: the monthly AI allowance left. A THIRD bucket, and deliberately not
+   * part of {@code balance}: it can only pay for chat and agent turns on the
+   * models opened to the free tier, so summing it into the headline figure would
+   * claim spending power the wallet does not have. Absent on CE and on plans with
+   * no allowance (every paid one).
+   */
+  aiBalance?: number;
+  /**
    * V148+: account delinquency flag. True when the last platform tool-call
    * commit ran into a partial-charge or floored state. While true, the
    * delinquent gate refuses fresh chat reservations and workflow run-init
@@ -69,6 +77,14 @@ export interface CreditHistoryEntry {
   // V363: cache-read token subset of promptTokens for LLM rows (billed at the
   // discounted cache rate). null on pre-V363 rows and non-LLM rows.
   cachedTokens: number | null;
+  // V506: whose API key the turn ran on. 'OWN_KEY' = the user's own provider key, so the
+  // row is a flat platform fee per turn and the provider billed the tokens; null/'PLATFORM'
+  // = the platform key, billed at the token rate (every pre-V506 row).
+  keyRoute?: string | null;
+  // V506, own-key rows only: the tokens at the provider's LIST rate, in credits
+  // (1 credit = $0.001). The estimate of what the user's provider bills for this turn.
+  // Never part of any balance; null on every other row.
+  providerCostCredits?: number | null;
   description: string | null;
   createdAt: string;
 }

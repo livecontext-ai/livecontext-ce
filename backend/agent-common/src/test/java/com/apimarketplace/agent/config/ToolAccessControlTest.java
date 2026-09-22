@@ -26,6 +26,21 @@ class ToolAccessControlTest {
     }
 
     @Test
+    @DisplayName("budgets is a READ, so a read-only agent may ask which caps are nearly spent")
+    void allowsTheBudgetsAction() {
+        // Anything absent from the read set is treated as a WRITE, so an action that reports
+        // spend and mutates nothing is refused by default. The tool help advertises budgets to
+        // every agent, which makes the failure the worst shape there is: an action a caller can
+        // see and cannot call, with a permission error that names no fix.
+        var denied = ToolAccessControl.checkWriteAccess(
+            Map.of("__agentAccessMode__", "read"),
+            "agent",
+            "budgets");
+
+        assertThat(denied).isEmpty();
+    }
+
+    @Test
     @DisplayName("allows read actions when internal namespaced access mode is read-only")
     void allowsReadActionFromNamespacedAccessMode() {
         var denied = ToolAccessControl.checkWriteAccess(
@@ -348,4 +363,73 @@ class ToolAccessControlTest {
         assertThat(ToolAccessControl.checkWriteAccess(Map.of(), "memory", "save")).isEmpty();
         assertThat(ToolAccessControl.checkWriteAccess(null, "memory", "save")).isEmpty();
     }
+
+    @Test
+    @DisplayName("application read-mode allows runs / get_run / get_node_output (same three reads the workflow entry lists)")
+    void applicationReadModeAllowsRunInspection() {
+        // Regression: these three were absent from the application READ set while the workflow
+        // entry listed them, and ApplicationCrudModule handles all three. A read-mode agent was
+        // therefore told it needed WRITE access to look at a run it was allowed to see. This is a
+        // fail-CLOSED misclassification, so it produced a support question, not a breach.
+        Map<String, Object> readOnly = Map.of("applicationAccessMode", "read");
+        for (String action : java.util.List.of("runs", "get_run", "get_node_output")) {
+            assertThat(ToolAccessControl.checkWriteAccess(readOnly, "application", action))
+                    .as("application read action '%s' must not require write access", action)
+                    .isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("application read-mode still denies the genuine application writes")
+    void applicationReadModeStillDeniesWrites() {
+        Map<String, Object> readOnly = Map.of("applicationAccessMode", "read");
+        assertThat(ToolAccessControl.checkWriteAccess(readOnly, "application", "execute")).isPresent();
+        assertThat(ToolAccessControl.checkWriteAccess(readOnly, "application", "delete")).isPresent();
+    }
+
+    @Test
+    @DisplayName("skill read-mode denies folder writes and publish, and allows list_folders")
+    void skillReadModeCoversFolderAndPublishActions() {
+        // The skill family has NO grant axis, so this mode is its ONLY gate: an ungated skill
+        // write action is unreachable by any configuration.
+        Map<String, Object> readOnly = Map.of("skillAccessMode", "read");
+        for (String action : java.util.List.of(
+                "create_folder", "rename_folder", "move_folder", "delete_folder", "publish", "unpublish")) {
+            assertThat(ToolAccessControl.checkWriteAccess(readOnly, "skill", action))
+                    .as("skill write action '%s' must be denied in read mode", action)
+                    .isPresent();
+        }
+        assertThat(ToolAccessControl.checkWriteAccess(readOnly, "skill", "list_folders")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("interface read-mode denies publish / unpublish")
+    void interfaceReadModeDeniesPublishing() {
+        Map<String, Object> readOnly = Map.of("interfaceAccessMode", "read");
+        assertThat(ToolAccessControl.checkWriteAccess(readOnly, "interface", "publish")).isPresent();
+        assertThat(ToolAccessControl.checkWriteAccess(readOnly, "interface", "unpublish")).isPresent();
+    }
+
+    @Test
+    @DisplayName("interface allow-list resolves from allowedInterfaceIds on the credentials channel")
+    void interfaceAllowListResolvesFromCredentials() {
+        // The interface CRUD module used to resolve this list from context.variables() while the
+        // create-grant appended to credentials. getAllowedIds is the single channel both sides
+        // now use; [] means explicit no-access and an absent key means unrestricted.
+        assertThat(ToolAccessControl.getAllowedIds(
+                Map.of("allowedInterfaceIds", java.util.List.of("i-1")), "interface"))
+                .containsExactly("i-1");
+        assertThat(ToolAccessControl.getAllowedIds(
+                Map.of("__allowedInterfaceIds__", java.util.List.of("i-2")), "interface"))
+                .containsExactly("i-2");
+        assertThat(ToolAccessControl.getAllowedIds(Map.of(), "interface")).isNull();
+
+        Map<String, Object> credentials = new java.util.HashMap<>();
+        credentials.put("allowedInterfaceIds", new java.util.ArrayList<>(java.util.List.of("i-1")));
+        ToolAccessControl.grantCreatedResource(credentials, "interface", "i-new");
+        assertThat(ToolAccessControl.getAllowedIds(credentials, "interface"))
+                .as("a freshly created interface must land in the list the module actually reads")
+                .containsExactly("i-1", "i-new");
+    }
+
 }

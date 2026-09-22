@@ -1,23 +1,25 @@
 LiveContext Community Edition
-Copyright (C) 2026 LiveContext
+Copyright (c) 2026 LiveContext
 
-This program is free software: you can redistribute it and/or modify it under
-the terms of the GNU Affero General Public License as published by the Free
-Software Foundation, either version 3 of the License, or (at your option) any
-later version.
+This product is licensed under the LiveContext Sustainable Use License 1.0
+(see the LICENSE file). You may use, copy, modify and redistribute it,
+including for your own production use and for the internal business
+purposes of your organization. You may not provide it to third parties on
+a hosted or embedded basis in order to compete with LiveContext's paid
+versions. For alternative licensing arrangements, contact
+oss@livecontext.ai.
 
-This program is distributed in the hope that it will be useful, but WITHOUT ANY
-WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
-PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License along
-with this program (see the LICENSE file). If not, see
-<https://www.gnu.org/licenses/>.
+THE LICENSED WORK IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, EXPRESS OR IMPLIED. See the LICENSE file for the
+full disclaimer.
 
 This product bundles third-party components distributed under their own
-licenses. See THIRD_PARTY_NOTICES for the list and the required attributions.
+licenses. See THIRD_PARTY_NOTICES for the list and the required
+attributions.
 
-"LiveContext" and the LiveContext logo are trademarks of LiveContext. Trademark
-rights are separate from the copyright license above: the AGPL grants no
-permission to use these marks. See TRADEMARKS for the trademark policy. This
-NOTICE file is for attribution purposes and does not modify the LICENSE terms.
+"LiveContext" and the LiveContext logo are trademarks of LiveContext.
+Trademark rights are separate from the copyright license above: the
+Sustainable Use License grants no permission to use these marks beyond
+reasonable and customary use in describing the origin of the work. See
+TRADEMARKS for the trademark policy. This NOTICE file is for attribution
+purposes and does not modify the LICENSE terms.

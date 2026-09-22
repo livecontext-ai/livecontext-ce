@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.execution.v2.engine.EvalContextBuilder;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.services.TemplateEngine;
@@ -68,13 +69,35 @@ public class SwitchNode extends BaseNode {
         Object switchValue = evaluateSwitchExpression(evalContext);
 
         // Match against cases
-        SwitchEvaluation evaluation = evaluateCases(switchValue);
+        // Computed ONCE: it runs a protected-region scan, a regex sweep and a probe over
+        // the subject expression, and both the case rows and the parameters panel need
+        // the same answer.
+        String subjectDisplay = subjectForDisplay(evalContext, switchValue);
+        SwitchEvaluation evaluation = evaluateCases(switchValue, subjectDisplay);
+
 
         // Build resolved_params snapshot for inspector visibility (resolved values)
         Map<String, Object> resolvedParams = new LinkedHashMap<>();
-        resolvedParams.put("switchExpression", resolveTemplateString(switchExpression, context));
-        resolvedParams.put("resolved_value", switchValue);
-        resolvedParams.put("switchCases", cases.size());
+        // The value the cases were compared against, rendered plainly (the quoted form
+        // belongs in an expression, not in a parameters panel). Taken from the matching
+        // itself: resolveTemplateString is a SECOND resolver that renders an absent
+        // value as an empty string, so it could show a subject nothing was compared to.
+        resolvedParams.put("switchExpression", subjectDisplay);
+        // The resolved SUBJECT is upstream data, or a workspace variable the author pulled
+        // in: `valueFrom` withholds a $vars scalar and bounds everything else. It is the
+        // one value on this row that is not plan configuration.
+        resolvedParams.put("resolved_value", ReportedParams.valueFrom(subjectDisplay, switchValue));
+        // One key per CASE with the value it matches on, the way a decision reports
+        // one key per branch. "switchCases: 3" told the reader how many cases existed
+        // and nothing about which values they were tested against, which is the only
+        // question anyone opens this panel to answer.
+        for (int i = 0; i < cases.size(); i++) {
+            SwitchCase caseItem = cases.get(i);
+            String key = caseItem.label() != null && !caseItem.label().isBlank()
+                ? caseItem.label()
+                : ("default".equals(caseItem.type()) ? "default" : "case_" + i);
+            resolvedParams.put(key, "default".equals(caseItem.type()) ? "(default)" : caseItem.value());
+        }
 
         // Build output with evaluation details
         Map<String, Object> output = new HashMap<>();
@@ -111,6 +134,32 @@ public class SwitchNode extends BaseNode {
             nodeId, switchValue, evaluation.selectedCaseType, evaluation.skippedCaseTypes);
 
         return NodeExecutionResult.success(nodeId, output);
+    }
+
+    /**
+     * The switch subject as a reader should see it.
+     *
+     * <p>A subject whose reference points at nothing resolves to null and then quietly
+     * takes the default, which looks exactly like a healthy run that chose the default on
+     * purpose. Marking it here puts the answer on every case row.
+     */
+    private String subjectForDisplay(Map<String, Object> evalContext, Object switchValue) {
+        // Null OR empty string: resolveWithMap renders an absent value as "" for a mixed
+        // template, which is the same empty-string rendering that made the decision's
+        // Params column read " == null". Only a CONFIRMED missing namespaced reference
+        // gets marked, so a legitimately empty subject is never accused.
+        boolean absent = switchValue == null || "".equals(switchValue);
+        if (absent && templateEngine != null) {
+            List<TemplateEngine.UnresolvedReference> missing =
+                templateEngine.findUnresolvedReferences(switchExpression, evalContext);
+            if (!missing.isEmpty()) {
+                return "<unresolved: " + missing.get(0).reference() + ">";
+            }
+        }
+        // Plain, not quoted. The case values it is compared against are plain, and the
+        // parameters panel shows this same string: quoting one side produced the
+        // lopsided "active" == archived, which reads as two different kinds of thing.
+        return switchValue == null ? "null" : String.valueOf(switchValue);
     }
 
     /**
@@ -162,71 +211,71 @@ public class SwitchNode extends BaseNode {
     /**
      * Evaluate all cases and find the matching one.
      */
-    private SwitchEvaluation evaluateCases(Object switchValue) {
-        SwitchCase selectedCase = null;
+    private SwitchEvaluation evaluateCases(Object switchValue, String subject) {
+        // Pass 1: only a NON-default case can win on value, and the first one does.
+        boolean[] matches = new boolean[cases.size()];
         int selectedIndex = -1;
-        List<String> skippedTypes = new ArrayList<>();
-        List<String> skippedLabels = new ArrayList<>();
-        List<Map<String, Object>> evaluationDetails = new ArrayList<>();
 
         for (int i = 0; i < cases.size(); i++) {
             SwitchCase caseItem = cases.get(i);
-            boolean matches;
-
             if (caseItem.isDefault()) {
-                // Default case matches if no other case matched yet
-                matches = (selectedCase == null);
-            } else {
-                // Compare switch value with case value
-                matches = valuesMatch(switchValue, caseItem.value());
+                continue;
             }
-
-            String caseType = caseItem.isDefault() ? "default" : "case_" + i;
-            String caseLabel = caseItem.label() != null ? caseItem.label() : caseType;
-            logger.debug("Case[{}] '{}': value='{}' vs switch='{}' -> {}",
-                i, caseType, caseItem.value(), switchValue, matches);
-
-            // Record evaluation
-            Map<String, Object> evalEntry = new HashMap<>();
-            evalEntry.put("case_type", caseType);
-            evalEntry.put("case_label", caseLabel);
-            evalEntry.put("case_value", caseItem.value() != null ? caseItem.value() : "");
-            evalEntry.put("is_default", caseItem.isDefault());
-            evalEntry.put("result", matches);
-            evalEntry.put("index", i);
-            evaluationDetails.add(evalEntry);
-
-            // First matching case wins (but default only if nothing else matched)
-            if (matches && selectedCase == null) {
-                if (!caseItem.isDefault()) {
-                    selectedCase = caseItem;
-                    selectedIndex = i;
-                }
-            } else if (!matches || selectedCase != null) {
-                skippedTypes.add(caseType);
-                skippedLabels.add(caseLabel);
+            matches[i] = valuesMatch(switchValue, caseItem.value());
+            if (matches[i] && selectedIndex < 0) {
+                selectedIndex = i;
             }
         }
 
-        // If no case matched, use default
-        if (selectedCase == null) {
+        // The default is taken only when nothing else matched, wherever it sits in the
+        // list. Deciding that while scanning made it positional: a default declared
+        // BEFORE its siblings was tested against a selection that could not exist yet,
+        // so it reported a match for a branch the switch did not take.
+        if (selectedIndex < 0) {
             for (int i = 0; i < cases.size(); i++) {
-                SwitchCase caseItem = cases.get(i);
-                if (caseItem.isDefault()) {
-                    selectedCase = caseItem;
+                if (cases.get(i).isDefault()) {
                     selectedIndex = i;
-                    skippedTypes.remove("default");
-                    String label = caseItem.label() != null ? caseItem.label() : "default";
-                    skippedLabels.remove(label);
                     break;
                 }
             }
         }
 
+        // Pass 2: report, now that the winner is known.
+        List<String> skippedTypes = new ArrayList<>();
+        List<String> skippedLabels = new ArrayList<>();
+        List<Map<String, Object>> evaluationDetails = new ArrayList<>(cases.size());
+
+        for (int i = 0; i < cases.size(); i++) {
+            SwitchCase caseItem = cases.get(i);
+            String caseType = caseItem.isDefault() ? "default" : "case_" + i;
+            String caseLabel = caseItem.label() != null ? caseItem.label() : caseType;
+            boolean selected = i == selectedIndex;
+
+            logger.debug("Case[{}] '{}': value='{}' vs switch='{}' -> matched={} selected={}",
+                i, caseType, caseItem.value(), switchValue, matches[i], selected);
+
+            Map<String, Object> entry = caseItem.isDefault()
+                ? BranchEvaluationReport.fallback(i, caseType, selected)
+                : BranchEvaluationReport.matched(
+                    i, caseType,
+                    caseItem.value() == null ? null : String.valueOf(caseItem.value()),
+                    subject, matches[i], selected);
+            // The author named this case; the port (case_0) cannot say "Gold tier".
+            entry.put("case_label", caseLabel);
+            evaluationDetails.add(entry);
+
+            if (!selected) {
+                skippedTypes.add(caseType);
+                skippedLabels.add(caseLabel);
+            }
+        }
+
+        SwitchCase selectedCase = selectedIndex >= 0 ? cases.get(selectedIndex) : null;
+
         return new SwitchEvaluation(
             selectedCase,
             selectedIndex,
-            selectedCase != null ? (selectedCase.isDefault() ? "default" : "case_" + selectedIndex) : null,
+            selectedCase == null ? null : (selectedCase.isDefault() ? "default" : "case_" + selectedIndex),
             skippedTypes,
             skippedLabels,
             evaluationDetails

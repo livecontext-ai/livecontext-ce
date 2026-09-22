@@ -96,6 +96,18 @@ public class FileToolsProvider implements ToolsProvider {
 
                 Example: download_file(url="https://example.com/report.pdf")
                 Returns: FileRef with path, name, mimeType, size
+
+                Redirects are followed, up to 5 hops, so ordinary share links and shortened
+                URLs work. Only http and https are fetched, and only from public addresses:
+                a private or internal address is refused with INVALID_PARAMETER_VALUE, and so
+                is a redirect that leads to one or that drops from https to http. Those are
+                refusals, not outages - retrying the same URL returns the same answer, so
+                correct the URL instead.
+
+                A link that needs a sign-in (a private Google Drive or Dropbox file) redirects
+                to a login page, so this returns that page rather than the file. Use the
+                provider's own integration for those, which reads the file with your
+                connected account.
                 """)
             .requiresAuth(true)
             .tags(List.of("file", "download", "storage"))
@@ -190,6 +202,12 @@ public class FileToolsProvider implements ToolsProvider {
 
             return ToolExecutionResult.success(result);
 
+        } catch (FileDownloader.UrlNotAllowedException e) {
+            // Before FileDownloadException, which it extends. A refusal is not transient:
+            // reporting it as EXECUTION_FAILED tells an agent to retry, and it would retry
+            // the same refusal until it runs out of iterations.
+            log.warn("Refused to download from {}: {}", url, e.getMessage());
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, e.getMessage());
         } catch (FileDownloader.FileDownloadException e) {
             log.error("Download failed from {}: {}", url, e.getMessage());
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to download file: " + e.getMessage());

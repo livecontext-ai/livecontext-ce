@@ -1,5 +1,11 @@
 package com.apimarketplace.conversation.entity;
 
+import com.apimarketplace.common.security.token.EncryptedTokenConverter;
+import com.apimarketplace.common.security.token.HashedTokenEntity;
+import com.apimarketplace.common.security.token.HashedTokenListener;
+import com.apimarketplace.common.security.token.TokenSlot;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import com.apimarketplace.conversation.domain.ConversationKind;
 import com.apimarketplace.common.scope.OrgScopedEntity;
 import com.apimarketplace.common.scope.OrgScopedEntityListener;
@@ -28,9 +34,9 @@ import java.util.Set;
  * - Pending actions for interrupted flows (e.g., waiting for credentials)
  */
 @Entity
-@EntityListeners(OrgScopedEntityListener.class)
+@EntityListeners({OrgScopedEntityListener.class, HashedTokenListener.class})
 @Table(name = "conversations", schema = "conversation")
-public class Conversation implements OrgScopedEntity {
+public class Conversation implements OrgScopedEntity, HashedTokenEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -141,8 +147,18 @@ public class Conversation implements OrgScopedEntity {
     @Column(name = "approved_tool_actions", columnDefinition = "jsonb")
     private Map<String, Object> approvedToolActions = new HashMap<>();
 
-    @Column(name = "share_token", unique = true, length = 64)
+    /**
+     * The public conversation share token (cs_...), null until sharing is enabled.
+     * Stored encrypted (ENC:...) through {@link EncryptedTokenConverter}; the entity always holds
+     * the plaintext. Lookups go through {@link #getShareTokenHash()}, never through this column.
+     */
+    @Convert(converter = EncryptedTokenConverter.class)
+    @Column(name = "share_token", unique = true, length = 255)
     private String shareToken;
+
+    /** HMAC-SHA256 of the plaintext, filled by {@link HashedTokenListener}; the only lookup key. */
+    @Column(name = "share_token_hash", length = 64)
+    private String shareTokenHash;
 
     @Column(name = "share_mode", nullable = false, length = 20)
     private String shareMode = "off";
@@ -531,5 +547,20 @@ public class Conversation implements OrgScopedEntity {
 
     public void setApprovedToolActions(Map<String, Object> approvedToolActions) {
         this.approvedToolActions = approvedToolActions != null ? approvedToolActions : new HashMap<>();
+    }
+
+    @JsonIgnore
+    public String getShareTokenHash() {
+        return shareTokenHash;
+    }
+
+    public void setShareTokenHash(String shareTokenHash) {
+        this.shareTokenHash = shareTokenHash;
+    }
+
+    @Override
+    @JsonIgnore
+    public List<TokenSlot> tokenSlots() {
+        return List.of(new TokenSlot(this::getShareToken, this::setShareTokenHash));
     }
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { Bell, Bot, AppWindow, Workflow, Clock, Webhook, MessageSquare, FormInput, Zap, Trash2, ChevronLeft, ChevronRight, UserPlus, Table, Sparkles, BookOpen, Monitor, Share2, Copy, Check, ExternalLink, MessageCircle, MessagesSquare, FileText, Trophy } from 'lucide-react';
@@ -11,7 +11,7 @@ import { getRunStatusLabel } from '@/lib/utils/runStatusUtils';
 import { ServiceIcon } from '@/components/ui/service-icon';
 import { AvatarDisplay } from '@/components/agents';
 import { NodeIcon } from '@/app/workflows/builder/components/nodes/shared';
-import { useHomeStatus } from '@/hooks/useHomeStatus';
+import { useHomeStatus, useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import { useNotificationsPaged } from '@/hooks/useNotificationsPaged';
 import { useRecentActivity } from '@/hooks/useRecentActivity';
 import { useSharedConversations } from '@/hooks/useSharedConversations';
@@ -65,6 +65,23 @@ const SHARED_RESOURCE_TYPE_ORDER: SharedResourceType[] = [
 
 const IMMINENT_WINDOW_MS = 5 * 60 * 1000;
 const INBOX_PAGE_SIZE = 15;
+/**
+ * How long an ask or an answer keeps the Triggers rows fresh enough for landing on that tab
+ * NOT to ask for them again. Exported so the test asserts the contract rather than a literal.
+ *
+ * <p>The rows ride the always-on home-status query (60s poll, 30s staleTime). The mutations
+ * that change a row ask for it again where they happen, and this visit-ask is the net
+ * underneath them: it catches a change made by another session, by a teammate in the same
+ * workspace, or by a call site nobody wired.
+ *
+ * <p>Two seconds because the tab is read immediately after the user's own action, to check
+ * that the action took. A bound long enough to outlive that reading turns the visit-ask into
+ * nothing: the tab keeps showing the workflow as it was, and that is the report this exists
+ * to answer. Short of that, the only thing the bound buys is that flipping between tabs is not
+ * a request per click, which needs no more than a second or two. It is not a staleness policy
+ * for the payload: the 60s poll remains that.
+ */
+export const TRIGGERS_ROWS_FRESH_FOR_MS = 2_000;
 
 /**
  * Unified bell - two tabs:
@@ -103,6 +120,9 @@ export function NotificationBell() {
   // it returns automations + the cursor-based unreadCount AND the legacy
   // (non-paginated) items list which we ignore here.
   const { automations, markAllRead } = useHomeStatus();
+  // Same refresh every producer of a row uses after acting, asked here with a freshness bound
+  // instead of unconditionally - see the effect below.
+  const refreshAutomations = useRefreshHomeStatus();
   const tRecent = useTranslations('chat.home.recent');
   // Root namespace: the run-status words (`status.completed`, ...) are shared with the
   // run panel and are not scoped to the bell.
@@ -130,6 +150,17 @@ export function NotificationBell() {
     isLoading: sharedLoading,
     revoke: revokeShared,
   } = useSharedConversations(sharedEnabled);
+  // Triggers tab - same visit-only spirit as the two tabs above, except the data is already
+  // in hand (home-status is the always-on query behind the bell badge), so what the visit
+  // buys is FRESHNESS rather than a lazy first load. Fires on the transition INTO the tab,
+  // which covers opening the bell straight onto it through the empty-inbox fallback, and
+  // never while the tab is off screen. The bound makes the call a no-op when the rows are
+  // already current, so the effect can run as often as React wants it to.
+  const triggersVisible = open && tab === 'triggers';
+  useEffect(() => {
+    if (!triggersVisible) return;
+    refreshAutomations({ freshForMs: TRIGGERS_ROWS_FRESH_FOR_MS });
+  }, [triggersVisible, refreshAutomations]);
   // Activity tab kind filter - null = show all rows; selected kind = filter
   // to that kind only. Client-side filter on the cached top-50, no extra
   // round-trip. (Previous "Modified by me" toggle dropped - `actorId` =
@@ -646,11 +677,13 @@ function resourceHrefForRecent(item: RecentActivityItem): string {
       ? `/app/applications/${item.publicationId}`
       : `/app/workflow/${item.resourceId}`;
     case 'INTERFACE':   return `/app/interface/${item.resourceId}`;
-    // No per-agent page exists (would 404). The AgentView reads ?openAgent=<id>
-    // on mount and pops the right-side panel for that agent - same visual as
-    // clicking the row in AgentTable.
+    // No per-agent page exists (would 404). AgentTable reads ?openAgent=<id> and pops the
+    // right-side panel for that agent - same visual as clicking the row in the list. It acts
+    // on the id whenever it appears in the address, so the link works as often as it is used.
     case 'AGENT':       return `/app/agent?openAgent=${item.resourceId}`;
-    case 'SKILL':       return `/app/agent`; // skills live under the agent shell
+    // Skills live under the agent shell, on their own tab. Naming it lands the user among
+    // skills; without it the row dropped them on the agents board instead.
+    case 'SKILL':       return `/app/agent?view=skills`;
     case 'TABLE':       return `/app/data/${item.resourceId}`;
     default:            return '/app';
   }
@@ -1232,6 +1265,22 @@ function ActivityList({
         // automation in a single glance.
         const isImminent = isImminentFire(a);
         // Top-right label - what is AHEAD of this automation, never behind it:
+        //   paused   → pausedBadge, ahead of the three branches below, because a
+        //              disabled resource has no future fire to describe. The engine
+        //              already refuses every lane: ScheduleExecutorService skips the
+        //              tick ("Agent X is inactive, skipping schedule"),
+        //              AgentWebhookDispatchService answers "Agent is inactive", and
+        //              the workflow webhook / form / chat / datasource / workflow
+        //              lanes all refuse on a CANCELLED production run. The bell used
+        //              to print the countdown and the blue imminent pulse anyway, so
+        //              the one surface whose job is to say what is about to happen
+        //              was the one contradicting the engine.
+        //   budget   → budgetBlockedBadge, for the same reason and one rank lower: the
+        //              schedule is still armed and nextFireAt is still the next tick, but
+        //              the spending cap refuses the run. A separate badge on purpose - a
+        //              pause is undone by re-enabling, a cap by raising it or waiting for
+        //              the period to roll, so one word for both sent the reader to the
+        //              wrong switch.
         //   SCHEDULE → countdown to nextFireAt
         //   WEBHOOK  → liveBadge ("Live", indicating no schedule)
         //   others   → nothing; the 6 declared kinds fire on demand, so the kind
@@ -1239,11 +1288,21 @@ function ActivityList({
         // What is behind it - when it last ran and how that ended - is the "Last:"
         // line below, on every kind. It used to live here for the declared kinds,
         // which is why they now read as icon-only.
-        const fireLabel = a.triggerType === 'SCHEDULE'
-          ? formatNextFire(a.schedule?.nextFireAt, t)
-          : a.triggerType === 'WEBHOOK'
-            ? t('liveBadge')
-            : '';
+        //
+        // ERROR is the ONE kind `resourcePaused` does not speak for, so it keeps the
+        // live treatment - see fireSuppression, which owns both rules for this row and
+        // for the imminence check, so the two cannot drift apart.
+        const suppression = fireSuppression(a);
+        const pausedAndSilent = suppression !== null;
+        const fireLabel = suppression === 'paused'
+          ? t('pausedBadge')
+          : suppression === 'budget'
+            ? t('budgetBlockedBadge')
+            : a.triggerType === 'SCHEDULE'
+              ? formatNextFire(a.schedule?.nextFireAt, t)
+              : a.triggerType === 'WEBHOOK'
+                ? t('liveBadge')
+                : '';
 
         // The "Last:" line, on every row that has something to say - and every row that said
         // something before this change still does. A never-fired SCHEDULE keeps its "never"
@@ -1253,6 +1312,32 @@ function ActivityList({
         // last-run line, and a permanent "Last: -" on an endpoint nobody has called yet would
         // be noise rather than news.
         const showLastRun = a.lastRunAt != null || a.triggerType !== 'WEBHOOK';
+        // Dimmed while the resource is disabled, so a glance down the list separates what
+        // is going to run from what is only still listed. Applied to the row's CONTENT and
+        // not to the row, because opacity on the parent is a ceiling its children cannot
+        // exceed - it would take the action menu down with it, and that menu is the way
+        // back ("Reactivate agent"). Opacity rather than a muted text colour: the row
+        // carries an avatar and a status icon, which no colour swap reaches.
+        //
+        // `pointer-events-none` is NOT decoration, it is what keeps the row clickable. An
+        // opacity below 1 makes the element paint as its own stacking context, so these
+        // spans would otherwise paint AND hit-test above the row's click target, which is
+        // the `absolute inset-0 z-0` overlay below - clicking the name or the label would
+        // land on nothing at all. None of the three spans holds an interactive element, so
+        // making them click-transparent hands every pixel back to the overlay. This is the
+        // same pairing the Shared tab row uses for the same reason (`relative z-[1] ...
+        // pointer-events-none`), and jsdom cannot see it: with no stylesheet the overlay
+        // wins either way, which is why the guard is asserted on the class pairing.
+        //
+        // 50% and not some third value: it is what the agenda already dims a "will not
+        // fire" occurrence by (AgendaListView, OccurrenceChip).
+        //
+        // What it deliberately does NOT cover is the badge itself. The badge is the one
+        // piece of NEW information on a disabled row, and it is the explanation of the
+        // dim, so dimming it would drop the only word that says why to about 2:1 against
+        // the popover ground - less legible than the countdown it replaces. The word
+        // stays at full strength; everything the row was already saying steps back.
+        const dimWhenPaused = pausedAndSilent ? 'opacity-50 pointer-events-none' : '';
         // The verdict as a word, for the sr-only twin of the icon. Same helper the run panel
         // uses, so the two surfaces name a status identically.
         const statusLabel = a.lastRunAt && a.lastRunStatus
@@ -1287,6 +1372,7 @@ function ActivityList({
             <span
               className={`relative inline-flex items-center justify-center
                           h-7 w-7 rounded-full bg-theme-secondary shrink-0 overflow-hidden
+                          ${dimWhenPaused}
                           ${isImminent ? 'ring-2 ring-blue-500/70' : ''}`}
             >
               {/* AGENT rows render the agent's avatar (or initials fallback)
@@ -1307,7 +1393,7 @@ function ActivityList({
                 />
               )}
             </span>
-            <span className="flex-1 min-w-0">
+            <span className={`flex-1 min-w-0 ${dimWhenPaused}`}>
               <span className="block text-sm text-theme-primary truncate">
                 {a.name}
               </span>
@@ -1343,9 +1429,24 @@ function ActivityList({
                   the bell cannot contradict the epoch row one click away. A row whose
                   backend has no honest verdict sends no status and the icon slot renders
                   empty, keeping its width so the times stay in one column.
-                  It costs no row height: the left column is already two lines. */}
+                  It costs no row height: the left column is already two lines.
+
+                  On a disabled row the paused dim REPLACES its own 70% rather than stacking
+                  with it: opacity multiplies through the tree, so the two together would put
+                  the popover's smallest text at 0.35 - unreadable rather than inactive, on
+                  the line that tells the user what this automation last did, which is what
+                  they need in order to decide what to do about it. Dimmed once.
+
+                  `pointer-events-none` is unconditional, and for the same reason it is on
+                  the dimmed spans: ANY opacity below 1 gives this line its own stacking
+                  context, so it paints and hit-tests above the row's `absolute inset-0 z-0`
+                  click target. It has held a dead strip across the bottom of every row since
+                  it was written; it carries nothing interactive, so handing the pixels back
+                  to the overlay is pure gain. */}
               {showLastRun && (
-              <span className="flex items-center gap-1 text-[10px] text-theme-muted opacity-70 leading-none whitespace-nowrap">
+              <span className={`flex items-center gap-1 text-[10px] text-theme-muted leading-none
+                                whitespace-nowrap pointer-events-none
+                                ${pausedAndSilent ? dimWhenPaused : 'opacity-70'}`}>
                 {t('lastRan')}
                 {a.lastRunAt && <EpochStatusIcon status={a.lastRunStatus} />}
                 {/* EpochStatusIcon is aria-hidden by construction: it is a colour and a shape.
@@ -1427,7 +1528,73 @@ function TriggerKindFilter({
 
 // ---- helpers (relocated from the deleted LiveWorkflowsBadge) ----
 
+/**
+ * Whether the backend's `resourcePaused` flag means THIS row will not fire.
+ *
+ * <p>It does for seven of the eight kinds: `ScheduleExecutorService` skips the tick
+ * ("Agent X is inactive, skipping schedule"), `AgentWebhookDispatchService` answers
+ * "Agent is inactive", and the workflow webhook / form / chat / datasource / workflow
+ * lanes all refuse on a CANCELLED production run.
+ *
+ * <p>ERROR is the exception. `ErrorTriggerDispatchService` resolves the newest
+ * NON-TERMINAL run and its own comment states it "does NOT consult production_run_id",
+ * so a workflow whose production run is CANCELLED still dispatches its error handler.
+ * Saying "disabled" there would be the very defect this rule exists to remove, pointing
+ * the other way: the bell asserting a refusal the engine does not make.
+ *
+ * <p>ONE function because the rule has two consumers - the row's label and dim, and
+ * {@link isImminentFire}. The second is unreachable today (a declared-kind row carries no
+ * schedule, so it has no fire time to be imminent), which is exactly why the two copies
+ * would drift unnoticed if the rule were written twice.
+ */
+function isSilencedByPause(a: ActiveAutomation): boolean {
+  return Boolean(a.resourcePaused) && a.triggerType !== 'ERROR';
+}
+
+/**
+ * Why this row's countdown would be a lie, or null when it is honest.
+ *
+ * <p>Two conditions keep a schedule's `nextFireAt` accurate and its run refused, and the
+ * bell has to tell them apart because they are undone by different actions: a PAUSED
+ * resource is re-enabled, a BUDGET-blocked one has its cap raised or waits for the period
+ * to roll. Collapsing them into one badge sent the reader to the wrong switch.
+ *
+ * <p>Pause wins when both hold: it is the one the reader can act on immediately, and a
+ * paused resource would not run even with budget to spare.
+ *
+ * <p>Same shape as the agenda's, which greys the same fires from the same two facts. One
+ * function here for the same reason it is one there: the row label, the dim, and the
+ * imminence pulse are three sizes of a single claim.
+ */
+function fireSuppression(a: ActiveAutomation): 'paused' | 'budget' | null {
+  if (isSilencedByPause(a)) return 'paused';
+  if (a.triggerType !== 'SCHEDULE' || !a.schedule?.budgetBlocked) return null;
+  // `budgetBlocked` is true NOW; this row is about the NEXT fire, which may well be on
+  // the far side of the reset. A monthly cap reached on 30 September lifts at midnight,
+  // and the 1 October fire runs - so labelling that row "capped", dimming it and
+  // withholding the countdown would be wrong about a run that is going to happen.
+  //
+  // Same comparison the agenda makes per occurrence; the bell makes it once, against the
+  // one fire it draws. No date at all means the cap never lifts, which suppresses
+  // everything - and an unparseable one suppresses too, because the server said blocked
+  // and a date we cannot read is not a reason to promise a run.
+  const until = a.schedule.budgetBlockedUntil;
+  if (!until) return 'budget';
+  const liftsAt = Date.parse(until);
+  const nextFire = a.schedule.nextFireAt ? Date.parse(a.schedule.nextFireAt) : NaN;
+  if (Number.isFinite(liftsAt) && Number.isFinite(nextFire) && nextFire >= liftsAt) {
+    return null;
+  }
+  return 'budget';
+}
+
 function isImminentFire(a: ActiveAutomation, nowMs: number = Date.now()): boolean {
+  // A disabled resource keeps its nextFireAt: the schedule row stays armed and the
+  // daemon still claims the slot, it just refuses at dispatch. So the timestamp alone
+  // says "about to fire" about something that will not fire. Read here rather than at
+  // the two call sites because both of them are the same claim in two sizes: the row's
+  // blue ping and the bell's own pulse.
+  if (fireSuppression(a) !== null) return false;
   const iso = a.schedule?.nextFireAt;
   if (!iso) return false;
   const target = Date.parse(iso);
@@ -1539,9 +1706,9 @@ function notificationHref(item: NotificationItem): string {
 function resourceHref(a: ActiveAutomation): string {
   switch (a.resourceType) {
     case 'AGENT':
-      // No per-agent page exists. Land on /app/agent with a one-shot
-      // ?openAgent=<id> query that AgentTable consumes to open the right-side
-      // panel for the target agent.
+      // No per-agent page exists. Land on /app/agent with an ?openAgent=<id> query that
+      // AgentTable consumes to open the right-side panel for the target agent. It clears the
+      // id once it has acted on it, and acts again the next time one appears.
       return `/app/agent?openAgent=${a.resourceId}`;
     case 'APPLICATION':
       // v5 F4 PUB-HIJACK observability fix: the application page is keyed by

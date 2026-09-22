@@ -380,6 +380,7 @@ describe('AcquirePublicationModal - inlineProgress mode (real timers)', () => {
       active: {
         publication: pub(),
         ceMode: false,
+        demo: false,
         inline: true,
         status: 'success',
         progress: 100,
@@ -402,6 +403,7 @@ describe('AcquirePublicationModal - inlineProgress mode (real timers)', () => {
       active: {
         publication: pub(),
         ceMode: false,
+        demo: false,
         inline: true,
         status: 'success',
         progress: 100,
@@ -427,6 +429,7 @@ describe('AcquirePublicationModal - inlineProgress mode (real timers)', () => {
       active: {
         publication: pub(),
         ceMode: false,
+        demo: false,
         inline: true,
         status: 'error',
         progress: 40,
@@ -450,6 +453,7 @@ describe('AcquirePublicationModal - inlineProgress mode (real timers)', () => {
       active: {
         publication: pub(),
         ceMode: false,
+        demo: false,
         inline: true,
         status: 'error',
         progress: 40,

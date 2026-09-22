@@ -1375,6 +1375,13 @@ public class AgentAsyncCompletionService {
     // Package-private for focused unit tests - the one-shot wrapping logic is small
     // and easier to verify in isolation than through the full onAgentResult graph.
     void injectAgentMetadata(Map<String, Object> output, WorkflowExecution execution, PendingAgent pending) {
+        // cacheUsage is a BILLING field, read above into the observability request. It is
+        // seeded here only because this path builds the output from the raw response map,
+        // and leaving it in would persist an undeclared key into workflow_step_data that
+        // the inline path never writes, that node_type_documentation does not describe and
+        // that no frontend schema knows - the 3-way-alignment rule, broken on one path only.
+        output.remove("cacheUsage");
+
         // Item context - the inline path adds these unconditionally.
         output.put("item_index", pending.itemIndex());
         output.put("itemIndex", pending.itemIndex());
@@ -1798,6 +1805,14 @@ public class AgentAsyncCompletionService {
                         // is classifiable too.
                         req.setStopReason(com.apimarketplace.orchestrator.execution.v2.nodes.AgentNode
                             .deriveSingleShotStopReason(status));
+                        // Whose key the call ran on: the worker serialises the classify /
+                        // guardrail response DTO verbatim, so the route is a top-level key here
+                        // (the agent shape carries it under metrics). Lost, an own-key node is
+                        // billed the platform token rate on the production (queued) path.
+                        String workerKeyRoute = readString(rawResult, "keyRoute");
+                        if (workerKeyRoute != null && !workerKeyRoute.isBlank()) {
+                            req.setKeyRoute(workerKeyRoute);
+                        }
                         String workerSystemPrompt = readString(rawResult, "systemPrompt");
                         String workerUserPrompt = readString(rawResult, "userPrompt");
                         if (workerSystemPrompt != null && !workerSystemPrompt.isBlank()) {
@@ -2034,7 +2049,23 @@ public class AgentAsyncCompletionService {
             if (reasoning != null) req.setReasoningTokens(reasoning);
             return;
         }
-        // Classify/Guardrail shape: flat counters
+        // Classify/Guardrail shape: flat counters, plus the cache breakdown that used to be
+        // absent here. Its absence was not cosmetic: the orchestrator bills these nodes from
+        // this method's output alone, so a run moved onto a CLI bridge by a model execution
+        // link was charged its whole context at full input rate (6.1x its cost, measured) and
+        // an unlinked one got its cache for free. Both are the same missing transport.
+        Object cacheUsage = rawResult.get("cacheUsage");
+        if (cacheUsage instanceof Map<?, ?> cache) {
+            Map<String, Object> c = (Map<String, Object>) cache;
+            Integer cacheCreate = toInt(c.get("cacheCreationInputTokens"));
+            if (cacheCreate != null) req.setCacheCreationTokens(cacheCreate);
+            Integer cacheRead = toInt(c.get("cacheReadInputTokens"));
+            if (cacheRead != null) req.setCacheReadTokens(cacheRead);
+            Integer cached = toInt(c.get("cachedTokens"));
+            if (cached != null) req.setCachedTokens(cached);
+            Integer reasoning = toInt(c.get("reasoningTokens"));
+            if (reasoning != null) req.setReasoningTokens(reasoning);
+        }
         Integer tokensUsed = toInt(rawResult.get("tokensUsed"));
         if (tokensUsed != null) {
             req.setTotalTokens(tokensUsed);
@@ -2217,6 +2248,14 @@ public class AgentAsyncCompletionService {
             Object scope = metrics.get("budgetScope");
             if (scope instanceof String s && !s.isBlank()) {
                 req.setBudgetScope(s);
+            }
+            // Whose key the agent ran on, stamped by agent-service on the response metrics
+            // (the same "keyRoute" entry AgentNode.keyRouteOf reads on the inline path). The
+            // queued path is the production one, so a route lost here would bill an own-key
+            // run at the platform token rate.
+            Object keyRoute = metrics.get("keyRoute");
+            if (keyRoute instanceof String kr && !kr.isBlank()) {
+                req.setKeyRoute(kr);
             }
             Object loopDetected = metrics.get("loopDetected");
             req.setLoopDetected(Boolean.TRUE.equals(loopDetected));

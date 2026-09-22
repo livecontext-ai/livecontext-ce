@@ -56,13 +56,19 @@ public class OptionNode extends BaseNode {
         // Evaluate all choices and determine which one is selected
         OptionEvaluation evaluation = evaluateChoices(evalContext);
 
-        // Build resolved_params snapshot for inspector visibility (resolved values)
+        // Keyed by the author's choice LABEL, which is what the plan names and what the
+        // inspector labels, but VALUED from the evaluation that just decided. Pre-fix the
+        // value came from resolveTemplateString, a second resolver that renders an absent
+        // value as an empty string where the evaluator renders it as null, so the two
+        // panels showed different things for one expression in one execution.
         Map<String, Object> resolvedParams = new LinkedHashMap<>();
         for (int i = 0; i < choices.size(); i++) {
             OptionBranch choice = choices.get(i);
-            String label = choice.label() != null ? choice.label() : "choice_" + i;
-            String expr = choice.expression() != null ? choice.expression() : "(no expression)";
-            resolvedParams.put(label, resolveTemplateString(expr, context));
+            String label = choice.label() != null && !choice.label().isBlank()
+                ? choice.label()
+                : "choice_" + i;
+            resolvedParams.put(label,
+                evaluation.evaluationDetails.get(i).get(BranchEvaluationReport.RESOLVED));
         }
         resolvedParams.put("choices", choices.size());
 
@@ -71,20 +77,10 @@ public class OptionNode extends BaseNode {
         List<String> selectedBranches = selectedLabel != null ? List.of(selectedLabel) : List.of();
         List<String> skippedBranches = evaluation.skippedChoiceLabels;
 
-        // Restructure evaluations: strip internal 'index' field (not part of persisted schema)
-        List<Map<String, Object>> persistedEvaluations = new ArrayList<>();
-        for (Map<String, Object> evalDetail : evaluation.evaluationDetails) {
-            Map<String, Object> e = new HashMap<>();
-            e.put("choice_id", evalDetail.get("choice_id"));
-            e.put("choice_label", evalDetail.get("choice_label"));
-            e.put("expression", evalDetail.get("expression"));
-            e.put("resolved_expression", evalDetail.get("resolved_expression"));
-            e.put("result", evalDetail.get("result"));
-            if (evalDetail.containsKey("error")) {
-                e.put("error", evalDetail.get("error"));
-            }
-            persistedEvaluations.add(e);
-        }
+        // Reported as built. The previous copy re-keyed every entry into a private
+        // spelling (choice_label / resolved_expression) and dropped `index`, which is
+        // one of three spellings this repo had for one idea.
+        List<Map<String, Object>> persistedEvaluations = evaluation.evaluationDetails;
 
         // Build output with evaluation details
         Map<String, Object> output = new HashMap<>();
@@ -120,36 +116,47 @@ public class OptionNode extends BaseNode {
         List<String> skippedLabels = new ArrayList<>();
         List<Map<String, Object>> evaluationDetails = new ArrayList<>();
 
+        List<ChoiceEvaluationResult> results = new ArrayList<>(choices.size());
+
         for (int i = 0; i < choices.size(); i++) {
             OptionBranch choice = choices.get(i);
             ChoiceEvaluationResult evalResult = choice.evaluateExpressionWithDetails(evalContext, templateEngine, templateAdapter);
 
-            logger.debug("Choice[{}] '{}': expression='{}' resolved='{}' → {}",
+            logger.debug("Choice[{}] '{}': expression='{}' resolved='{}' -> {}",
                 i, choice.label(), choice.expression(), evalResult.resolvedExpression(), evalResult.result());
 
-            // Record evaluation with resolved expression for UI display
-            Map<String, Object> evalDetail = new HashMap<>();
-            evalDetail.put("choice_id", choice.id());
-            evalDetail.put("choice_label", choice.label());
-            evalDetail.put("expression", choice.expression() != null ? choice.expression() : "");
-            evalDetail.put("resolved_expression", evalResult.resolvedExpression());
-            evalDetail.put("result", evalResult.result());
-            evalDetail.put("index", i);
-            if (evalResult.errorMessage() != null) {
-                evalDetail.put("error", evalResult.errorMessage());
-            }
-            evaluationDetails.add(evalDetail);
+            results.add(evalResult);
 
             // First matching choice wins
             if (evalResult.result() && selectedChoice == null) {
                 selectedChoice = choice;
                 selectedIndex = i;
-            } else if (selectedChoice == null) {
-                // Only add to skipped if not yet selected
-                skippedIds.add(choice.id());
-                skippedLabels.add(choice.label() != null ? choice.label() : choice.id());
-            } else {
-                // Already selected, this one is skipped
+            }
+        }
+
+        // Report once the winner is known, so every entry can say whether it was the
+        // one taken. Reporting inside the evaluation loop is why no entry could.
+        for (int i = 0; i < choices.size(); i++) {
+            OptionBranch choice = choices.get(i);
+            ChoiceEvaluationResult evalResult = results.get(i);
+            boolean selected = i == selectedIndex;
+            // The PORT, the same string the edge carries (core:<label>:choice_N), so a
+            // branch reads the same here as on the canvas. The author-facing id and
+            // label ride along beside it: the port alone cannot name the choice.
+            String port = "choice_" + i;
+
+            // Always `evaluated`, never `fallback`: an option has no else. A choice left
+            // without an expression is a misconfiguration that matches nothing
+            // (OptionBranch answers false with an error), not a branch that always wins.
+            Map<String, Object> entry = BranchEvaluationReport.evaluated(
+                i, port, choice.expression(), evalResult.resolvedExpression(),
+                evalResult.result(), selected, evalResult.errorMessage(),
+                evalResult.unresolvedReferences());
+            entry.put("choice_id", choice.id());
+            entry.put("choice_label", choice.label());
+            evaluationDetails.add(entry);
+
+            if (!selected) {
                 skippedIds.add(choice.id());
                 skippedLabels.add(choice.label() != null ? choice.label() : choice.id());
             }
@@ -172,8 +179,20 @@ public class OptionNode extends BaseNode {
     public record ChoiceEvaluationResult(
         boolean result,
         String resolvedExpression,
-        String errorMessage
-    ) {}
+        String errorMessage,
+        List<TemplateEngine.UnresolvedReference> unresolvedReferences
+    ) {
+        public ChoiceEvaluationResult {
+            unresolvedReferences = unresolvedReferences == null
+                ? List.of()
+                : List.copyOf(unresolvedReferences);
+        }
+
+        /** Previous arity, for a result built without looking at references. */
+        public ChoiceEvaluationResult(boolean result, String resolvedExpression, String errorMessage) {
+            this(result, resolvedExpression, errorMessage, List.of());
+        }
+    }
 
     @Override
     public List<ExecutionNode> getNextNodes(NodeExecutionResult result) {
@@ -389,7 +408,8 @@ public class OptionNode extends BaseNode {
                 return new ChoiceEvaluationResult(
                     evalResult.result(),
                     evalResult.resolvedExpression(),
-                    evalResult.errorMessage()
+                    evalResult.errorMessage(),
+                    evalResult.unresolvedReferences()
                 );
             } catch (Exception e) {
                 logger.error("Expression evaluation failed: expression={}, error={}",

@@ -43,9 +43,12 @@ class StreamServiceTest {
         @Test
         @DisplayName("should create a new stream and stop existing active streams")
         void shouldCreateNewStream() {
+            // Stated, not inferred: createStream returns early when the streamId already
+            // exists, so "not yet registered" is a precondition of creating anything.
+            when(streamRepository.findByStreamId("stream-1")).thenReturn(Optional.empty());
             when(conversationRepository.lockConversationRowIfExists("conv-1")).thenReturn(Optional.of(1));
             when(streamRepository.stopAllActiveStreamsForConversation(anyString(), any())).thenReturn(0);
-            when(streamRepository.save(any(Stream.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(streamRepository.saveAndFlush(any(Stream.class))).thenAnswer(inv -> inv.getArgument(0));
 
             Stream result = streamService.createStream("conv-1", "stream-1", "user-1");
 
@@ -59,9 +62,12 @@ class StreamServiceTest {
         @Test
         @DisplayName("should stop existing active streams before creating new one")
         void shouldStopExistingStreams() {
+            // Stated, not inferred: createStream returns early when the streamId already
+            // exists, so "not yet registered" is a precondition of creating anything.
+            when(streamRepository.findByStreamId("stream-1")).thenReturn(Optional.empty());
             when(conversationRepository.lockConversationRowIfExists("conv-1")).thenReturn(Optional.of(1));
             when(streamRepository.stopAllActiveStreamsForConversation(anyString(), any())).thenReturn(1);
-            when(streamRepository.save(any(Stream.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(streamRepository.saveAndFlush(any(Stream.class))).thenAnswer(inv -> inv.getArgument(0));
 
             streamService.createStream("conv-1", "stream-1", "user-1");
 
@@ -69,16 +75,48 @@ class StreamServiceTest {
         }
 
         @Test
+        @DisplayName("an already-registered streamId returns the existing row and writes nothing")
+        void alreadyRegisteredStreamIdIsReused() {
+            Stream existing = new Stream("row-1", "conv-1", "stream-1", "user-1",
+                    Stream.StreamStatus.ACTIVE);
+            when(streamRepository.findByStreamId("stream-1")).thenReturn(Optional.of(existing));
+
+            Stream result = streamService.createStream("conv-1", "stream-1", "user-1");
+
+            assertThat(result).isSameAs(existing);
+            verify(streamRepository, never()).saveAndFlush(any());
+            verify(streamRepository, never()).stopAllActiveStreamsForConversation(anyString(), any());
+            verify(conversationRepository, never()).lockConversationRowIfExists(anyString());
+        }
+
+        @Test
+        @DisplayName("a streamId bound to another conversation is refused rather than re-homed")
+        void streamIdBoundToAnotherConversationIsRefused() {
+            Stream elsewhere = new Stream("row-1", "other-conv", "stream-1", "user-1",
+                    Stream.StreamStatus.ACTIVE);
+            when(streamRepository.findByStreamId("stream-1")).thenReturn(Optional.of(elsewhere));
+
+            Stream result = streamService.createStream("conv-1", "stream-1", "user-1");
+
+            assertThat(result)
+                .as("returning a row from another conversation would silently mis-attribute the "
+                    + "stream; null is the established graceful-skip contract")
+                .isNull();
+            verify(streamRepository, never()).saveAndFlush(any());
+        }
+
+        @Test
         @DisplayName("should skip the row (return null, no save) when the conversation no longer exists")
         void shouldSkipWhenConversationGone() {
             // FK guard: a non-existent conversation (lock returns empty) must NOT reach the streams
             // INSERT - pre-fix this hit streams_conversation_id_fkey. The chat tolerates the null.
+            when(streamRepository.findByStreamId("stream-1")).thenReturn(Optional.empty());
             when(conversationRepository.lockConversationRowIfExists("conv-gone")).thenReturn(Optional.empty());
 
             Stream result = streamService.createStream("conv-gone", "stream-1", "user-1");
 
             assertThat(result).isNull();
-            verify(streamRepository, never()).save(any());
+            verify(streamRepository, never()).saveAndFlush(any());
             verify(streamRepository, never()).stopAllActiveStreamsForConversation(anyString(), any());
         }
     }

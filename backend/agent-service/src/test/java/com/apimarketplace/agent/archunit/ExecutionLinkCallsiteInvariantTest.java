@@ -107,7 +107,8 @@ class ExecutionLinkCallsiteInvariantTest {
             .collect(Collectors.toCollection(TreeSet::new));
 
         assertThat(callers).contains(
-            "AgentRemoteExecutionService", "ClassifyService", "GuardrailService", "SubAgentExecutionHandler");
+            "AgentRemoteExecutionService", "ClassifyService", "GuardrailService", "SubAgentExecutionHandler",
+            "JsonCompletionService");
         // AgentRemoteExecutionService reaches the bridge through dispatchRaw and the sub-agent
         // handler through the client directly, so both of those entry points must be watched
         // too: a future caller that only ever touches the bridge is still a linked-model run.

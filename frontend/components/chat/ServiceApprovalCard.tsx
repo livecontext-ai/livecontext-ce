@@ -14,6 +14,44 @@ import ToastContainer from '@/components/ToastContainer';
 import { track } from '@/lib/analytics/analytics';
 import type { ServiceApprovalInfo, PendingServiceApproval } from '@/contexts/StreamingContext';
 import { normalizeIconSlug } from '@/lib/credentials/iconSlug';
+import { MissingScopesBanner } from '@/components/credentials/MissingScopesBanner';
+import { useByokCapability } from '@/lib/credentials/useByokCapability';
+
+/**
+ * One connected account that was not granted what the failing call needed.
+ *
+ * <p>A component of its own because whether the user's own OAuth client is even offered for
+ * this integration is a lookup, and a hook cannot be called from inside a map. It also keeps
+ * the decision where the workflow inspector makes it: from the catalog template, through the
+ * wizard's own resolvers, so the two surfaces cannot disagree about one integration.
+ */
+function ServiceScopeGapBanner({
+  service,
+  onReconnect,
+  onSwitchToAdvanced,
+}: {
+  service: ServiceApprovalInfo;
+  onReconnect: () => void;
+  onSwitchToAdvanced: () => void;
+}) {
+  const { byokOnlyScopes, platformScopes, byokOffered } = useByokCapability(service.serviceType);
+
+  return (
+    <MissingScopesBanner
+      requiredScopes={service.requiredScopes}
+      grantedScopes={service.grantedScopes}
+      credentialType={service.credentialType}
+      integrationDisplayName={service.serviceName}
+      platformScopes={platformScopes.length > 0 ? platformScopes : undefined}
+      byokOnlyScopes={byokOnlyScopes}
+      onReconnect={onReconnect}
+      // Undefined, not a no-op: the banner reads its ABSENCE as "there is no BYOK path here"
+      // and then keeps the ordinary reconnect visible instead of hiding it behind a form
+      // this integration does not offer.
+      onSwitchToAdvanced={byokOffered ? onSwitchToAdvanced : undefined}
+    />
+  );
+}
 
 export interface ServiceApprovalCardProps {
   /** Conversation ID */
@@ -50,6 +88,9 @@ export function ServiceApprovalCard({
   const [isDenied, setIsDenied] = useState(false);
   const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({});
   const [isWizardOpen, setIsWizardOpen] = useState(false);
+  // Which form the wizard opens on. 'advanced' is the user's own OAuth client, offered
+  // only where the shared one cannot grant the missing scope.
+  const [wizardMode, setWizardMode] = useState<'standard' | 'advanced'>('standard');
   const [hasProcessedOAuthCallback, setHasProcessedOAuthCallback] = useState(false);
 
   console.log('[ServiceApprovalCard] Credentials loading state:', credentialsLoading);
@@ -78,8 +119,24 @@ export function ServiceApprovalCard({
     }))
   });
 
+  // A service the refusal reported as short of scopes. It HAS a credential, so it is absent
+  // from servicesNeedingCredentials, and the wizard would open on an empty requirement list:
+  // the user clicks Reconnect and is shown nothing to reconnect.
+  // The two conditions must match the banner's own (MissingScopesBanner returns null unless
+  // credentialType is exactly 'OAuth2' and the gap is non-empty). Filtering on requiredScopes
+  // alone put services in the wizard that the banner then refuses to explain: the card opens,
+  // the reason does not appear, and an API-key service cannot have a scope gap at all.
+  const servicesShortOfScopes = servicesWithIconSlug.filter(
+    s => Array.isArray(s.requiredScopes) && s.requiredScopes.length > 0
+      && s.credentialType === 'OAuth2'
+      && Array.isArray(s.missingScopes) && s.missingScopes.length > 0
+  );
+
   // Convert to CredentialWizardRequirement format
-  const credentialRequirements: CredentialWizardRequirement[] = servicesNeedingCredentials.map(s => ({
+  const credentialRequirements: CredentialWizardRequirement[] = [
+    ...servicesNeedingCredentials,
+    ...servicesShortOfScopes.filter(s => !servicesNeedingCredentials.includes(s)),
+  ].map(s => ({
     iconSlug: s.iconSlug!,
     serviceName: s.serviceName,
     toolId: s.toolName,
@@ -185,10 +242,16 @@ export function ServiceApprovalCard({
     refetchCredentials();
     setIsWizardOpen(false);
 
-    // Only approve if ALL required credentials were configured (not skipped)
-    const allConfigured = servicesNeedingCredentials.every(
-      (s) => completedIconSlugs.includes(s.iconSlug!)
-    );
+    // Only approve if ALL required credentials were configured (not skipped).
+    //
+    // Checked against everything the wizard was HANDED, not only the services that had no
+    // credential. A scope-gap service has one, so it is absent from that list, and gating on
+    // it alone would approve the card the moment the OTHER services were connected while the
+    // reconnect this card exists for was still pending. It happens to be inert today because
+    // the wizard fires onComplete only once every requirement it was given is done, but that
+    // is its behaviour, not our invariant, and nothing here would notice it changing.
+    const requiredSlugs = new Set(credentialRequirements.map((r) => r.iconSlug));
+    const allConfigured = [...requiredSlugs].every((slug) => completedIconSlugs.includes(slug));
 
     if (allConfigured) {
       await approveServices();
@@ -326,8 +389,8 @@ export function ServiceApprovalCard({
         {/* Services list */}
         <div className="space-y-2">
           {pendingApproval.services.map((service, index) => (
+            <React.Fragment key={`${service.serviceType}-${index}`}>
             <div
-              key={`${service.serviceType}-${index}`}
               className="flex items-center gap-3 p-2.5 rounded-xl bg-theme-primary border border-theme"
             >
               {/* Service icon - normalize slug to match SVG filenames ([a-z0-9]+) */}
@@ -357,6 +420,21 @@ export function ServiceApprovalCard({
                 )}
               </div>
             </div>
+            {/* Connected, and short of what the call needed. Says which scopes, and where
+                only the user's own OAuth client can grant them, opens the wizard straight
+                on that form: sending someone through the ordinary reconnect for a scope the
+                shared client never asks for spends their time to reach the same refusal. */}
+            {/* The same three conditions the wizard filter uses, so a service either gets both
+                or neither. Mounting on requiredScopes alone made useByokCapability fetch a
+                credential template for services the banner then declined to render. */}
+            {servicesShortOfScopes.includes(service) && (
+              <ServiceScopeGapBanner
+                service={service}
+                onReconnect={() => { setWizardMode('standard'); setIsWizardOpen(true); }}
+                onSwitchToAdvanced={() => { setWizardMode('advanced'); setIsWizardOpen(true); }}
+              />
+            )}
+            </React.Fragment>
           ))}
         </div>
 
@@ -449,6 +527,7 @@ export function ServiceApprovalCard({
         onOpenChange={setIsWizardOpen}
         onComplete={handleWizardComplete}
         onCredentialAdded={handleCredentialAdded}
+        initialMode={wizardMode}
       />
 
       {/* Toast notifications */}

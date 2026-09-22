@@ -1141,4 +1141,92 @@ class ConversationToolExecutionServiceTest {
             assertThat(result.error()).isEqualTo("Title is required");
         }
     }
+
+    /**
+     * The internal credential lookup: it must SIGN, and a refusal must never read as an absence.
+     * Both behaviours ship with the widening of auth-service's HMAC-required prefix to the whole
+     * {@code /api/internal/credentials/} namespace.
+     */
+    @Nested
+    @DisplayName("internal credential lookup")
+    class InternalCredentialLookupTests {
+
+        private void setGatewaySecret(String secret) throws Exception {
+            Field f = ConversationToolExecutionService.class.getDeclaredField("gatewaySecretKey");
+            f.setAccessible(true);
+            f.set(service, secret);
+        }
+
+        private ToolCall requireGmail() {
+            Map<String, Object> args = new HashMap<>();
+            args.put("services", List.of("gmail"));
+            args.put("reason", "Need to read mail");
+            return createToolCall("call_1", "request_credential", args);
+        }
+
+        @Test
+        @DisplayName("the lookup carries the gateway signature - the endpoint is HMAC-gated")
+        void lookupIsSigned() throws Exception {
+            // Pre-fix this was a bare getForEntity with NO headers at all: no identity, no
+            // signature. It only worked because the whole /api/internal/ namespace was exempt.
+            setGatewaySecret("test-gateway-secret");
+            MockRestServiceServer authServer = bindAuthServiceServer();
+            authServer.expect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                            .requestTo(org.hamcrest.Matchers.containsString(
+                                    "/api/internal/credentials/default")))
+                    .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                            .header("X-User-ID", "tenant-1"))
+                    .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                            .header("X-Provider-ID", "internal-conversation-service"))
+                    .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                            .withSuccess("{\"id\":7}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+            service.executeTool(requireGmail(), createToolDefinition("request_credential"),
+                    "tenant-1", Map.of());
+
+            authServer.verify();
+        }
+
+        @Test
+        @DisplayName("a 401 fails the tool call - a REFUSAL must never read as 'not connected'")
+        void refusalDoesNotReadAsAbsence() throws Exception {
+            // The shape this guards: returning null on a refusal means "the user has not connected
+            // this service", so the chat shows a reconnect card to someone already connected, and
+            // the force-loop guard does not damp it because it only inspects the configured set.
+            setGatewaySecret("test-gateway-secret");
+            MockRestServiceServer authServer = bindAuthServiceServer();
+            authServer.expect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                            .requestTo(org.hamcrest.Matchers.containsString(
+                                    "/api/internal/credentials/default")))
+                    .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                            .withUnauthorizedRequest());
+
+            ToolResult result = service.executeTool(requireGmail(),
+                    createToolDefinition("request_credential"), "tenant-1", Map.of());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error())
+                    .as("the agent must be told NOT to ask for a reconnection on this call")
+                    .contains("Do not ask the user to reconnect");
+        }
+
+        @Test
+        @DisplayName("a 404 still means ABSENT - the branch above the new one is unchanged")
+        void notFoundStillMeansAbsent() throws Exception {
+            setGatewaySecret("test-gateway-secret");
+            MockRestServiceServer authServer = bindAuthServiceServer();
+            authServer.expect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                            .requestTo(org.hamcrest.Matchers.containsString(
+                                    "/api/internal/credentials/default")))
+                    .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                            .withStatus(org.springframework.http.HttpStatus.NOT_FOUND));
+
+            ToolResult result = service.executeTool(requireGmail(),
+                    createToolDefinition("request_credential"), "tenant-1", Map.of());
+
+            assertThat(result.success())
+                    .as("a missing credential is the NORMAL path and must still succeed")
+                    .isTrue();
+        }
+    }
 }

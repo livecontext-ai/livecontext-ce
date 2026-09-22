@@ -85,6 +85,8 @@ describe('WorkflowDetailView - opening a sub-workflow', () => {
 
     expect(openTab).toHaveBeenCalledTimes(1);
     expect(openTab.mock.calls[0][0].id).toBe(`workflow-run-${SUB_WF}-${RUN}`);
+    const content = openTab.mock.calls[0][0].content as React.ReactElement<Record<string, unknown>>;
+    expect(content.props.hostTabId).toBe(`workflow-run-${SUB_WF}-${RUN}`);
   });
 
   it('still opens the workflow when the pinned-run lookup fails', async () => {

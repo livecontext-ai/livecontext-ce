@@ -6,12 +6,13 @@ GitHub Actions, not via this directory.
 
 | Mode | File | Containers | Keycloak | Best for |
 |------|------|-----------|----------|----------|
-| **Monolith** | `docker-compose.yml` | 5 | No | Local dev, self-hosting |
+| **Monolith** | `docker-compose.yml` | 6 running + 1 initialization job | No | Local dev, self-hosting |
 
 ---
 
 ## Prerequisites
 
+- A machine supported by the release images. Prebuilt releases support x86-64; ARM64 must be explicitly included in that release. See [image architectures](../README.md#images).
 - Docker Desktop 4.x+ (or Docker Engine 24+ with Compose v2)
 - 4 GB RAM minimum (8 GB recommended)
 - An LLM provider for agents: connect to LiveContext Cloud (recommended), or add your own OpenAI / Anthropic / Google key in the app
@@ -19,7 +20,11 @@ GitHub Actions, not via this directory.
 ## Quick Start
 
 ```bash
-# From the repo root. This PULLS the prebuilt images (no local build):
+# Clone once, then run from the repository root:
+git clone https://github.com/livecontext-ai/livecontext-ce.git
+cd livecontext-ce
+cp docker/.env.ce.example .env
+# Review .env before the first start, especially passwords on a server.
 docker compose up -d
 
 # Wait ~2-3 minutes for the backend to initialize (Flyway migrations + tool registration)
@@ -33,13 +38,9 @@ docker compose ps
 > yourself, use the per-service Dockerfiles (`backend/monolith-service/Dockerfile` with the
 > `ce` Maven profile, `frontend/Dockerfile`, `mcp/bridge/Dockerfile`).
 
-> **Accessing from another machine (not localhost)?** Works out of the box, nothing to
-> rebuild. The web UI resolves the backend origin at runtime from the address you opened
-> it with, so `http://192.168.1.50:3000` connects to `http://192.168.1.50:8080`. Just make
-> sure BOTH ports are published and reachable. If the backend is not at
-> `<the address you opened the app with>:BACKEND_PORT` (typically a reverse proxy serving
-> everything on one origin), set `GATEWAY_PUBLIC_URL` on the `frontend` service to the
-> browser-facing backend URL, e.g. `GATEWAY_PUBLIC_URL=https://livecontext.example.com`.
+For LAN or server access, publish both ports and configure `PUBLIC_BASE_URL` and
+`GATEWAY_PUBLIC_URL` for email links and OAuth callbacks. No image rebuild is needed.
+See [server and reverse-proxy setup](#server-and-reverse-proxy-setup).
 
 ## Architecture
 
@@ -74,13 +75,14 @@ Only ports **3000** (frontend, the app) and **8080** (backend API) are exposed t
 
 ### Environment Variables
 
-Pass them inline or copy `docker/.env.ce.example` to `docker/.env.ce` and run Compose with
-`--env-file docker/.env.ce`.
+Copy `docker/.env.ce.example` to `.env` in the repository root. Compose loads it automatically on every command. PowerShell also accepts `cp`. Keep `.env` private.
+
+If you already use `docker/.env.ce`, continue passing `--env-file docker/.env.ce` on every command, including stop and update. Do not change database credentials or encryption keys on an existing installation without a planned migration and a backup.
 
 ```bash
-# docker/.env.ce
+# .env (repository root)
 
-# LLM API keys - at least one required for agent execution
+# Optional provider keys if you are not using a cloud connection
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=AI...
@@ -97,11 +99,85 @@ MINIO_ROOT_PASSWORD=minioadmin
 CREDENTIAL_ENCRYPTION_PASSWORD=
 CREDENTIAL_ENCRYPTION_SALT=
 
-# Ports (optional - change if conflicts). NOTE: changing BACKEND_PORT requires a
-# frontend rebuild - the API URL is baked into the web bundle (see the build-args table).
+# SMTP - needed for password reset and invitation e-mails (see below)
+# MAIL_HOST=smtp.your-provider.example
+MAIL_PORT=587
+MAIL_USERNAME=
+MAIL_PASSWORD=
+MAIL_FROM=noreply@your-domain.example
+
+# Ports (optional). Both are read at runtime; no frontend rebuild is required.
 BACKEND_PORT=8080
 FRONTEND_PORT=3000
 ```
+
+### E-mail (SMTP)
+
+Set this up before you need it. Most notifications only degrade the experience
+when they never arrive, but **the password reset link is the way back into an
+account**: with no relay configured, a user who forgets their password submits
+the form, is told to check their inbox, and nothing ever arrives. The only trace
+is one `ERROR` line in the container log saying the send failed and the user is
+still locked out.
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `MAIL_HOST` | `localhost` | The relay. The default is the Mailpit dev convention, not a working relay. |
+| `MAIL_PORT` | `1025` | `587` on a real relay (the submission port, with STARTTLS). |
+| `MAIL_USERNAME` / `MAIL_PASSWORD` | blank | Set **both or neither**. Setting both is all an authenticated relay needs: the client then sends `AUTH` on its own. Leave both blank for a relay that accepts unauthenticated submission. |
+| `MAIL_FROM` | `noreply@livecontext.local` | Must be an address your relay accepts as sender, or it will refuse the message. |
+| `MAIL_SMTP_STARTTLS` | `true` | Leave it on. It is opportunistic, so a local relay that does not offer TLS still works, while a real one gets an encrypted session. Turning it off against a **non-local** host makes the app **refuse to start**, on purpose: a reset link in cleartext is an account handed to anyone on the path. |
+| private-CA relay | (not a variable) | If your relay's certificate is signed by a **private CA**, put that CA's PEM in a directory mounted at `/app/extra-ca` (`CE_EXTRA_CA_DIR`). The container imports it into a runtime truststore at startup and logs `[CE-TLS] Imported extra CA`. Trust the CA; do not turn TLS off. |
+| `PUBLIC_BASE_URL` | `http://localhost:$FRONTEND_PORT` | Already used for OAuth redirects, and it is also the host in the reset link. If it is wrong, the e-mail arrives with a link nobody outside the server can open. Do not leave a trailing slash on it. |
+
+There is deliberately no "e-mail is not configured" warning in the app. The host
+defaults to a non-blank value, so nothing can tell a real relay from an unset
+one without also refusing the feature to installs that run their own relay on
+`localhost`, which is a common setup.
+
+#### Upgrading to this release with an internal relay
+
+This release turns STARTTLS **on** (it was off before, so every send was
+plaintext). That is what makes the reset link work with a normal relay, and it
+changes one case: if your `MAIL_HOST` advertises TLS with a certificate signed by
+a **private CA**, or one whose name does not match, JavaMail now issues
+`STARTTLS` and aborts rather than falling back, so **all** mail stops, including
+verification codes and invitations. The only symptom is an `ERROR` line per send.
+
+If that is you, mount the CA: put its PEM in a folder and add
+`- ./extra-ca:/app/extra-ca:ro` to the `livecontext` service's volumes. The
+startup log then shows `[CE-TLS] Imported extra CA #1` and mail resumes.
+Setting `MAIL_SMTP_STARTTLS=false` also works, but only for a **local** relay:
+against a non-local host it makes the app refuse to start, on purpose.
+
+One thing that is **not** configurable here: SMTP `AUTH` is never forced on. It
+does not need to be, because setting both credentials is what makes the client
+authenticate; and forcing it on with credentials missing makes JavaMail refuse to
+open the connection at all, which would break the credential-less default.
+
+To check the wiring without waiting for a locked-out user, put Mailpit on the
+stack's own network and read what arrives. Note `MAIL_HOST=mailpit`, not
+`localhost`: the backend runs in a container, where `localhost` is that
+container and nothing is listening on it.
+
+```yaml
+# docker-compose.override.yml, at the REPO ROOT next to docker-compose.yml.
+# Compose only auto-loads an override that sits beside the base file, so one
+# placed in docker/ is silently ignored and mailpit never starts.
+services:
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "8025:8025"
+  livecontext:
+    environment:
+      MAIL_HOST: mailpit
+      MAIL_PORT: 1025
+```
+
+Then use "Forgot password?" on the sign-in page and open http://localhost:8025.
+If nothing arrives, `docker compose logs livecontext | grep -i "reset"` shows
+the send failure, which is the only place a delivery problem is reported.
 
 ### What the Backend Handles
 
@@ -112,7 +188,7 @@ The monolith JAR bundles all microservices into one process with the `ce` Spring
 - **All service endpoints** on a single port (orchestrator, agent, auth, catalog, etc.)
 - **S3 storage** via MinIO for workflow file nodes
 - **Redis** for event bus, cache, and streaming state
-- **Unlimited credits** - consumption is tracked but balance is infinite
+- **Local usage tracking** - platform counters do not make upstream providers free; your own provider or connected cloud account may charge for calls.
 
 ### What the Frontend Handles
 
@@ -136,7 +212,7 @@ Multi-stage Maven build:
 
 The `-Pce` Maven profile is critical: it makes all service modules produce regular JARs (not Spring Boot fat JARs), so the monolith can include them on its classpath. Only `monolith-service` gets repackaged as a Spring Boot executable JAR.
 
-JVM settings: `-Xms512m -Xmx1024m -XX:+UseZGC -XX:+ZGenerational` (1.5 GB container limit).
+The public Compose limits the backend container to 1.5 GB. Check the image entrypoint and Compose file for the JVM settings of the version you run.
 
 ### Frontend Dockerfile (`frontend/Dockerfile`)
 
@@ -153,6 +229,7 @@ Key build args injected by docker-compose:
 | `NEXT_PUBLIC_AUTH_MODE` | `embedded` | Use built-in auth (not Keycloak). Kept as legacy shim for one release |
 | `NEXT_PUBLIC_SPRING_BASE_URL` | `http://livecontext:8080` | Backend URL for SSR proxy (container-to-container) |
 | `NEXT_PUBLIC_GATEWAY_WS_URL` | `http://localhost:8080` | Build-time fallback for the browser-facing backend URL. Inlined into the client bundle, so it is only a last resort now: the running app prefers the RUNTIME values below. Leave it alone unless you build your own image. |
+| `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` | *(empty)* | reCAPTCHA v3 site key for the public `/contact` form. Deliberately empty in CE: the form renders disabled and points at email, because the matching secret would also have to be set and the site key cannot be supplied without rebuilding. |
 
 **Runtime** env vars on the `frontend` service (no rebuild needed, this is how you serve CE
 anywhere other than localhost):
@@ -177,7 +254,7 @@ Next.js compression is disabled. This is required for Docker Desktop on Windows 
 | `hikari.connection-init-sql` | `SET search_path TO orchestrator,auth,...` | All schemas accessible without prefixes |
 | `piston.embedded` | `true` | In-process code execution (no Piston container; CE image includes bash, Node.js, Python, and tsx) |
 | `websearch.enabled` | `false` (env `WEBSEARCH_ENABLED`) | Browser agent off by default; the opt-in `browser-agent` profile sets it to `true` (see "Browser agent" below) |
-| `credit.unlimited` | `true` | No billing, infinite credits |
+| `credit.unlimited` | `true` | Local CE credit accounting; upstream provider/cloud charges still apply |
 | All `services.*-url` | `http://localhost:${PORT}` | Loopback - all services in same JVM |
 
 ## Browser agent (agent_browse) - opt-in
@@ -192,7 +269,7 @@ browser-agent module in the app):
 
 ```bash
 # First run builds the Chromium image (a few minutes); later runs reuse it.
-docker compose --env-file docker/.env.ce.browser-agent up -d
+docker compose --env-file .env --env-file docker/.env.ce.browser-agent up -d
 ```
 
 - **Model:** the agent node picks the model per AI provider
@@ -224,7 +301,7 @@ which starts the `screenshot-renderer` container (`renderer` Docker profile) and
 points the app at it (`SCREENSHOT_RENDERER_URL=http://screenshot-renderer:8094`):
 
 ```bash
-docker compose --env-file docker/.env.ce.renderer up -d
+docker compose --env-file .env --env-file docker/.env.ce.renderer up -d
 ```
 
 - **Best-effort when off:** with the renderer disabled the interface node still
@@ -232,6 +309,70 @@ docker compose --env-file docker/.env.ce.renderer up -d
   unaffected.
 - Set only one half and it stays off (a container the app never calls, or the URL
   with no container) - always use the env file so they stay coupled.
+
+## Keeping optional features enabled
+
+Prefer storing the settings in the root `.env`, then using ordinary `docker compose up -d`:
+
+```dotenv
+COMPOSE_PROFILES=renderer,browser-agent
+SCREENSHOT_RENDERER_URL=http://screenshot-renderer:8094
+WEBSEARCH_ENABLED=true
+```
+
+For only one extension, keep its profile and corresponding setting. See the root README for each case.
+If you use the bundled env-file examples instead, repeat the same options on every start, update and stop.
+The later file replaces the earlier `COMPOSE_PROFILES`; explicitly enable both profiles when combining them:
+
+```bash
+docker compose --env-file .env --env-file docker/.env.ce.renderer --env-file docker/.env.ce.browser-agent --profile renderer --profile browser-agent up -d
+```
+
+## Server and reverse-proxy setup
+
+Use the prebuilt images; changing the public address does not require a rebuild.
+For direct LAN access, make ports 3000 and 8080 reachable from your browser, and set:
+
+```dotenv
+PUBLIC_BASE_URL=http://192.168.1.50:3000
+GATEWAY_PUBLIC_URL=http://192.168.1.50:8080
+```
+
+Replace the address and ports with yours. These values also control email links and credential OAuth callbacks.
+Register `http://192.168.1.50:8080/api/credentials/oauth2/callback` with the credential provider when it permits LAN HTTP callbacks; many providers require an HTTPS domain.
+
+For internet access, use HTTPS. A straightforward proxy setup is:
+
+| Public hostname | Proxy target | Required support |
+| --- | --- | --- |
+| `https://app.example.com` | frontend port 3000 | HTTP, long-lived responses |
+| `https://api.example.com` | backend port 8080 | HTTP and WebSocket upgrades |
+
+Set `PUBLIC_BASE_URL=https://app.example.com` and `GATEWAY_PUBLIC_URL=https://api.example.com` in `.env`, without trailing slashes. Configure matching DNS and certificates, then run `docker compose up -d`. Register the credential callback `https://api.example.com/api/credentials/oauth2/callback` with the provider. Social sign-in has its own provider settings; a credential callback is not a social-login callback.
+
+A single-origin proxy must explicitly route the backend API and WebSocket paths as well as the frontend. Merely setting `GATEWAY_PUBLIC_URL` does not configure the proxy. After setup, check login, a chat response, live execution updates, and any OAuth integration you use from another machine.
+
+## Backup and recovery
+
+Persistent application data is in Docker volumes, not just the clone or the launcher's configuration directory.
+Before an upgrade, save the Compose file and version, `.env`, any proxy/custom overrides and the `catalog-seeds` directory privately.
+The `.env` and encryption-key backup may contain secrets; restrict access to the backup.
+
+For a consistent cold backup, stop the stack with `docker compose stop` using the same project and profile options used to start it. Then export these volumes with your Docker volume backup tool (Docker Desktop provides volume export/import):
+
+| Logical volume | What it preserves |
+| --- | --- |
+| `livecontext_data` | PostgreSQL database |
+| `livecontext_minio` | Stored files and generated assets |
+| `livecontext_keys` | Authentication and credential-encryption keys |
+| `livecontext_redis` | Redis state and queued work |
+| `livecontext_logs` | Logs and audit history |
+
+The actual volume names have a project prefix: use `docker volume ls` and `docker inspect livecontext-app livecontext-db livecontext-minio livecontext-redis` to identify the mounted volumes. The npm launcher uses project `livecontext`, while the repository defaults to `livecontext-ce`.
+Start the stack again after all volume exports finish. Keep all volumes from the same stopped snapshot together.
+
+Test recovery on an isolated host: restore the configuration and all backed-up volumes with the same project name and the same image versions, then start the stack and verify login, saved credentials and a stored file. A cold PostgreSQL volume backup requires a compatible PostgreSQL version. Restore before attempting a software upgrade. Do not restore over a running database or overwrite an existing installation during a test.
+A database-only backup without the encryption keys or file storage is not a complete recovery plan.
 
 ## Update check and anonymous install count
 
@@ -265,7 +406,7 @@ and its access log, exactly as your browser does when you open livecontext.ai.
 What the claim above is about is the fleet record itself, which is the only
 thing derived from this feature and the only thing it keeps.
 
-**Turning it off**, in `docker/.env.ce`:
+**Turning it off**, in the root `.env`:
 
 ```bash
 # Keep the update check, stop identifying this install:
@@ -288,7 +429,7 @@ the same on an air-gapped box as on a connected one. Each user sees it once,
 older entries are never replayed, and it stays reachable afterwards from the
 "What's new" entry in the profile menu.
 
-To remove it entirely, in `docker/.env.ce`:
+To remove it entirely, in the root `.env`:
 
 ```bash
 CHANGELOG_ENABLED=false
@@ -315,9 +456,9 @@ normally within seconds of startup but is delayed if the database is not up yet.
 # Start everything (pulls the prebuilt images)
 docker compose up -d
 
-# Update to a newer release: the compose pins the image version, so pull the repo
-# (which carries the new pinned compose), then restart
-git pull
+# Back up first (see Backup and recovery). Update the pinned image versions:
+git pull --ff-only
+docker compose pull
 docker compose up -d
 
 # View backend / frontend logs
@@ -327,12 +468,11 @@ docker compose logs -f frontend
 # Stop everything
 docker compose down
 
-# Stop and delete all data (fresh start)
-docker compose down -v
-
 # Check health status
 docker compose ps
 ```
+
+`docker compose down` keeps the data volumes. **`docker compose down -v` deletes them.** Never use `-v` as an upgrade or ordinary troubleshooting step.
 
 ## Startup Order and Timing
 
@@ -385,17 +525,19 @@ services:
 
 ### Backend fails to start - Flyway errors
 
-If you see `relation "..." already exists`, the DB volume has stale data from a previous run with a different migration state.
+Do not delete volumes to fix a migration error. Capture the error and running image version:
 
 ```bash
-# Nuclear option: wipe everything and start fresh
-docker compose down -v
-docker compose up -d
+docker compose ps
+docker compose logs --tail=200 livecontext
 ```
 
-### Backend fails - "Could not deserialize" tool registration error
+Check the release notes for upgrade requirements and confirm that the Compose version matches the intended release. Back up the existing data before repair. If the cause is unclear, open a support issue with the version and sanitized error, never credentials or a database dump.
+Rolling an image back after a migration is not automatically safe; use a verified, complete pre-upgrade backup when recovery requires reverting the database.
 
-If you see `Could not deserialize string to java type: java.util.List<java.lang.String>`, a migration left bad JSONB data in `node_type_documentation`. This is fixed by migration V30. If it persists, wipe volumes (`down -v`) and rebuild.
+### Backend fails with a deserialization error
+
+Capture the failing field and migration error from the backend logs, then check the release notes. Preserve the database and follow a version-specific repair. Deleting volumes erases workflows, accounts and stored credentials and is not the default remedy.
 
 ### Frontend loads but SSR pages hang (Windows only)
 
@@ -441,7 +583,7 @@ docker compose ps
 # Backend health endpoint
 curl http://localhost:8080/actuator/health
 
-# Backend registered tools (should be 16)
+# Backend registered tools (authentication may be required)
 curl http://localhost:8080/api/agent-tools | python -m json.tool | head -5
 ```
 

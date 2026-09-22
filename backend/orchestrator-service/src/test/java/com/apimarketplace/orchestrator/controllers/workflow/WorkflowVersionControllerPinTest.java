@@ -50,7 +50,8 @@ class WorkflowVersionControllerPinTest {
     @BeforeEach
     void setUp() {
         controller = new WorkflowVersionController(versionService, workflowRepository, workflowRunRepository, pinService,
-                new com.fasterxml.jackson.databind.ObjectMapper(), orgAccessGuard, workflowManagementService);
+                new com.fasterxml.jackson.databind.ObjectMapper(), orgAccessGuard, workflowManagementService,
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.activity.WorkflowEditorsService.class));
     }
 
     // ==================== Restore Version on APPLICATION ====================
@@ -301,7 +302,7 @@ class WorkflowVersionControllerPinTest {
             when(versionService.getCurrentVersion(WORKFLOW_ID)).thenReturn(7);
             when(workflowRunRepository.countRunsByPlanVersion(WORKFLOW_ID)).thenReturn(List.of());
 
-            ResponseEntity<?> response = controller.listVersions(WORKFLOW_ID_STR, TENANT_ID, null);
+            ResponseEntity<?> response = controller.listVersions(WORKFLOW_ID_STR, TENANT_ID, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             @SuppressWarnings("unchecked")
@@ -319,7 +320,7 @@ class WorkflowVersionControllerPinTest {
             when(versionService.getCurrentVersion(WORKFLOW_ID)).thenReturn(3);
             when(workflowRunRepository.countRunsByPlanVersion(WORKFLOW_ID)).thenReturn(List.of());
 
-            ResponseEntity<?> response = controller.listVersions(WORKFLOW_ID_STR, TENANT_ID, null);
+            ResponseEntity<?> response = controller.listVersions(WORKFLOW_ID_STR, TENANT_ID, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             @SuppressWarnings("unchecked")

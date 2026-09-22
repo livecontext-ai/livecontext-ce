@@ -274,31 +274,18 @@ class EmailInboxNodeTest {
         }
 
         @Test
-        @DisplayName("Should fall back to the default credential when the selected credentialId is not found")
-        void shouldFallBackToDefaultWhenSelectedCredentialMissing() {
-            // credentialId 5 is configured but absent; the node must fall back to the default IMAP credential.
-            Map<String, Object> fallbackCred = validImapCredentialData();
-            fallbackCred.put("host", "127.0.0.1");
-            fallbackCred.put("port", 1);        // closed port -> connect fails, but credential resolution succeeded
-            fallbackCred.put("use_ssl", "false");
-
+        @DisplayName("An unavailable selected IMAP account must never use the default mailbox")
+        void refusesUnavailableSelectedAccountWithoutFallback() {
             when(mockCredentialClient.getCredentialById(anyString(), eq(5L)))
                 .thenReturn(Optional.empty());
-            when(mockCredentialClient.getDefaultCredential(anyString(), eq("imap")))
-                .thenReturn(Optional.of(credentialWith(fallbackCred)));
-
             EmailInboxNode node = new EmailInboxNode("core:read", configWithCredentialId(5L));
             node.acceptServices(mockServiceRegistry);
 
             NodeExecutionResult result = node.execute(context);
 
-            // The by-id lookup is tried first, then the default is consulted as the fallback source.
-            verify(mockCredentialClient).getCredentialById(anyString(), eq(5L));
-            verify(mockCredentialClient).getDefaultCredential(anyString(), eq("imap"));
-            // Fallback credential WAS used: we got past credential resolution and failed at connect,
-            // NOT with the "No IMAP credential configured" error.
             assertTrue(result.isFailure());
-            assertFalse(result.errorMessage().orElse("").contains("No IMAP credential"));
+            assertTrue(result.errorMessage().orElse("").contains("Selected IMAP credential is unavailable"));
+            verify(mockCredentialClient, never()).getDefaultCredential(anyString(), anyString());
         }
 
         @Test
@@ -1630,6 +1617,89 @@ class EmailInboxNodeTest {
             Map<String, Object> resolved = (Map<String, Object>) result.output().get("resolved_params");
             assertEquals("INBOX.Archive", resolved.get("folder"));
             assertNoNulAnywhere(result.output(), "the failure output");
+        }
+    }
+
+    /**
+     * A credential the caller never configured is the caller's to fix. The node still FAILS with
+     * the same message; what changed is that it no longer writes an ERROR line, because an
+     * unconfigured node is not a platform incident. Its three siblings (database, sftp, ssh)
+     * already returned a plain failure, which the engine logs at INFO - these two threw, so the
+     * generic catch logged ERROR.
+     */
+    @org.junit.jupiter.api.Nested
+    @DisplayName("a missing credential is a refusal, not an error")
+    class MissingCredentialIsNotAnError {
+
+        private ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender;
+        private ch.qos.logback.classic.Logger nodeLogger;
+
+        @BeforeEach
+        void attachAppender() {
+            nodeLogger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(EmailInboxNode.class);
+            appender = new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            nodeLogger.addAppender(appender);
+        }
+
+        @org.junit.jupiter.api.AfterEach
+        void detachAppender() {
+            nodeLogger.detachAppender(appender);
+        }
+
+        private NodeExecutionResult runWithoutCredential() {
+            EmailInboxNode node = new EmailInboxNode("core:read", config("none", null, null));
+            wireCredentialClient(node, null);
+            return node.execute(context);
+        }
+
+        @Test
+        @DisplayName("the run still fails, with the message the user needs")
+        void stillFails() {
+            NodeExecutionResult result = runWithoutCredential();
+
+            assertTrue(result.isFailure());
+            assertTrue(result.errorMessage().orElse("").contains("No IMAP credential configured"));
+        }
+
+        @Test
+        @DisplayName("a PLATFORM failure still logs ERROR with its stack - the rule is not 'everything is a warning'")
+        void platformFailureStaysError() {
+            // The branch the first round left untested: an auditor deleted this else and the whole
+            // suite stayed green. Wiring no services at all leaves credentialClient null, which is
+            // a deployment fault, not something the customer configured wrong.
+            EmailInboxNode node = new EmailInboxNode("core:read", config("none", null, null));
+            // deliberately NOT calling acceptServices: credentialClient stays null
+            NodeExecutionResult result = node.execute(context);
+            assertTrue(result.isFailure());
+
+            org.assertj.core.api.Assertions.assertThat(appender.list).anySatisfy(e -> {
+                org.assertj.core.api.Assertions.assertThat(e.getLevel())
+                    .isEqualTo(ch.qos.logback.classic.Level.ERROR);
+                org.assertj.core.api.Assertions.assertThat(e.getFormattedMessage())
+                    .contains("execution failed");
+            });
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                .as("a platform fault must keep its stack trace")
+                .anySatisfy(e -> org.assertj.core.api.Assertions.assertThat(e.getThrowableProxy()).isNotNull());
+        }
+
+        @Test
+        @DisplayName("it is logged at WARN, and no ERROR line is written")
+        void logsWarnNotError() {
+            runWithoutCredential();
+
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                .as("an unconfigured credential must not read as a platform incident")
+                .noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                .anySatisfy(e -> {
+                    org.assertj.core.api.Assertions.assertThat(e.getLevel())
+                        .isEqualTo(ch.qos.logback.classic.Level.WARN);
+                    org.assertj.core.api.Assertions.assertThat(e.getFormattedMessage())
+                        .contains("EmailInbox refused");
+                });
         }
     }
 }

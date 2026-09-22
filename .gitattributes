@@ -1,6 +1,12 @@
 # Force LF line endings for shell scripts - they run on Linux servers only
 *.sh text eol=lf
 
+# Host files copied by hand onto the k3s workers / lc-data: systemd refuses a
+# unit with CRLF, k3s ignores a drop-in it cannot parse, cron wants LF.
+deploy/systemd/* text eol=lf
+deploy/k3s/** text eol=lf
+deploy/config/cron.d/* text eol=lf
+
 # CE export manifests are parsed by POSIX shell loops. Keep them LF so a
 # Windows checkout cannot append CR bytes to path/pattern entries.
 deploy/ce-export/*.txt text eol=lf

@@ -47,7 +47,7 @@ class GenerationProvenanceRecorderTest {
     private static GenerationProvenanceRecorder.Recipe recipe(Map<String, Object> unified) {
         return new GenerationProvenanceRecorder.Recipe(
                 "flux-1.1-pro", "image", "Flux", unified, "platform",
-                new BigDecimal("1"), "image");
+                new BigDecimal("1"), "image", new BigDecimal("42"));
     }
 
     private static Map<String, Object> fileRef(String id) {
@@ -120,6 +120,44 @@ class GenerationProvenanceRecorderTest {
         }
 
         @Test
+        @DisplayName("records what the platform charged, so the asset can state its own price later")
+        void recordsWhatItCost() {
+            Map<String, Object> described =
+                    GenerationProvenanceRecorder.describe(recipe(unified(Map.of())));
+
+            assertThat(described.get(GenerationProvenanceFields.BILLED_CREDITS))
+                    .isEqualTo(new BigDecimal("42"));
+        }
+
+        @Test
+        @DisplayName("records NO price at all when the platform charged nothing, because absent and "
+                + "zero are opposite facts on screen")
+        void recordsNoPriceWhenNothingWasCharged() {
+            // The reader's own key paid the provider directly. Storing 0 here would put "0 credits"
+            // under an asset they were charged for elsewhere - a claim, not a missing value.
+            Map<String, Object> described = GenerationProvenanceRecorder.describe(
+                    new GenerationProvenanceRecorder.Recipe(
+                            "flux-1.1-pro", "image", "Flux", unified(Map.of()), "user",
+                            null, null, null));
+
+            assertThat(described).doesNotContainKey(GenerationProvenanceFields.BILLED_CREDITS);
+        }
+
+        @Test
+        @DisplayName("records NO price for an amount of zero either, because zero is a price and "
+                + "absent is the absence of one")
+        void recordsNoPriceForZero() {
+            // Reachable through an endpoint published at nothing. Stored, it would draw "0 credits"
+            // under the asset, which reads as "this was free" rather than as "nobody charged you".
+            Map<String, Object> described = GenerationProvenanceRecorder.describe(
+                    new GenerationProvenanceRecorder.Recipe(
+                            "flux-1.1-pro", "image", "Flux", unified(Map.of()), "platform",
+                            null, null, BigDecimal.ZERO));
+
+            assertThat(described).doesNotContainKey(GenerationProvenanceFields.BILLED_CREDITS);
+        }
+
+        @Test
         @DisplayName("keeps a control key out of the stored parameters, wherever it came from")
         void neverStoresAControlKeyAsAParameter() {
             // This is a REACHABLE path, not a hypothetical: the module filters control keys at the
@@ -153,7 +191,7 @@ class GenerationProvenanceRecorderTest {
             // only takes up space.
             Map<String, Object> described = GenerationProvenanceRecorder.describe(
                     new GenerationProvenanceRecorder.Recipe(
-                            null, "image", "Flux", unified(Map.of()), "platform", null, null));
+                            null, "image", "Flux", unified(Map.of()), "platform", null, null, null));
 
             assertThat(described).isEmpty();
         }
@@ -244,7 +282,7 @@ class GenerationProvenanceRecorderTest {
             GenerationProvenanceRecorder recorder = recorderWith(client);
 
             recorder.record(fileRef("file-7"), new GenerationProvenanceRecorder.Recipe(
-                    null, "image", "Flux", unified(Map.of()), "platform", null, null), TENANT, ORG);
+                    null, "image", "Flux", unified(Map.of()), "platform", null, null, null), TENANT, ORG);
 
             verifyNoInteractions(client);
         }

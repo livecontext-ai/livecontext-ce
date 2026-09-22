@@ -6,11 +6,11 @@
  * costs the reader rather than the platform.
  *
  * <ul>
- *   <li><b>Rounding is UP.</b> A per-character model is quoted on a bucketed length, because the
- *       exact one changes on every keystroke and would mint a query key per key press. Rounding
- *       down would quote every prompt as if it were shorter than it is, on every model billed that
- *       way, silently and for ever. Up over-states by less than one bucket, which is the safe way
- *       to be imprecise about someone else's money.
+ *   <li><b>The size is EXACT.</b> A per-character model used to be quoted on a length rounded up
+ *       to the next 50, on the argument that the exact one changes per keystroke. The debounce is
+ *       what actually stops that, and the rounding only ever produced a number nobody is charged -
+ *       a 62 character prompt quoted as 100 - which THIS surface used and the workflow inspector
+ *       and chat dialog did not, so one call became two cache entries and two amounts on screen.
  *   <li><b>A quote that no longer matches the request says so.</b> The quantity is debounced, so
  *       between a change and the answer the amount in hand belongs to the PREVIOUS request. Paste a
  *       long prompt, press send inside the window, and the figure beside the button is the one for
@@ -105,18 +105,19 @@ function renderSettled(model: GenerationModel, source: Record<string, unknown>) 
 }
 
 describe('useGenerationQuote - rounding a character count', () => {
-  it('rounds UP, so the amount shown is never less than what will be charged', () => {
-    // 51 characters must not be quoted as 50. Rounding down understates every prompt on every
-    // per-character model, and understating is the only direction a reader can be hurt by.
+  it('quotes the EXACT length, which is what the server charges for', () => {
+    // 51 characters is 51. Rounded up to 100 the reader was shown roughly twice the amount they
+    // were about to spend - and the inspector and the chat dialog, asking the same endpoint about
+    // the same call, showed the real one.
     renderSettled(perCharacterModel(), { prompt: 'x'.repeat(51) });
 
-    expect(quotedQuantity()).toBe(100);
+    expect(quotedQuantity()).toBe(51);
   });
 
-  it('never quotes below one bucket, even for a single character', () => {
+  it('quotes a single character as one, not as a minimum nobody charges', () => {
     renderSettled(perCharacterModel(), { prompt: 'x' });
 
-    expect(quotedQuantity()).toBe(50);
+    expect(quotedQuantity()).toBe(1);
   });
 
   it('does not round a quantity the reader chose in whole steps', () => {
@@ -219,7 +220,7 @@ describe('useGenerationQuote - the quantity it hands back', () => {
     const { result, rerender } = renderSettled(perCharacterModel(), { prompt: 'x'.repeat(10) });
     rerender({ s: { prompt: 'x'.repeat(2000) } });
 
-    expect(result.current.quantity).toBe(50);
+    expect(result.current.quantity).toBe(10);
   });
 });
 
@@ -282,9 +283,12 @@ describe('useGenerationQuote - the request it actually sends', () => {
 
     rerender({ s: { prompt: 'x'.repeat(2000) } });
 
-    // Still inside the 600 ms window, so every request made in it is for the OLD bucket.
+    // Still inside the 600 ms window, so every request made in it is for the OLD length. Asserting
+    // the count first: an empty `mock.calls` would satisfy the loop without testing anything, and
+    // "held the old value" and "asked nothing at all" are different outcomes.
+    expect(askPrice.mock.calls.length).toBeGreaterThan(0);
     for (const call of askPrice.mock.calls) {
-      expect(call[2]).toMatchObject({ quantity: 50 });
+      expect(call[2]).toMatchObject({ quantity: 10 });
     }
   });
 
@@ -296,5 +300,91 @@ describe('useGenerationQuote - the request it actually sends', () => {
     renderSettled(noIntegration, { prompt: 'hello' });
 
     expect(askPrice).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * What the CHOICES in the call do to its price, which the published rate cannot express on its own.
+ *
+ * <p>The factor is the third number in the arithmetic, and it can be wrong in two invisible ways.
+ * It can fail to reach the REQUEST, in which case the amount beside the button is the published
+ * rate for a call the server will charge more for. Or it can reach the KEY without the debounce, in
+ * which case a modifier on a parameter the reader types fires one request per keystroke, past a
+ * debounce written for exactly that.
+ */
+describe('useGenerationQuote - what the call\'s own choices cost', () => {
+  /** A per-second video model that sells its resolution. */
+  function modulatedModel(): GenerationModel {
+    return {
+      ...perCharacterModel(),
+      model: 'seedance-2.0',
+      measuredUnit: 'second',
+      price: {
+        unit: 'second',
+        baseCredits: '0',
+        unitCredits: '100',
+        modifiers: { resolution: { by_value: { '480p': 1, '1080p': 2 } } },
+      },
+    } as unknown as GenerationModel;
+  }
+
+  /** The factor in the request body, and the one in the key: two separate expressions. */
+  const sentFactor = () => (askPrice.mock.calls[0]?.[2] as Record<string, unknown>)?.priceMultiplier;
+  const keyedFactor = () => queryState.lastKey[7];
+
+  it('sends the factor the chosen values reached', () => {
+    renderSettled(modulatedModel(), { duration_seconds: 10, resolution: '1080p' });
+
+    expect(sentFactor()).toBe(2);
+  });
+
+  it('sends the published rate for a call that chose the reference tier', () => {
+    renderSettled(modulatedModel(), { duration_seconds: 10, resolution: '480p' });
+
+    expect(sentFactor()).toBe(1);
+  });
+
+  it('keys on it too, or the 1080p amount is served from the 720p entry', () => {
+    renderSettled(modulatedModel(), { duration_seconds: 10, resolution: '1080p' });
+
+    expect(keyedFactor()).toBe(2);
+  });
+
+  it('hands the factor back, so a surface can compare what was ASKED with what was ANSWERED', () => {
+    const { result } = renderSettled(modulatedModel(), { duration_seconds: 10, resolution: '1080p' });
+
+    expect(result.current.multiplier).toBe(2);
+  });
+
+  it('holds a changed factor for the debounce, rather than asking per keystroke', () => {
+    // A modifier can sit on a parameter the reader TYPES; undebounced, each character would be a
+    // new key and a new request.
+    const { rerender } = renderSettled(modulatedModel(), { duration_seconds: 10, resolution: '480p' });
+    askPrice.mockClear();
+
+    rerender({ s: { duration_seconds: 10, resolution: '1080p' } });
+
+    for (const call of askPrice.mock.calls) {
+      expect(call[2]).toMatchObject({ priceMultiplier: 1 });
+    }
+  });
+
+  it('says the amount in hand is stale while a changed factor settles', () => {
+    // The same protection the quantity has, for the same reason: the figure on screen belongs to
+    // the tier the reader has already left, and a crisp number that is simply too low is worse
+    // than a dimmed one.
+    const { result, rerender } = renderSettled(modulatedModel(), { duration_seconds: 10, resolution: '480p' });
+    expect(result.current.stale).toBe(false);
+
+    rerender({ s: { duration_seconds: 10, resolution: '1080p' } });
+
+    expect(result.current.stale).toBe(true);
+  });
+
+  it('quotes a model with no declared modifiers exactly as it did before they existed', () => {
+    renderSettled(perCharacterModel(), { prompt: 'hello' });
+
+    expect(sentFactor()).toBe(1);
+    expect(keyedFactor()).toBe(1);
   });
 });

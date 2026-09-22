@@ -207,6 +207,68 @@ class AgentAsyncCompletionServiceOutputShapeTest {
         }
     }
 
+    /**
+     * The async path seeds the persisted output from the RAW response map, so a field the
+     * DTO gained for billing arrives here for free and would be written to
+     * {@code workflow_step_data} on this path only. The inline path never writes it, no
+     * {@code node_type_documentation} row describes it and no frontend schema knows it:
+     * that is the 3-way-alignment rule broken on one path, which is exactly the shape of
+     * defect this class was created for.
+     */
+    @Nested
+    @DisplayName("billing fields do not become persisted output")
+    class BillingFieldsAreNotPersisted {
+
+        private Map<String, Object> cacheUsage() {
+            Map<String, Object> cache = new HashMap<>();
+            cache.put("cacheCreationInputTokens", 18_945);
+            cache.put("cacheReadInputTokens", 79_368);
+            return cache;
+        }
+
+        @Test
+        @DisplayName("a guardrail response's cacheUsage is stripped before the output is persisted")
+        void guardrailCacheUsageIsStripped() {
+            Map<String, Object> output = new HashMap<>();
+            output.put("passed", true);
+            output.put("violations", List.of());
+            output.put("cacheUsage", cacheUsage());
+
+            service.injectAgentMetadata(output, executionWithAgent(null), agent("guardrail", "agent:check_safety", 0));
+
+            assertThat(output).doesNotContainKey("cacheUsage");
+            // Everything the node really outputs is untouched.
+            assertThat(output).containsEntry("passed", true);
+            assertThat(output).containsEntry("node_type", "GUARDRAIL");
+        }
+
+        @Test
+        @DisplayName("a classify response's cacheUsage is stripped before the output is persisted")
+        void classifyCacheUsageIsStripped() {
+            Map<String, Object> output = new HashMap<>();
+            output.put("selectedCategory", "billing");
+            output.put("confidence", 0.9);
+            output.put("cacheUsage", cacheUsage());
+
+            service.injectAgentMetadata(output, executionWithAgent(null), agent("classify", "agent:categorize", 0));
+
+            assertThat(output).doesNotContainKey("cacheUsage");
+            assertThat(output).containsEntry("selectedCategory", "billing");
+        }
+
+        @Test
+        @DisplayName("an output with no cacheUsage is left exactly as it was")
+        void absentCacheUsageIsNotInvented() {
+            Map<String, Object> output = new HashMap<>();
+            output.put("passed", true);
+            output.put("violations", List.of());
+
+            service.injectAgentMetadata(output, executionWithAgent(null), agent("guardrail", "agent:check_safety", 0));
+
+            assertThat(output).doesNotContainKey("cacheUsage");
+        }
+    }
+
     @Nested
     @DisplayName("classify")
     class Classify {

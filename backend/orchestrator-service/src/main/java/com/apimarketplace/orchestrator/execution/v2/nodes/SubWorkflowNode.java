@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.workflow.Core;
@@ -132,6 +133,10 @@ public class SubWorkflowNode extends BaseNode {
             resolvedParams.put("maxDepth", config.maxDepth());
             if (config.triggerId() != null) resolvedParams.put("triggerId", config.triggerId());
         }
+        // Through the gate once, here, rather than at each of the exits below: the
+        // `inputMapping` is an author expression with no ceiling, and it is the payload this
+        // node hands the child, so it can carry whatever the author put in it.
+        resolvedParams = ReportedParams.forReport(resolvedParams);
 
         try {
             // 1. Anti-recursion depth guard

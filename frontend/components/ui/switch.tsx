@@ -20,6 +20,13 @@ interface SwitchProps {
   /** Accessible label announced by screen readers (e.g. "Activate application"). */
   'aria-label'?: string;
   /**
+   * Id of the element that explains what this toggle costs or changes. Use it
+   * whenever the hint beside a switch is the reason to think twice about it:
+   * as plain text it is reached only by chance, as a description it is
+   * announced with the control.
+   */
+  'aria-describedby'?: string;
+  /**
    * Visual size. {@code 'sm'} (default) is the standard control; {@code 'md'} is
    * a slightly larger peer for h-9 header controls. Same square-rounded shape.
    */
@@ -59,6 +66,7 @@ export const Switch: React.FC<SwitchProps> = ({
   disabled = false,
   className,
   'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
   size = 'sm',
   presentational = false,
   testId,
@@ -96,6 +104,7 @@ export const Switch: React.FC<SwitchProps> = ({
       role="switch"
       aria-checked={checked}
       aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
       data-testid={testId}
       disabled={disabled}
       onClick={() => onCheckedChange?.(!checked)}

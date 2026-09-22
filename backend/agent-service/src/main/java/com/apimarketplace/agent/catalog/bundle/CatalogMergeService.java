@@ -75,7 +75,8 @@ public class CatalogMergeService {
     /** Per-row pricing change queued for the afterCommit mirror. */
     private record PricingChange(String provider, String modelId,
                                  BigDecimal priceInput, BigDecimal priceOutput,
-                                 String providerKind) {}
+                                 String providerKind,
+                                 BigDecimal priceCacheRead, BigDecimal priceCacheWrite) {}
 
     public record MergeResult(int inserted, int updated, int deprecated,
                               int skippedCustom, int skippedUserModified,
@@ -219,7 +220,8 @@ public class CatalogMergeService {
                 if (row.getPriceInput() != null || row.getPriceOutput() != null) {
                     pricingChanges.add(new PricingChange(provider, modelId,
                             row.getPriceInput(), row.getPriceOutput(),
-                            row.getProviderKind()));
+                            row.getProviderKind(),
+                            row.getPriceCacheRead(), row.getPriceCacheWrite()));
                 }
                 continue;
             }
@@ -248,6 +250,11 @@ public class CatalogMergeService {
                     ? new String[0] : row.getUserModifiedFields());
             BigDecimal prevInput  = row.getPriceInput();
             BigDecimal prevOutput = row.getPriceOutput();
+            // V491: a cache price moving on its own is a billing change too. Without
+            // these two the mirror would keep the stale cache rate until the input or
+            // output price happened to move, which for a mature model is never.
+            BigDecimal prevCacheRead  = row.getPriceCacheRead();
+            BigDecimal prevCacheWrite = row.getPriceCacheWrite();
             applyFields(row, m, protect, opts.partialUpdate());
             if (opts.bundleVersion() != null) row.setBundleVersion(opts.bundleVersion());
             row.setLastSyncedAt(now);
@@ -259,12 +266,15 @@ public class CatalogMergeService {
             if (!protect.isEmpty()) skippedUserModified++;
 
             boolean priceChanged = !Objects.equals(prevInput, row.getPriceInput())
-                                || !Objects.equals(prevOutput, row.getPriceOutput());
+                                || !Objects.equals(prevOutput, row.getPriceOutput())
+                                || !Objects.equals(prevCacheRead, row.getPriceCacheRead())
+                                || !Objects.equals(prevCacheWrite, row.getPriceCacheWrite());
             if (priceChanged &&
                     (row.getPriceInput() != null || row.getPriceOutput() != null)) {
                 pricingChanges.add(new PricingChange(provider, modelId,
                         row.getPriceInput(), row.getPriceOutput(),
-                        row.getProviderKind()));
+                        row.getProviderKind(),
+                        row.getPriceCacheRead(), row.getPriceCacheWrite()));
             }
         }
 
@@ -449,7 +459,8 @@ public class CatalogMergeService {
             for (PricingChange c : pricingChanges) {
                 try {
                     authPricingSyncClient.sync(c.provider(), c.modelId(),
-                            c.priceInput(), c.priceOutput(), c.providerKind());
+                            c.priceInput(), c.priceOutput(), c.providerKind(),
+                            c.priceCacheRead(), c.priceCacheWrite());
                     ok++;
                 } catch (Exception e) {
                     log.warn("Unexpected error syncing {}/{} to auth-service: {}",
@@ -610,14 +621,107 @@ public class CatalogMergeService {
      * curated 10M, deepseek/deepseek-chat 60k against 2M. Leaving the columns
      * NULL for those models is what hands control back to the curated table;
      * the ceiling is not lost, it is the stricter, researched one.
+     *
+     * <p><b>And the TPM fallback is a floor, not a flat number.</b> A token
+     * ceiling is only a ceiling relative to what one request costs, and that is
+     * bounded by the model's context window - so a single value cannot serve a
+     * 32k model and a 1M one. When the ceiling drops below the cost of one
+     * request the limiter inverts: no request ever fits a fresh window, so every
+     * call waits out the full 60s window before proceeding. Measured on
+     * production 2026-09-11, deepseek-v4-flash (1M context, ~50 000 estimated
+     * tokens per tool-heavy agent turn) against the then-flat 60 000 ceiling:
+     * 16 of 17 calls delayed, ~51s of limiter wait each, for provider responses
+     * that took 1.5-10s. The fallback therefore takes the larger of the
+     * configured flat value and {@code contextWindow x multiplier}.
+     * {@code applyFields} has already written contextWindow by the time we run,
+     * on both the insert and the update path.
      */
     private void applyRateLimitDefaults(ModelConfigOverrideEntity row) {
         if (catalogDefaults == null) return; // defensive for non-Spring test harnesses
         if (hasCuratedRateLimit(row.getProvider(), row.getModelId())) return;
-        if (row.getRateLimitTpm()          == null) row.setRateLimitTpm(catalogDefaults.getRateLimitTpm());
+        if (row.getRateLimitTpm()          == null) row.setRateLimitTpm(contextAwareTpmDefault(row));
         if (row.getRateLimitRpm()          == null) row.setRateLimitRpm(catalogDefaults.getRateLimitRpm());
-        if (row.getRateLimitTpmPerTenant() == null) row.setRateLimitTpmPerTenant(catalogDefaults.getRateLimitTpmPerTenant());
+        // Read the global column back rather than reusing the value computed
+        // above: when the feed supplied its own global TPM that value was NOT
+        // written, and sizing the tenant share off the discarded one lands a
+        // per-tenant cap ABOVE the platform cap (measured on a 1M-context row
+        // with a feed-supplied 800000: tenant 1048576 against global 800000).
+        // Under PER_TENANT only the tenant dimension is checked, so that row
+        // would out-run the published limit it was meant to respect.
+        if (row.getRateLimitTpmPerTenant() == null) row.setRateLimitTpmPerTenant(tenantTpmDefault(row.getRateLimitTpm()));
         if (row.getRateLimitRpmPerTenant() == null) row.setRateLimitRpmPerTenant(catalogDefaults.getRateLimitRpmPerTenant());
+    }
+
+    /**
+     * Largest TPM this method will derive from a context window. A context
+     * window is feed-supplied and therefore untrusted: without a ceiling a
+     * malformed value would overflow the {@code integer} column. No real
+     * provider tier comes close to this, so clamping here can only ever bite a
+     * bad row.
+     */
+    private static final int MAX_DERIVED_TPM = 100_000_000;
+
+    /** A tenant's share of the platform window: the tenant floor is 1/this of it. */
+    private static final int TENANT_TPM_DIVISOR = 4;
+
+    /**
+     * The flat default, raised to {@code contextWindow x multiplier} when that
+     * is larger. The result is therefore {@code >= } the configured flat value,
+     * never below it.
+     *
+     * <p>A configured value of {@code null} or {@code <= 0} is returned
+     * untouched. Those are not "small ceilings" to be raised, they are the
+     * codebase's own off-switches, and raising one would quietly re-enable
+     * traffic an operator had capped: {@code RateLimitConfig.hasGlobalTokenLimit}
+     * reads {@code -1} as "no limit" (shipped that way by
+     * {@code V216__deepseek_disable_per_tenant_tpm.sql}) and
+     * {@code ProviderRateLimiter} documents {@code 0} as the block-everything
+     * kill-switch. An absent or non-positive multiplier, or a row with no usable
+     * context window, likewise leaves the flat value alone.
+     */
+    private Integer contextAwareTpmDefault(ModelConfigOverrideEntity row) {
+        Integer flat = catalogDefaults.getRateLimitTpm();
+        if (flat == null || flat <= 0) return flat;
+        Integer ctx = row.getContextWindow();
+        Integer multiplier = catalogDefaults.getRateLimitTpmContextMultiplier();
+        if (ctx == null || ctx <= 0 || multiplier == null || multiplier <= 0) return flat;
+        long derived = Math.min((long) ctx * multiplier, MAX_DERIVED_TPM);
+        return (int) Math.max(flat.longValue(), derived);
+    }
+
+    /**
+     * The configured per-tenant default, held between two bounds against the
+     * row's effective global TPM.
+     *
+     * <p>The lower bound is a {@link #TENANT_TPM_DIVISOR}th of the global
+     * value: a per-tenant cap under the cost of one request is not a throttle
+     * but a hard failure, rejected outright by
+     * {@code ProviderRateLimiter.acquireWithWait} as a non-retryable
+     * {@code request_exceeds_tenant_capacity} under PER_TENANT and HYBRID.
+     *
+     * <p>The upper bound is the global value itself, and it is not decoration:
+     * the configured flat floor is a single number while the global value is
+     * per-model, so any row whose global TPM lands below that floor would
+     * otherwise hand one tenant more than the whole platform. Real rows sit
+     * there (the shipped seed alone carries 12 models at 250000 and 9 at
+     * 100000), and under PER_TENANT only the tenant dimension is checked, so
+     * such a row would let a single tenant out-run the published platform limit
+     * several times over.
+     *
+     * <p>Off-switch contract as in {@link #contextAwareTpmDefault}: a
+     * configured {@code null} or {@code <= 0} is returned untouched. A global
+     * TPM that is itself absent or switched off gives nothing to bound against,
+     * so the flat value stands.
+     *
+     * @param effectiveGlobalTpm the value actually on the row, feed-supplied or
+     *                           defaulted, never the discarded default
+     */
+    private Integer tenantTpmDefault(Integer effectiveGlobalTpm) {
+        Integer flat = catalogDefaults.getRateLimitTpmPerTenant();
+        if (flat == null || flat <= 0) return flat;
+        if (effectiveGlobalTpm == null || effectiveGlobalTpm <= 0) return flat;
+        int atLeastAShare = Math.max(flat, effectiveGlobalTpm / TENANT_TPM_DIVISOR);
+        return Math.min(atLeastAShare, effectiveGlobalTpm);
     }
 
     /**

@@ -11,6 +11,7 @@ import { ShowcasePreview } from '@/components/marketplace/ShowcasePreview';
 import { showcaseBindingFor } from '@/lib/applications/showcasePreview';
 import { WorkflowNodeIcons } from '@/components/WorkflowNodeIcons';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
+import { VerifiedBadge } from '@/components/profile/VerifiedBadge';
 import { VisibilityBadge } from '@/components/ui/VisibilityBadge';
 import { WorkflowRelationsMenu } from '@/components/workflow/relations/WorkflowRelationsMenu';
 import type { WorkflowRelations } from '@/lib/api/orchestrator/types';
@@ -337,6 +338,7 @@ export function ApplicationCard({ publication, source, isSelected, onToggleSelec
           <span className="text-xs text-theme-secondary truncate">
             {publication.publisherName || t('anonymous')}
           </span>
+          <VerifiedBadge userId={publication.publisherId} size="xs" />
           {publication.nodeIcons && publication.nodeIcons.length > 0 && (
             <WorkflowNodeIcons
               nodeIcons={publication.nodeIcons}

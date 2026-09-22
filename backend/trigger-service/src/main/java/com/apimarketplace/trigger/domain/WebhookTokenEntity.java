@@ -1,5 +1,12 @@
 package com.apimarketplace.trigger.domain;
 
+import com.apimarketplace.common.security.token.EncryptedTokenConverter;
+import com.apimarketplace.common.security.token.HashedTokenEntity;
+import com.apimarketplace.common.security.token.HashedTokenListener;
+import com.apimarketplace.common.security.token.TokenSlot;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import java.util.List;
+
 import com.apimarketplace.common.scope.OrgScopedEntity;
 import com.apimarketplace.common.scope.OrgScopedEntityListener;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -14,10 +21,10 @@ import java.util.UUID;
  * Each webhook trigger in a workflow gets its own unique URL/token.
  */
 @Entity
-@EntityListeners(OrgScopedEntityListener.class)
+@EntityListeners({OrgScopedEntityListener.class, HashedTokenListener.class})
 @Table(name = "webhook_tokens", schema = "trigger")
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-public class WebhookTokenEntity implements OrgScopedEntity {
+public class WebhookTokenEntity implements OrgScopedEntity, HashedTokenEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -29,8 +36,18 @@ public class WebhookTokenEntity implements OrgScopedEntity {
     @Column(name = "trigger_id", nullable = false)
     private String triggerId;
 
-    @Column(name = "token", nullable = false, unique = true)
+    /**
+     * The per-trigger webhook token carried in the URL.
+     * Stored encrypted (ENC:...) through {@link EncryptedTokenConverter}; the entity always holds
+     * the plaintext. Lookups go through {@link #getTokenHash()}, never through this column.
+     */
+    @Convert(converter = EncryptedTokenConverter.class)
+    @Column(name = "token", nullable = false, unique = true, length = 255)
     private String token;
+
+    /** HMAC-SHA256 of the plaintext, filled by {@link HashedTokenListener}; the only lookup key. */
+    @Column(name = "token_hash", length = 64)
+    private String tokenHash;
 
     // PR22c R3 - workspace tag for cross-scope dispatch guard at
     // WebhookDispatchService.dispatch (pinned branch). NULL = personal scope
@@ -152,5 +169,20 @@ public class WebhookTokenEntity implements OrgScopedEntity {
                 ", triggerId='" + triggerId + '\'' +
                 ", token='" + (token != null ? token.substring(0, Math.min(12, token.length())) + "..." : "null") + '\'' +
                 '}';
+    }
+
+    @JsonIgnore
+    public String getTokenHash() {
+        return tokenHash;
+    }
+
+    public void setTokenHash(String tokenHash) {
+        this.tokenHash = tokenHash;
+    }
+
+    @Override
+    @JsonIgnore
+    public List<TokenSlot> tokenSlots() {
+        return List.of(new TokenSlot(this::getToken, this::setTokenHash));
     }
 }

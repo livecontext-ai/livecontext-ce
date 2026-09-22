@@ -9,6 +9,7 @@ import { docsHref } from '@/lib/docs/docsHostRewrite';
 import { IS_CE } from '@/lib/edition/edition';
 import FooterIntegrations from '@/components/landing/FooterIntegrations';
 import { WELL_KNOWN_MODELS } from '@/lib/models/wellKnownModels';
+import { PERSONA_FOOTER_LABELS, PERSONA_KEYS, personaHref, type PersonaKey } from '@/components/landing/personas/personas';
 // The /models page owns its URL contract; the footer is a consumer of it, so the
 // param name lives in one place. This is a server component, so pulling the
 // catalogue in with it costs nothing in the browser bundle.
@@ -151,22 +152,103 @@ export function GithubMark({ className }: { className?: string }) {
   );
 }
 
-export function LandingHeader({ extra, siteBaseUrl }: { extra?: React.ReactNode; siteBaseUrl?: string } = {}) {
+
+/**
+ * Every piece of text in the header and footer, so a localised page can hand over its own.
+ *
+ * <p>`locale` is the one field that is not copy. It exists because the persona row links to
+ * pages that HAVE a localised sibling: without it the French footer showed French anchor text
+ * on an English href, and a crawler with no NEXT_LOCALE cookie followed it straight out of the
+ * French tree. Every other chrome destination is single-language, so nothing else needs it.
+ *
+ * <p>The shell CANNOT read an intl context: it renders on the public pages that live outside
+ * the `[locale]` tree (/docs, /legal, /marketplace, /about), where calling next-intl throws.
+ * That is why its copy was English literals, and why it stayed English on /fr even after the
+ * page inside it had been translated. A prop crosses that boundary without breaking it: the
+ * localised pages pass labels, the others pass nothing and keep the English below.
+ *
+ * <p>Untranslated on purpose: LiveContext, Changelog, GitHub and the competitor names, plus
+ * the model and integration names, which are catalogue data rather than copy. Changelog is here
+ * because nothing else in the product translates it; Marketplace is NOT, because the signed-in
+ * app does (`sidebar.nav.marketplace` is "Marktplatz" in de and "市场" in zh), and a visitor
+ * meeting two different words for one destination is worse than either word. Everything else in the header and footer is here, INCLUDING the
+ * copy that is not visible as body text: the `aria-label` of the GitHub link, of the theme
+ * toggle and of the language select. A control with no text of its own is named by its
+ * aria-label, so leaving one in English leaves the control in English.
+ */
+export interface ShellLabels {
+  pricing: string; selfHosted: string; signIn: string; getStarted: string; docs: string;
+  product: string; models: string; resources: string; compare: string; company: string; legal: string;
+  /** Heading of the persona row. Not named `useCases`: a `useX` member trips the hooks lint. */
+  personasHeading: string;
+  marketplace: string;
+  /** Locale prefix for the persona links. Not copy: see the note above. */
+  locale?: string;
+  workflows: string; agents: string; interfaces: string; tables: string; integrations: string;
+  videos: string; status: string; allIntegrations: string;
+  language: string; toLightTheme: string; toDarkTheme: string;
+  about: string; careers: string; soon: string; contact: string;
+  privacy: string; terms: string; notice: string;
+  /** Takes the competitor's name, because the word order differs: "Alternative a Zapier". */
+  alternativeTo: (brand: string) => string;
+  tagline: string; rights: string;
+  personas: Record<PersonaKey, string>;
+}
+
+/** What the shell shows when nobody hands it anything: the copy it always had. */
+export const DEFAULT_SHELL_LABELS: ShellLabels = {
+  pricing: 'Pricing', selfHosted: 'Self-hosted', signIn: 'Sign in', getStarted: 'Get started free', docs: 'Docs',
+  product: 'Product', models: 'Models', resources: 'Resources', compare: 'Compare', company: 'Company', legal: 'Legal',
+  personasHeading: 'Use cases', marketplace: 'Marketplace',
+  // No locale: the pages that take the defaults are the ones outside the [locale] tree, whose
+  // persona links are correctly the unprefixed English ones.
+  workflows: 'Workflows', agents: 'Agents', interfaces: 'Interfaces & apps', tables: 'Tables & data', integrations: 'Integrations',
+  videos: 'Videos', status: 'Status', allIntegrations: 'All integrations',
+  language: 'Language', toLightTheme: 'Switch to light theme', toDarkTheme: 'Switch to dark theme',
+  about: 'About', careers: 'Careers', soon: 'Soon', contact: 'Contact',
+  privacy: 'Privacy Policy', terms: 'Terms of Service', notice: 'Legal Notice',
+  alternativeTo: (brand) => `${brand} alternative`,
+  tagline: 'The AI automation platform. Describe a job, watch the workflow build itself, and ship it as an app your team can use. Cloud or self-hosted.',
+  rights: 'All rights reserved.',
+  personas: PERSONA_FOOTER_LABELS,
+};
+
+export function LandingHeader({ extra, siteBaseUrl, labels = DEFAULT_SHELL_LABELS }: { extra?: React.ReactNode; siteBaseUrl?: string; labels?: ShellLabels } = {}) {
   return (
     <header className="sticky top-0 z-50 backdrop-blur" style={{ background: 'var(--landing-header-bg)', borderBottom: '1px solid var(--border-color)' }}>
-      <div className="max-w-6xl mx-auto px-6 h-20 flex items-center justify-between">
-        <Link href={withBase(siteBaseUrl, '/')} className="flex items-center mr-1 group/logo relative cursor-pointer">
+      {/* Below the nav's breakpoint the bar is the brand and the pill, nothing else, and at
+          320px - the narrowest phone still in use - German needed 14px more than it had. Three
+          things give way, each only where it costs nothing: the gap (sm), the brand's right
+          margin, which exists to separate it from a nav that does not render below md, and the
+          bar padding. The padding is scoped to `max-[374px]` rather than to `sm` on purpose:
+          every other container on these pages is `px-6`, so a padding that yielded all the way
+          to 639px would leave the brand 8px left of the hero, the footer and the copyright line
+          on every phone. The shortfall itself runs out around 344px, and 374 is the nearest
+          bound above it: a device between the two gets 8px it does not need, which is cheaper
+          than picking the exact number and being wrong about it on another font. */}
+      <div className="max-w-6xl mx-auto px-6 max-[374px]:px-4 h-20 flex items-center justify-between gap-2 sm:gap-3">
+        <Link href={withBase(siteBaseUrl, '/')} className="flex items-center md:mr-1 shrink-0 group/logo relative cursor-pointer">
           <div className="relative flex items-center justify-center transition-opacity duration-300">
-            <LogoAnimate size="md" className="text-theme-primary" />
+            {/* Decorative: the brand name is right beside it as real text, so announcing the
+                mark as well made the link read "Logo LiveContext" in every language, with the
+                first half of that never translated. */}
+            <LogoAnimate size="md" className="text-theme-primary" decorative />
           </div>
           <span className="text-xl font-light text-theme-primary transition-colors duration-300 livecontext-title opacity-100 scale-100 w-auto">
             LiveContext
           </span>
         </Link>
-        {/* gap-5 at md: the logo, the nav and the right-hand cluster do not fit at 768px
+        {/* gap-4 at md: the logo, the nav and the right-hand cluster do not fit at 768px
             with gap-8. Back to five entries since Integrations moved to the footer, which
-            was already tight at that count, so the smaller gap stays. */}
-        <nav className="hidden md:flex items-center gap-5 lg:gap-8 text-sm" style={{ color: 'var(--text-secondary)' }}>
+            was already tight at that count, so the smaller gap stays. It went from gap-5
+            to gap-4 when the labels stopped being English: every entry here is a
+            translation, and the German nav ("Marktplatz", "Selbst gehostet") is ~40px
+            wider than the English one it was measured against.
+            `whitespace-nowrap`: without it the flex row resolves an overflow by WRAPPING
+            the longest label, and a wrapped label inside the fixed-height pill next door
+            is the bug this header shipped in French. Nothing here may wrap; the row is
+            sized so it does not have to. */}
+        <nav className="hidden md:flex items-center gap-4 lg:gap-8 text-sm whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>
           {/* A real destination, not an in-page anchor. The public marketplace
               (`/marketplace`) is the crawlable index of every published listing,
               so linking it from the chrome of every public page is what puts
@@ -177,32 +259,46 @@ export function LandingHeader({ extra, siteBaseUrl }: { extra?: React.ReactNode;
               page through the footer column and the landing's own section, which is what
               keeps the connector tree crawlable; in the header it was the sixth entry and
               pushed the nav to gap-5 to fit at 768px. */}
-          <Link href={withBase(siteBaseUrl, '/marketplace')} className="hover:opacity-80 transition-opacity">Marketplace</Link>
-          <LandingNavAnchor targetId="pricing" baseUrl={siteBaseUrl} className="hover:opacity-80 transition-opacity cursor-pointer">Pricing</LandingNavAnchor>
+          <Link href={withBase(siteBaseUrl, '/marketplace')} className="hover:opacity-80 transition-opacity">{labels.marketplace}</Link>
+          <LandingNavAnchor targetId="pricing" baseUrl={siteBaseUrl} className="hover:opacity-80 transition-opacity cursor-pointer">{labels.pricing}</LandingNavAnchor>
           <Link href={withBase(siteBaseUrl, '/changelog')} className="hover:opacity-80 transition-opacity">Changelog</Link>
-          <Link href={docsHref(siteBaseUrl)} prefetch={false} className="hover:opacity-80 transition-opacity">Docs</Link>
+          <Link href={docsHref(siteBaseUrl)} prefetch={false} className="hover:opacity-80 transition-opacity">{labels.docs}</Link>
           <a
             href="https://github.com/livecontext-ai"
             target="_blank"
             rel="noopener noreferrer"
-            aria-label="Self-hosted (GitHub)"
+            aria-label={`${labels.selfHosted} (GitHub)`}
             className="inline-flex items-center gap-1.5 hover:opacity-80 transition-opacity"
           >
             <GithubMark className="w-4 h-4" />
-            Self-hosted
+            {labels.selfHosted}
           </a>
         </nav>
-        <div className="flex items-center gap-3">
+        {/* shrink-0: the two sign-in affordances are the point of the bar, so the nav gives
+            way before they do. Without it the flex row takes the space back out of the pill,
+            whose label then wraps to two lines inside a fixed h-9 box and spills out of it. */}
+        <div className="flex items-center gap-2 lg:gap-3 shrink-0">
           {extra}
-          <SignInButton variant="link" baseUrl={siteBaseUrl} className="hidden sm:inline-flex text-sm cursor-pointer">
-            Sign in
+          {/* Hidden from 768px to 858px, and nowhere else. That is the band where the nav
+              appears while the bar is still narrow, and it is the only place the row does not
+              fit: measured with this link in, 768px is 15px short in French and Portuguese and
+              32px short in German, and every locale has room again by 859px. This is the one
+              entry in the bar that is not load-bearing - the pill beside it opens the same
+              sign-in for a visitor who already has an account - so it is what goes, rather than
+              the label being cut or wrapped.
+              Written as `md:max-[859px]:hidden` rather than `md:hidden min-[860px]:inline-flex`:
+              the second form loses the cascade (Tailwind emits the arbitrary min-width rule
+              BEFORE `md:hidden`, so the link stayed hidden at 860, 900 and 1024 - verified in
+              the browser), while stacking the two conditions on the one `hidden` cannot. */}
+          <SignInButton variant="link" baseUrl={siteBaseUrl} className="hidden sm:inline-flex md:max-[859px]:hidden text-sm whitespace-nowrap cursor-pointer">
+            {labels.signIn}
           </SignInButton>
           <SignInButton
             variant="primary"
             baseUrl={siteBaseUrl}
-            className="inline-flex items-center gap-1 h-9 px-4 rounded-xl text-sm font-medium transition-colors hover:bg-[var(--accent-hover)] active:scale-[0.98] cursor-pointer"
+            className="inline-flex items-center gap-1 h-9 px-3 lg:px-4 rounded-xl text-sm font-medium whitespace-nowrap transition-colors hover:bg-[var(--accent-hover)] active:scale-[0.98] cursor-pointer"
           >
-            Get started free
+            {labels.getStarted}
           </SignInButton>
         </div>
       </div>
@@ -210,22 +306,22 @@ export function LandingHeader({ extra, siteBaseUrl }: { extra?: React.ReactNode;
   );
 }
 
-export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
+export function LandingFooter({ siteBaseUrl, labels = DEFAULT_SHELL_LABELS }: { siteBaseUrl?: string; labels?: ShellLabels } = {}) {
   return (
     <footer style={{ borderTop: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
       <div className="max-w-6xl mx-auto px-6 py-14 flex flex-col gap-10 md:flex-row md:gap-12 text-sm">
         <div className="md:w-72 md:flex-shrink-0">
           <div className="flex items-center mr-1 group/logo relative">
             <div className="relative flex items-center justify-center transition-opacity duration-300">
-              <LogoAnimate size="md" className="text-theme-primary" />
+              {/* Decorative, same reason as the header: the name is text beside it. */}
+              <LogoAnimate size="md" className="text-theme-primary" decorative />
             </div>
             <span className="text-xl font-light text-theme-primary transition-colors duration-300 livecontext-title opacity-100 scale-100 w-auto">
               LiveContext
             </span>
           </div>
           <p className="mt-3 max-w-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            The AI automation platform. Describe a job, watch the workflow build itself, and ship it as
-            an app your team can use. Cloud or self-hosted.
+            {labels.tagline}
           </p>
 
           <div className="mt-5 flex items-center justify-start gap-2">
@@ -280,6 +376,16 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1V9.01a6.27 6.27 0 0 0-.79-.05 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.34-6.34V8.75a8.18 8.18 0 0 0 4.76 1.52V6.84a4.84 4.84 0 0 1-1-.15z" /></svg>
             </a>
             <a
+              href="https://www.youtube.com/@livecontext-ai"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="YouTube"
+              className="w-9 h-9 rounded-full flex items-center justify-center transition-colors duration-200 hover:brightness-125"
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M23.5 6.19a3.02 3.02 0 0 0-2.12-2.14C19.5 3.55 12 3.55 12 3.55s-7.5 0-9.38.5A3.02 3.02 0 0 0 .5 6.19C0 8.08 0 12 0 12s0 3.92.5 5.81a3.02 3.02 0 0 0 2.12 2.14c1.88.5 9.38.5 9.38.5s7.5 0 9.38-.5a3.02 3.02 0 0 0 2.12-2.14C24 15.92 24 12 24 12s0-3.92-.5-5.81zM9.55 15.57V8.43L15.82 12l-6.27 3.57z" /></svg>
+            </a>
+            <a
               href="https://discord.gg/5gTuUwhkJ"
               target="_blank"
               rel="noopener noreferrer"
@@ -291,29 +397,43 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
             </a>
           </div>
         </div>
-        {/* Seven columns at lg since Models joined: gap-8 still fits them in the footer's
-            width, and below lg they wrap two or three at a time as before. */}
-        <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-8 gap-y-10">
+        {/* Seven columns since Models joined, but from xl rather than lg, and below that they
+            wrap two, three or four at a time. Measured: this grid is 640px wide at a 1024px
+            viewport and 768px from 1280px up, so seven columns are 64px each at 1024 and 82px
+            from 1280. 64px holds "Gmail" and nothing longer: the German footer ran its Legal
+            column off the right edge there and gave the whole PAGE a 63px horizontal scroll
+            (French, 5px, was the same bug smaller). Four columns are 136px, which is the width
+            at which every language reads normally - not a perfect fit, since
+            "Datenschutzerklärung" is 146px and still hyphenates, but a hyphen inside a column
+            instead of a page that scrolls sideways.
+            `*:min-w-0` + `break-words hyphens-auto` is the belt to those braces: a grid column
+            is min-width:auto by default, so it can never be narrower than its longest WORD, and
+            one long compound in a future translation would push the document again. The column
+            may now be narrower than the word, and the word hyphenates instead. `*:` rather than
+            `[&>div]:` so it holds for any element a column is ever made of. Hyphen positions
+            follow <html lang>, which this app sets to the page's locale on the client; the
+            server ships `lang="en"`, so the first paint hyphenates by English rules. */}
+        <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-8 gap-y-10 break-words hyphens-auto *:min-w-0">
         <div>
-          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>Product</p>
+          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>{labels.product}</p>
           {/* The capability entries point at the docs page that explains each one:
               a visitor who is not signed in yet has something to read, and the
               column stops being two sign-in prompts. Titles match the docs nav
               (`app/docs/_nav.ts`) so the label and the destination agree. */}
           <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
-            <li><Link href={docsHref(siteBaseUrl, 'workflows')} prefetch={false}>Workflows</Link></li>
-            <li><Link href={docsHref(siteBaseUrl, 'agents')} prefetch={false}>Agents</Link></li>
-            <li><Link href={docsHref(siteBaseUrl, 'interfaces')} prefetch={false}>Interfaces &amp; apps</Link></li>
-            <li><Link href={docsHref(siteBaseUrl, 'tables')} prefetch={false}>Tables &amp; data</Link></li>
-            <li><Link href={docsHref(siteBaseUrl, 'integrations')} prefetch={false}>Integrations</Link></li>
+            <li><Link href={docsHref(siteBaseUrl, 'workflows')} prefetch={false}>{labels.workflows}</Link></li>
+            <li><Link href={docsHref(siteBaseUrl, 'agents')} prefetch={false}>{labels.agents}</Link></li>
+            <li><Link href={docsHref(siteBaseUrl, 'interfaces')} prefetch={false}>{labels.interfaces}</Link></li>
+            <li><Link href={docsHref(siteBaseUrl, 'tables')} prefetch={false}>{labels.tables}</Link></li>
+            <li><Link href={docsHref(siteBaseUrl, 'integrations')} prefetch={false}>{labels.integrations}</Link></li>
             {/* The PUBLIC marketplace, not a sign-in prompt: there is a
                 crawlable page behind this word now, and a footer link from
                 every public page is one of the cheapest ways to keep the whole
                 listing tree reachable. */}
-            <li><Link href={withBase(siteBaseUrl, '/marketplace')}>Marketplace</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/marketplace')}>{labels.marketplace}</Link></li>
             <li>
               <SignInButton variant="link" returnTo="/app/settings/pricing" baseUrl={siteBaseUrl} className="cursor-pointer">
-                Pricing
+                {labels.pricing}
               </SignInButton>
             </li>
           </ul>
@@ -321,7 +441,7 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
         {/* Ranked by the node-usage ledger, not curated: see FooterIntegrations.
             Each name is a crawlable page, so the footer puts every public page one
             click from an integration page and vice versa. */}
-        <FooterIntegrations siteBaseUrl={siteBaseUrl} />
+        <FooterIntegrations siteBaseUrl={siteBaseUrl} heading={labels.integrations} allLabel={labels.allIntegrations} />
         {/* The families the platform runs on. Named rather than counted: "275 models" tells
             a visitor nothing, "Claude, GPT, Gemini, Grok" answers the question they came
             with. Each is checked against the catalogue seed by wellKnownModels.test.ts.
@@ -332,7 +452,7 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
             its OWN provider filter, so the eight are eight destinations rather than one URL
             printed eight times, and "Grok" lands on Grok. */}
         <div>
-          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>Models</p>
+          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>{labels.models}</p>
           <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
             {WELL_KNOWN_MODELS.map((model) => (
               <li key={model.provider}>
@@ -348,64 +468,88 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
             shows the nav, so /models is reached from the Models column beside this
             one, from the sitemap, and not from the header. */}
         <div>
-          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>Resources</p>
+          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>{labels.resources}</p>
           <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
+            <li><Link href={withBase(siteBaseUrl, '/videos')}>{labels.videos}</Link></li>
             <li><Link href={withBase(siteBaseUrl, '/changelog')}>Changelog</Link></li>
             {/* Cloud only: /status reports the LiveContext cloud and 404s in a
                 self-hosted build, so linking it there would be a dead entry. */}
-            {!IS_CE && <li><Link href={withBase(siteBaseUrl, '/status')}>Status</Link></li>}
-            <li><Link href={docsHref(siteBaseUrl)} prefetch={false}>Docs</Link></li>
+            {!IS_CE && <li><Link href={withBase(siteBaseUrl, '/status')}>{labels.status}</Link></li>}
+            <li><Link href={docsHref(siteBaseUrl)} prefetch={false}>{labels.docs}</Link></li>
             <li>
               <a href="https://github.com/livecontext-ai" target="_blank" rel="noopener noreferrer">
-                Self-hosted
+                {labels.selfHosted}
               </a>
             </li>
           </ul>
         </div>
         <div>
-          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>Compare</p>
+          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>{labels.compare}</p>
           <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
-            <li><Link href={withBase(siteBaseUrl, '/compare/zapier-alternative')}>Zapier alternative</Link></li>
-            <li><Link href={withBase(siteBaseUrl, '/compare/n8n-alternative')}>n8n alternative</Link></li>
-            <li><Link href={withBase(siteBaseUrl, '/compare/make-alternative')}>Make alternative</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/zapier-alternative')}>{labels.alternativeTo('Zapier')}</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/n8n-alternative')}>{labels.alternativeTo('n8n')}</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/make-alternative')}>{labels.alternativeTo('Make')}</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/openclaw-alternative')}>{labels.alternativeTo('OpenClaw')}</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/hermes-agent-alternative')}>{labels.alternativeTo('Hermes Agent')}</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/muse-alternative')}>{labels.alternativeTo('Muse')}</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/grok-bot-alternative')}>{labels.alternativeTo('Grok Bot')}</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/agent-zero-alternative')}>{labels.alternativeTo('Agent Zero')}</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/autogpt-alternative')}>{labels.alternativeTo('AutoGPT')}</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/manus-alternative')}>{labels.alternativeTo('Manus')}</Link></li>
           </ul>
         </div>
         <div>
-          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>Company</p>
+          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>{labels.company}</p>
           <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
-            <li><Link href={withBase(siteBaseUrl, '/about')}>About</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/about')}>{labels.about}</Link></li>
             <li>
               <span className="inline-flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
-                Careers
+                {labels.careers}
                 <span
                   className="inline-flex items-center rounded-full px-1.5 py-px text-[10px] font-medium uppercase tracking-wide"
                   style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
                 >
-                  Soon
+                  {labels.soon}
                 </span>
               </span>
             </li>
-            <li><Link href={withBase(siteBaseUrl, '/contact')}>Contact</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/contact')}>{labels.contact}</Link></li>
             {/* No postal address here: a raw street line among nav links read as
                 a stray entry. The registered office stays where it is legally
                 required, on the Legal Notice / Terms / Privacy pages. */}
           </ul>
         </div>
         <div>
-          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>Legal</p>
+          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>{labels.legal}</p>
           <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
-            <li><Link href={withBase(siteBaseUrl, '/legal/privacy')}>Privacy Policy</Link></li>
-            <li><Link href={withBase(siteBaseUrl, '/legal/terms')}>Terms of Service</Link></li>
-            <li><Link href={withBase(siteBaseUrl, '/legal/mentions')}>Legal Notice</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/legal/privacy')}>{labels.privacy}</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/legal/terms')}>{labels.terms}</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/legal/mentions')}>{labels.notice}</Link></li>
           </ul>
         </div>
         </div>
       </div>
+      {/* The six persona pages, linked from EVERY public page. Until this line their only
+          internal links were the hero pills, which exist on the home page and on each
+          other, so nothing on /integrations, /models, /compare, /marketplace or the docs
+          pointed at them at all. They sit on their own row rather than in an eighth
+          column: the seven above are already 82px wide at a 1440 viewport, and a column
+          narrower than its own words is not a link anyone follows. */}
+      <nav aria-label={labels.personasHeading} className="max-w-6xl mx-auto px-6 pb-6 text-sm">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 pt-6" style={{ borderTop: '1px solid var(--border-color)' }}>
+          <span className="text-[11px] uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>{labels.personasHeading}</span>
+          {PERSONA_KEYS.map((persona) => (
+            <Link key={persona} href={withBase(siteBaseUrl, personaHref(persona, labels.locale))} style={{ color: 'var(--text-secondary)' }} className="hover:opacity-80 transition-opacity">
+              {labels.personas[persona]}
+            </Link>
+          ))}
+        </div>
+      </nav>
       <div className="max-w-6xl mx-auto px-6 pb-8 text-xs flex items-center justify-between gap-4" style={{ color: 'var(--text-muted)' }}>
-        <p>© {new Date().getFullYear()} LIVECONTEXT SAS. All rights reserved.</p>
+        <p>© {new Date().getFullYear()} LIVECONTEXT SAS. {labels.rights}</p>
         <div className="flex items-center gap-2">
-          <LandingLanguageSelect />
-          <LandingThemeToggle />
+          <LandingLanguageSelect label={labels.language} />
+          <LandingThemeToggle toLight={labels.toLightTheme} toDark={labels.toDarkTheme} />
         </div>
       </div>
     </footer>

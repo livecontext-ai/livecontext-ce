@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -120,16 +121,29 @@ public class TransformNode extends BaseNode {
             result.put("itemIndex", context.itemIndex());
             result.put("item_id", context.itemId());
 
-            // resolved_params for inspector visibility: resolved values per label, fallback to expression on null
+            // resolved_params for inspector visibility: resolved values per label.
+            //
+            // Bounded: a mapping can carry a whole upstream collection, and this map is
+            // persisted on the row of every item of every split.
+            //
+            // A mapping that resolved to NOTHING reports null, not its expression. Reporting
+            // the expression there was the defect DataInputNode fixes in this same commit:
+            // one item, in one execution, read as nothing in the Output column and as
+            // `{{core:x.output.y}}` in the Params column, and neither told the reader which
+            // was true. Null says the one thing that is true - the mapping produced nothing -
+            // and says it the same way both columns do. The expression is still a click away
+            // in the configuration, which is where configuration belongs.
             Map<String, Object> resolvedParams = new LinkedHashMap<>();
             for (Core.TransformMapping mapping : mappings) {
                 if (mapping.label() != null && !mapping.label().isBlank()) {
                     Object resolvedValue = transformed.get(mapping.label());
                     resolvedParams.put(mapping.label(),
-                        resolvedValue != null ? resolvedValue : mapping.expression());
+                        ReportedParams.valueFrom(mapping.expression(), resolvedValue));
                 }
             }
-            result.put("resolved_params", resolvedParams);
+            // Through the key-name rule too: a mapping label is the AUTHOR'S name, and one
+            // called `api_key` is a credential whatever it was mapped from.
+            result.put("resolved_params", ReportedParams.forReport(resolvedParams));
 
             logger.info("✅ Transform completed: nodeId={}, transformedKeys={}, evaluationCount={}",
                 nodeId, transformed.keySet(), evaluations.size());

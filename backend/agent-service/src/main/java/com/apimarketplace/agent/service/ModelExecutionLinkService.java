@@ -117,20 +117,21 @@ public class ModelExecutionLinkService {
     public record SingleCompletionTarget(String provider, String model) {}
 
     /**
-     * Resolve the execution target for a bare single completion (the
-     * {@code json-completion} path: COLD-summary generation, single-turn JSON
-     * extraction). This is the second consumer of the link system, alongside the
-     * full agent execution ({@code AgentRemoteExecutionService}). The CE LLM relay
+     * Resolve an API-only execution target for a caller that cannot run a loop and so
+     * cannot take a bridge. Avatar generation is the one consumer left: the
+     * {@code json-completion} path (COLD-summary generation) now resolves through
+     * {@code ExecutionLinkRouter} and serves a bridge target as a restricted single-shot
+     * session, like classify and guardrail. The CE LLM relay
      * ({@code CloudLlmRelayController}) deliberately does NOT consult links: a
      * linked CE install always executes the billed pair on that provider's real API.
      *
      * <p>Only {@link ModelExecutionLinkScope#ALL} links apply: a single completion
      * carries no activity source, so no surface-scoped row can match.
      *
-     * <p>A link that targets a CLI bridge is NOT executable here - a bridge owns its
-     * own agent loop and cannot serve a bare completion. Falling through to the billed
-     * provider would silently execute on the key the admin linked AWAY from (the
-     * misleading "credit balance too low" failure shape), so it throws instead.
+     * <p>A link that targets a CLI bridge is NOT executable here - this caller has no
+     * loop to serve it with. Falling through to the billed provider would silently
+     * execute on the key the admin linked AWAY from (the misleading "credit balance too
+     * low" failure shape), so it throws instead and the caller picks its own fallback.
      *
      * @throws IllegalArgumentException when the resolved link targets a CLI bridge
      *         (maps to 400 INVALID_ARGUMENT at the controller layer)

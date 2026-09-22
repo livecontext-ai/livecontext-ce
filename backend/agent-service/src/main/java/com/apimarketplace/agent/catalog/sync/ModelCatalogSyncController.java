@@ -28,13 +28,20 @@ import java.util.stream.Collectors;
  *       {@code model_catalog_sync_log}).</li>
  *   <li>{@code POST /api/model-config/catalog-sync?mode=apply} - same, then
  *       apply via {@link com.apimarketplace.agent.catalog.bundle.CatalogMergeService}.
- *       Refuses to apply if any guard fails unless
- *       {@code overrideGuards=<guard-name>,...} explicitly lists them.</li>
+ *       Refuses to apply if a BLOCKING guard fails unless
+ *       {@code overrideGuards=<guard-name>,...} explicitly lists it.</li>
  * </ul>
  *
- * <p>Behaviour when guards fail without override: returns HTTP 412
- * Precondition Failed with the plan attached so the admin UI can render the
- * flagged rows and prompt for explicit confirmation.
+ * <p>Behaviour when a blocking guard fails without override: returns HTTP 412
+ * Precondition Failed with the plan attached, so the admin UI can show why
+ * nothing was applied.
+ *
+ * <p>{@code price-sanity} is NOT blocking and never produces a 412. Its flagged
+ * rows are held back from the apply while the rest of the refresh lands, and
+ * they come back in {@code plan.flagged} for review; re-running with
+ * {@code overrideGuards=price-sanity} is what accepts them. So a 200 can carry
+ * a non-empty {@code flagged} list, and that combination means "applied, minus
+ * these rows" rather than "nothing happened".
  */
 @Slf4j
 @RestController

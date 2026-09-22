@@ -14,6 +14,7 @@ import {
 import { WorkflowRelationsAutoMenu } from '@/components/workflow/relations/WorkflowRelationsAutoMenu';
 import { requestOpenRelatedWorkflow } from '@/lib/sidePanel/openWorkflowBuilderTab';
 import { CanvasFileStripToggleButton } from './CanvasFileStripToggleButton';
+import { CanvasRunFollowToggleButton } from './CanvasRunFollowToggleButton';
 import { CanvasRunTriggerButton } from './CanvasRunTriggerButton';
 import { TriggerNodePinButton } from './nodes/TriggerNodePinButton';
 import type { CanvasCursorMode } from '../hooks/useBoxSelection';
@@ -203,6 +204,11 @@ export function CanvasToolbar({
           >
             <Focus className="h-4 w-4" />
           </button>
+          {/* Same group as Focus on purpose: both are "put the camera somewhere
+              useful". Focus frames the whole graph once, this one keeps framing
+              whatever is running. It renders nothing in edit mode, where no step
+              can be running. */}
+          <CanvasRunFollowToggleButton />
           <button
             type="button"
             onClick={onAutoLayout}

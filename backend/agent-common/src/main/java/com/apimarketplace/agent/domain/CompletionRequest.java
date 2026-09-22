@@ -187,7 +187,15 @@ public record CompletionRequest(
      * direct providers ignore this field. {@code null} → parameter omitted →
      * provider default ({@code high} on the Anthropic API).
      */
-    String reasoningEffort
+    String reasoningEffort,
+
+    /**
+     * Whose API key this call runs on, pinned once per execution on the loop context
+     * and carried verbatim here so the provider never re-decides from the calling
+     * thread. {@code PLATFORM} = platform key only; {@code OWN_KEY} = the tenant's saved
+     * key; {@code null} = unpinned (user-first by {@link #tenantId()}). See {@link KeyRoute}.
+     */
+    KeyRoute keyRoute
 ) {
     /**
      * Create a simple request with just a prompt

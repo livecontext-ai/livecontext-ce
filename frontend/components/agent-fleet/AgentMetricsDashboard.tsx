@@ -31,6 +31,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
+import { useResourceRowsDeleted } from '@/lib/resources/resourceDeleted';
 
 /**
  * Agent Metrics Dashboard - fleet overview + per-agent drill-down.
@@ -177,6 +178,13 @@ export function AgentMetricsDashboard() {
     }
   }, [chartPeriod, chartAgentId]);
 
+  // An agent deleted anywhere else leaves a row here that no longer exists: this
+  // dashboard fetches imperatively, so nothing else would tell it. Dropping the
+  // row locally is enough to stop showing a ghost; the summaries it sits beside
+  // are workspace-wide and are corrected on the next load rather than re-fetched
+  // for one row.
+  useResourceRowsDeleted('agent', agents, setAgents);
+
   // Skip initial render (loadData handles it), only react to filter changes
   const initialRef = React.useRef(true);
   useEffect(() => {
@@ -218,8 +226,17 @@ export function AgentMetricsDashboard() {
       icon: agent.avatarUrl
         ? <AvatarDisplay avatarUrl={agent.avatarUrl} name={agent.name || 'Agent'} size="sm" className="!w-4 !h-4" />
         : <Bot className="w-4 h-4" />,
-      pinned: true,
-      scope: ['/app/agent/*'],
+      // Not pinned, same reason as the agents list: this is the same page, and a tab
+      // the user opened from a row has to be closable. See AgentTable.openAgentPanel.
+      // `/app/agent`, NOT `/app/agent/*`: agents have no page of their own, so the wildcard
+      // could never match anything - the metrics view is this same path with `?view=metrics`,
+      // and scope patterns never see the query. Scope is only read when the pathname changes,
+      // A locale switch (`/en/app/agent` -> `/fr/app/agent`) is a CROSS-group change,
+      // because the page group keeps the locale segment. There only pinned and
+      // persistent tabs survive, so an unpinned agent tab is now dropped by it - the
+      // same as every other tab the user opened, which is the point of unpinning.
+      // Otherwise it is the dead pattern corrected to the one the agents list already uses.
+      scope: ['/app/agent'],
       content: <AgentPanelContent agentId={agent.id} initialTab={AGENT_CONFIGURATION_TAB} />,
     });
   }, [sidePanel]);
@@ -1252,7 +1269,10 @@ export function AgentMetricsDashboard() {
                             const consumed = agent.creditsConsumed ?? 0;
                             const reserved = agent.creditsReserved ?? 0;
                             const total = agent.creditBudget;
-                            const over = (consumed + reserved) >= total;
+                            // Server verdict first, raw arithmetic only as a fallback:
+                            // the stored counter is reset lazily, so a rolled-over agent
+                            // sums to over and is not stopped. See FleetInspectorPanel.
+                            const over = agent.budgetBlocked ?? (consumed + reserved) >= total;
                             const pct = total > 0 ? Math.min(100, Math.round((consumed / total) * 100)) : 0;
                             const reservedPct = total > 0 ? Math.min(100 - pct, Math.round((reserved / total) * 100)) : 0;
                             const title = `${t('creditsUsed')}: ${formatCost(consumed, 4)} · ${t('creditsReservedLabel')}: ${formatCost(reserved, 4)} / ${formatCost(total, 4)}`;

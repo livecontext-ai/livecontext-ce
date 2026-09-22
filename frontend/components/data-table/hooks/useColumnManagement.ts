@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { ColumnDefinition, ColumnOrder } from '../types';
 import { idIsHiddenBehindCheckbox, type ViewConfig } from '../viewConfig';
+import { buildColumnOrderRank } from '@/utils/columnSpec';
 
 export interface UseColumnManagementParams {
   viewConfig: ViewConfig;
@@ -37,10 +38,6 @@ export interface UseColumnManagementReturn {
    * Get deduplicated columns
    */
   getUniqueColumns: () => ColumnDefinition[];
-  /**
-   * Initialize column order from columns (if not already set)
-   */
-  initializeColumnOrder: (fixedColumns: string[]) => void;
   /**
    * Reorder columns after a successful drag and drop operation.
    * Returns the new order for persistence.
@@ -152,10 +149,64 @@ export function useColumnManagement({
     return fixedColumns;
   }, [viewConfig, columns]);
 
+  /** Saved position per column, rebuilt only when the saved order itself changes. */
+  const savedOrderRank = useMemo(() => buildColumnOrderRank(columnOrder), [columnOrder]);
+
   /**
-   * Get all columns (fixed + dynamic) sorted according to columnOrder
+   * Arrange columns according to the saved order.
+   *
+   * The rule is: a column the saved order NAMES takes its saved position; a
+   * column it does not name DOES NOT MOVE. Concretely, the named columns are
+   * sorted among themselves and put back into the slots they already occupied,
+   * so an order that only knows about some of the columns rearranges those and
+   * leaves the rest exactly where they were.
+   *
+   * That is what makes this safe on a partial order, which is a shape the
+   * product really produces: several server paths copy a table with an empty
+   * `column_order`, and one added column then makes it name a single field.
+   * Sending everything unnamed to the END instead would push the selection
+   * checkbox behind every data column. And no column needs to be excluded from
+   * the sort to protect it: the grid pins only `checkbox` and the id lane, but
+   * `priority`, `created_at`, `array_index` and `value` are draggable like any
+   * other column (`DataTableGrid` gates the handle on `isFixed`, which is those
+   * two alone), so a saved order that moves one of them is a real arrangement a
+   * user made and must be honoured.
+   *
+   * A freshly added column lands at the END because the BACKEND appends it to
+   * `column_order` when it creates it, not because of anything decided here.
+   * Which entry names which column is decided in one place, `buildColumnOrderRank`,
+   * including the case where a data column carries a lane's name.
    */
-  const getAllColumns = useCallback((): ColumnDefinition[] => {
+  const applySavedOrder = useCallback((cols: ColumnDefinition[]): ColumnDefinition[] => {
+    if (savedOrderRank.size === 0) return cols;
+
+    const named: Array<{ col: ColumnDefinition; rank: number }> = [];
+    const slots: number[] = [];
+    cols.forEach((col, index) => {
+      const rank = savedOrderRank.of(col.field);
+      if (rank === undefined) return;
+      named.push({ col, rank });
+      slots.push(index);
+    });
+    if (named.length === 0) return cols;
+
+    // Stable (ES2019), so two columns sharing a saved position keep their
+    // incoming relative order rather than swapping at random.
+    named.sort((a, b) => a.rank - b.rank);
+
+    const arranged = [...cols];
+    slots.forEach((slot, i) => { arranged[slot] = named[i].col; });
+    return arranged;
+  }, [savedOrderRank]);
+
+  /**
+   * Every column of this view, arranged by the saved order.
+   *
+   * Memoized rather than rebuilt per call: the grid asks for these a dozen
+   * times per render, and every caller therefore shares one array instance.
+   * Treat the result as READ-ONLY; copy before sorting or splicing it.
+   */
+  const allColumns = useMemo((): ColumnDefinition[] => {
     // In workflow context, the backend is the source of truth for all columns
     // Don't add frontend fixed columns - use backend columns directly
     if (workflowContext && columns.length > 0) {
@@ -163,21 +214,7 @@ export function useColumnManagement({
       const hasBackendColumns = columns.some(col => col.renderType);
       if (hasBackendColumns) {
         // Use backend columns directly, respecting columnOrder if set
-        if (columnOrder.length === 0) {
-          return columns;
-        }
-
-        const columnMap = new Map(columns.map(col => [col.field, col]));
-        const uniqueOrderFields = Array.from(new Set(columnOrder.map(item => item.field)));
-        const orderedColumns = uniqueOrderFields
-          .map(field => columnMap.get(field))
-          .filter(Boolean) as ColumnDefinition[];
-
-        const remainingColumns = columns.filter(col =>
-          !uniqueOrderFields.includes(col.field)
-        );
-
-        return [...orderedColumns, ...remainingColumns];
+        return applySavedOrder(columns);
       }
     }
 
@@ -188,7 +225,7 @@ export function useColumnManagement({
     // nested JSON navigation the columns are derived from the data itself, so a
     // row genuinely carrying `id` (table rows), `value` or `array_index` would
     // have its column silently deleted when the matching fixed column is off
-    // (e.g. showIdColumn={false} in the node Logs table).
+    // (any view on DataTable's own `showIdColumn = false` default).
     const fixedFields = new Set(fixedColumns.map(col => col.field));
     // At ROOT level outside workflow mode the grid renders the row id INSIDE the
     // checkbox column (DataTableGrid returns null for both the `id` header and
@@ -199,60 +236,30 @@ export function useColumnManagement({
     }
     const dynamicColumns = columns.filter(col => !fixedFields.has(col.field));
 
-    // Combine all columns
-    const allColumns = [...fixedColumns, ...dynamicColumns];
+    return applySavedOrder([...fixedColumns, ...dynamicColumns]);
+  }, [buildFixedColumns, columns, applySavedOrder, workflowContext, viewConfig]);
 
-    // If columnOrder is empty, return default order
-    if (columnOrder.length === 0) {
-      return allColumns;
-    }
+  const uniqueColumns = useMemo((): ColumnDefinition[] => (
+    allColumns.filter((col, idx, arr) => arr.findIndex(c => c.field === col.field) === idx)
+  ), [allColumns]);
 
-    // Create a map for quick column lookup
-    const columnMap = new Map(allColumns.map(col => [col.field, col]));
-
-    // Deduplicate columnOrder and sort according to defined order
-    const uniqueOrderFields = Array.from(new Set(columnOrder.map(item => item.field)));
-    const orderedColumns = uniqueOrderFields
-      .map(field => columnMap.get(field))
-      .filter(Boolean) as ColumnDefinition[];
-
-    // Add columns not in columnOrder
-    const remainingColumns = allColumns.filter(col =>
-      !uniqueOrderFields.includes(col.field)
-    );
-
-    return [...orderedColumns, ...remainingColumns];
-  }, [buildFixedColumns, columns, columnOrder, workflowContext, viewConfig]);
+  /**
+   * Get all columns (fixed + dynamic) sorted according to columnOrder
+   */
+  const getAllColumns = useCallback((): ColumnDefinition[] => allColumns, [allColumns]);
 
   /**
    * Get deduplicated columns
    */
-  const getUniqueColumns = useCallback((): ColumnDefinition[] => {
-    return getAllColumns().filter((col, idx, arr) =>
-      arr.findIndex(c => c.field === col.field) === idx
-    );
-  }, [getAllColumns]);
+  const getUniqueColumns = useCallback((): ColumnDefinition[] => uniqueColumns, [uniqueColumns]);
 
   // A second `getDynamicColumns` used to live here with its own reserved-name list. Nothing called
   // it - the controller takes useTableExport's, which is driven by the view's real fixed set - and
   // two implementations of one rule is how they drift apart.
 
-  /**
-   * Initialize column order from columns (if not already set)
-   */
-  const initializeColumnOrder = useCallback((fixedColumns: string[]) => {
-    if (columnOrder.length > 0 || columns.length === 0) return;
-
-    const dynamicColumnFields = columns.map(col => col.field);
-    const allFields = [...fixedColumns, ...dynamicColumnFields];
-
-    const initialOrder = allFields.map((field, index) => ({
-      field,
-      order: index
-    }));
-
-    setColumnOrder(initialOrder);
-  }, [columnOrder.length, columns]);
+  // An `initializeColumnOrder` used to live here too, seeding the order from the
+  // current columns. Nothing called it: useDataFetching owns that seeding, on the
+  // same state, and two implementations of one rule is how they drift apart.
 
   /**
    * Reorder columns after a successful drag and drop operation.
@@ -330,7 +337,6 @@ export function useColumnManagement({
     // Functions
     getAllColumns,
     getUniqueColumns,
-    initializeColumnOrder,
     reorderColumns,
     resetDragState,
   };

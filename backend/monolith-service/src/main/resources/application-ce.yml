@@ -50,6 +50,24 @@ spring:
       # but noted here so a future regression can locate the assumption.
       connection-init-sql: "SET search_path TO orchestrator,auth,agent,datasource,conversation,catalog,interface,trigger,publication,storage,public; SET lc.migration.source_timezone = 'UTC'"
 
+  mvc:
+    async:
+      # The CE monolith mounts the SAME streaming endpoint as the cloud
+      # storage-service: MonolithFileController.proxySignedDownload returns a
+      # StreamingResponseBody through ClientStreamCopier. Without this property the 30s
+      # container default applies and a showcase video that takes longer is delivered
+      # truncated, with no error the user or the log can act on. Measured on the cloud
+      # mount of the same endpoint over the 3 days to 2026-09-21: 112 of 4979 requests
+      # ran past 30s, 77 past 60s. The value matches storage-service/application.yml, but
+      # note what is and is not enforced: each file is pinned IN ITS OWN MODULE to the
+      # same range (finite, at least 10 min, at most 30 min), because a test can only read
+      # its own classpath. Exact equality between the two files is a convention, not a
+      # guarantee, so do not rely on one to document the other.
+      #
+      # Unlike storage-service this file does NOT also turn open-in-view off: the
+      # monolith bundles every service's entities, so that is a whole-application
+      # decision with a much larger blast radius, and it is not needed to fix this.
+      request-timeout: 600000
   jpa:
     hibernate:
       ddl-auto: none
@@ -113,6 +131,90 @@ spring:
   mail:
     host: ${MAIL_HOST:localhost}
     port: ${MAIL_PORT:1025}
+    # Set both or neither. These are all a relay needs: measured in
+    # SmtpAuthNegotiationProbeTest, a client with a username AND password sends
+    # AUTH even when mail.smtp.auth is unset, and one with neither goes straight
+    # to the envelope. So credentials are what turns authentication on here, not
+    # a flag.
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      # mail.smtp.auth is DELIBERATELY NOT BOUND, and it is worth knowing why
+      # because binding it looks like an improvement.
+      #
+      # MailTransportSecurityValidator refuses to boot when a NON-LOCAL host has
+      # AUTH off. Binding this key makes it read the real value; leaving it
+      # unbound leaves it reading its own :true default, which is what every
+      # release before this one did. Bind it with a false default and an existing
+      # install that points MAIL_HOST at an unauthenticated internal relay stops
+      # BOOTING on upgrade, taking the whole monolith with it, for a mail setting
+      # that worked yesterday. Bind it with a TRUE default and the shipped
+      # credential-less config cannot send at all (measured in
+      # MailAuthDefaultContractTest: AUTH on without both credentials never opens
+      # the socket). Neither default is safe, and the flag buys nothing, because
+      # credentials alone already authenticate.
+      #
+      # The consequence to be honest about: the S-3 guard's AUTH half is dormant
+      # in CE, exactly as it has always been. Its STARTTLS half is LIVE, because
+      # that flag IS bound below, so turning TLS off against a non-local relay
+      # refuses the boot. Do not read this paragraph as "CE has no transport
+      # security": it says AUTH, and only AUTH.
+      # STARTTLS is ON, and unlike auth above this one MUST be bound.
+      #
+      # Nothing here bound it before, so every CE send was plaintext, and that
+      # made the reset link unusable with any mainstream relay: SendGrid, SES,
+      # Mailgun and Gmail all answer "530 Must issue a STARTTLS command first".
+      # The only relay a self-hoster could use was a local unauthenticated one,
+      # which is a worse outcome than the regression leaving it unbound avoided.
+      #
+      # It is safe in all three directions because "enable" is OPPORTUNISTIC:
+      #  - a dev relay that does not advertise STARTTLS (Mailpit, Mailhog) is
+      #    untouched and still sends in plaintext, so no dev stack breaks;
+      #  - a real relay advertising a publicly-trusted certificate now works,
+      #    which it could not before;
+      #  - a relay advertising TLS with a certificate the JVM does not trust is
+      #    the one case that changes, because JavaMail aborts rather than falling
+      #    back. That case has its own escape hatch below instead of being a
+      #    reason to send everyone's reset links in the clear.
+      #
+      # Turning it OFF against a non-local host now refuses the boot
+      # (MailTransportSecurityValidator), which is the intended shape: a
+      # deliberate opt-out that fails loudly, not a silent default.
+      mail.smtp.starttls.enable: ${MAIL_SMTP_STARTTLS:true}
+      # mail.smtp.ssl.trust is DELIBERATELY NOT BOUND, and an earlier version of
+      # this file bound it to ${MAIL_SMTP_SSL_TRUST:} on the belief that an empty
+      # value means "use the normal trust store". It does not, and the mistake
+      # blocked delivery to every relay that offers STARTTLS, which is every real
+      # one. Measured in SmtpSslTrustBindingProbeTest:
+      #
+      #   - an empty placeholder binds as a PRESENT key, and JavaMail branches on
+      #     presence, not on emptiness;
+      #   - SocketFetcher then calls setTrustedHosts(trust.split("\s+")), and
+      #     "".split("\s+") is a ONE-element array holding "";
+      #   - a factory whose trusted-host list is [""] answers
+      #     isServerTrusted(anything) with false, and that check runs AFTER the
+      #     handshake and after CA and hostname validation have passed.
+      #
+      # So the "harmless default" turned normal verification into an allow-list
+      # that allows nothing, and only for relays that offer TLS: a dev relay that
+      # does not (Mailpit) kept working, which is exactly why an e2e run against
+      # one passed while every real relay would have failed.
+      #
+      # A relay with a private CA is handled by TRUSTING THE CA, not by waiving
+      # verification for a host: drop the PEM into /app/extra-ca and the
+      # entrypoint imports it into a runtime truststore (see ce-entrypoint.sh and
+      # README-CE.md). Absent, this property leaves the JVM's normal CA and
+      # hostname checks in place, which is what a public relay needs.
+      # JavaMail defaults these to infinite, and the CE default host is a dev
+      # relay that is usually not listening. Verification and invitation mail is
+      # sent on the request thread, so an unbounded send there holds a request
+      # thread for good; password reset mail is detached onto its own bounded
+      # pool, where it backs the queue up instead. See auth-service's
+      # application.yml, which carries the same three keys for the split
+      # deployment (only the env-var names differ).
+      mail.smtp.connectiontimeout: ${MAIL_CONNECT_TIMEOUT_MS:10000}
+      mail.smtp.timeout: ${MAIL_READ_TIMEOUT_MS:10000}
+      mail.smtp.writetimeout: ${MAIL_WRITE_TIMEOUT_MS:10000}
 
 # App configuration (auth-service needs these)
 app:
@@ -320,6 +422,18 @@ rate-limit:
 workflow:
   node-billing:
     enabled: false
+  # Mail socket timeouts for the email_inbox (IMAP) and send_email (SMTP) nodes. The monolith
+  # does not load orchestrator's application.yml, so without this block MailTimeouts coerces all
+  # five and every CE boot logs five WARNs about a misconfiguration nobody made. The values are
+  # the same as cloud; connect stays short while read gets the headroom a slow mailbox needs.
+  mail:
+    imap:
+      connect-timeout-ms: ${WORKFLOW_MAIL_IMAP_CONNECT_TIMEOUT_MS:10000}
+      read-timeout-ms: ${WORKFLOW_MAIL_IMAP_READ_TIMEOUT_MS:60000}
+    smtp:
+      connect-timeout-ms: ${WORKFLOW_MAIL_SMTP_CONNECT_TIMEOUT_MS:10000}
+      read-timeout-ms: ${WORKFLOW_MAIL_SMTP_READ_TIMEOUT_MS:30000}
+      write-timeout-ms: ${WORKFLOW_MAIL_SMTP_WRITE_TIMEOUT_MS:30000}
 
 # Credits: unlimited in CE (consumption is tracked for metrics/analytics but balance is always infinite)
 credit:
@@ -386,7 +500,7 @@ credit:
       - { provider: deepseek, model: deepseek-reasoner, inputRate: 0.28, outputRate: 0.42 }
 
 # Billing: disabled in CE (no Stripe). A self-hosted CE install bills at the REAL
-# provider price - NO gross margin. The managed-cloud LLM multiplier (1.11x)
+# provider price - NO gross margin. The managed-cloud LLM multiplier (1.333333x)
 # (billing.llm.cloud-multiplier, ModelPricingService) and the platform-credential
 # markup are cloud REVENUE levers; they must NOT apply to a self-hosted install, so
 # here they default to neutral (1.0 / off) and the recorded/displayed consumption is
@@ -399,6 +513,14 @@ billing:
   provider: none
   llm:
     cloud-multiplier: ${BILLING_LLM_CLOUD_MULTIPLIER:1.0}
+    # Neutralised for the same reason as the line above. The cloud ships this empty too
+    # since 2026-09-20, so today the two agree - but that is a cloud PRICING decision,
+    # not a CE guarantee: the day a provider override is set there, an unset key here
+    # would inherit a cloud revenue lever into a self-hosted install and bill its
+    # operator a multiple of the real provider price on that provider alone. Pinning it
+    # empty is what makes CE independent of that choice. Empty = every provider bills at
+    # cloud-multiplier, which here is 1.0, which is the true provider cost.
+    provider-multipliers: ${BILLING_LLM_PROVIDER_MULTIPLIERS:}
   stripe:
     secretKey: ""
     webhookSecret: ""
@@ -466,7 +588,7 @@ catalog:
     cloud-url: ${CATALOG_BUNDLE_CLOUD_URL:https://livecontext.ai}
     sync:
       enabled: ${CATALOG_BUNDLE_SYNC_ENABLED:true}
-      cron: ${CATALOG_BUNDLE_SYNC_CRON:0 */15 * * * *}
+      cron: ${CATALOG_BUNDLE_SYNC_CRON:#{T(com.apimarketplace.common.scheduling.PollSpread).quarterHourlyCron()}}
 
 # API catalog bundle sync (cloud → CE): the scheduler fetches the signed,
 # gzipped API-catalog snapshot from the cloud, verifies the Ed25519 signature
@@ -478,7 +600,7 @@ api-catalog:
     cloud-url: ${API_CATALOG_BUNDLE_CLOUD_URL:https://livecontext.ai}
     sync:
       enabled: ${API_CATALOG_BUNDLE_SYNC_ENABLED:true}
-      cron: ${API_CATALOG_BUNDLE_SYNC_CRON:0 */15 * * * *}
+      cron: ${API_CATALOG_BUNDLE_SYNC_CRON:#{T(com.apimarketplace.common.scheduling.PollSpread).quarterHourlyCron()}}
 
 # Skill bundle sync (cloud → CE): the scheduler fetches the signed snapshot of the cloud's
 # admin-managed GLOBAL skills, verifies the Ed25519 signature against catalog.bundle.trusted-keys
@@ -493,7 +615,7 @@ skill:
     cloud-url: ${SKILL_BUNDLE_CLOUD_URL:https://livecontext.ai}
     sync:
       enabled: ${SKILL_BUNDLE_SYNC_ENABLED:true}
-      cron: ${SKILL_BUNDLE_SYNC_CRON:0 */15 * * * *}
+      cron: ${SKILL_BUNDLE_SYNC_CRON:#{T(com.apimarketplace.common.scheduling.PollSpread).quarterHourlyCron()}}
 
 # Model-catalog SEED (boot-time, CE-only): ModelSeedBootstrapService inserts the
 # curated models shipped in the agent-service classpath resource
@@ -519,6 +641,15 @@ conversation:
   bridge:
     enabled: ${BRIDGE_ENABLED:true}
     url: ${BRIDGE_SERVICE_URL:http://host.docker.internal:8093}
+  # COLD-summary compaction. The monolith does not load conversation-service's
+  # application.yml, so the trigger knobs are restated here or a self-hosted
+  # operator has no way to reach them. Same three modes as cloud: turns
+  # (default, cadence only), size (COLD growth only), size-or-turns (first of
+  # the two). Defaults are identical to the cloud defaults, so this block
+  # changes nothing until it is set.
+  compaction:
+    trigger: ${CONVERSATION_COMPACTION_TRIGGER:turns}
+    size-trigger-cold-tokens: ${CONVERSATION_COMPACTION_SIZE_TRIGGER_COLD_TOKENS:32000}
 
 # Model picker: a CLI-routed provider (claude-code/codex/gemini-cli/mistral-vibe)
 # is only offered when the bridge confirms its CLI is installed AND authenticated.
@@ -617,6 +748,21 @@ ai:
         api-key: ${DEEPSEEK_API_KEY:}
         api-url: https://api.deepseek.com/v1/chat/completions
         models: deepseek-chat,deepseek-coder
+      # Decision provider - typed decisions, never text. Not selectable for chat or for
+      # an Agent node (its models carry mode='decision'); a Classify node dispatches to
+      # api-url. CE runs it on the self-hoster's own TYPESAFE_API_KEY.
+      #
+      # BYOK MODE ONLY. An install whose LLM source is CLOUD (cloud-linked) will not see
+      # this engine in the classify picker: isProviderRuntimeAvailable answers from
+      # CloudRelaySupport for a cloud-selected tenant, and the relay speaks
+      # chat-completions, not System One, so it genuinely cannot execute this model. The
+      # picker is therefore right to hide it. Switch the LLM source to BYOK to use it.
+      typesafe:
+        enabled: ${TYPESAFE_ENABLED:true}
+        display-order: 20
+        api-key: ${TYPESAFE_API_KEY:}
+        api-url: ${TYPESAFE_API_URL:https://api.typesafe.ai/v1/systemone}
+        models: jev-latest
       claude-code:
         enabled: ${BRIDGE_CLAUDE_CODE_ENABLED:true}
         display-order: 6
@@ -624,7 +770,7 @@ ai:
       codex:
         enabled: ${BRIDGE_CODEX_ENABLED:true}
         display-order: 7
-        models: gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.5,gpt-5.4,gpt-5.4-mini,gpt-5.3-codex,gpt-5.2
+        models: gpt-6-astra,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.5,gpt-5.4,gpt-5.4-mini,gpt-5.4-nano,gpt-5.3-codex,gpt-5.2
       gemini-cli:
         enabled: ${BRIDGE_GEMINI_CLI_ENABLED:true}
         display-order: 8

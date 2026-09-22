@@ -21,6 +21,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
+import com.apimarketplace.common.storage.service.api.QuotaOperations;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Collections;
@@ -366,8 +367,11 @@ class StorageQuotaControllerTest {
             assertThat(response.getBody().tenantId()).isEqualTo(ORG_ID);
             assertThat(response.getBody().usedBytes()).isEqualTo(1234L);
             verify(reconciliationService).reconcileOrganization(ORG_ID);
-            verify(quotaService).updateOrganizationUsage(ORG_ID);
             verify(quotaService).getOrganizationQuota(ORG_ID);
+            // The gauge refresh belongs to reconcileOrganization, exactly as it belongs to
+            // reconcileTenant on the other branch - so the nightly pass leaves both scopes
+            // consistent too, not only an explicit recalculate from this endpoint.
+            verify(quotaService, never()).updateOrganizationUsage(anyString());
             verify(reconciliationService, never()).reconcileTenant(anyString());
             verify(quotaService, never()).getQuota(anyString());
         }
@@ -407,6 +411,67 @@ class StorageQuotaControllerTest {
         }
 
         @Test
+        @DisplayName("tenant history bootstraps today's point when the table is still empty")
+        void historyWithoutOrgBootstrapsWhenEmpty() {
+            // The org branch has done this since 2026-05-22 and the tenant branch did not, so the
+            // same workspace drew a populated trend in one scope and a flat zero in the other
+            // until the 02:30 UTC cron. The bootstrap only helps if the re-read happens after it,
+            // which is what the returned body proves here.
+            when(historyService.getHistory(TENANT_ID, 30))
+                    .thenReturn(List.of())
+                    .thenReturn(List.of(new StorageUsageHistory(TENANT_ID, "FILES", 2048L, 7, LocalDate.now())));
+
+            ResponseEntity<List<StorageHistoryDto>> response = controller.getHistory(TENANT_ID, null, 30);
+
+            verify(reconciliationService).refreshTenantBreakdown(TENANT_ID);
+            verify(historyService).snapshotTenant(TENANT_ID);
+            verify(historyService, times(2)).getHistory(TENANT_ID, 30);
+            assertThat(response.getBody()).hasSize(1);
+            assertThat(response.getBody().get(0).usedBytes()).isEqualTo(2048L);
+        }
+
+        @Test
+        @DisplayName("tenant history does not snapshot when it already has points")
+        void historyWithoutOrgDoesNotBootstrapWhenPopulated() {
+            when(historyService.getHistory(TENANT_ID, 30)).thenReturn(
+                    List.of(new StorageUsageHistory(TENANT_ID, "FILES", 1024L, 5, LocalDate.now())));
+
+            controller.getHistory(TENANT_ID, null, 30);
+
+            verify(historyService, never()).snapshotTenant(anyString());
+        }
+
+        @Test
+        @DisplayName("a failed bootstrap still answers, with whatever history there was")
+        void historyWithoutOrgSurvivesFailedBootstrap() {
+            // Drawing a trend is not worth failing a page over.
+            when(historyService.getHistory(TENANT_ID, 30)).thenReturn(List.of());
+            doThrow(new RuntimeException("snapshot write failed"))
+                    .when(historyService).snapshotTenant(TENANT_ID);
+
+            ResponseEntity<List<StorageHistoryDto>> response = controller.getHistory(TENANT_ID, null, 30);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("every tenant read refreshes the tenant breakdown first, as the org reads do")
+        void tenantReadsRefreshTheBreakdownFirst() {
+            when(quotaService.getQuota(TENANT_ID)).thenReturn(createQuota(TENANT_ID, 1L, 100L));
+            when(breakdownService.getBreakdown(TENANT_ID)).thenReturn(List.of());
+            when(historyService.getHistory(TENANT_ID, 30)).thenReturn(
+                    List.of(new StorageUsageHistory(TENANT_ID, "FILES", 1L, 1, LocalDate.now())));
+
+            controller.getQuota(TENANT_ID, null);
+            controller.getBreakdown(TENANT_ID, null);
+            controller.getHistory(TENANT_ID, null, 30);
+
+            verify(reconciliationService, times(3)).refreshTenantBreakdown(TENANT_ID);
+            verify(reconciliationService, never()).refreshOrgBreakdown(anyString());
+        }
+
+        @Test
         @DisplayName("recalculate with X-Organization-ID reconciles only the active org")
         void recalculateWithOrgRunsOrgReconcilerOnly() {
             OrganizationStorageQuota quota = createOrgQuota(ORG_ID, 100L, 1_000_000L);
@@ -416,7 +481,6 @@ class StorageQuotaControllerTest {
 
             verify(reconciliationService).reconcileOrganization(ORG_ID);
             verify(reconciliationService, never()).reconcileTenant(anyString());
-            verify(quotaService).updateOrganizationUsage(ORG_ID);
         }
 
         @Test
@@ -522,6 +586,133 @@ class StorageQuotaControllerTest {
             StorageBreakdownDto dto2 = new StorageBreakdownDto("AGENTS", 1024L, 5, now);
 
             assertThat(dto1).isNotEqualTo(dto2);
+        }
+    }
+
+    /**
+     * The workspace response when an account-wide storage pool applies.
+     *
+     * <p>Two rules are load-bearing here and neither is visible from the numbers alone. The
+     * STATUS must be the one the write gate will apply, decided on the pool, or a member watches
+     * a green bar while every upload is refused. And the account TOTAL must reach the owning
+     * account only: hiding it in the UI is not a boundary, the response is readable in devtools.
+     */
+    @Nested
+    @DisplayName("org quota - account-wide pool")
+    class AccountPoolResponse {
+
+        private static final String ORG_ID = "org-9";
+        private static final long POOL_CEILING = 100L * 1024 * 1024 * 1024; // 100 GB
+
+        private OrganizationStorageQuota workspaceRow(String accountId, long ownUsed, long ownCeiling) {
+            OrganizationStorageQuota row = new OrganizationStorageQuota(ORG_ID, ownCeiling);
+            row.setUsedBytes(ownUsed);
+            row.setAccountId(accountId);
+            when(quotaService.getOrganizationQuota(ORG_ID)).thenReturn(row);
+            return row;
+        }
+
+        private void poolIs(long used, long ceiling) {
+            when(quotaService.getAccountPool(ORG_ID))
+                    .thenReturn(new QuotaOperations.AccountPool("7", used, ceiling));
+        }
+
+        @Test
+        @DisplayName("the owner gets the account total and the ENFORCED ceiling, not the row's copy")
+        void ownerSeesPoolAndEnforcedCeiling() {
+            // The row still carries a stale 100 MB; the pool's ceiling is the real one. Returning
+            // the row's copy would render "Account: 21 GB of 100 MB".
+            workspaceRow("7", 3L * 1024 * 1024 * 1024, 104_857_600L);
+            poolIs(21L * 1024 * 1024 * 1024, POOL_CEILING);
+
+            StorageQuotaDto dto = controller.getQuota("7", ORG_ID).getBody();
+
+            assertThat(dto.accountUsedBytes()).isEqualTo(21L * 1024 * 1024 * 1024);
+            assertThat(dto.maxBytes()).isEqualTo(POOL_CEILING);
+            assertThat(dto.usedBytes()).isEqualTo(3L * 1024 * 1024 * 1024);
+            // The only case where the row's ceiling and the pool's differ, so the only one that
+            // catches a status regressing to the row: 21 GB is fine against 100 GB and would
+            // read HARD_LIMIT_REACHED against the row's stale 100 MB.
+            assertThat(dto.status()).isEqualTo(QuotaStatus.OK);
+            // Every limit-shaped field describes the same allowance, or a client reading one
+            // would size its bar differently from a client reading another.
+            assertThat(dto.hardLimitBytes()).isEqualTo(POOL_CEILING);
+            assertThat(dto.softLimitBytes()).isEqualTo((long) (POOL_CEILING * 0.8));
+            assertThat(dto.availableBytes()).isEqualTo(POOL_CEILING - 21L * 1024 * 1024 * 1024);
+            assertThat(dto.usagePercentage()).isEqualTo(21.0);
+        }
+
+        @Test
+        @DisplayName("a member gets no account total, and NO field it can be derived from")
+        void memberNeverReceivesTheAccountTotal() {
+            long workspaceUsed = 3L * 1024 * 1024 * 1024;
+            long accountUsed = 21L * 1024 * 1024 * 1024;
+            workspaceRow("7", workspaceUsed, POOL_CEILING);
+            poolIs(accountUsed, POOL_CEILING);
+
+            StorageQuotaDto dto = controller.getQuota("99", ORG_ID).getBody();
+
+            // Nulling one field is not a boundary if the number survives elsewhere:
+            // ceiling - availableBytes, or usagePercentage x ceiling, each hand back the total.
+            assertThat(dto.accountUsedBytes()).isNull();
+            assertThat(POOL_CEILING - dto.availableBytes()).isNotEqualTo(accountUsed);
+            assertThat(dto.usagePercentage()).isNotEqualTo((accountUsed * 100.0) / POOL_CEILING);
+            // What a member does get: their own workspace's figures, plus the pool-decided
+            // status, which says "blocked" without saying by how much or by whom.
+            assertThat(dto.usedBytes()).isEqualTo(workspaceUsed);
+            assertThat(dto.availableBytes()).isEqualTo(POOL_CEILING - workspaceUsed);
+        }
+
+        @Test
+        @DisplayName("the owner's usage-derived fields DO describe the account, since they may see it")
+        void ownerUsageFieldsDescribeTheAccount() {
+            long accountUsed = 21L * 1024 * 1024 * 1024;
+            workspaceRow("7", 3L * 1024 * 1024 * 1024, POOL_CEILING);
+            poolIs(accountUsed, POOL_CEILING);
+
+            StorageQuotaDto dto = controller.getQuota("7", ORG_ID).getBody();
+
+            assertThat(dto.availableBytes()).isEqualTo(POOL_CEILING - accountUsed);
+            assertThat(dto.usagePercentage()).isEqualTo(21.0);
+        }
+
+        @Test
+        @DisplayName("a member still gets the refusal: status is decided on the pool for everyone")
+        void memberStillSeesTheRefusal() {
+            // The workspace holds almost nothing, so a row-based status would say OK while the
+            // gate refuses every byte.
+            workspaceRow("7", 1024L, POOL_CEILING);
+            poolIs(POOL_CEILING, POOL_CEILING);
+
+            StorageQuotaDto dto = controller.getQuota("99", ORG_ID).getBody();
+
+            assertThat(dto.status()).isEqualTo(QuotaStatus.HARD_LIMIT_REACHED);
+            assertThat(dto.accountUsedBytes()).isNull();
+        }
+
+        @Test
+        @DisplayName("past 80% of the POOL warns, even though this workspace is nearly empty")
+        void softLimitFiresOnThePool() {
+            workspaceRow("7", 1024L, POOL_CEILING);
+            poolIs((long) (POOL_CEILING * 0.85), POOL_CEILING);
+
+            assertThat(controller.getQuota("7", ORG_ID).getBody().status())
+                    .isEqualTo(QuotaStatus.SOFT_LIMIT_REACHED);
+        }
+
+        @Test
+        @DisplayName("an unattributed workspace keeps the row's own reading, pool or not")
+        void unattributedFallsBackToTheRow() {
+            OrganizationStorageQuota row = new OrganizationStorageQuota(ORG_ID, POOL_CEILING);
+            row.setUsedBytes(3L * 1024 * 1024 * 1024);
+            when(quotaService.getOrganizationQuota(ORG_ID)).thenReturn(row);
+            when(quotaService.getAccountPool(ORG_ID)).thenReturn(null);
+
+            StorageQuotaDto dto = controller.getQuota("7", ORG_ID).getBody();
+
+            assertThat(dto.accountUsedBytes()).isNull();
+            assertThat(dto.maxBytes()).isEqualTo(POOL_CEILING);
+            assertThat(dto.status()).isEqualTo(QuotaStatus.OK);
         }
     }
 }

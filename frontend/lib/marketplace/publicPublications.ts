@@ -28,6 +28,8 @@
  */
 import 'server-only';
 
+import { IS_MANAGED_CLOUD } from '@/lib/edition';
+
 import type { NodeIconData } from '@/lib/api/orchestrator/types';
 
 /** How long a public marketplace page may serve stale data, in seconds. */
@@ -244,6 +246,64 @@ async function getJson(path: string, revalidateSeconds: number): Promise<unknown
     // timeout above lands here too, which is the point.
     return null;
   }
+}
+
+/**
+ * Mirrors `VerifiedAccountService.MAX_BATCH_SIZE` on the backend: the ceiling on one
+ * badge lookup, which is why a page with more distinct authors than this asks in
+ * several requests instead of one oversized one. Exported so `verifiedBatchCap.test.ts`
+ * can pin it against the Java constant.
+ */
+export const VERIFIED_HANDLES_PER_REQUEST = 100;
+
+/**
+ * Which of these authors carry the verified badge, as a set of LOWERCASED @handles.
+ *
+ * Keyed by handle rather than by user id on purpose: this runs for anonymous
+ * visitors, and the id-keyed lookup is authenticated precisely because sequential
+ * ids would let anyone page out the platform's verified accounts. A handle is
+ * user-chosen and is already printed on the page, so asking about it reveals nothing
+ * the visitor is not looking at.
+ *
+ * Returns an empty set without issuing a request on a self-hosted deployment, and on
+ * any failure: a badge lookup must never take a public page down.
+ */
+export async function fetchVerifiedPublisherHandles(
+  handles: Array<string | null | undefined>,
+  revalidateSeconds = PUBLIC_MARKETPLACE_REVALIDATE_SECONDS,
+): Promise<Set<string>> {
+  const verified = new Set<string>();
+  if (!IS_MANAGED_CLOUD) return verified;
+
+  const distinct = Array.from(
+    new Set(
+      handles
+        .filter((h): h is string => typeof h === 'string' && h.trim() !== '')
+        .map((h) => h.trim().toLowerCase()),
+    ),
+  );
+  if (distinct.length === 0) return verified;
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < distinct.length; i += VERIFIED_HANDLES_PER_REQUEST) {
+    chunks.push(distinct.slice(i, i + VERIFIED_HANDLES_PER_REQUEST));
+  }
+
+  const answers = await Promise.all(
+    chunks.map((chunk) => getJson(
+      `/api/users/public/verified-handles?handles=${chunk.map(encodeURIComponent).join(',')}`,
+      revalidateSeconds,
+    )),
+  );
+  for (const payload of answers) {
+    if (typeof payload !== 'object' || payload === null) continue;
+    const list = (payload as Record<string, unknown>).verified;
+    if (!Array.isArray(list)) continue;
+    for (const handle of list) {
+      if (typeof handle === 'string') verified.add(handle.toLowerCase());
+    }
+  }
+  return verified;
 }
 
 /**

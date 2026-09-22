@@ -123,18 +123,34 @@ describe('control cores: declared vs reported', () => {
     expect(alignmentFor(switchNode, reported, 'switch').mismatches).toEqual([]);
   });
 
-  it('declares nothing for a loop read on its own, because the plan registers a loop from its EDGES', () => {
-    // A known blind spot, and the safe direction: the banner stays silent
-    // rather than warning about parameters it cannot see. The e2e compares
-    // against the SAVED plan, where the loop's configuration does exist.
+  it('declares a loop from the NODE, because registerControlNodes walks nodes before edges', () => {
+    // This used to assert the opposite, under the name "a known blind spot, the plan
+    // registers a loop from its EDGES". It is not: `processEdgesV2` calls
+    // `registerControlNodes` BEFORE it touches an edge, and that function iterates
+    // `ctx.nodes`. The old fixture returned null for an unrelated reason - it set
+    // `loopCondition`, and the plan reads `node.data.whileCondition` - so the test
+    // confirmed a blind spot that does not exist and hid the field-name trap that does.
     const loop = node(
-      { label: 'Repeat', loopCondition: '{{core:x.output.more}}', maxIterations: 3 },
-      'loop-1',
-      'loopNode',
+      { label: 'Repeat', kind: 'while_group', whileCondition: '{{core:x.output.more}}', maxIterations: 3 },
+      'while_group-1',
+      'whileGroupNode',
     );
-    expect(planEntryForNode(loop)).toBeNull();
-    expect(collectDeclaredParams(loop)).toEqual({});
-    expect(alignmentFor(loop, { maxIterations: 3 }, 'loop').mismatches).toEqual([]);
+    expect(collectDeclaredParams(loop, 'while-group')).toEqual({
+      loopCondition: '{{core:x.output.more}}',
+      maxIterations: 3,
+    });
+  });
+
+  it('a loop that keeps its condition under the WRONG field name declares nothing, and that is the real trap', () => {
+    // `loopCondition` is what the plan entry is called; `whileCondition` is what the node
+    // data must hold. A fixture that confuses them reports an empty Params column for a
+    // configured loop, which is what the previous test mistook for an edge blind spot.
+    const loop = node(
+      { label: 'Repeat', kind: 'while_group', loopCondition: '{{core:x.output.more}}' },
+      'while_group-2',
+      'whileGroupNode',
+    );
+    expect(collectDeclaredParams(loop, 'while-group').loopCondition).toBe('');
   });
 
   it('a fork reports its branch count under the plan name', () => {

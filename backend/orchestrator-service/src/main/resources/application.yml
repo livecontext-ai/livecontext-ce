@@ -242,6 +242,21 @@ workflow:
       result-ttl-seconds: ${WORKFLOW_EXECUTION_QUEUE_RESULT_TTL_SECONDS:900}
       worker-permit-ttl-seconds: ${WORKFLOW_EXECUTION_QUEUE_WORKER_PERMIT_TTL_SECONDS:120}
       execution-lease-ttl-seconds: ${WORKFLOW_EXECUTION_QUEUE_EXECUTION_LEASE_TTL_SECONDS:120}
+  mail:
+    # Socket timeouts for the email_inbox (IMAP) and send_email (SMTP) nodes. Connect and read
+    # answer different questions and must not share a value: connect asks whether the host is
+    # reachable (short on purpose), read asks how long a command may take, and a folder read
+    # over a hundred messages legitimately exceeds ten seconds on a slow provider. A MISSING or
+    # non-positive value falls back to MailTimeouts' own defaults, logging a WARN that names the
+    # property. An EMPTY value is a different failure: @Value cannot convert "" to an int, so the
+    # service fails to boot (measured in auth-service, MailTransportConfigBindingTest).
+    imap:
+      connect-timeout-ms: ${WORKFLOW_MAIL_IMAP_CONNECT_TIMEOUT_MS:10000}
+      read-timeout-ms: ${WORKFLOW_MAIL_IMAP_READ_TIMEOUT_MS:60000}
+    smtp:
+      connect-timeout-ms: ${WORKFLOW_MAIL_SMTP_CONNECT_TIMEOUT_MS:10000}
+      read-timeout-ms: ${WORKFLOW_MAIL_SMTP_READ_TIMEOUT_MS:30000}
+      write-timeout-ms: ${WORKFLOW_MAIL_SMTP_WRITE_TIMEOUT_MS:30000}
   builder:
     allow-create-without-validation: false  # When false, agent cannot create workflows with validation errors
   execution:

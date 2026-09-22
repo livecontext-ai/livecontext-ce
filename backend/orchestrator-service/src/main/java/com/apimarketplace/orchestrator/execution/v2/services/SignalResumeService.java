@@ -55,6 +55,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.time.Duration;
 import java.time.Instant;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
+import java.util.LinkedHashMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -1118,10 +1120,13 @@ public class SignalResumeService {
             : "UNKNOWN");
 
         if (resolvedSignal.getSignalConfig() != null && !resolvedSignal.getSignalConfig().isEmpty()) {
-            Map<String, Object> signalConfig = new HashMap<>(resolvedSignal.getSignalConfig());
-            signalConfig.remove("webhookToken");
-            signalConfig.remove("cdpToken");
-            input.put("signal_config", signalConfig);
+            // Through the gate, not a hand-written denylist. It used to remove `webhookToken`
+            // and `cdpToken` by name, three lines above a map that goes through forReport -
+            // two policies for one persisted row, and the shorter one only knew the two keys
+            // somebody had already been bitten by. `isCredentialKey` masks both of those and
+            // the next one nobody remembers to add, and it bounds the map while it is there.
+            input.put("signal_config",
+                ReportedParams.forReport(new LinkedHashMap<>(resolvedSignal.getSignalConfig())));
         }
         if (resolvedSignal.getItemId() != null) {
             input.put("item_id", resolvedSignal.getItemId());
@@ -1130,6 +1135,22 @@ public class SignalResumeService {
             input.put("trigger_id", resolvedSignal.getDagTriggerId());
         }
         input.put("epoch", resolvedSignal.getEpoch());
+
+        // The node's OWN parameters LAST, so they win (V500).
+        //
+        // This row is the only one a parked node ever gets, and it used to carry signal
+        // bookkeeping alone: an interface's variable_mapping, an approval's resolved
+        // delegation, a wait's duration under the plan's own key - none of it was reported
+        // anywhere, at any moment of the run, because the yield persists nothing and the
+        // resume knew only about the signal.
+        //
+        // Last rather than first, because on a key both of them write the PLAN's
+        // vocabulary is the one the panel labels and the one a workflow addresses:
+        // `duration` is the plan's name for what signal_config calls durationMs. Written
+        // the other way round the comment said one thing and the code did the other.
+        if (resolvedSignal.getReportedParams() != null && !resolvedSignal.getReportedParams().isEmpty()) {
+            input.putAll(resolvedSignal.getReportedParams());
+        }
         return input;
     }
 

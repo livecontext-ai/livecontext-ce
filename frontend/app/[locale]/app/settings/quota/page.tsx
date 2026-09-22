@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { getClientLocale } from '@/lib/utils/locale';
+import { OwnKeyRowNote } from './OwnKeyRowNote';
 import { Coins, Bot, MessageSquare, Workflow, RefreshCw, Filter, ChevronLeft, ChevronRight, User, ArrowDownCircle } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
@@ -9,82 +10,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { quotaApi, CreditSummary, CreditHistoryPage } from '@/lib/api';
 import { useAuth } from '@/lib/providers/smart-providers';
 import UsageAnalyticsPanel from './components/UsageAnalyticsPanel';
+import { ProviderModelCell, useModelNameIndex } from './components/modelLabels';
 import { isCeMode, creditsToUsd } from '@/lib/format-cost';
 import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
 import { BalanceBreakdownCard, TopUpModal } from '@/components/billing';
 import { usePaygTiers } from '@/lib/hooks/smart-hooks-complete';
+import { useFreeAiCredits } from '@/lib/hooks/useFreeAiCredits';
 import { useCreditWallet } from '@/lib/hooks/useCreditWallet';
+import { useScheduledPlanChange } from '@/lib/hooks/useScheduledPlanChange';
 import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
 import { cloudLinkService } from '@/lib/api/cloud-link.service';
 import { WorkspaceScopeSelect, ALL_WORKSPACES_SCOPE } from '@/components/settings/WorkspaceScopeSelect';
-
-/** Label keys per source type */
-// WORKFLOW_RUN intentionally absent: there is no per-run debit - billing
-// happens at the WORKFLOW_NODE granularity. Listing it here would surface a
-// dropdown filter that always returns zero rows.
-// V148+ display labels. Includes legacy IMAGE_GENERATION* keys so historical
-// ledger rows (pre-cutover) still render with a friendly label rather than the
-// raw enum string. Display-only - these source types are no longer written by
-// the new billing path; new image generations bill as PLATFORM_MARKUP via the
-// unified scope reservation lifecycle.
-const SOURCE_LABEL_KEYS: Record<string, string> = {
-  AGENT_EXECUTION: 'types.agent',
-  WORKFLOW_NODE: 'types.workflowNode',
-  // Launch promo: nodes run free (0 credits) and are logged as a distinct 0-cost
-  // source type so history rows stay clearly labeled "Workflow node (free)".
-  WORKFLOW_NODE_PROMO: 'types.workflowNodePromo',
-  CHAT_CONVERSATION: 'types.chat',
-  // Cloud-linked CE: every relayed LLM call is billed cloud-side under this single source
-  // type (the cloud collapses chat/agent/workflow origin into one). It only ever appears
-  // in the cloud-mirrored view, never the local CE ledger.
-  CE_LLM_RELAY: 'types.cloudRelay',
-  CLASSIFY_EXECUTION: 'types.classify',
-  GUARDRAIL_EXECUTION: 'types.guardrail',
-  // Browser-agent runs: LLM-driven Chromium sessions surfaced separately
-  // from chat-agent / classify / guardrail because the cost profile is
-  // different (visual context tokens dominate, multi-minute wall clock).
-  BROWSER_AGENT_EXECUTION: 'types.browserAgent',
-  // Stage 5.4 - COLD-summary calls charged via AgentObservabilityService.
-  // Segregated from AGENT_EXECUTION so users can see compaction cost
-  // separately in the quota breakdown + analytics panel.
-  COMPACTION_SUMMARY: 'types.compactionSummary',
-  // Web tools - search and fetch are billed as separate source types so they
-  // can be filtered independently on the quota / usage analytics page.
-  WEB_SEARCH: 'types.webSearch',
-  WEB_FETCH: 'types.webFetch',
-  // V148+ unified markup billing. Replaces IMAGE_GENERATION / IMAGE_GENERATION_BYOK
-  // for new tool calls. Released states surface to users so they understand
-  // when a reservation was returned (failed call, partial result, sweeper auto-release).
-  PLATFORM_MARKUP: 'types.platformMarkup',
-  PLATFORM_MARKUP_RELEASED: 'types.platformMarkupReleased',
-  PLATFORM_MARKUP_RELEASED_TIMEOUT: 'types.platformMarkupReleasedTimeout',
-  // Legacy display labels - no longer written, kept for historical row rendering.
-  IMAGE_GENERATION: 'types.imageGeneration',
-  IMAGE_GENERATION_BYOK: 'types.imageGenerationByok',
-  PURCHASE: 'types.purchase',
-  PLAN_GRANT: 'types.planGrant',
-  PLAN_RESET: 'types.planReset',
-};
-
-/**
- * Source types offered in the filter dropdown. Distinct from
- * {@link SOURCE_LABEL_KEYS} so we can render labels for legacy history rows
- * (IMAGE_GENERATION*) without offering them as filter options. Removing them
- * from the dropdown matches v9 spec: new billing only writes PLATFORM_MARKUP*.
- */
-const FILTER_SOURCE_TYPES = [
-  'AGENT_EXECUTION',
-  'WORKFLOW_NODE',
-  'CHAT_CONVERSATION',
-  'CLASSIFY_EXECUTION',
-  'GUARDRAIL_EXECUTION',
-  'BROWSER_AGENT_EXECUTION',
-  'COMPACTION_SUMMARY',
-  'PLATFORM_MARKUP',
-  'PURCHASE',
-  'PLAN_GRANT',
-  'PLAN_RESET',
-];
+import {
+  CREDIT_SOURCE_FILTERS,
+  CREDIT_SOURCE_FILTERS_LOCAL_LEDGER,
+  CREDIT_SOURCE_LABEL_KEYS,
+} from '@/lib/billing/creditSourceTypes';
 
 /**
  * Quota & Usage page.
@@ -98,6 +39,8 @@ export default function QuotaPage() {
 
 function CeQuotaPage() {
   const t = useTranslations('quota');
+  // Names the models the history charges for; see ./components/modelLabels.
+  const modelNames = useModelNameIndex();
   const { isLoading: authLoading, isAuthenticated } = useAuth();
   // Subscribe to the active workspace so the cost balance + usage history refetch on a
   // workspace switch (apiClient auto-attaches X-Active-Organization-ID). Without this the
@@ -283,14 +226,18 @@ function CeQuotaPage() {
               per-type filter only makes sense against the local BYOK ledger. */}
           {!usingCloud && (
             <Select value={filterType || 'ALL'} onValueChange={handleFilterChange}>
-              <SelectTrigger className="w-full sm:w-[180px] h-9 min-h-0 py-0 text-sm">
+              <SelectTrigger
+                data-testid="usage-history-filter"
+                className="w-full sm:w-[180px] h-9 min-h-0 py-0 text-sm"
+              >
                 <SelectValue placeholder={t('history.filterAll')} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="ALL">{t('history.filterAll')}</SelectItem>
-                {FILTER_SOURCE_TYPES.map((type) => (
+                {/* This branch reads the install's OWN ledger, which never carries a relayed row. */}
+                {CREDIT_SOURCE_FILTERS_LOCAL_LEDGER.map((type) => (
                   <SelectItem key={type} value={type}>
-                    {SOURCE_LABEL_KEYS[type] ? t(SOURCE_LABEL_KEYS[type]) : type}
+                    {CREDIT_SOURCE_LABEL_KEYS[type] ? t(CREDIT_SOURCE_LABEL_KEYS[type]) : type}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -317,10 +264,10 @@ function CeQuotaPage() {
                   <tr key={entry.id} className="border-b border-slate-200 dark:border-slate-700/50 last:border-b-0 hover:bg-theme-secondary/50 transition-colors duration-150">
                     <td className="px-4 py-2 text-sm text-theme-primary whitespace-nowrap">{formatDate(entry.createdAt)}</td>
                     <td className="px-4 py-2 text-sm text-theme-primary">
-                      {SOURCE_LABEL_KEYS[entry.sourceType] ? t(SOURCE_LABEL_KEYS[entry.sourceType]) : entry.sourceType}
+                      {CREDIT_SOURCE_LABEL_KEYS[entry.sourceType] ? t(CREDIT_SOURCE_LABEL_KEYS[entry.sourceType]) : entry.sourceType}
                     </td>
                     <td className="px-4 py-2 text-sm text-theme-primary">
-                      {entry.provider && entry.model ? `${entry.provider} / ${entry.model}` : entry.provider || entry.model || '-'}
+                      <ProviderModelCell provider={entry.provider} model={entry.model} index={modelNames} />
                     </td>
                     <td className="px-4 py-2 text-sm text-theme-primary whitespace-nowrap">
                       {isImageGenSourceType(entry.sourceType) ? (
@@ -331,6 +278,7 @@ function CeQuotaPage() {
                     </td>
                     <td className={`px-4 py-2 text-sm text-right font-medium whitespace-nowrap ${entry.amount > 0 ? 'text-emerald-500 dark:text-emerald-400' : 'text-theme-primary'}`}>
                       {entry.amount < 0 ? '' : '+'}{formatCredits(entry.amount)}
+                      <OwnKeyRowNote entry={entry} />
                     </td>
                     <td className="px-4 py-2 text-sm text-theme-primary max-w-[200px] truncate" title={entry.description ?? undefined}>
                       {entry.description || '-'}
@@ -366,6 +314,8 @@ function CeQuotaPage() {
 }
 
 function QuotaPageInner() {
+  // Names the models the history charges for; see ./components/modelLabels.
+  const modelNames = useModelNameIndex();
   const t = useTranslations('quota');
   const tSettings = useTranslations('settings');
   const { isLoading: authLoading, isAuthenticated, loginWithRedirect } = useAuth();
@@ -393,10 +343,23 @@ function QuotaPageInner() {
     balance: walletTotal,
     subBalance: walletSub,
     paygBalance: walletPayg,
+    aiBalance: walletAi,
+    hasAiAllowance,
     allowance,
+    renewsAt,
+    periodEndsAt,
   } = useCreditWallet();
   const { configured: paygConfigured } = usePaygTiers();
-  const monthlyPlan = allowance !== null ? { allowance } : undefined;
+  const freeAiCredits = useFreeAiCredits();
+  // The wallet card promises the CURRENT tier's grant, so it must stand down when a different
+  // tier is already scheduled to take effect. Same hook, same query key and same fail-open
+  // posture as the Billing page, which suppresses its own rows under this condition.
+  const { hasScheduledChange } = useScheduledPlanChange(isAuthenticated);
+  // The three travel together because the card states them in one sentence, and
+  // useCreditWallet resolves all three behind the same payer guard: an allowance we are
+  // sure of can never be paired with a date belonging to somebody else's subscription.
+  const monthlyPlan =
+    allowance !== null ? { allowance, renewsAt, periodEndsAt, hasScheduledChange } : undefined;
 
   const fetchData = useCallback(async () => {
     const requestSeq = ++requestSeqRef.current;
@@ -487,12 +450,14 @@ function QuotaPageInner() {
   const isImageGenSourceType = (sourceType: string) =>
     sourceType === 'IMAGE_GENERATION' || sourceType === 'IMAGE_GENERATION_BYOK';
 
-  // Breakdown card config
+  // The four kinds of spend that get a summary card. A deliberate SUBSET - four cards is the
+  // layout - but each is named from the shared map rather than restated here, so the card, the
+  // table row and the chart series for one kind of spend cannot end up with three names.
   const breakdownCards = [
-    { key: 'WORKFLOW_NODE', icon: Workflow, labelKey: 'types.workflowNode' },
-    { key: 'AGENT_EXECUTION', icon: Bot, labelKey: 'types.agent' },
-    { key: 'CHAT_CONVERSATION', icon: MessageSquare, labelKey: 'types.chat' },
-    { key: 'BROWSER_AGENT_EXECUTION', icon: Bot, labelKey: 'types.browserAgent' },
+    { key: 'WORKFLOW_NODE', icon: Workflow, labelKey: CREDIT_SOURCE_LABEL_KEYS.WORKFLOW_NODE },
+    { key: 'AGENT_EXECUTION', icon: Bot, labelKey: CREDIT_SOURCE_LABEL_KEYS.AGENT_EXECUTION },
+    { key: 'CHAT_CONVERSATION', icon: MessageSquare, labelKey: CREDIT_SOURCE_LABEL_KEYS.CHAT_CONVERSATION },
+    { key: 'BROWSER_AGENT_EXECUTION', icon: Bot, labelKey: CREDIT_SOURCE_LABEL_KEYS.BROWSER_AGENT_EXECUTION },
   ];
 
   // Loading skeleton
@@ -552,6 +517,11 @@ function QuotaPageInner() {
         balance={walletTotal ?? summary?.balance ?? null}
         subBalance={walletSub}
         paygBalance={walletPayg}
+        aiBalance={walletAi}
+        // Both halves: the account is the shape that gets a pot AND the plan still
+        // configures one. An admin who sets included_ai_credits to 0 closes the free
+        // tier, and the card must then stop drawing a row for a pot nobody has.
+        hasAiAllowance={hasAiAllowance && freeAiCredits > 0}
         onTopUp={() => setTopUpOpen(true)}
         topUpEnabled={paygConfigured}
         monthlyPlan={monthlyPlan}
@@ -640,14 +610,17 @@ function QuotaPageInner() {
           </div>
 
           <Select value={filterType || 'ALL'} onValueChange={handleFilterChange}>
-            <SelectTrigger className="w-full sm:w-[180px] h-9 min-h-0 py-0 text-sm">
+            <SelectTrigger
+              data-testid="usage-history-filter"
+              className="w-full sm:w-[180px] h-9 min-h-0 py-0 text-sm"
+            >
               <SelectValue placeholder={t('history.filterAll')} />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">{t('history.filterAll')}</SelectItem>
-              {FILTER_SOURCE_TYPES.map((type) => (
+              {CREDIT_SOURCE_FILTERS.map((type) => (
                 <SelectItem key={type} value={type}>
-                  {SOURCE_LABEL_KEYS[type] ? t(SOURCE_LABEL_KEYS[type]) : type}
+                  {CREDIT_SOURCE_LABEL_KEYS[type] ? t(CREDIT_SOURCE_LABEL_KEYS[type]) : type}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -675,12 +648,10 @@ function QuotaPageInner() {
                       {formatDate(entry.createdAt)}
                     </td>
                     <td className="px-4 py-2 text-sm text-theme-primary">
-                      {SOURCE_LABEL_KEYS[entry.sourceType] ? t(SOURCE_LABEL_KEYS[entry.sourceType]) : entry.sourceType}
+                      {CREDIT_SOURCE_LABEL_KEYS[entry.sourceType] ? t(CREDIT_SOURCE_LABEL_KEYS[entry.sourceType]) : entry.sourceType}
                     </td>
                     <td className="px-4 py-2 text-sm text-theme-primary">
-                      {entry.provider && entry.model
-                        ? `${entry.provider} / ${entry.model}`
-                        : entry.provider || entry.model || '-'}
+                      <ProviderModelCell provider={entry.provider} model={entry.model} index={modelNames} />
                     </td>
                     <td className="px-4 py-2 text-sm text-theme-primary whitespace-nowrap">
                       {isImageGenSourceType(entry.sourceType) ? (
@@ -702,6 +673,7 @@ function QuotaPageInner() {
                     </td>
                     <td className={`px-4 py-2 text-sm text-right font-medium whitespace-nowrap ${entry.amount > 0 ? 'text-emerald-500 dark:text-emerald-400' : 'text-theme-primary'}`}>
                       {entry.amount < 0 ? '' : '+'}{formatCredits(entry.amount)}
+                      <OwnKeyRowNote entry={entry} />
                     </td>
                     <td className="px-4 py-2 text-sm text-theme-primary max-w-[200px] truncate" title={entry.description ?? undefined}>
                       {entry.description || '-'}

@@ -109,6 +109,20 @@ class HttpExecutionServiceRetryLiveHttpTest {
             respond(exchange, 429, "{\"error\":\"rate limited\"}");
         });
 
+        // Refuses every time, asking for a full second: long enough that a tight budget refuses
+        // the wait and a generous one allows it.
+        server.createContext("/throttle-slow", exchange -> {
+            record(exchange.getRequestBody());
+            exchange.getResponseHeaders().add("Retry-After", "1");
+            respond(exchange, 429, "{\"error\":\"rate limited\"}");
+        });
+
+        // Never refuses. The baseline for "a call that was answered first time".
+        server.createContext("/ok", exchange -> {
+            record(exchange.getRequestBody());
+            respond(exchange, 200, "{\"ok\":true}");
+        });
+
         // A refusal only the account owner can act on.
         server.createContext("/refuse", exchange -> {
             record(exchange.getRequestBody());
@@ -136,6 +150,9 @@ class HttpExecutionServiceRetryLiveHttpTest {
 
     @AfterEach
     void stopProvider() {
+        // The budget and the retry count are thread-bound, and the test methods share a thread.
+        // Leaving either set would make one test's setting decide the next test's outcome.
+        ProviderRetryContext.clear();
         if (server != null) {
             server.stop(0);
         }
@@ -305,5 +322,151 @@ class HttpExecutionServiceRetryLiveHttpTest {
         call(api, tool("GET", "/gateway-error"), objectMapper.createArrayNode());
 
         assertThat(requestTimes).hasSize(3);
+    }
+
+    // ==================== The caller's budget ====================
+
+    @Test
+    @DisplayName("a caller budget of zero leaves every retry to the caller: the provider sees the "
+            + "call exactly once")
+    void budgetOfZeroLeavesEveryRetryToTheCaller() {
+        // What a node that paces itself sends. Without it the platform would re-send twice
+        // UNDERNEATH the node's own retry or loop, so a careful author would hammer the provider
+        // harder than a careless one.
+        ProviderRetryContext.setMaxWaitSeconds(0);
+
+        Map<String, Object> result = call(api(null), tool("GET", "/throttle-always"),
+                objectMapper.createArrayNode());
+
+        assertThat(result.get("status"))
+                .as("the refusal is handed back rather than absorbed")
+                .isEqualTo(429);
+        assertThat(requestTimes)
+                .as("counted by the provider: the platform added nothing")
+                .hasSize(1);
+        assertThat(ProviderRetryContext.getRetries()).isZero();
+    }
+
+    @Test
+    @DisplayName("and a refused wait is never slept first, so a paced workflow is not also slowed")
+    void aRefusedWaitIsNotSleptFirst() {
+        // The budget is checked BEFORE sleeping. Checking after would make the zero cost a full
+        // Retry-After per attempt while still not retrying: the worst of both.
+        ProviderRetryContext.setMaxWaitSeconds(0);
+
+        long startedAt = System.currentTimeMillis();
+        Map<String, Object> result = call(api(null), tool("GET", "/throttle-slow"),
+                objectMapper.createArrayNode());
+
+        assertThat(result.get("status")).isEqualTo(429);
+        assertThat(requestTimes).hasSize(1);
+        assertThat(System.currentTimeMillis() - startedAt).isLessThan(900L);
+    }
+
+    @Test
+    @DisplayName("the same endpoint IS retried when the caller says nothing, which is what makes "
+            + "the zero meaningful")
+    void thePlatformStillRetriesWhenTheCallerSaysNothing() {
+        Map<String, Object> result = call(api(null), tool("GET", "/throttle-always"),
+                objectMapper.createArrayNode());
+
+        assertThat(result.get("status")).isEqualTo(429);
+        assertThat(requestTimes).hasSize(3);
+    }
+
+
+    @Test
+    @DisplayName("THE money case: a caller budget CANNOT raise the platform's, because sleeping "
+            + "past the caller's read window bills a step the run reports as failed")
+    void theCallerCannotRaiseTheBudgetAboveThePlatformDefault() {
+        // Our caller waits on ONE HTTP read window and does not know how long we mean to sleep.
+        // Honouring a larger budget means: caller times out, we go on to re-send, succeed, store
+        // the result and commit the charge. The customer is billed for a step the run reports
+        // FAILED, and nothing releases it because from here nothing failed. The platform budget is
+        // the value chosen to fit inside that window, so it is the ceiling.
+        HttpExecutionService tightPlatform = new HttpExecutionService(
+                apiToolParameterRepository, userCredentialService, encryptionService,
+                objectMapper, jdbcTemplate, new RestTemplate(),
+                new ErrorPolicyEngine(2, 300L));
+        // What the help used to recommend, and what the inspector lets a user type.
+        ProviderRetryContext.setMaxWaitSeconds(60);
+
+        long startedAt = System.currentTimeMillis();
+        try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
+            urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            tightPlatform.executeHttpCallWithCredentials(
+                    api(null), tool("GET", "/throttle-slow"), objectMapper.createArrayNode(),
+                    null, null, null);
+        }
+
+        assertThat(requestTimes)
+                .as("the provider asked for 1s, the platform allows 300ms, so no re-send happens "
+                        + "however large the caller's number is")
+                .hasSize(1);
+        assertThat(System.currentTimeMillis() - startedAt)
+                .as("and nothing was slept: a wait that would be abandoned must not be started")
+                .isLessThan(900L);
+    }
+
+    @Test
+    @DisplayName("a caller budget BELOW the platform's is honoured, so the setting still does "
+            + "something in the direction that is safe")
+    void aCallerBudgetBelowThePlatformsIsHonoured() {
+        // Platform allows 10s, provider asks 1s, caller allows 1s: retried. The clamp is min(),
+        // not "ignore the caller", and this is what stops the fix above from making the setting
+        // inert in every direction but zero.
+        ProviderRetryContext.setMaxWaitSeconds(1);
+
+        call(api(null), tool("GET", "/throttle-slow"), objectMapper.createArrayNode());
+
+        assertThat(requestTimes).hasSize(2);
+        assertThat(ProviderRetryContext.getRetries()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("at budget 0, a declared rule still gets to say WHY: its message replaces the raw "
+            + "body instead of the refusal arriving unexplained")
+    void aDeclaredMessageSurvivesAZeroBudget() {
+        // A budget of 0 turns off the re-sending, not the EXPLAINING. The refusal still runs through
+        // declaredErrorMessage, so an API whose seed wrote a sentence for this case still shows it -
+        // otherwise a workflow that paces itself would be the one workflow whose users get raw
+        // provider JSON, which is exactly backwards.
+        ProviderRetryContext.setMaxWaitSeconds(0);
+        ApiEntity api = api("[{\"match\":{\"bodyContains\":\"rate limited\"},\"action\":\"retry\","
+                + "\"waitMs\":250,\"message\":\"This account is posting too fast. Wait a minute.\"}]");
+
+        Map<String, Object> result = call(api, tool("GET", "/throttle-always"),
+                objectMapper.createArrayNode());
+
+        assertThat(result.get("status")).isEqualTo(429);
+        assertThat(String.valueOf(result.get("error")))
+                .as("the seed's wording, not the provider's body")
+                .isEqualTo("This account is posting too fast. Wait a minute.");
+        assertThat(requestTimes).as("and still exactly one request").hasSize(1);
+    }
+
+    // ==================== What the caller learns afterwards ====================
+
+    @Test
+    @DisplayName("the number of re-sends travels back to the caller, because the wait itself "
+            + "produced no event")
+    void theRetryCountTravelsBackToTheCaller() {
+        call(api(null), tool("GET", "/throttle-once"), objectMapper.createArrayNode());
+
+        assertThat(ProviderRetryContext.getRetries())
+                .as("one refusal waited out is one re-send, and the node stayed RUNNING throughout")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a call answered first time reports no re-sends at all")
+    void aCallAnsweredFirstTimeReportsNothing() {
+        call(api(null), tool("GET", "/ok"), objectMapper.createArrayNode());
+
+        assertThat(requestTimes).hasSize(1);
+        assertThat(ProviderRetryContext.getRetries())
+                .as("absent, not zero-with-a-key: nothing changes for the overwhelming majority "
+                        + "of calls")
+                .isZero();
     }
 }

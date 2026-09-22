@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.domain;
 
 import com.apimarketplace.common.scope.OrgScopedEntity;
 import com.apimarketplace.common.scope.OrgScopedEntityListener;
+import com.apimarketplace.orchestrator.services.WorkflowNodeTypeExtractor;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -390,6 +391,27 @@ public class WorkflowEntity implements OrgScopedEntity {
 
     public void setNodeIcons(List<Map<String, Object>> nodeIcons) {
         this.nodeIcons = nodeIcons;
+    }
+
+    /**
+     * Node-type tokens of this workflow ({@code mcp:gmail}, {@code core:loop},
+     * {@code trigger:webhook}, ...), used by the node-type filter on the
+     * workflow list. Never null; empty for a plan with no nodes.
+     *
+     * <p>Computed from {@link #plan} on every call rather than stored in a
+     * column of its own. Every path that filters on this already has the plan in
+     * memory (it is an eager column, and the list loads the whole org set to run
+     * its search and sort), so a stored copy would be a duplicate of data
+     * already here - one that could go stale and drop a workflow out of a
+     * filtered list with no error to notice. The walk is over a handful of small
+     * arrays, next to nothing beside the JSONB deserialization that already
+     * happened to load the plan.
+     *
+     * <p>The published twin does keep a column, because its list queries
+     * deliberately never load the plan snapshot.
+     */
+    public List<String> getNodeTypes() {
+        return WorkflowNodeTypeExtractor.extractNodeTypes(this.plan);
     }
 
     public UUID getProjectId() {

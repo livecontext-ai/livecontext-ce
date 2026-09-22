@@ -98,7 +98,7 @@ public class JsonbPatchExecutor {
      * invalidate by seq alone without parsing the JSONB.
      *
      * <p>Pass {@code newSeq < 0} to skip the seq update (legacy behavior used
-     * by {@code JsonbPatchPostgresIT} which does not exercise the seq column).
+     * by {@code JsonbPatchPostgresTest} which does not exercise the seq column).
      * Production callers in {@code StateSnapshotService} always pass the
      * post-increment seq from {@code StateSnapshot.withIncrementedSeq()}.
      */
@@ -227,7 +227,7 @@ public class JsonbPatchExecutor {
      * Compose the {@code UPDATE workflow_runs SET state_snapshot = jsonb_set(...)}
      * SQL string for a fixed patch count. Extracted as a package-private static
      * helper so both the production {@link #applyPatches} path AND the Postgres
-     * integration test ({@code JsonbPatchPostgresIT}) call the same shape -
+     * integration test ({@code JsonbPatchPostgresTest}) call the same shape -
      * eliminates silent drift if the SQL evolves.
      *
      * <p>Shape (for n=2 patches):

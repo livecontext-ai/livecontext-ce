@@ -301,6 +301,36 @@ export function isCrudNode(node: Node<BuilderNodeData>): boolean {
 }
 
 /**
+ * Whether this canvas node becomes a catalog tool step (a `plan.mcps` entry).
+ *
+ * <p>THE authority for that question, and the body `filterStepNodes` used to carry inline. It
+ * matters beyond plan generation because a tool step is the only node the engine runs through
+ * `StepNode`, so anything keyed to "this node calls a provider" has to give the same answer.
+ *
+ * <p>The positive `toolData || apiData` test is the load-bearing half, not a shortcut: a node
+ * without either is not emitted as an mcps entry at all, whatever else it looks like. A second
+ * predicate that skipped it would offer a provider-only control on a node whose setting could
+ * never reach a plan entry.
+ */
+export function isToolStepNode(node: Node<BuilderNodeData>): boolean {
+  // Exclude CRUD nodes
+  if (isCrudNode(node)) return false;
+  // Exclude triggers
+  if (nodeRegistry.isTrigger(node)) return false;
+  // Exclude agents
+  if (isAiReasoningNode(node)) return false;
+  // Exclude all control nodes (decision, switch, option, loop, split, merge, fork, transform, wait, download_file, aggregate, exit, response)
+  if (nodeRegistry.isControlNode(node)) return false;
+  // Exclude notes
+  if (nodeRegistry.isNoteNode(node)) return false;
+  // Exclude interface nodes
+  if (nodeRegistry.isInterfaceNode(node)) return false;
+  // Include only tool/API nodes
+  if (node.data?.toolData || node.data?.apiData) return true;
+  return false;
+}
+
+/**
  * Detects if a node is a Find node (CRUD table operation that behaves like Split).
  */
 export function isFindNode(node: Node<BuilderNodeData>): boolean {

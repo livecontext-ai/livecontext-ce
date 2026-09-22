@@ -20,6 +20,9 @@ import com.apimarketplace.auth.service.StripeScheduleService;
 import com.apimarketplace.auth.service.SubscriptionService;
 import com.apimarketplace.auth.util.NonceUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import com.stripe.StripeClient;
 import com.stripe.exception.ApiException;
 import com.stripe.exception.InvalidRequestException;
@@ -115,7 +118,18 @@ class BillingControllerIntegrationTest {
         // checking 200/4xx fail. Inject the header by default; individual
         // tests that want to verify the 403 path (none today - covered
         // by BillingControllerOwnerGuardTest) can override with .header().
+        // Dates, rendered as the running service renders them. A bare standaloneSetup does
+        // NOT apply spring.jackson.serialization.write-dates-as-timestamps: false, so it writes
+        // a LocalDateTime as a [y,M,d,...] ARRAY where auth-service serves ISO-8601. Tests
+        // written against the array assert a property of this harness rather than of the
+        // response, and the difference is not cosmetic: the client reads these fields with a
+        // `typeof x === "string"` guard and silently drops anything else, so the one regression
+        // that would kill the feature is exactly the one an array-shaped assertion cannot see.
         mockMvc = MockMvcBuilders.standaloneSetup(billingController)
+                .setMessageConverters(new MappingJackson2HttpMessageConverter(
+                        Jackson2ObjectMapperBuilder.json()
+                                .featuresToDisable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                                .build()))
                 .defaultRequest(post("/").header("X-Organization-Role", "OWNER"))
                 .build();
     }
@@ -678,6 +692,108 @@ class BillingControllerIntegrationTest {
                             .header("X-User-ID", USER_ID_STR))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.subscription.cadence").value("yearly"));
+        }
+
+        @Test
+        @DisplayName("a monthly subscription is told its credits come back at the period end")
+        void meMonthlyNamesThePeriodEndAsTheNextCreditGrant() throws Exception {
+            Plan proPlan = buildPlan(3L, "PRO", "Pro");
+            User user = buildUser(USER_ID);
+            BillingCustomer bc = buildBillingCustomer(1L, user);
+            Subscription sub = buildSubscription(1L, proPlan, bc, "active");
+            LocalDateTime periodEnd = LocalDateTime.now().plusDays(15);
+            sub.setCurrentPeriodEnd(periodEnd);
+
+            when(subscriptionRepository.findTopByBillingCustomer_User_IdAndStatusInOrderByCreatedAtDesc(
+                    eq(USER_ID), any()))
+                    .thenReturn(Optional.of(sub));
+
+            mockMvc.perform(get("/api/billing/me")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.subscription.nextCreditGrantAt")
+                            .value(org.hamcrest.Matchers.startsWith(periodEnd.toLocalDate().toString())));
+        }
+
+        @Test
+        @DisplayName("REGRESSION: a yearly subscription is told its credits come back NEXT MONTH, not at its next invoice")
+        void meYearlyNamesTheMonthlyCreditCycleNotTheInvoice() throws Exception {
+            // The information a yearly customer could not get anywhere: the invoice is annual,
+            // the credit pack is monthly. Serving currentPeriodEnd as the credit date would tell
+            // somebody three weeks into his year to wait eleven more months.
+            Plan teamPlan = buildPlan(5L, "TEAM", "Team");
+            User user = buildUser(USER_ID);
+            BillingCustomer bc = buildBillingCustomer(1L, user);
+            Subscription sub = buildSubscription(1L, teamPlan, bc, "active");
+            LocalDateTime periodStart = LocalDateTime.now().minusDays(20);
+            sub.setPrice(null);
+            sub.setCadence("yearly");
+            sub.setCurrentPeriodStart(periodStart);
+            sub.setCurrentPeriodEnd(periodStart.plusMonths(12));
+            LocalDateTime creditsBack = periodStart.plusMonths(1);
+            LocalDateTime invoice = periodStart.plusMonths(12);
+
+            when(subscriptionRepository.findTopByBillingCustomer_User_IdAndStatusInOrderByCreatedAtDesc(
+                    eq(USER_ID), any()))
+                    .thenReturn(Optional.of(sub));
+
+            mockMvc.perform(get("/api/billing/me")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.subscription.cadence").value("yearly"))
+                    .andExpect(jsonPath("$.subscription.nextCreditGrantAt")
+                            .value(org.hamcrest.Matchers.startsWith(creditsBack.toLocalDate().toString())))
+                    // Both dates are served, and they are deliberately different: one is when the
+                    // card is charged, the other is when the credits arrive. The client decides
+                    // whether to explain that difference by comparing these two strings, so they
+                    // have to BE strings and they have to differ.
+                    .andExpect(jsonPath("$.subscription.currentPeriodEnd")
+                            .value(org.hamcrest.Matchers.startsWith(invoice.toLocalDate().toString())));
+        }
+
+        @Test
+        @DisplayName("the credit date is served as an ISO-8601 STRING, the only shape the client accepts")
+        void theCreditDateGoesOnTheWireAsAnIsoString() throws Exception {
+            // The assertions above read a string only because this harness is now configured the
+            // way the service is. That configuration is one line in application.yml, and nothing
+            // else stands between the client and an array it would drop in silence: Jackson's own
+            // default IS the array, and Jackson2ObjectMapperBuilder does not change it. Both
+            // halves are asserted, because the surprise was the second one.
+            LocalDateTime instant = LocalDateTime.of(2026, 10, 14, 23, 53, 9);
+            java.util.Map<String, Object> body = java.util.Map.of("nextCreditGrantAt", instant);
+
+            assertThat(Jackson2ObjectMapperBuilder.json().build().writeValueAsString(body))
+                    .as("Jackson's own default is the array shape the client silently drops")
+                    .isEqualTo("{\"nextCreditGrantAt\":[2026,10,14,23,53,9]}");
+
+            String applicationYml;
+            try (java.io.InputStream in = getClass().getResourceAsStream("/application.yml")) {
+                assertThat(in).as("auth-service application.yml is on the test classpath").isNotNull();
+                applicationYml = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            assertThat(applicationYml)
+                    .as("the service must not serve timestamp dates: the client drops them in silence")
+                    .contains("write-dates-as-timestamps: false");
+        }
+
+        @Test
+        @DisplayName("a subscription set to cancel is served a null credit date, never a renewal it will not get")
+        void meCancelledNamesNoCreditDate() throws Exception {
+            Plan proPlan = buildPlan(3L, "PRO", "Pro");
+            User user = buildUser(USER_ID);
+            BillingCustomer bc = buildBillingCustomer(1L, user);
+            Subscription sub = buildSubscription(1L, proPlan, bc, "active");
+            sub.setCancelAtPeriodEnd(true);
+
+            when(subscriptionRepository.findTopByBillingCustomer_User_IdAndStatusInOrderByCreatedAtDesc(
+                    eq(USER_ID), any()))
+                    .thenReturn(Optional.of(sub));
+
+            mockMvc.perform(get("/api/billing/me")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.subscription.cancelAtPeriodEnd").value(true))
+                    .andExpect(jsonPath("$.subscription.nextCreditGrantAt").value(nullValue()));
         }
 
         @Test
@@ -1719,17 +1835,18 @@ class BillingControllerIntegrationTest {
                     .andExpect(jsonPath("$.invoices[0].amountPaid").value(4900))
                     .andExpect(jsonPath("$.invoices[0].amountDue").value(0))
                     .andExpect(jsonPath("$.invoices[0].currency").value("usd"))
-                    // Instant fields: the standalone-MockMvc ObjectMapper (no Boot
-                    // auto-config) writes Instant as epoch seconds; assert the epoch
-                    // value so the test pins the DTO carrying the RIGHT instant
-                    // (1735689600 = 2025-01-01T00:00:00Z) without depending on the
-                    // harness's date rendering. Prod Boot Jackson renders ISO-8601.
-                    .andExpect(jsonPath("$.invoices[0].created",
-                            org.hamcrest.Matchers.hasToString(org.hamcrest.Matchers.startsWith("1735689600"))))
-                    .andExpect(jsonPath("$.invoices[0].periodStart",
-                            org.hamcrest.Matchers.hasToString(org.hamcrest.Matchers.startsWith("1733011200"))))
-                    .andExpect(jsonPath("$.invoices[0].periodEnd",
-                            org.hamcrest.Matchers.hasToString(org.hamcrest.Matchers.startsWith("1735689600"))))
+                    // Instant fields, asserted in the shape the service actually serves and the
+                    // client actually parses (`BillingInvoice.created: string`, read through
+                    // formatUtcDate). These used to assert epoch seconds because the harness
+                    // rendered them that way, with a comment noting that production did not; the
+                    // harness is now configured as the service is, so the apology is unnecessary
+                    // and the assertion is about the response instead of about the fixture.
+                    .andExpect(jsonPath("$.invoices[0].created")
+                            .value(org.hamcrest.Matchers.startsWith("2025-01-01T00:00:00")))
+                    .andExpect(jsonPath("$.invoices[0].periodStart")
+                            .value(org.hamcrest.Matchers.startsWith("2024-12-01T00:00:00")))
+                    .andExpect(jsonPath("$.invoices[0].periodEnd")
+                            .value(org.hamcrest.Matchers.startsWith("2025-01-01T00:00:00")))
                     .andExpect(jsonPath("$.invoices[0].hostedInvoiceUrl").value("https://invoice.stripe.com/i/in_001"))
                     .andExpect(jsonPath("$.invoices[0].invoicePdf").value("https://pay.stripe.com/invoice/in_001/pdf"))
                     .andExpect(jsonPath("$.invoices[1].id").value("in_002"))

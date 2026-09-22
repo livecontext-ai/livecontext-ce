@@ -35,6 +35,7 @@ vi.mock('@/lib/api', () => ({ orchestratorApi: { deleteWorkflow } }));
 
 import { SidePanelProvider, useSidePanel, type SidePanelTab } from '@/contexts/SidePanelContext';
 import { SidePanel } from '@/components/app/SidePanel';
+import { AGENDA_PANEL_TAB_ID } from '@/lib/sidePanel/tabResource';
 
 const SUB_WF = 'ef1d124a-610b-4c6b-b1d8-8fb6a6f20604';
 const WF = 'f54f378a-c4ff-4398-a003-107c87e9f2a6';
@@ -70,6 +71,12 @@ function openTabMenu(id: string) {
 }
 
 describe('SidePanel tab menu - "Go to page"', () => {
+  it('navigates the agenda tab to the full agenda page', () => {
+    openTabMenu(AGENDA_PANEL_TAB_ID);
+    fireEvent.click(screen.getByText('goToPage'));
+    expect(push).toHaveBeenCalledWith('/app/agenda');
+  });
+
   it('navigates a sub-workflow tab to the sub-workflow itself, not to a "builder-" id', () => {
     openTabMenu(`workflow-builder-${SUB_WF}`);
     fireEvent.click(screen.getByText('goToPage'));
@@ -81,6 +88,14 @@ describe('SidePanel tab menu - "Go to page"', () => {
     openTabMenu(`workflow-run-${WF}-${RUN}`);
     fireEvent.click(screen.getByText('goToPage'));
     expect(push).toHaveBeenCalledWith(`/app/workflow/${WF}/run/${RUN}`);
+  });
+
+  it('navigates an agent tab to that agent, not to the bare agents board', () => {
+    openTabMenu(`agent-${WF}`);
+    fireEvent.click(screen.getByText('goToPage'));
+    // Agents have no page of their own, so the one the panel shows travels in the query.
+    // Pre-fix this pushed '/app/agent' and the agent the user was looking at vanished.
+    expect(push).toHaveBeenCalledWith(`/app/agent?openAgent=${WF}`);
   });
 
   it('offers no menu on a tab that shows no addressable resource, just the close control', () => {

@@ -1,5 +1,6 @@
 package com.apimarketplace.trigger.repository;
 
+
 import com.apimarketplace.trigger.domain.WebhookTokenEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -24,7 +25,8 @@ public interface WebhookTokenRepository extends JpaRepository<WebhookTokenEntity
      * Find a webhook token entity by its token value.
      * Used during webhook dispatch to route to the correct workflow and trigger.
      */
-    Optional<WebhookTokenEntity> findByToken(String token);
+    /** Lookup by HMAC of the plaintext token (TokenAtRest.hash); the token column is encrypted, no findByToken on purpose. */
+    Optional<WebhookTokenEntity> findByTokenHash(String tokenHash);
 
     /**
      * Find token for a specific workflow and trigger combination.
@@ -69,4 +71,20 @@ public interface WebhookTokenRepository extends JpaRepository<WebhookTokenEntity
     @Query("SELECT DISTINCT w.workflowId FROM WebhookTokenEntity w WHERE w.workflowId IN :ids")
     Set<UUID> findWorkflowIdsWithTokens(@Param("ids") Collection<UUID> ids);
 
+    /**
+     * Find the active webhook-token rows for a workflow batch.
+     * Agenda uses the exact workflow/trigger pairs rather than treating one token as
+     * proof that every webhook trigger in the workflow is armed.
+     */
+    @Query("SELECT w FROM WebhookTokenEntity w WHERE w.workflowId IN :ids AND w.state = com.apimarketplace.trigger.domain.TriggerState.ACTIVE")
+    List<WebhookTokenEntity> findActiveByWorkflowIdIn(@Param("ids") Collection<UUID> ids);
+
+    /**
+     * READ-ONLY plaintext match for a row written before 2026-09-17 (token in clear, no hash).
+     * Native on purpose: a JPQL comparison would convert the parameter through the encrypting
+     * converter. Rewrites nothing; the delayed startup backfill does. Gated by the service on
+     * {@code PlaintextTokenBackfill.mayHaveLegacyRows}.
+     */
+    @Query(value = "SELECT * FROM trigger.webhook_tokens WHERE token = :plain AND token_hash IS NULL", nativeQuery = true)
+    Optional<WebhookTokenEntity> findLegacyPlaintext(@Param("plain") String plain);
 }

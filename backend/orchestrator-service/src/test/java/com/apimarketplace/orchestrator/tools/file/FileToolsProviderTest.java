@@ -190,6 +190,33 @@ class FileToolsProviderTest {
             assertThat(r.error()).contains("Failed to download");
         }
 
+        /**
+         * A refusal is not an outage. UrlNotAllowedException extends FileDownloadException,
+         * so without its own catch it would land on EXECUTION_FAILED above, which an agent
+         * reads as transient: it would retry a URL that will be refused identically every
+         * time, until it runs out of iterations. What this pins is that the branch EXISTS
+         * and passes the reason through unwrapped; the catch order itself needs no test,
+         * because javac refuses a subclass caught after its parent. The branch is the kind
+         * of thing a later tidy-up merges back into one.
+         */
+        @Test
+        @DisplayName("a refused URL -> INVALID_PARAMETER_VALUE, not the retryable EXECUTION_FAILED")
+        void refusedUrlIsNotRetryable() {
+            when(fileDownloader.download("https://x/redirects-inward"))
+                    .thenThrow(new FileDownloader.UrlNotAllowedException(
+                            "Refused to follow redirect from https://x/redirects-inward to "
+                                    + "http://169.254.169.254/latest: Requests to private/internal "
+                                    + "network addresses are not allowed: 169.254.169.254"));
+
+            ToolExecutionResult r = exec("download_file", Map.of("url", "https://x/redirects-inward"));
+
+            assertThat(r.errorCode()).isEqualTo(ToolErrorCode.INVALID_PARAMETER_VALUE);
+            assertThat(r.error())
+                    .as("the agent needs the reason to correct the URL, not a generic wrapper")
+                    .contains("Refused to follow redirect")
+                    .contains("169.254.169.254");
+        }
+
         @Test
         @DisplayName("a non-download failure on the download path (storage throws) hits the generic catch -> EXECUTION_FAILED")
         void genericFailureWrapped() {

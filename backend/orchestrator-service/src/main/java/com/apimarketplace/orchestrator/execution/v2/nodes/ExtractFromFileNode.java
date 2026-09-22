@@ -887,6 +887,14 @@ public class ExtractFromFileNode extends BaseNode {
         if (extractFromFileConfig != null) {
             inputData.put("format", extractFromFileConfig.format());
             inputData.put("mode", extractFromFileConfig.mode());
+            // `separator` decides how a TEXT file is split into records. Reported only
+            // in the mode that reads it: the config constructor defaults it, so a csv
+            // node would otherwise show a separator it never uses next to its real
+            // delimiter - telling the reader they configured something they did not.
+            if (extractFromFileConfig.isTextMode() && extractFromFileConfig.separator() != null
+                    && !extractFromFileConfig.separator().isBlank()) {
+                inputData.put("separator", extractFromFileConfig.separator());
+            }
             if (extractFromFileConfig.isTextMode()) {
                 inputData.put("chunking", extractFromFileConfig.isChunkingEnabled());
                 if (extractFromFileConfig.isChunkingEnabled()) {

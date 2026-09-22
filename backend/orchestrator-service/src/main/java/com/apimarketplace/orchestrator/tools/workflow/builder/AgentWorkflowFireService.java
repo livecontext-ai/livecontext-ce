@@ -779,6 +779,20 @@ public class AgentWorkflowFireService {
                     Map<String, Object> counts = new LinkedHashMap<>();
                     counts.put("completed", state.getCompletedNodeIds().size());
                     counts.put("failed", state.getFailedNodeIds().size());
+                    // A node that lost SOME of its split items stays COMPLETED by design, so it
+                    // was counted nowhere and the epoch read "failed: 0" while items had really
+                    // failed. Observed 2026-09-22: three classifications lost to a provider
+                    // outage, the whole downstream chain skipped, and the epoch reporting
+                    // {completed: 10, failed: 0, skipped: 5}. The epoch VERDICT stays binary on
+                    // purpose (see computeEpochStatus); what was missing is the count that makes
+                    // the loss visible at all.
+                    //
+                    // Complete for every trigger-fired run: both producers of
+                    // markNodePartialFailure converge on recordSplitAggregateIfMissing, and both
+                    // require a resolved trigger id. An internal, trigger-less execution with
+                    // per-item losses therefore still reports 0 here - the same internal-execution
+                    // exception the rest of the epoch accounting already carries.
+                    counts.put("partial_failed", state.getPartialFailedNodeIds().size());
                     counts.put("skipped", state.getSkippedNodeIds().size());
                     epochInfo.put("node_counts", counts);
                     epochInfo.put("status", computeEpochStatus(state, header.isActive()));

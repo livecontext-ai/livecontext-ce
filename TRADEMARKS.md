@@ -3,13 +3,15 @@
 > Draft. This policy is separate from the software license and needs legal
 > review before it is treated as final.
 
-The AGPL-3.0 license (see LICENSE) covers the **source code** of LiveContext
-Community Edition. It does not grant any rights to the LiveContext brand.
+The LiveContext Sustainable Use License 1.0 (see LICENSE) covers the **source
+code** of LiveContext Community Edition. It does not grant any rights to the
+LiveContext brand.
 
 "**LiveContext**" and the LiveContext logo are trademarks of LiveContext. These
-trademark rights are independent of the copyright license: the AGPL gives you
-broad freedom over the code, but not permission to use the name or logo in ways
-that could confuse people about the origin of a product or imply endorsement.
+trademark rights are independent of the copyright license: the Sustainable Use
+License gives you broad freedom over the code, but not permission to use the name
+or logo in ways that could confuse people about the origin of a product or imply
+endorsement.
 
 ## You may, without asking
 
@@ -27,6 +29,7 @@ that could confuse people about the origin of a product or imply endorsement.
   LiveContext or is endorsed by it.
 
 If you distribute a modified version, please use your own product name and
-branding, while keeping the attribution notices required by the AGPL and NOTICE.
+branding, while keeping the attribution notices required by the LICENSE and
+NOTICE.
 
 Questions about trademark use: contact@livecontext.ai

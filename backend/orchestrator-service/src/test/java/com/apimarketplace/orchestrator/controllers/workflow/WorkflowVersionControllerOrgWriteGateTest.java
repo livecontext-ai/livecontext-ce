@@ -88,7 +88,8 @@ class WorkflowVersionControllerOrgWriteGateTest {
     void setUp() {
         WorkflowVersionController controller = new WorkflowVersionController(
                 versionService, workflowRepository, workflowRunRepository, pinService,
-                new ObjectMapper(), orgAccessGuard, workflowManagementService);
+                new ObjectMapper(), orgAccessGuard, workflowManagementService,
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.activity.WorkflowEditorsService.class));
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new OrgAccessDeniedExceptionHandler())
                 .build();

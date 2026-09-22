@@ -445,16 +445,7 @@ public class StripeBillingService {
         }
 
         // 2b) Detect actual billing interval from Stripe subscription items (source of truth)
-        String stripeInterval = null;
-        for (var item : stripeSub.getItems().getData()) {
-            if (!priceCacheService.isCreditPackPrice(item.getPrice().getId())) {
-                var recurring = item.getPrice().getRecurring();
-                if (recurring != null) {
-                    stripeInterval = "year".equals(recurring.getInterval()) ? "yearly" : "monthly";
-                }
-                break;
-            }
-        }
+        String stripeInterval = StripeSubscriptionPeriod.cadenceOf(stripeSub, priceCacheService::isCreditPackPrice);
         boolean isBillingCycleChange = billingCycleOverride != null && stripeInterval != null
                 && !billingCycleOverride.equals(stripeInterval);
         if (!isBillingCycleChange && stripeInterval != null && !stripeInterval.equals(currentBillingCycle)) {
@@ -1093,10 +1084,17 @@ public class StripeBillingService {
      * S'assure aussi que le nonce est present dans les metadonnees du customer.
      */
     private BillingCustomer ensureValidStripeCustomer(User user) throws StripeException {
-        BillingCustomer bc = billingCustomerRepository.findByUserId(user.getId())
-                                                      .orElseGet(() -> new BillingCustomer(user, "stripe"));
+        // Deliberately NOT created here. The row has to exist before recreateStripeCustomer saves
+        // it, and that insert is on a uniquely constrained column, so a concurrent first checkout
+        // for the same user must wait on that key until THIS transaction commits. Taking it here
+        // would add the customer retrieve/create round-trips below to that wait; taking it at the
+        // save point drops them. It does not reduce the wait to a statement: this class is
+        // @Transactional and every caller of this method makes one more Stripe call afterwards
+        // (checkout session, portal session, topup), so the loser still waits across that one.
+        // See BillingCustomerRepository.findOrCreate.
+        BillingCustomer bc = billingCustomerRepository.findByUserId(user.getId()).orElse(null);
 
-        String customerId = bc.getProviderCustomerId();
+        String customerId = bc == null ? null : bc.getProviderCustomerId();
         if (customerId != null && !customerId.isBlank()) {
             try {
                 Customer customer = stripe.customers().retrieve(customerId);
@@ -1131,6 +1129,7 @@ public class StripeBillingService {
         return recreateStripeCustomer(user, bc);
     }
 
+    /** @param bc the user's existing row, or {@code null} when they have none yet. */
     private BillingCustomer recreateStripeCustomer(User user, BillingCustomer bc) throws StripeException {
         String nonce = nonceUtil.generateNonce(user.getId());
 
@@ -1141,10 +1140,18 @@ public class StripeBillingService {
                 .putMetadata("nonce", nonce)
                 .build();
         Customer created = stripe.customers().create(params);
-        bc.setProviderCustomerId(created.getId());
-        
-        
-        return billingCustomerRepository.save(bc);
+
+        // The row is taken HERE, after the call above, and through findOrCreate rather than
+        // new + save: the old spelling was a check-then-act on billing_customer.user_id, so a
+        // concurrent first checkout for the same user did not lose a row, it lost this whole
+        // transaction. Taking it this late is not cosmetic either, it is what keeps the Stripe
+        // customer round-trips out of the window a losing racer waits through. See the
+        // repository method, which puts that duty on callers.
+        BillingCustomer row = bc != null
+                ? bc
+                : billingCustomerRepository.findOrCreate(user.getId(), "stripe");
+        row.setProviderCustomerId(created.getId());
+        return billingCustomerRepository.save(row);
     }
 
     private String buildFullName(User user) {
@@ -1423,6 +1430,15 @@ public class StripeBillingService {
         return debug;
     }
 
+    /**
+     * <p><b>Currently unreachable: nothing calls this.</b> The twin of
+     * {@code BillingController.createFreeSubscription}, and the more dangerous of the two. Like
+     * it, this inserts an ACTIVE subscription without retiring the user's existing active row,
+     * which V423's partial unique index rejects; unlike it, the catch below swallows, so the
+     * rejection would leave this transaction dead and the caller would learn about it at the
+     * commit, with only a log line here to say why. Do not wire it up as it stands:
+     * {@code FreeSubscriptionProvisioner} is the path that does this correctly.
+     */
     private void createFreeSubscription(User user) {
         try {
             var freePlan = planRepository.findByCode("FREE");

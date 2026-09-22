@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter } from '@/i18n/navigation';
 import { useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
@@ -12,24 +13,31 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { useDragSensors } from '@/lib/dnd/useDragSensors';
-import { CalendarClock } from 'lucide-react';
+import { CalendarClock, Loader2 } from 'lucide-react';
 import { AuthenticatedView } from './AuthenticatedView';
 import { useToast } from '@/components/Toast';
 import ToastContainer from '@/components/ToastContainer';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 import { useAgendaPreferences } from '@/hooks/useAgendaPreferences';
+import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import {
   agendaService,
   type Agenda,
+  type AgendaMarker,
   type AgendaOccurrence,
   type MoveScope,
 } from '@/lib/api/orchestrator/agenda.service';
+import {
+  productionResourceKind,
+  setProductionResourcePaused,
+} from '@/lib/api/orchestrator/resource-control';
 import {
   addDays,
   addMonths,
   buildTimezoneOptions,
   dayKey,
+  formatCompactDateRange,
   formatFullDate,
   formatMonthTitle,
   monthGridDays,
@@ -44,19 +52,49 @@ import { MoveOccurrenceDialog } from '@/components/agenda/MoveOccurrenceDialog';
 import { OccurrenceMenu } from '@/components/agenda/OccurrenceMenu';
 import { TimeGridView } from '@/components/agenda/TimeGridView';
 import { occurrenceHref } from '@/components/agenda/agendaVisuals';
+import { coverageBoundaryLabel } from '@/components/agenda/agendaCoverage';
 import { markEpochPickedByUser } from '@/components/workflow/run-panel/useDefaultEpochSelection';
 import { AGENDA_EMPTY_KEYS, selectAgendaEmptyState } from '@/components/agenda/agendaEmptyState';
 import { resolveDropStart, type AgendaDropTarget } from '@/components/agenda/agendaDrag';
 import { OccurrenceDragPreview } from '@/components/agenda/OccurrenceDragPreview';
 import { agendaErrorText } from '@/components/agenda/agendaErrors';
 import {
-  NewScheduledWorkflowDialog,
+  agendaTriggerKey,
+  occurrenceMatchesTriggerTypes,
+  occurrenceUsesTrigger,
+} from '@/components/agenda/agendaTriggerSelection';
+import { AGENDA_KIND_ORDER, type AgendaKind } from '@/components/agenda/agendaLaunchKinds';
+import {
+  NewScheduledResourceDialog,
+  type NewScheduleKind,
   type NewScheduleSlot,
-} from '@/components/agenda/NewScheduledWorkflowDialog';
+} from '@/components/agenda/NewScheduledResourceDialog';
 import { createScheduledWorkflowPlan } from '@/lib/workflows/defaultWorkflowPlan';
 import { orchestratorApi } from '@/lib/api';
 import { rememberWorkflowName } from '@/lib/workflows/recentWorkflowNames';
 import { track } from '@/lib/analytics/analytics';
+
+// Loaded only once an agent is actually being created. The agent form is the largest
+// component in the app and pulls the model catalogue, the tool catalogue and the skills
+// tree behind it; a calendar that fetched all of that on every page view to serve a button
+// most visits never press would pay for the feature on every visit that does not use it.
+const CreateAgentModal = dynamic(
+  () => import('@/components/chat/CreateAgentModal').then((m) => m.CreateAgentModal),
+  {
+    ssr: false,
+    // Confirming closes the slot dialog, so without this the screen simply goes back to the
+    // calendar while the chunk downloads and the click reads as having done nothing.
+    loading: () => (
+      <div
+        role="status"
+        aria-live="polite"
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+      >
+        <Loader2 className="h-6 w-6 animate-spin text-white" aria-hidden="true" />
+      </div>
+    ),
+  },
+);
 
 /**
  * The agenda page: every scheduled workflow, application and agent in the workspace,
@@ -73,7 +111,12 @@ function parseLinkedDate(value: string | null): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-export function AgendaView() {
+interface AgendaViewProps {
+  /** Render inside the app side panel, whose shell already owns authentication and padding. */
+  embedded?: boolean;
+}
+
+export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
   const t = useTranslations('agenda');
   const router = useRouter();
   const { toasts, addToast, removeToast } = useToast();
@@ -118,6 +161,13 @@ export function AgendaView() {
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [search, setSearch] = useState('');
+  const [selectedTriggerKey, setSelectedTriggerKey] = useState<string | null>(null);
+  // Every kind on by default, agent launch kinds included: the calendar's job is to show
+  // what the workspace did, and a filter that starts partly off hides work without saying
+  // so. AGENDA_KIND_ORDER, not TRIGGER_KIND_ORDER: seeding from the eight workflow kinds
+  // would make every agent run invisible from the first paint. Its LENGTH is separately
+  // what selectAgendaEmptyState compares against to decide whether anything is filtered.
+  const [triggerTypes, setTriggerTypes] = useState<AgendaKind[]>([...AGENDA_KIND_ORDER]);
   const [reloadKey, setReloadKey] = useState(0);
 
   // Menu + dialog state.
@@ -127,6 +177,11 @@ export function AgendaView() {
   // The empty slot the user clicked, and the refusal to report if creating from it fails.
   const [newSlot, setNewSlot] = useState<NewScheduleSlot | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  // The schedule an agent is being created WITH, and the only thing that makes the agent
+  // form appear on this page. Null until the slot dialog is confirmed on the agent kind.
+  const [agentSeed, setAgentSeed] = useState<
+    { name: string; cron: string; timezone: string; description?: string } | null
+  >(null);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -151,6 +206,11 @@ export function AgendaView() {
   }, [anchor, timezone, view, weekStartsOn]);
 
   const reload = useCallback(() => setReloadKey((key) => key + 1), []);
+  // `reload` refreshes the CALENDAR. Every mutation below also changes what the notification
+  // bell lists as armed and what its imminent-fire ring pulses for, and that payload is
+  // invalidated by nothing - so each of them asks for it again, exactly as the bell's own
+  // schedule row menu does after the same calls.
+  const refreshAutomations = useRefreshHomeStatus();
   useOrgScopedReset(reload);
 
   useEffect(() => {
@@ -187,17 +247,33 @@ export function AgendaView() {
     return () => { cancelled = true; };
   }, [hydrated, visibleWindow.from, visibleWindow.to, preferences.showPast, reloadKey, addToast, t]);
 
+  const triggerCandidates = useMemo(() => {
+    if (!agenda) return [];
+    return (agenda.markers ?? []).filter((trigger) => {
+      if (!preferences.resourceTypes.includes(trigger.resourceType)) return false;
+      if (!triggerTypes.includes(trigger.triggerType)) return false;
+      if (!preferences.showPaused && (!trigger.armed || trigger.resourcePaused)) return false;
+      return true;
+    });
+  }, [agenda, preferences.resourceTypes, preferences.showPaused, triggerTypes]);
+
+  const selectedTrigger = useMemo(
+    () => triggerCandidates.find((trigger) => agendaTriggerKey(trigger) === selectedTriggerKey) ?? null,
+    [selectedTriggerKey, triggerCandidates],
+  );
+
   /** Occurrences after the on-screen filters, which never round-trip to the server. */
   const visibleOccurrences = useMemo(() => {
     if (!agenda) return [];
-    const needle = search.trim().toLowerCase();
     return agenda.occurrences.filter((occurrence) => {
       if (!preferences.resourceTypes.includes(occurrence.resourceType)) return false;
       if (!preferences.showPast && occurrence.kind === 'PAST') return false;
-      if (needle && !occurrence.name.toLowerCase().includes(needle)) return false;
+      if (!occurrenceMatchesTriggerTypes(occurrence, triggerTypes)) return false;
+      if (selectedTrigger
+        && !occurrenceUsesTrigger(occurrence, selectedTrigger, agenda.markers ?? [])) return false;
       return true;
     });
-  }, [agenda, preferences.resourceTypes, preferences.showPast, search]);
+  }, [agenda, preferences.resourceTypes, preferences.showPast, selectedTrigger, triggerTypes]);
 
   const occurrencesByDay = useMemo(() => {
     const map = new Map<string, AgendaOccurrence[]>();
@@ -241,11 +317,8 @@ export function AgendaView() {
     if (view === 'month') return formatMonthTitle(anchor, timezone);
     if (view === 'day') return formatFullDate(anchor, timezone);
     const days = weekGridDays(anchor, timezone, weekStartsOn);
-    return t('weekRange', {
-      from: formatFullDate(days[0], timezone),
-      to: formatFullDate(days[6], timezone),
-    });
-  }, [view, anchor, timezone, weekStartsOn, t]);
+    return formatCompactDateRange(days[0], days[6], timezone);
+  }, [view, anchor, timezone, weekStartsOn]);
 
   /* ---------------------------------------------------------------- *
    *  Interaction
@@ -299,13 +372,13 @@ export function AgendaView() {
   );
 
   const openResource = useCallback(
-    (target: {
-      resourceType: AgendaOccurrence['resourceType'];
-      resourceId: string;
-      runIdPublic?: string;
-      publicationId?: string;
-      epoch?: number;
-    }) => {
+    // Typed against the fields occurrenceHref and the epoch hand-off actually read,
+    // conversationId INCLUDED. Listing a subset used to work only because every caller
+    // happens to pass the whole occurrence and TypeScript does not strip extra
+    // properties at runtime: anyone rebuilding this object from a pick would have sent
+    // every agent run back to the agent panel, with no type error anywhere.
+    (target: Pick<AgendaOccurrence, 'resourceType' | 'resourceId'>
+      & Partial<Pick<AgendaOccurrence, 'runIdPublic' | 'publicationId' | 'epoch' | 'conversationId'>>) => {
       // A past fire opens the run ON that fire. A run is a sequence of fires and its
       // surfaces default to the cumulative view of ALL of them - right when you open a
       // run, wrong when you clicked one dot on a calendar: the user pointed at Tuesday
@@ -431,6 +504,41 @@ export function AgendaView() {
     [addToast, describeError, router, t],
   );
 
+  /**
+   * What the slot dialog's confirm does, which depends on WHAT is being scheduled.
+   *
+   * <p>A workflow is created here and then opened in the builder: two fields are enough to
+   * describe one, and the thing the user still has to do lives somewhere else.
+   *
+   * <p>An agent is NOT created here. It is handed to the agent form with this schedule
+   * already set, because an agent needs a model, a system prompt, a tool grant and a
+   * budget, and a second, thinner agent form on this page would be a place for all four to
+   * default silently. So this path writes nothing: it swaps one dialog for another, and
+   * the agent exists only if that form is saved.
+   */
+  const confirmNewScheduled = useCallback(
+    (input: {
+      kind: NewScheduleKind;
+      name: string;
+      cron: string;
+      timezone: string;
+      cronDescription?: string;
+    }) => {
+      if (input.kind === 'AGENT') {
+        setAgentSeed({
+          name: input.name,
+          cron: input.cron,
+          timezone: input.timezone,
+          description: input.cronDescription,
+        });
+        setNewSlot(null);
+        setCreateError(null);
+        return;
+      }
+      void createScheduledWorkflow(input);
+    },
+    [createScheduledWorkflow],
+  );
 
   const confirmMove = useCallback(
     async (startAt: Date, scope: MoveScope) => {
@@ -454,13 +562,14 @@ export function AgendaView() {
           message: scope === 'ALL' ? t('toasts.movedAll') : t('toasts.movedNext'),
         });
         reload();
+        refreshAutomations();
       } catch (error) {
         setMoveError(describeError(error));
       } finally {
         setBusy(false);
       }
     },
-    [moveTarget, describeError, addToast, t, reload],
+    [moveTarget, describeError, addToast, t, reload, refreshAutomations],
   );
 
   const runNow = useCallback(
@@ -472,6 +581,7 @@ export function AgendaView() {
         setSelected(null);
         addToast({ type: 'success', title: t('toasts.ranTitle'), message: t('toasts.ranMessage') });
         reload();
+        refreshAutomations();
       } catch (error) {
         addToast({
           type: 'error',
@@ -482,7 +592,7 @@ export function AgendaView() {
         setBusy(false);
       }
     },
-    [addToast, describeError, t, reload],
+    [addToast, describeError, t, reload, refreshAutomations],
   );
 
   const togglePause = useCallback(
@@ -497,6 +607,7 @@ export function AgendaView() {
           message: enabled ? t('toasts.resumedMessage') : t('toasts.pausedMessage'),
         });
         reload();
+        refreshAutomations();
       } catch (error) {
         addToast({
           type: 'error',
@@ -507,8 +618,37 @@ export function AgendaView() {
         setBusy(false);
       }
     },
-    [addToast, describeError, t, reload],
+    [addToast, describeError, t, reload, refreshAutomations],
   );
+
+  const toggleResourcePause = useCallback(async (resource: AgendaMarker | AgendaOccurrence) => {
+    setBusy(true);
+    const resourceKind = productionResourceKind(resource.resourceType);
+    try {
+      const paused = !resource.resourcePaused;
+      await setProductionResourcePaused(resource, paused);
+      setSelected(null);
+      addToast({
+        type: 'success',
+        title: paused
+          ? t('toasts.resourcePausedTitle', { type: resourceKind })
+          : t('toasts.resourceResumedTitle', { type: resourceKind }),
+        message: paused
+          ? t('toasts.resourcePausedMessage', { type: resourceKind })
+          : t('toasts.resourceResumedMessage', { type: resourceKind }),
+      });
+      reload();
+      refreshAutomations();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: t('toasts.resourceToggleFailedTitle', { type: resourceKind }),
+        message: describeError(error),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, [addToast, describeError, reload, t, refreshAutomations]);
 
 
   /* ---------------------------------------------------------------- *
@@ -540,22 +680,35 @@ export function AgendaView() {
     failed: loadFailed,
     loading,
     resourceTypes: preferences.resourceTypes,
-    search,
+    search: selectedTrigger ? selectedTrigger.name : '',
+    triggerTypes,
     showPast: preferences.showPast,
     showPaused: preferences.showPaused,
     occurrenceCount: visibleOccurrences.length,
   });
 
-  return (
-    <AuthenticatedView maxWidth="max-w-[1600px]" overflow>
-      <div className="flex min-h-0 flex-1 flex-col gap-3">
+  const content = (
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
         <AgendaHeader
           title={title}
           anchor={anchor}
           preferences={preferences}
           timezoneOptions={timezoneOptions}
           search={search}
+          triggers={triggerCandidates}
+          triggerCatalogue={agenda?.markers ?? []}
+          occurrences={agenda?.occurrences ?? []}
+          selectedTriggerKey={selectedTriggerKey}
+          triggerTypes={triggerTypes}
+          busy={busy}
+          canMutate={canMutate}
           onSearchChange={setSearch}
+          onSelectTrigger={setSelectedTriggerKey}
+          onToggleTriggerType={(type) => setTriggerTypes((current) => current.includes(type)
+            ? current.filter((candidate) => candidate !== type)
+            : [...current, type])}
+          onToggleResourcePause={(trigger) => void toggleResourcePause(trigger)}
+          onOpenTrigger={(trigger) => router.push(occurrenceHref(trigger))}
           onPrevious={() => step(-1)}
           onNext={() => step(1)}
           onToday={() => {
@@ -587,7 +740,42 @@ export function AgendaView() {
             {t('truncated.schedules', { n: truncatedCount })}
           </p>
         )}
-        {agenda?.pastTruncated && (
+        {/* Naming the date matters more than the warning. "Some older runs are not
+            shown" beside a month whose first three weeks are empty reads as "nothing ran
+            then"; naming the day coverage starts at tells the user which part of the grid
+            is a fact and which part is a gap. The server only sends it when it knows. */}
+        {/* Three different facts, three different sentences. "Some older runs are not
+            shown" is only true of a CAP; when the agent source could not be read at all
+            the missing rows include today's, and sending the user to look back in time
+            for them is the wrong instruction. The dated form comes last because it is
+            the only one that can name where coverage starts.
+
+            The unavailable case is its own condition rather than a branch inside the
+            truncation one: the backend ORs it into pastTruncated today, and nesting made
+            the sentence silently disappear the day that stopped being true. The DTO
+            documents them as separate facts, so the page reads them as separate facts. */}
+        {agenda?.agentHistoryUnavailable && (
+          <p className="shrink-0 rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+            {t('truncated.agentHistoryUnavailable')}
+          </p>
+        )}
+        {/* Both, when both are true. An unreachable agent source and a capped epoch scan
+            are two independent gaps, and picking one to mention dropped the other: a
+            month could be missing its older workflow fires AND every agent run, and the
+            user would only be told about the agents. */}
+        {agenda?.pastTruncated && !agenda?.agentHistoryUnavailable && (
+          <p className="shrink-0 rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+            {agenda.pastCoveredFrom
+              ? t('truncated.pastFrom', {
+                  date: coverageBoundaryLabel(agenda.pastCoveredFrom, timezone),
+                })
+              : t('truncated.past')}
+          </p>
+        )}
+        {/* The agent source being unreadable already cancels pastCoveredFrom, so when
+            both hold there is no boundary to name and the second sentence is the plain
+            one. */}
+        {agenda?.agentHistoryUnavailable && agenda?.pastTruncated && (
           <p className="shrink-0 rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
             {t('truncated.past')}
           </p>
@@ -710,10 +898,11 @@ export function AgendaView() {
             // Resuming is offered on the rail's greyed marker.
             if (occurrence.scheduleId) void togglePause(occurrence.scheduleId, false);
           }}
+          onToggleResourcePause={(occurrence) => void toggleResourcePause(occurrence)}
           onOpenResource={openResource}
         />
 
-        <NewScheduledWorkflowDialog
+        <NewScheduledResourceDialog
           // A key per slot, so a second click on a different hour mounts a fresh dialog
           // rather than asking one to notice its prop changed and reset itself.
           key={newSlot ? `${newSlot.day.getTime()}:${newSlot.hour}` : 'none'}
@@ -722,8 +911,52 @@ export function AgendaView() {
           submitting={busy}
           error={createError}
           onCancel={() => { setNewSlot(null); setCreateError(null); }}
-          onConfirm={createScheduledWorkflow}
+          onConfirm={confirmNewScheduled}
         />
+
+        {agentSeed && (
+          <CreateAgentModal
+            // A name, and no id: the form reads `agent.id` to decide whether it is editing,
+            // so an id here would open it against an agent that does not exist.
+            agent={{ name: agentSeed.name }}
+            initialSchedule={{
+              cron: agentSeed.cron,
+              timezone: agentSeed.timezone,
+              description: agentSeed.description,
+            }}
+            onClose={() => setAgentSeed(null)}
+            onAgentCreated={(agentId, result) => {
+              setAgentSeed(null);
+              if (!agentId) return;
+              track('agent_created', { agent_id: agentId, source: 'agenda_slot' });
+              // Unlike a workflow, an agent's schedule is armed the moment it is saved, so
+              // the calendar is re-read rather than left showing the gap. The bell counts
+              // armed triggers from its own payload, which nothing invalidates, so it is
+              // asked again too - the same pair every mutation on this page performs.
+              reload();
+              refreshAutomations();
+              // The agent exists either way; its SCHEDULE may not, and "check the calendar
+              // for its next run" over an agent that has no next run sends the user to look
+              // at nothing. Only a schedule the form says it WROTE earns that sentence:
+              // `false` is a refusal (the form has already said so in its own words) and
+              // `undefined` means no schedule was saved at all, which on this page can only
+              // be the user switching the seeded one off before saving.
+              if (result?.scheduleSaved !== true) return;
+              addToast({
+                type: 'success',
+                title: t('create.agentCreatedTitle'),
+                // A schedule with no instruction is answered at fire time by the agent's
+                // assigned tasks, and a brand-new agent has none - so on this page, which
+                // only ever CREATES, it is skipped on every fire until someone sends it
+                // work. Pointing that user at the calendar for a next run is the exact
+                // silent-agent state this feature documents, announced as success.
+                message: result.scheduleHasPrompt
+                  ? t('create.agentCreatedMessage')
+                  : t('create.agentCreatedNoPromptMessage'),
+              });
+            }}
+          />
+        )}
 
         <MoveOccurrenceDialog
           occurrence={moveTarget?.occurrence ?? null}
@@ -735,8 +968,21 @@ export function AgendaView() {
           onConfirm={confirmMove}
         />
 
-        <ToastContainer toasts={toasts} onRemoveToast={removeToast} />
+      <ToastContainer toasts={toasts} onRemoveToast={removeToast} />
+    </div>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
+        {content}
       </div>
+    );
+  }
+
+  return (
+    <AuthenticatedView maxWidth="max-w-[1600px]" overflow>
+      {content}
     </AuthenticatedView>
   );
 }

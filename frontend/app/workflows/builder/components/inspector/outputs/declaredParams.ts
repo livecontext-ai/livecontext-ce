@@ -15,6 +15,8 @@
 import type { Node } from 'reactflow';
 import type { BuilderNodeData } from '../../../types';
 import { generateWorkflowPlan } from '../../../utils/workflowPlanGenerator';
+import { CONFIGURED_SECRETS, WITHHELD_CREDENTIAL } from './configuredSecrets';
+import { isCredentialKey } from './credentialKeys';
 import { flattenPlannedParams } from './runParamAlignment';
 
 /**
@@ -26,12 +28,14 @@ const PLAN_ENTRY_LISTS = ['cores', 'mcps', 'tables', 'agents', 'triggers', 'inte
 /**
  * The plan entry the generator emits for one node, or null when it emits none.
  *
- * A loop is the notable null: the generator registers it from its EDGES
- * (`processEdgesV2`), so reading the node alone declares nothing. That is a
- * blind spot, and the safe one: the mismatch panel stays silent rather than
- * warning about parameters it cannot see. The alignment e2e compares against the
- * SAVED plan, where a loop's configuration does exist, so the check itself is
- * not blind there.
+ * There is no blind spot here, which this comment used to claim for the loop.
+ * `processEdgesV2` calls `registerControlNodes` BEFORE it touches any edge, and that
+ * function walks `ctx.nodes`: decision, switch, split, option, fork, approval and
+ * while-group all declare their configuration from the node alone, and
+ * `nodeRegistry.isLoopNode` IS `isWhileGroupNode` - there is one loop node type and it
+ * reports `loopCondition` and `maxIterations`. Verified type by type against the
+ * generator, because the previous claim sent a reader looking for a hole that is not
+ * there. A `merge` reports nothing, and that is honest: it has no parameters of its own.
  */
 export function planEntryForNode(
   node: Node<BuilderNodeData>,
@@ -62,12 +66,39 @@ export function planEntryForNode(
 
 /**
  * The configuration keys this node hands to its backend node, flattened the way
- * the run reports them back. Empty when the node declares nothing.
+ * the run reports them back, with the values that authenticate masked. Empty
+ * when the node declares nothing.
+ *
+ * <p>The masking is the load-bearing part and it needs `nodeType`. This function
+ * reads the plan entry straight out of the canvas, so it bypasses the backend
+ * gate entirely: without it a `crypto_jwt` node rendered `Secret: <the HMAC
+ * secret>` in the Params column, and an `http_request` rendered its whole
+ * `authConfig` block as JSON. The marker is the backend's own, so a parked node
+ * and a resumed one read alike instead of one key answering two ways.
+ *
+ * <p>Called without a `nodeType` it cannot match the per-type entries and masks
+ * nothing, which is why every display call site passes one.
  */
 export function collectDeclaredParams(
   node: Node<BuilderNodeData> | null | undefined,
+  nodeType?: string,
 ): Record<string, unknown> {
   if (!node) return {};
   const entry = planEntryForNode(node);
-  return entry ? flattenPlannedParams(entry) : {};
+  if (!entry) return {};
+  const flattened = flattenPlannedParams(entry);
+  if (!nodeType) return flattened;
+  const safe: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(flattened)) {
+    // TWO rules, because they catch different things. The word predicate is the backend's
+    // own and covers any key whose NAME says credential, including the author-typed ones a
+    // static list can never enumerate: an MCP tool argument called `token`, an agent's
+    // `credentials`. The per-type list covers the ones NO word rule can see, because the
+    // secret is inside a block whose own name is innocent: `http_request.authConfig` holds
+    // four of them, and one-level flattening makes the block the reachable key.
+    safe[key] = isCredentialKey(key) || CONFIGURED_SECRETS.has(`${nodeType}.${key}`)
+      ? WITHHELD_CREDENTIAL
+      : value;
+  }
+  return safe;
 }

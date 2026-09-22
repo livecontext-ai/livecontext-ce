@@ -19,7 +19,19 @@ export type AppVisibilityFilter = 'all' | 'public' | 'private';
 
 /** Minimal shape the ordering rules read - the page item is a superset. */
 export interface SortableApp {
-  pub: { id?: string; title?: string; publishedAt?: string; updatedAt?: string; visibility?: string };
+  pub: {
+    id?: string;
+    title?: string;
+    publishedAt?: string;
+    updatedAt?: string;
+    visibility?: string;
+    /**
+     * Node-type tokens of the application's plan (`mcp:gmail`, `core:loop`, ...),
+     * denormalized on the publication row so the list can filter on them without
+     * loading a plan snapshot. Absent on rows published before V483.
+     */
+    nodeTypes?: string[];
+  };
   source: AppSource;
   /** ISO timestamp the app was acquired (acquired apps only). */
   acquiredAt?: string;
@@ -66,6 +78,43 @@ export function filterByVisibility<T extends SortableApp>(apps: T[], filter: App
 }
 
 /**
+ * Keep only the apps containing one of the given node types.
+ *
+ * <p>ANY-of, exactly like the server-side filter on the workflows list: ticking
+ * two integrations asks for the applications touching either. An empty
+ * selection is no filter at all.
+ */
+export function filterByNodeTypes<T extends SortableApp>(apps: T[], nodeTypes: readonly string[]): T[] {
+  if (!nodeTypes || nodeTypes.length === 0) return apps;
+  const wanted = new Set(nodeTypes.map((token) => token.toLowerCase()));
+  return apps.filter((app) => (app.pub.nodeTypes ?? []).some((token) => wanted.has(token.toLowerCase())));
+}
+
+/**
+ * Count how many apps carry each node type, for the picker.
+ *
+ * <p>The applications page already holds its whole set in memory, so the
+ * options are counted here rather than asked for: one source, and the counts
+ * cannot describe a different set than the cards on screen. Ordered by
+ * descending count then alphabetically, matching the server-side facets of the
+ * workflows list so both pickers read the same way.
+ */
+export function nodeTypeFacets<T extends SortableApp>(apps: T[]): { value: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const app of apps) {
+    // Distinct per app: the facet answers "how many applications would this
+    // option show me", not how many nodes exist.
+    for (const token of new Set((app.pub.nodeTypes ?? []).map((t) => t.toLowerCase()))) {
+      if (!token) continue;
+      counts.set(token, (counts.get(token) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => (b.count - a.count) || a.value.localeCompare(b.value));
+}
+
+/**
  * Return a new array sorted by the given key. Stable for equal keys (relies on
  * Array.prototype.sort stability) so the upstream dedup order is preserved as a
  * tie-breaker. Apps with no timestamp sort last for time-based keys.
@@ -100,9 +149,10 @@ export function favoritesFirst<T extends SortableApp>(apps: T[], favoriteIds?: R
 }
 
 /**
- * Filter by provenance, then visibility, sort, then float favorites to the top -
- * the order the page renders. `favoriteIds` is optional; when omitted the result
- * is exactly the sorted set (back-compatible with callers that don't track favorites).
+ * Filter by provenance, then visibility, then node type, sort, then float
+ * favorites to the top - the order the page renders. `favoriteIds` and
+ * `nodeTypes` are optional; when omitted the result is exactly the sorted set
+ * (back-compatible with callers that track neither).
  */
 export function processApps<T extends SortableApp>(
   apps: T[],
@@ -110,6 +160,8 @@ export function processApps<T extends SortableApp>(
   visibility: AppVisibilityFilter,
   sort: AppSortKey,
   favoriteIds?: ReadonlySet<string>,
+  nodeTypes?: readonly string[],
 ): T[] {
-  return favoritesFirst(sortApps(filterByVisibility(filterApps(apps, filter), visibility), sort), favoriteIds);
+  const narrowed = filterByNodeTypes(filterByVisibility(filterApps(apps, filter), visibility), nodeTypes ?? []);
+  return favoritesFirst(sortApps(narrowed, sort), favoriteIds);
 }

@@ -13,6 +13,20 @@ import { metaDescription } from '@/lib/marketplace/indexability';
  * Deliberately text-only: no remote images, no custom font fetch. Both would
  * add a network dependency to a route that must stay fast and can never fail,
  * since a broken OG image silently degrades every share of that page.
+ *
+ * EVERY text element below takes exactly ONE child, and interpolation is done
+ * in the template string rather than by placing text beside an expression.
+ * Satori (what `ImageResponse` renders with) throws on any element that has
+ * more than one child and no explicit `display`, and JSX splits `by {author}`
+ * into TWO children ('by ' and the value). That threw for every listing that
+ * had a publisher name, which is all of them.
+ *
+ * Measured in production, and worth writing down because none of it points at
+ * this file: GET answered 502 for every real slug, a slug with NO publication
+ * answered 200 (that path renders no author, so it never built the bad
+ * element), and HEAD answered 200 even for the broken slugs. So the symptom
+ * read as an infrastructure fault, while the whole marketplace shared broken
+ * preview cards.
  */
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
@@ -50,7 +64,7 @@ export default async function OpengraphImage({ params }: { params: Promise<{ slu
           </div>
           <div style={{ fontSize: 30, color: '#c3cad8', lineHeight: 1.35 }}>{description}</div>
         </div>
-        {author && <div style={{ fontSize: 28, color: '#9aa4b8' }}>by {author}</div>}
+        {author && <div style={{ fontSize: 28, color: '#9aa4b8' }}>{`by ${author}`}</div>}
       </div>
     ),
     size,

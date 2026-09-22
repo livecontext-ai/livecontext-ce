@@ -27,12 +27,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, fireEvent, act } from '@testing-library/react';
 
 let mockObjectUrl: { url: string | null; loading: boolean; error: boolean };
+// Three parameters, matching the hook: the third is the type FORCED on the blob, and a double
+// shaped for the old two-argument contract would swallow it without a word.
 const useAuthedObjectUrlMock = vi.fn(
-  (_src: string | null | undefined, _hint?: string | null) => mockObjectUrl,
+  (_src: string | null | undefined, _hint?: string | null, _forced?: string | null) => mockObjectUrl,
 );
 
 vi.mock('@/hooks/useAuthedObjectUrl', () => ({
-  useAuthedObjectUrl: (src: string | null, hint?: string | null) => useAuthedObjectUrlMock(src, hint),
+  useAuthedObjectUrl: (src: string | null, hint?: string | null, forced?: string | null) =>
+    useAuthedObjectUrlMock(src, hint, forced),
 }));
 vi.mock('@/lib/api/orchestrator/file.service', () => ({
   fileRefToUrl: (f: { id?: string }) => (f.id ? `/api/files/${f.id}` : ''),
@@ -194,6 +197,31 @@ describe('FileResultStrip v2 - expanded preview card', () => {
     const iframe = c.container.querySelector('iframe') as HTMLIFrameElement;
     expect(iframe).not.toBeNull();
     expect(iframe.getAttribute('src')).toBe('blob:media');
+  });
+
+  it('forces the blob type of the page it FRAMES, whatever the ref claims', () => {
+    // A blob URL inherits this app's origin, and a page is typed by NAME as well as by mime, so
+    // a file stored as text/html under a `.pdf` name would run its own script here - on the
+    // builder canvas, and on a published showcase canvas. Forced, it renders as a broken page.
+    const hostile = makeFile({ path: '1/general/x.pdf', name: 'invoice.pdf', mimeType: 'text/html', id: 'f-9' });
+    const c = render(<FileResultStrip file={hostile} />);
+    expand(c);
+
+    expect(useAuthedObjectUrlMock).toHaveBeenLastCalledWith(
+      expect.any(String), expect.anything(), 'application/pdf',
+    );
+  });
+
+  it('only hints the type of what it plays, since media executes nothing', () => {
+    // Forcing here would be wrong, not merely useless: a clip stored as video/webm under an
+    // `.mp4` name would stop decoding.
+    const clip = makeFile({ path: '1/general/c.mp4', name: 'clip.mp4', mimeType: 'video/webm', id: 'f-10' });
+    const c = render(<FileResultStrip file={clip} />);
+    expand(c);
+
+    expect(useAuthedObjectUrlMock).toHaveBeenLastCalledWith(
+      expect.any(String), 'video/webm', undefined,
+    );
   });
 
   it('falls back to the no-preview hint when the blob fetch errors (v1 "blob error fallback" regression, now on the card)', () => {

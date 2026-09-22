@@ -1,5 +1,6 @@
 import { ALL_RESOURCE_TYPES } from '@/hooks/useAgendaPreferences';
 import type { ResourceType } from '@/lib/api/orchestrator/agenda.service';
+import { AGENDA_KIND_ORDER, type AgendaKind } from './agendaLaunchKinds';
 
 /**
  * Which "nothing to show" message is TRUE for the current view.
@@ -15,7 +16,14 @@ import type { ResourceType } from '@/lib/api/orchestrator/agenda.service';
  * toggles as well. Any of them being active means the honest message is "your filters hide
  * everything", not "you have nothing".
  */
-export type AgendaEmptyKind = 'none' | 'workspace' | 'no-kind' | 'search' | 'filters' | 'failed';
+export type AgendaEmptyKind =
+  | 'none'
+  | 'workspace'
+  | 'no-kind'
+  | 'no-launch-kind'
+  | 'search'
+  | 'filters'
+  | 'failed';
 
 export interface AgendaEmptyInput {
   loading: boolean;
@@ -32,6 +40,17 @@ export interface AgendaEmptyInput {
   search: string;
   showPast: boolean;
   showPaused: boolean;
+  /**
+   * The launch kinds still selected.
+   *
+   * <p>The module's own rule is that EVERY control narrows the view, and this one was
+   * missing: deselecting kinds until nothing is left produced "Nothing is scheduled
+   * here", a claim about the workspace made because of something the user did. It became
+   * easy to walk into once agent runs joined the calendar, since turning Chat off is the
+   * natural reaction to a busy month. Optional so a caller that has not been updated
+   * keeps its previous verdicts rather than silently reading "all kinds off".
+   */
+  triggerTypes?: readonly AgendaKind[];
   occurrenceCount: number;
 }
 
@@ -50,8 +69,10 @@ export function selectAgendaEmptyState(input: AgendaEmptyInput): AgendaEmptyKind
   if (input.failed) return 'failed';
 
   const isSearching = input.search.trim().length > 0;
+  const kinds = input.triggerTypes ?? AGENDA_KIND_ORDER;
   const narrowing =
     input.resourceTypes.length < ALL_RESOURCE_TYPES.length
+    || kinds.length < AGENDA_KIND_ORDER.length
     || isSearching
     || !input.showPast
     || !input.showPaused;
@@ -60,6 +81,11 @@ export function selectAgendaEmptyState(input: AgendaEmptyInput): AgendaEmptyKind
   // Most specific first: a user who has turned every kind off, or typed a query, gets told
   // about the thing they did rather than a generic "check your filters".
   if (input.resourceTypes.length === 0) return 'no-kind';
+  // Its own state, not 'no-kind'. That message reads "No resource kind selected / Turn a
+  // resource kind back on", so a user who emptied the LAUNCH-kind list was sent to a
+  // control they had not touched - and the two states being distinct is exactly why the
+  // "every state has a distinct message pair" test could not see it.
+  if (kinds.length === 0) return 'no-launch-kind';
   if (isSearching) return 'search';
   return 'filters';
 }
@@ -72,6 +98,10 @@ export const AGENDA_EMPTY_KEYS: Record<
   workspace: { title: 'empty.title', description: 'empty.description' },
   failed: { title: 'errors.loadTitle', description: 'errors.loadMessage' },
   'no-kind': { title: 'empty.allFilteredTitle', description: 'empty.allFilteredDescription' },
+  'no-launch-kind': {
+    title: 'empty.noLaunchKindTitle',
+    description: 'empty.noLaunchKindDescription',
+  },
   search: { title: 'empty.searchTitle', description: 'empty.searchDescription' },
   filters: { title: 'empty.filteredTitle', description: 'empty.filteredDescription' },
 };

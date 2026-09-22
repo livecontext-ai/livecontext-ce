@@ -1,5 +1,8 @@
 package com.apimarketplace.orchestrator.services.approvalchannel.telegram;
 
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.common.security.CredentialEncryptionService;
+
 import com.apimarketplace.orchestrator.domain.ToolRef;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.execution.ApprovalChannelDeliveryEntity;
@@ -56,6 +59,12 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("TelegramApprovalNotifier")
 class TelegramApprovalNotifierTest {
+
+    /** Token columns are hashed through TokenAtRest; a unit test must install the material itself. */
+    @org.junit.jupiter.api.BeforeAll
+    static void installTokenAtRest() {
+        TokenAtRest.install(new CredentialEncryptionService("test-password-123", "0123456789abcdef"));
+    }
 
     private static final String TENANT_ID = "tenant-1";
     private static final String RUN_ID = "run_pub_abc";
@@ -133,9 +142,9 @@ class TelegramApprovalNotifierTest {
     /** Stubs the fresh-insert happy path: this call owns the send. */
     private ApprovalChannelDeliveryEntity stubOwnedInsert() {
         ApprovalChannelDeliveryEntity delivery = pendingDelivery();
-        when(deliveryRepository.insertPendingIfAbsent(any(), anyString(), anyString(), any(),
+        when(deliveryRepository.insertPendingIfAbsent(any(), anyString(), anyString(), anyString(), any(),
                 any(), any(), any(), any(), anyInt(), any(), any(), any(), any())).thenReturn(1);
-        when(deliveryRepository.findByCallbackToken(anyString())).thenReturn(Optional.of(delivery));
+        when(deliveryRepository.findByCallbackTokenHash(anyString())).thenReturn(Optional.of(delivery));
         return delivery;
     }
 
@@ -262,8 +271,9 @@ class TelegramApprovalNotifierTest {
             notifier.notifyPending(signal(), config("msg"), run(), null);
 
             ArgumentCaptor<String> tokenCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<String> hashCaptor = ArgumentCaptor.forClass(String.class);
             verify(deliveryRepository).insertPendingIfAbsent(eq(55L), eq("telegram"),
-                    tokenCaptor.capture(), eq(TENANT_ID), isNull(), eq(RUN_ID), eq(NODE_ID),
+                    tokenCaptor.capture(), hashCaptor.capture(), eq(TENANT_ID), isNull(), eq(RUN_ID), eq(NODE_ID),
                     eq("0"), eq(0), eq(CREDENTIAL_ID), eq(CHAT_ID), any(), any());
             verify(toolsGateway).executeTool(any(ToolRef.class), paramsCaptor.capture(),
                     anyString(), anyMap());
@@ -274,7 +284,10 @@ class TelegramApprovalNotifierTest {
                     (List<List<Map<String, Object>>>) replyMarkup.get("inline_keyboard");
 
             assertThat(keyboard.get(0).get(0).get("callback_data"))
-                    .isEqualTo("lcapr:" + tokenCaptor.getValue() + ":a");
+                    .isEqualTo("lcapr:" + TokenAtRest.decrypt(tokenCaptor.getValue()) + ":a");
+            // The row gets the ciphertext and the keyed hash of the plaintext; the button gets the plaintext.
+            assertThat(tokenCaptor.getValue()).startsWith("ENC:");
+            assertThat(hashCaptor.getValue()).isEqualTo(TokenAtRest.hash(TokenAtRest.decrypt(tokenCaptor.getValue())));
         }
 
         @Test
@@ -319,7 +332,7 @@ class TelegramApprovalNotifierTest {
         @Test
         @DisplayName("idempotency: insert returning 0 (replay/replica race) sends NOTHING")
         void insertConflictNeverSends() {
-            when(deliveryRepository.insertPendingIfAbsent(any(), anyString(), anyString(), any(),
+            when(deliveryRepository.insertPendingIfAbsent(any(), anyString(), anyString(), anyString(), any(),
                     any(), any(), any(), any(), anyInt(), any(), any(), any(), any())).thenReturn(0);
 
             notifier.notifyPending(signal(), config("msg"), run(), null);
@@ -363,7 +376,7 @@ class TelegramApprovalNotifierTest {
             notifier.notifyPending(signal(), config("msg"), orgRun, null);
 
             verify(deliveryRepository).insertPendingIfAbsent(eq(55L), eq("telegram"),
-                    anyString(), eq(TENANT_ID), eq("org-7"), eq(RUN_ID), eq(NODE_ID),
+                    anyString(), anyString(), eq(TENANT_ID), eq("org-7"), eq(RUN_ID), eq(NODE_ID),
                     eq("0"), eq(0), eq(CREDENTIAL_ID), eq(CHAT_ID), any(), any());
         }
 

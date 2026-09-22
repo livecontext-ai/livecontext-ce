@@ -9,6 +9,7 @@ import { useUnifiedApp } from '@/contexts/UnifiedAppContext';
 import { deduplicateById } from '@/lib/utils/deduplication';
 import { useErrorHandler } from '@/hooks/utils/useErrorHandler';
 import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
+import { notifyResourceDeleted, useResourceDeleted, type ResourceDeletedDetail } from '@/lib/resources/resourceDeleted';
 
 export interface UseConversationListOptions {
   autoLoad?: boolean;
@@ -45,7 +46,7 @@ export function useConversationList({
 }: UseConversationListOptions = {}): UseConversationListReturn {
   const { isAuthenticated, user, isReady } = useAuthGuard();
   const queryClient = useQueryClient();
-  const { addConversations, setHasMore: setSyncHasMore, state: appState } = useUnifiedApp();
+  const { addConversations, removeConversation: removeSharedConversation, setHasMore: setSyncHasMore, state: appState } = useUnifiedApp();
   const sharedHasMore = appState.hasMore;
   const sharedConversations = appState.conversations;
 
@@ -62,6 +63,12 @@ export function useConversationList({
   const [searchTerm, setSearchTerm] = useState('');
 
   // Refs to avoid stale closures in callbacks
+  /**
+   * Conversation ids currently being announced as cascaded from an agent deletion.
+   * Read by this hook's own deletion handler to recognise its own re-entry.
+   */
+  const cascadingConversationIdsRef = useRef<Set<string>>(new Set());
+
   const conversationsRef = useRef<Conversation[]>([]);
   useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
 
@@ -201,6 +208,104 @@ export function useConversationList({
       setSyncHasMore(shouldHaveMore);
     }
   }, [conversationsData, currentPage, setSyncHasMore]);
+
+  /**
+   * Drop conversations that no longer exist, from all three places that can show them.
+   *
+   * Two kinds matter here. A deleted CONVERSATION is the obvious one. A deleted
+   * AGENT is the one that bit: the server deletes that agent's conversations with
+   * it, and nothing told this list, so the rows sat in the sidebar until a hard
+   * reload.
+   *
+   * All three copies have to be corrected or the row comes back:
+   *  - the local array, which is what renders;
+   *  - the shared context, because `useSidebarConversations` renders whichever of
+   *    the two is LONGER, so filtering only the local one hands the render to the
+   *    stale copy;
+   *  - the React Query page cache, which is `staleTime: Infinity` with an hour of
+   *    `gcTime` and `refetchOnMount: false`. Left alone it re-seeds the local array
+   *    with the deleted row on the next mount of the sidebar, which is the
+   *    "it came back" half of the bug.
+   *
+   * The invalidate that follows is the server truth: the local filter is what makes
+   * the row go away NOW, the refetch is what refills the page and fixes the count.
+   */
+  const dropDeletedConversations = useCallback(({ kind, id }: ResourceDeletedDetail) => {
+    if (kind !== 'conversation' && kind !== 'agent') return;
+    // The agent branch below announces each of the agent's conversations, and that
+    // dispatch is SYNCHRONOUS, so this handler re-enters while the work above is
+    // still in flight. `conversationsRef` is synced in an effect and has not been
+    // updated yet, so the re-entrant pass would recompute the same id and redo
+    // everything: a second removeSharedConversation and a second invalidate per
+    // conversation. The id sits in this set for exactly the duration of its own
+    // dispatch, which is the only window in which re-entry can happen.
+    if (kind === 'conversation' && cascadingConversationIdsRef.current.has(id)) return;
+    const isGone = (conv: Conversation) => (
+      kind === 'conversation' ? conv.id === id : conv.agentId === id
+    );
+
+    // Every cached page, not just the one on screen: `queryKeys.conversations.all`
+    // is a prefix, so this reaches ['conversations', 0, 50], ['conversations', 1,
+    // 50] and the search keys alike. Pages whose shape this does not recognise are
+    // returned untouched. Doing this FIRST also collects the ids, which the
+    // invalidate below would otherwise refetch away before anyone read them.
+    const doomed = new Set<string>();
+    queryClient.setQueriesData<unknown>(
+      { queryKey: queryKeys.conversations.all },
+      (cached) => {
+        const page = cached as { content?: Conversation[] } | undefined;
+        if (!page || !Array.isArray(page.content)) return cached;
+        const content = page.content.filter(conv => {
+          if (!isGone(conv)) return true;
+          doomed.add(conv.id);
+          return false;
+        });
+        return content.length === page.content.length ? cached : { ...page, content };
+      },
+    );
+    conversationsRef.current.filter(isGone).forEach(conv => doomed.add(conv.id));
+
+    // Nothing of ours was showing it: say nothing, touch nothing, and above all do
+    // not refetch. A bulk delete of N resources fires N broadcasts, and a list that
+    // reacted to each regardless would turn one user action into N page loads of a
+    // list that held none of them.
+    if (doomed.size === 0) return;
+
+    // Called with one argument explicitly: a bare `forEach(removeSharedConversation)`
+    // also hands it the index and the array, which is only harmless for as long as
+    // the context's signature stays one-argument.
+    doomed.forEach(convId => removeSharedConversation(convId));
+
+    setConversations(prev => {
+      const remaining = prev.filter(conv => !isGone(conv));
+      return remaining.length === prev.length ? prev : remaining;
+    });
+
+    // The server truth: the local filter is what makes the row go away NOW, the
+    // refetch is what refills the page and fixes the count.
+    queryClient.invalidateQueries({ queryKey: queryKeys.conversations.all });
+
+    // An agent takes its conversations with it server-side, so a `conversation-<id>`
+    // side-panel tab for one of them is now showing something that does not exist.
+    // The panel matches tabs by kind and id and cannot know that link, so say it
+    // here, where the mapping is already in hand. Only the agent branch emits, and
+    // the re-entrancy guard at the top of this handler stops the pass it causes.
+    if (kind === 'agent') {
+      doomed.forEach(convId => {
+        cascadingConversationIdsRef.current.add(convId);
+        try {
+          // `cascadedFrom` states what this is: inferred from the agent's deletion,
+          // not observed. The server's cascade is best-effort, so a consumer whose
+          // reaction is expensive or irreversible can tell the two apart. Closing a
+          // tab and dropping a row, the only consumers today, are neither.
+          notifyResourceDeleted('conversation', convId, { kind: 'agent', id });
+        } finally {
+          cascadingConversationIdsRef.current.delete(convId);
+        }
+      });
+    }
+  }, [queryClient, removeSharedConversation]);
+  useResourceDeleted(dropDeletedConversations);
 
   // Sync conversations with shared context
   const lastSyncedConversationsRef = useRef<string>('');

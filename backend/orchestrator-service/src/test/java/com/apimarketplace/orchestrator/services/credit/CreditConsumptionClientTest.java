@@ -723,20 +723,20 @@ class CreditConsumptionClientTest {
         @Test
         @DisplayName("should return true when auth-service says allowed")
         void shouldReturnTrueWhenAllowed() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkAllowedResponse());
 
             assertThat(client.checkCredits(USER_ID)).isTrue();
 
             verify(restTemplate).exchange(
                     eq(AUTH_SERVICE_URL + "/api/credits/check"),
-                    eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+                    eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap());
         }
 
         @Test
         @DisplayName("should return false when auth-service returns 402")
         void shouldReturnFalseOn402() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(HttpClientErrorException.create(
                             HttpStatus.PAYMENT_REQUIRED, "Payment Required",
                             HttpHeaders.EMPTY, new byte[0], null));
@@ -747,7 +747,7 @@ class CreditConsumptionClientTest {
         @Test
         @DisplayName("should return false when response body says allowed=false")
         void shouldReturnFalseWhenNotAllowed() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenReturn(checkDeniedResponse());
 
             assertThat(client.checkCredits(USER_ID)).isFalse();
@@ -756,7 +756,7 @@ class CreditConsumptionClientTest {
         @Test
         @DisplayName("should return false (fail-closed) when auth-service is down and no cache")
         void shouldReturnFalseWhenServiceDown() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class), anyMap()))
                     .thenThrow(new ResourceAccessException("Connection refused"));
 
             assertThat(client.checkCredits(USER_ID)).isFalse();

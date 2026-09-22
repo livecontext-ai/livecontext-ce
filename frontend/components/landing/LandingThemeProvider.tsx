@@ -44,6 +44,22 @@ interface LandingThemeProviderProps {
   /** When true, restore the persisted choice on mount (docs). Default false = always `defaultTheme`. */
   respectStored?: boolean;
   defaultTheme?: LandingTheme;
+  /**
+   * The language of everything inside, stamped on the wrapper this component already renders.
+   *
+   * <p>The ROOT layout serves `<html lang="en">` for the whole app, because it is shared with
+   * every route outside the `[locale]` tree and cannot read the locale param without opting
+   * the entire site out of static rendering. An inline script corrects the attribute after
+   * parse, so anything running JavaScript is fine, but the SERVED document says English.
+   *
+   * <p>That was harmless while the landing really was English on all six URLs. It stopped
+   * being harmless when the page was translated and each locale became self-canonical with
+   * its own hreflang: `/fr` is now a French document whose markup claimed to be English.
+   * `lang` is valid on any element and applies to its subtree, so stamping it here fixes the
+   * served language for the whole public page, with no extra element and no layout change.
+   * Pages outside the `[locale]` tree pass nothing and keep inheriting the document default.
+   */
+  lang?: string;
 }
 
 export default function LandingThemeProvider({
@@ -52,6 +68,7 @@ export default function LandingThemeProvider({
   storageKey = 'landing-theme',
   respectStored = false,
   defaultTheme = 'light',
+  lang,
 }: LandingThemeProviderProps) {
   // Start from the default on the server and the first client render (so SSR markup
   // matches and there is no hydration mismatch); a post-mount effect then restores
@@ -84,7 +101,7 @@ export default function LandingThemeProvider({
 
   return (
     <LandingThemeContext.Provider value={{ theme, toggle }}>
-      <div className={rootClass}>{children}</div>
+      <div className={rootClass} lang={lang}>{children}</div>
     </LandingThemeContext.Provider>
   );
 }

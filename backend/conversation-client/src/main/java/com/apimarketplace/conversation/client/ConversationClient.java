@@ -6,7 +6,11 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.*;
 import com.apimarketplace.common.web.OrgContextHeaderForwarder;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import com.apimarketplace.common.credit.ChatCreditRefusal;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
@@ -25,6 +29,8 @@ public class ConversationClient {
 
     private static final Logger log = LoggerFactory.getLogger(ConversationClient.class);
     private static final Duration DEFAULT_SYNC_READ_TIMEOUT = Duration.ofMinutes(325);
+    /** Reads only the {@code error} field off a failed response body; stateless and thread-safe. */
+    private static final ObjectMapper ERROR_BODY_MAPPER = new ObjectMapper();
 
     private final RestTemplate restTemplate;
     private final RestTemplate syncRestTemplate; // Long timeout for sync chat (agent execution can take minutes)
@@ -282,10 +288,76 @@ public class ConversationClient {
                 return resp.getBody();
             }
             return Map.of("success", false, "error", "Unexpected response: " + resp.getStatusCode());
+        } catch (HttpStatusCodeException e) {
+            String error = errorFromResponse(e);
+            if (e.getStatusCode().value() == HttpStatus.PAYMENT_REQUIRED.value()) {
+                // The tenant is out of credits, or - the same 402, deliberately - the credit
+                // gate could not reach auth-service and failed closed. Either way the product
+                // is refusing as designed and the person who can act is the customer or an
+                // operator already alerted elsewhere, so this is a WARN. (UserActionableFailure
+                // documents that ambiguity in full.) It is decided on the STATUS CODE, never
+                // on the text: this is
+                // the last frame that still holds the response, and every frame above
+                // only receives a message. A schedule fires forever, so leaving this
+                // at ERROR put one empty wallet into a quarter of the calling service's
+                // error lines (44 of orchestrator-service's 179 over 24 h on 2026-09-17).
+                log.warn("Sync chat refused for conversation {} (source={}): {}",
+                        conversationId, source, error);
+            } else {
+                // The FAULT line keeps the whole transport sentence (status + URL) and gains the
+                // conversation, because narrowing it to the service's own message would make the
+                // one path that still needs debugging harder to debug. Only the RETURNED value is
+                // unwrapped, which is what callers display.
+                log.error("Error in sync chat for conversation {} (source={}): {}",
+                        conversationId, source, e.getMessage());
+            }
+            return Map.of("success", false, "error", error);
         } catch (Exception e) {
-            log.error("Error in sync chat: {}", e.getMessage());
-            return Map.of("success", false, "error", e.getMessage());
+            // toString(), not String.valueOf(getMessage()): a message-less exception would make
+            // that yield the four-character string "null", which reaches a widget caller and a
+            // task's failure reason verbatim. Map.of still refuses a null, so the guard stays.
+            log.error("Error in sync chat: {}", e.toString());
+            return Map.of("success", false, "error", e.toString());
         }
+    }
+
+    /**
+     * The service's own {@code error} field, or the transport message when the body
+     * carries none.
+     *
+     * <p>Unwrapping matters beyond tidiness. {@code e.getMessage()} is the whole
+     * RestTemplate sentence: the status, the internal cluster URL and the raw JSON
+     * body. That string is what callers log, and the widget and webhook paths hand it
+     * to a caller as the failure reason, so an in-cluster hostname travelled outwards
+     * with it. Unwrapping also leaves a message the frames above can recognise, through
+     * {@link ChatCreditRefusal#MESSAGE} directly in agent-service and through
+     * orchestrator's {@code UserActionableFailure} above this client.
+     *
+     * <p><b>Four callers DO match on this string</b>, as of the same change that added this
+     * method, so "no caller reads it" is not the reason narrowing is safe. The reason is that
+     * every matcher uses {@code contains} and is pinned by a test against BOTH shapes, the
+     * unwrapped sentence and the transport-wrapped one, so neither this unwrap nor its removal
+     * can silently change a classification.
+     *
+     * <p><b>It runs on every status, not only 402.</b> A 500's returned value is likewise
+     * narrowed to the service's own {@code error} field. The ERROR log line deliberately keeps
+     * the full transport sentence, so nothing is lost for debugging; what changes is the string
+     * a caller stores or displays.
+     */
+    private static String errorFromResponse(HttpStatusCodeException e) {
+        try {
+            String body = e.getResponseBodyAsString();
+            if (body != null && !body.isBlank()) {
+                JsonNode error = ERROR_BODY_MAPPER.readTree(body).get("error");
+                if (error != null && error.isTextual() && !error.asText().isBlank()) {
+                    return error.asText();
+                }
+            }
+        } catch (Exception ignored) {
+            // A body that is absent, truncated or not JSON is not itself a failure:
+            // fall through to the transport message, which is what we reported before.
+        }
+        return e.getMessage() != null ? e.getMessage() : e.toString();
     }
 
     // ==================== DELETE ====================

@@ -45,9 +45,16 @@ public class InterfaceStorageUsageService {
                 """;
             StorageUsageDto result = jdbcTemplate.queryForObject(sql, STORAGE_USAGE_MAPPER, tenantId, tenantId, tenantId);
             return result != null ? result : StorageUsageDto.zero();
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
+            // Do NOT degrade to zero here. The only consumer of this endpoint is
+            // StorageReconciliationService, which writes the answer through setUsage, an
+            // ABSOLUTE set: a swallowed failure does not report "this tenant stores
+            // nothing", it ERASES the stored figure. Propagating makes the internal
+            // endpoint answer 5xx, the client degrade to an empty result, and the
+            // reconciler skip the category and keep the last good value until the next
+            // nightly run. The log line stays because it names the tenant.
             log.warn("Failed to query interface storage for tenant {}: {}", tenantId, e.getMessage());
-            return StorageUsageDto.zero();
+            throw e;
         }
     }
 

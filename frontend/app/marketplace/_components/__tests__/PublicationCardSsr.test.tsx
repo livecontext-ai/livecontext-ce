@@ -229,4 +229,22 @@ describe('PublicationCardSsr', () => {
     const row = avatar?.closest('div.flex.items-center');
     expect(row?.querySelector('svg, img:not([src*="/avatar"])')).toBeTruthy();
   });
+
+  it('shows the verified check right after a verified author name', () => {
+    const { getByRole } = render(
+      <PublicationCardSsr publication={publication()} publisherVerified />,
+    );
+
+    // Labelled in English: this card renders outside the [locale] tree.
+    const badge = getByRole('img', { name: 'Verified account' });
+    expect(badge).toBeTruthy();
+    // Immediately AFTER the name, the way Instagram and X place it.
+    expect(badge.previousElementSibling?.textContent).toBe('Ada');
+  });
+
+  it('shows no check for an author who is not verified', () => {
+    const { queryByRole } = render(<PublicationCardSsr publication={publication()} />);
+
+    expect(queryByRole('img', { name: 'Verified account' })).toBeNull();
+  });
 });

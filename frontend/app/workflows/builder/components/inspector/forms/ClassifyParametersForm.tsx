@@ -14,11 +14,43 @@ import { ExpressionEditor } from '@/components/ui/expression-editor';
 import { ExpressionField, ConnectionProps } from '../ExpressionField';
 import { OptionalSection } from '../OptionalSection';
 import { ModelPicker } from '@/components/ai/ModelPicker';
-import type { SelectedModel } from '@/hooks/useModels';
+import type { ModelCapability, SelectedModel } from '@/hooks/useModels';
 import { useTranslations } from 'next-intl';
 import type { BuilderNodeData, ClassifyCategory } from '../../../types';
 import { createDefaultClassifyCategories } from '../../../types';
 import type { Connection } from '../useInspectorConnections';
+
+/**
+ * The two engines this node can run on, and the reason its picker is the only one that
+ * asks for more than one kind of model.
+ *
+ * <p>A chat model reads the categories in a prompt and writes back a label; a decision
+ * model scores every declared category in one pass and cannot write prose at all. The
+ * node is the same either way (same categories, same output ports, same branches), so
+ * both belong in one list. Offering only decision models would hide the engine that is
+ * still the default and the fallback when the decision endpoint is unavailable.
+ *
+ * <p>Module-level so its identity is stable across renders: an inline array literal here
+ * would re-filter the whole catalogue on every keystroke in this form.
+ */
+const CLASSIFY_ENGINES: readonly ModelCapability[] = ['chat', 'decision'];
+
+/**
+ * The catalogue slice the decision models live in.
+ *
+ * <p>Needed IN ADDITION to the capability filter above, and the distinction is the thing
+ * to remember: the chat answer never contains a decision model (the server removes it
+ * before the client sees anything, which is what keeps it out of every chat picker), so
+ * a filter alone has nothing to let through. This names the slice to fetch; the filter
+ * then says which of the merged result belongs here.
+ */
+const DECISION_MODEL_CATEGORY = 'classification';
+
+/**
+ * Providers whose models return a typed decision. Kept beside the category above: both
+ * describe the same engine, one for fetching it and one for adapting the form to it.
+ */
+const DECISION_PROVIDERS: ReadonlySet<string> = new Set(['typesafe']);
 
 // Default values
 const DEFAULT_TEMPERATURE = 0.3; // Lower for more consistent classification
@@ -63,6 +95,16 @@ export function ClassifyParametersForm({
   const t = useTranslations('workflowBuilder.forms');
   const temperature = data.temperature ?? DEFAULT_TEMPERATURE;
   const maxTokens = data.maxTokens ?? DEFAULT_MAX_TOKENS;
+
+  // A decision engine scores every category in one pass: it does no sampling, so the
+  // sampling controls below are inert on it.
+  //
+  // Read off the PROVIDER, which is the only thing the node stores. The model's catalogue
+  // `mode` would be the better signal and needs no list at all, but it lives on the
+  // picker's catalogue entry rather than on the node, and this form holds only the
+  // provider/model pair. So a second decision PROVIDER means one entry here; a second
+  // decision model under this provider means none.
+  const isDecisionEngine = DECISION_PROVIDERS.has((data.provider ?? '').toLowerCase());
 
   // Build the typed selection from the node's legacy two-field storage -
   // `data.provider` / `data.model` remain the persisted shape so existing
@@ -162,6 +204,8 @@ export function ClassifyParametersForm({
         providerLabel={t('provider')}
         modelLabel={t('model')}
         costProfile="classifyStep"
+        filterCapability={CLASSIFY_ENGINES}
+        unionCategory={DECISION_MODEL_CATEGORY}
       />
 
       {/* Prompt - Required */}
@@ -288,7 +332,13 @@ export function ClassifyParametersForm({
         </div>
       </div>
 
-      {/* Optional Parameters */}
+      {/* Optional Parameters. Hidden entirely on a decision engine: both of them are
+          sampling controls, and a decision model does no sampling - it scores every
+          declared category in one pass. Showing a knob that changes nothing is worse than
+          showing none, and the agent-facing docs already say the engine ignores them, so
+          leaving the UI behind would be the cross-layer divergence the 3-layer rule is
+          meant to prevent, only inverted. */}
+      {!isDecisionEngine && (
       <OptionalSection
         isOpen={showOptionalParams}
         onToggle={() => setShowOptionalParams(!showOptionalParams)}
@@ -346,6 +396,7 @@ export function ClassifyParametersForm({
           />
         </div>
       </OptionalSection>
+      )}
     </div>
   );
 }

@@ -705,10 +705,14 @@ class ForkNodeTest {
 
             @SuppressWarnings("unchecked")
             Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
-            // A fork's only configuration is how many outputs it has, and the plan
-            // calls that `forkOutputs`. `branch_count` already exists in the output
-            // as an OUTPUT field; the Params column reads this map, not that one.
-            assertEquals(2, params.get("forkOutputs"));
+            // One key per branch, naming where it goes. `forkOutputs` used to carry
+            // the count, which could not tell a reader which branch is which - and a
+            // fork exists precisely to name them.
+            // Keyed on the branch ID, which is what the plan names; the runtime label
+            // is synthesised from the port and would invent a key the plan lacks.
+            assertEquals("(not wired)", params.get("branch_0"));
+            assertEquals("(not wired)", params.get("branch_1"));
+            assertFalse(params.containsKey("forkOutputs"));
         }
 
         @Test
@@ -720,9 +724,9 @@ class ForkNodeTest {
 
             @SuppressWarnings("unchecked")
             Map<String, Object> params = (Map<String, Object>) result.output().get("resolved_params");
-            // Zero is a real answer here: "this fork activates nothing" is exactly
-            // what the reader needs, and an absent key would read as "not reported".
-            assertEquals(0, params.get("forkOutputs"));
+            // A fork with no branch wired reports nothing, because there is nothing
+            // to name. The empty map is the honest answer.
+            assertTrue(params.isEmpty());
         }
     }
 

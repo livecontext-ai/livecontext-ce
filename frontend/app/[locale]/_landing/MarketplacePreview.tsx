@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from '@/i18n/navigation';
 import type { WorkflowPublication } from '@/lib/api';
 import { PublicationCard, PublicationCardSkeleton } from '@/components/marketplace/PublicationCard';
+import type { PersonaKey } from '@/components/landing/personas/personas';
 
 interface MarketplaceResponse {
   publications?: WorkflowPublication[];
@@ -24,12 +25,23 @@ interface LandingHighlightsResponse {
  * so the two surfaces never drift. An anonymous visitor can't acquire in
  * place, so the Install CTA routes to the app (which prompts sign-in).
  *
- * Data source: the admin-curated LANDING highlights row first (set in
- * Settings → Marketplace Highlights → Landing page); when nothing is curated
- * it falls back to the most recent public marketplace publications, so the
- * section is never empty.
+ * Data source, in order, first non-empty wins:
+ * 1. the persona's own curated row (LANDING_OPS, LANDING_CREATOR, ...) on a
+ *    /for/<persona> page, set in Settings → Marketplace Highlights;
+ * 2. the generic LANDING row, which the home page uses;
+ * 3. the most recent public marketplace publications.
+ *
+ * In practice a persona page stops at step 1 wherever the LANDING row was
+ * curated, because the migration that opened the six buckets SEEDED each one
+ * with a copy of it: an admin then edits one persona at a time from a working
+ * starting point rather than from nothing. Where LANDING was empty the migration
+ * copied nothing, and the page falls through to step 3 exactly as before. Those copies are SNAPSHOTS, not a
+ * view of LANDING: editing LANDING afterwards moves the home page only, and each
+ * persona row has to be edited on its own. That is the intent, a persona row
+ * exists precisely to diverge. Step 2 then catches the persona whose row an
+ * admin has emptied, and step 3 the install that has never curated anything.
  */
-export default function MarketplacePreview() {
+export default function MarketplacePreview({ persona }: { persona?: PersonaKey } = {}) {
   const router = useRouter();
   const [pubs, setPubs] = useState<WorkflowPublication[] | null>(null);
   const [error, setError] = useState(false);
@@ -39,16 +51,20 @@ export default function MarketplacePreview() {
     // Both endpoints are public (anonymous-accessible) gateway routes, so raw
     // fetch through the proxy is correct here - the landing page has no auth token.
     (async () => {
-      try {
-        const curatedRes = await fetch('/api/proxy/publications/highlights/LANDING', {
+      const curatedRow = async (bucket: string) => {
+        const res = await fetch(`/api/proxy/publications/highlights/${bucket}`, {
           headers: { Accept: 'application/json' },
         });
-        if (curatedRes.ok) {
-          const data: LandingHighlightsResponse = await curatedRes.json();
-          const curated = (data.highlights || [])
-            .map((h) => h.publication)
-            .filter((p): p is WorkflowPublication => !!p)
-            .slice(0, 16);
+        if (!res.ok) return [];
+        const data: LandingHighlightsResponse = await res.json();
+        return (data.highlights || [])
+          .map((h) => h.publication)
+          .filter((p): p is WorkflowPublication => !!p)
+          .slice(0, 16);
+      };
+      try {
+        for (const bucket of persona ? [`LANDING_${persona.toUpperCase()}`, 'LANDING'] : ['LANDING']) {
+          const curated = await curatedRow(bucket);
           if (curated.length > 0) {
             if (!cancelled) setPubs(curated);
             return;
@@ -68,7 +84,7 @@ export default function MarketplacePreview() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [persona]);
 
   if (error || (pubs && pubs.length === 0)) return null;
 

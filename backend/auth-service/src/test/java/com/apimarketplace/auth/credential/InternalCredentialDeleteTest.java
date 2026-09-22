@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("Internal Credential Delete by Integration Tests")
+@DisplayName("Internal credential by-integration operations: mark, never delete")
 class InternalCredentialDeleteTest {
 
     @Mock
@@ -70,42 +70,62 @@ class InternalCredentialDeleteTest {
     // ========== Controller Tests ==========
 
     @Nested
-    @DisplayName("DELETE /api/internal/credentials/by-integration/{integrationName}")
-    class ControllerDeleteByIntegrationTests {
+    @DisplayName("POST /api/internal/credentials/by-integration/{integrationName}/needs-reauth")
+    class ControllerMarkNeedsReauthTests {
 
         @Test
-        @DisplayName("should return correct count when credentials exist")
-        void deleteByIntegration_returnsCorrectCount() {
-            when(credentialService.deleteByIntegration("gmail")).thenReturn(3);
+        @DisplayName("reports how many credentials were taken out of service, and deletes none")
+        void markNeedsReauth_returnsCorrectCount() {
+            when(credentialService.markNeedsReauthByIntegration("gmail")).thenReturn(3);
 
-            ResponseEntity<Map<String, Object>> response = controller.deleteByIntegration("gmail");
+            ResponseEntity<Map<String, Object>> response =
+                    controller.markNeedsReauthByIntegration("gmail");
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(response.getBody()).containsEntry("deleted", 3);
+            assertThat(response.getBody()).containsEntry("marked", 3);
             assertThat(response.getBody()).containsEntry("integration", "gmail");
-            verify(credentialService).deleteByIntegration("gmail");
+            assertThat(response.getBody())
+                    .as("nothing is deleted any more, so no caller may read a delete count")
+                    .doesNotContainKey("deleted");
+            verify(credentialService).markNeedsReauthByIntegration("gmail");
         }
 
         @Test
-        @DisplayName("should return 0 when no credentials match the integration")
-        void deleteByIntegration_returnsZeroWhenNoMatches() {
-            when(credentialService.deleteByIntegration("nonexistent")).thenReturn(0);
+        @DisplayName("returns 0 when no credential of that integration is usable")
+        void markNeedsReauth_returnsZeroWhenNoMatches() {
+            when(credentialService.markNeedsReauthByIntegration("nonexistent")).thenReturn(0);
 
-            ResponseEntity<Map<String, Object>> response = controller.deleteByIntegration("nonexistent");
+            ResponseEntity<Map<String, Object>> response =
+                    controller.markNeedsReauthByIntegration("nonexistent");
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(response.getBody()).containsEntry("deleted", 0);
+            assertThat(response.getBody()).containsEntry("marked", 0);
             assertThat(response.getBody()).containsEntry("integration", "nonexistent");
         }
 
         @Test
-        @DisplayName("should return 400 for blank integration name")
-        void deleteByIntegration_returnsBadRequestForBlank() {
-            ResponseEntity<Map<String, Object>> response = controller.deleteByIntegration("   ");
+        @DisplayName("refuses a blank integration name without touching any credential")
+        void markNeedsReauth_returnsBadRequestForBlank() {
+            ResponseEntity<Map<String, Object>> response =
+                    controller.markNeedsReauthByIntegration("   ");
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             assertThat(response.getBody()).containsKey("error");
             verifyNoInteractions(credentialService);
+        }
+
+        @Test
+        @DisplayName("REGRESSION: the controller exposes no way to delete credentials by integration")
+        void thereIsNoDeleteByIntegrationEndpointLeft() {
+            // A user lost a credential to the previous endpoint: it ran
+            // DELETE FROM auth.credentials WHERE integration = ? for every tenant, with no backup
+            // and no confirmation, triggered automatically by a catalog re-import. An automated
+            // caller may take a credential OUT OF SERVICE; it may never take it away, because the
+            // owner usually cannot get the secret back.
+            assertThat(InternalCredentialController.class.getDeclaredMethods())
+                    .extracting(java.lang.reflect.Method::getName)
+                    .as("a method named like a by-integration delete must not come back")
+                    .noneMatch(name -> name.toLowerCase().contains("deletebyintegration"));
         }
     }
 
@@ -202,8 +222,8 @@ class InternalCredentialDeleteTest {
     // ========== Service Tests ==========
 
     @Nested
-    @DisplayName("CredentialService.deleteByIntegration")
-    class ServiceDeleteByIntegrationTests {
+    @DisplayName("CredentialService.markNeedsReauthByIntegration")
+    class ServiceMarkNeedsReauthTests {
 
         private CredentialService service;
 
@@ -215,38 +235,38 @@ class InternalCredentialDeleteTest {
         }
 
         @Test
-        @DisplayName("should delegate to repository and return count")
-        void deleteByIntegration_delegatesToRepo() {
-            when(credentialRepository.deleteByIntegration("gmail")).thenReturn(5);
+        @DisplayName("delegates to the repository and reports how many were taken out of service")
+        void markNeedsReauth_delegatesToRepo() {
+            when(credentialRepository.markNeedsReauthByIntegration("gmail")).thenReturn(5);
 
-            int result = service.deleteByIntegration("gmail");
+            int result = service.markNeedsReauthByIntegration("gmail");
 
             assertThat(result).isEqualTo(5);
-            verify(credentialRepository).deleteByIntegration("gmail");
+            verify(credentialRepository).markNeedsReauthByIntegration("gmail");
         }
 
         @Test
         @DisplayName("should return 0 when no matches")
-        void deleteByIntegration_returnsZero() {
-            when(credentialRepository.deleteByIntegration("nonexistent")).thenReturn(0);
+        void markNeedsReauth_returnsZero() {
+            when(credentialRepository.markNeedsReauthByIntegration("nonexistent")).thenReturn(0);
 
-            int result = service.deleteByIntegration("nonexistent");
+            int result = service.markNeedsReauthByIntegration("nonexistent");
 
             assertThat(result).isEqualTo(0);
         }
 
         @Test
         @DisplayName("should throw for null integration")
-        void deleteByIntegration_throwsForNull() {
-            assertThatThrownBy(() -> service.deleteByIntegration(null))
+        void markNeedsReauth_throwsForNull() {
+            assertThatThrownBy(() -> service.markNeedsReauthByIntegration(null))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("integration");
         }
 
         @Test
         @DisplayName("should throw for blank integration")
-        void deleteByIntegration_throwsForBlank() {
-            assertThatThrownBy(() -> service.deleteByIntegration("   "))
+        void markNeedsReauth_throwsForBlank() {
+            assertThatThrownBy(() -> service.markNeedsReauthByIntegration("   "))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("integration");
         }
@@ -254,12 +274,12 @@ class InternalCredentialDeleteTest {
         @Test
         @DisplayName("should trim integration name before delegating")
         void deleteByIntegration_trimsInput() {
-            when(credentialRepository.deleteByIntegration("gmail")).thenReturn(2);
+            when(credentialRepository.markNeedsReauthByIntegration("gmail")).thenReturn(2);
 
-            int result = service.deleteByIntegration("  gmail  ");
+            int result = service.markNeedsReauthByIntegration("  gmail  ");
 
             assertThat(result).isEqualTo(2);
-            verify(credentialRepository).deleteByIntegration("gmail");
+            verify(credentialRepository).markNeedsReauthByIntegration("gmail");
         }
     }
 }

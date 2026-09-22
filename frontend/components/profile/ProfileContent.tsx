@@ -10,6 +10,7 @@ import { unifiedApiService } from '@/lib/api/unified-api-service';
 import { orchestratorApi } from '@/lib/api';
 import { dmApi } from '@/lib/api/dm-api';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
+import { VerifiedBadge } from '@/components/profile/VerifiedBadge';
 import { PublicationCard, PublicationCardSkeleton } from '@/components/marketplace/PublicationCard';
 import { ProfileBadgeStrip } from '@/components/badges/ProfileBadgeStrip';
 import type { PublicProfile } from '@/lib/api/services/user-api.service';
@@ -92,7 +93,15 @@ export default function ProfileContent({ handle }: ProfileContentProps) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-col items-center gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <h1 className="truncate text-2xl font-semibold text-theme-primary">{displayName}</h1>
+              {/* The check follows the name on the same baseline, so a long name
+                  truncates and the badge stays put next to it. */}
+              <div className="flex min-w-0 items-center justify-center gap-1.5 sm:justify-start">
+                <h1 className="truncate text-2xl font-semibold text-theme-primary">{displayName}</h1>
+                {/* userId as well as the flag: `verified` is optional on the payload,
+                    and an older/degraded response that omits it then resolves through
+                    the normal lookup instead of silently reading as unverified. */}
+                <VerifiedBadge userId={profile.userId} verified={profile.verified} size="lg" />
+              </div>
               {profile.handle && (
                 <p className="truncate text-sm text-theme-muted">@{profile.handle}</p>
               )}

@@ -6,11 +6,13 @@ import com.apimarketplace.common.plan.PlanStripUtils;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowPlanVersionEntity;
+import com.apimarketplace.orchestrator.controllers.dto.ResourceEditorDto;
 import com.apimarketplace.orchestrator.repository.WorkflowRepository;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import com.apimarketplace.orchestrator.services.WorkflowManagementService;
 import com.apimarketplace.orchestrator.services.WorkflowPinService;
 import com.apimarketplace.orchestrator.services.WorkflowPlanVersionService;
+import com.apimarketplace.orchestrator.services.activity.WorkflowEditorsService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +40,7 @@ public class WorkflowVersionController {
     private final ObjectMapper objectMapper;
     private final OrgAccessGuard orgAccessGuard;
     private final WorkflowManagementService workflowManagementService;
+    private final WorkflowEditorsService editorsService;
 
     public WorkflowVersionController(WorkflowPlanVersionService versionService,
                                       WorkflowRepository workflowRepository,
@@ -45,7 +48,8 @@ public class WorkflowVersionController {
                                       WorkflowPinService pinService,
                                       ObjectMapper objectMapper,
                                       OrgAccessGuard orgAccessGuard,
-                                      WorkflowManagementService workflowManagementService) {
+                                      WorkflowManagementService workflowManagementService,
+                                      WorkflowEditorsService editorsService) {
         this.versionService = versionService;
         this.workflowRepository = workflowRepository;
         this.workflowRunRepository = workflowRunRepository;
@@ -53,6 +57,7 @@ public class WorkflowVersionController {
         this.objectMapper = objectMapper;
         this.orgAccessGuard = orgAccessGuard;
         this.workflowManagementService = workflowManagementService;
+        this.editorsService = editorsService;
     }
 
     /**
@@ -62,11 +67,14 @@ public class WorkflowVersionController {
     public ResponseEntity<?> listVersions(
             @PathVariable("workflowId") String workflowId,
             @RequestHeader("X-User-ID") String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
             UUID id = UUID.fromString(workflowId);
 
-            if (!verifyOwnership(id, tenantId, orgId)) {
+            // Deny-listed too: every row here carries `createdBy`, so without this a member
+            // refused the workflow could read who works on it straight from the version drawer.
+            if (!canReadHistory(id, tenantId, orgId, orgRole)) {
                 return ResponseEntity.notFound().build();
             }
 
@@ -87,7 +95,13 @@ public class WorkflowVersionController {
                         map.put("nodeCount", countNodes(v.getPlan()));
                         map.put("runCount", runCountMap.getOrDefault(v.getVersion(), 0L));
                         map.put("createdAt", v.getCreatedAt());
-                        map.put("createdBy", v.getCreatedBy());
+                        // Withheld from the anonymous /s/{token} viewer, which this endpoint is
+                        // allow-listed for. Refusing that viewer the workflow's OWNER id while
+                        // handing it an author id per version would have withheld nothing: it
+                        // is a strictly larger set of ids about the same workflow.
+                        if (!WorkflowControllerHelper.isShareContext()) {
+                            map.put("createdBy", v.getCreatedBy());
+                        }
                         return map;
                     })
                     .toList();
@@ -104,6 +118,12 @@ public class WorkflowVersionController {
 
             return ResponseEntity.ok(response);
 
+        } catch (OrgAccessDeniedException e) {
+            // The deny-list refusal, re-thrown ahead of the blanket catch below so the global
+            // handler maps it to 403. Swallowed by `catch (Exception)` it became a 500: still
+            // withheld, but reported as a server fault and logged as one. Same treatment as
+            // {@code WorkflowCrudController.saveWorkflow}.
+            throw e;
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", "Invalid workflow ID format"));
         } catch (Exception e) {
@@ -114,18 +134,64 @@ public class WorkflowVersionController {
     }
 
     /**
+     * The people who recently edited this workflow, for the resource-info popover.
+     *
+     * <p>Deliberately NOT served by {@code /versions}: that endpoint answers a different
+     * question (the restorable history, one row per version) and pays a JSONB deserialize per
+     * row to do it. This one reads three scalar columns and collapses them per person - see
+     * {@link WorkflowEditorsService} for why plan versions, and not a column on the workflow,
+     * are the honest source of "who modified this".
+     *
+     * <p>Guarded like a READ of the workflow itself, through {@link #canReadHistory}: workspace
+     * scope (404, so a workflow in another workspace is indistinguishable from one that does
+     * not exist) then the per-member deny-list. The version list shares that guard, because it
+     * answers the same question from the same rows.
+     */
+    @GetMapping("/{workflowId}/editors")
+    public ResponseEntity<?> listRecentEditors(
+            @PathVariable("workflowId") String workflowId,
+            @RequestHeader("X-User-ID") String tenantId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
+        UUID id;
+        try {
+            id = UUID.fromString(workflowId);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Invalid workflow ID format"));
+        }
+
+        if (!canReadHistory(id, tenantId, orgId, orgRole)) {
+            return ResponseEntity.notFound().build();
+        }
+
+        try {
+            List<ResourceEditorDto> editors = editorsService.listRecentEditors(id);
+            return ResponseEntity.ok(Map.of("editors", editors));
+        } catch (Exception e) {
+            logger.error("Error listing editors for workflow: {}", workflowId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to list editors"));
+        }
+    }
+
+    /**
      * Get a specific version with its full plan.
+     *
+     * <p>The heaviest of the three reads - it returns the whole plan as well as the author -
+     * and version numbers start at 1, so "which versions exist" is not a secret worth relying
+     * on. It therefore goes through the same {@link #canReadHistory} gate as the other two.
      */
     @GetMapping("/{workflowId}/versions/{version}")
     public ResponseEntity<?> getVersion(
             @PathVariable("workflowId") String workflowId,
             @PathVariable("version") int version,
             @RequestHeader("X-User-ID") String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
             UUID id = UUID.fromString(workflowId);
 
-            if (!verifyOwnership(id, tenantId, orgId)) {
+            if (!canReadHistory(id, tenantId, orgId, orgRole)) {
                 return ResponseEntity.notFound().build();
             }
 
@@ -144,6 +210,10 @@ public class WorkflowVersionController {
 
             return ResponseEntity.ok(response);
 
+        } catch (OrgAccessDeniedException e) {
+            // Ahead of the blanket catch, so the deny-list refusal maps to 403 instead of
+            // being reported as a server fault.
+            throw e;
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", "Invalid workflow ID format"));
         } catch (Exception e) {
@@ -413,5 +483,37 @@ public class WorkflowVersionController {
         WorkflowEntity wf = workflowOpt.get();
         return ScopeGuard.isInStrictScope(tenantId, orgId,
                 wf.getTenantId(), wf.getOrganizationId());
+    }
+
+    /**
+     * The full READ gate for a workflow's history: workspace scope, then the per-member org
+     * deny-list. Returns false when the workflow is out of scope or absent (the caller answers
+     * 404); raises {@link OrgAccessDeniedException} when it exists and this member is
+     * restricted from it, exactly as {@code WorkflowCrudController.getWorkflow} does.
+     *
+     * <p>All THREE reads in this controller go through it - the version list, one version with
+     * its plan, and the editor list - and that is the point. They answer the same question,
+     * who has been working on this, from the same rows, so a deny-list applied to some of them
+     * withholds nothing: a member refused the workflow would simply ask another endpoint. The
+     * id is canonicalised before the lookup because the deny-list matches ids EXACTLY, while
+     * {@code UUID.fromString} accepts spellings {@code toString()} never produces.
+     */
+    private boolean canReadHistory(UUID workflowId, String tenantId, String orgId, String orgRole) {
+        Optional<WorkflowEntity> workflowOpt = workflowRepository.findById(workflowId);
+        if (workflowOpt.isEmpty()) {
+            return false;
+        }
+        WorkflowEntity wf = workflowOpt.get();
+        if (!ScopeGuard.isInStrictScope(tenantId, orgId, wf.getTenantId(), wf.getOrganizationId())) {
+            return false;
+        }
+        String workflowOrgId = wf.getOrganizationId();
+        if (workflowOrgId != null
+                && !orgAccessGuard.canAccess(workflowOrgId, tenantId, "workflow", workflowId.toString(), orgRole)) {
+            logger.warn("OrgAccess deny-list: user {} restricted from reading the history of workflow {} in org {}",
+                    tenantId, workflowId, workflowOrgId);
+            throw new OrgAccessDeniedException("workflow", workflowId.toString());
+        }
+        return true;
     }
 }

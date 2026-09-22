@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { canvasChromeSurfaceClass } from '@/components/ui/canvas-chrome';
 import LoadingSpinner from '@/components/LoadingSpinner';
-import { useMcpApis, useMcpApiTools, usePopularApis, ApiSystem, ApiTool } from '../hooks/useMcpData';
+import { useMcpApis, useMcpApiTools, usePopularApis, fetchCatalogTool, ApiSystem, ApiTool } from '../hooks/useMcpData';
 import { useDataSources, useDataSourceTables, DataSource } from '../hooks/useDataSourceData';
 import { useWorkflows } from '../hooks/useWorkflowsData';
 import { useInterfaces } from '../hooks/useInterfaces';
@@ -19,7 +19,7 @@ import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { CreateInterfaceModal } from '@/components/chat/CreateInterfaceModal';
 import { CreateAgentModal } from '@/components/chat/CreateAgentModal';
 import { CreateDataSourceModal } from '@/components/chat/CreateDataSourceModal';
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { orchestratorApi } from '@/lib/api';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 import type { Agent } from '@/lib/api/orchestrator/types';
@@ -33,9 +33,17 @@ import {
 import type { BuilderNodeKind } from '../types';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { NodeIcon } from './nodes/shared';
-import { DraggableNodeItem, useBreadcrumbs, useLazyLoadObserver, useOnVisibleOnce } from './palette/index';
+import { DraggableNodeItem, useBreadcrumbs, useLazyLoadObserver } from './palette/index';
+// Generic, so it lives with the other hooks: the data table's media cells defer their bytes
+// with the same latch.
+import { useOnVisibleOnce } from '@/hooks/useOnVisibleOnce';
 import { usePlanFeatureGate, type PlanLock } from '@/hooks/usePlanFeatureGate';
 import { nodeFeatureKey, catalogFeatureKeys } from '../nodes/planFeatureKeys';
+import {
+  buildTriggerShortcutSelection,
+  TRIGGER_SHORTCUTS,
+  type TriggerShortcutDefinition,
+} from '../data/triggerShortcuts';
 
 type NodeCreatorPanelProps = {
   isOpen: boolean;
@@ -58,6 +66,21 @@ export function NodeCreatorPanel({ isOpen, onClose, onSelectNode, currentWorkflo
   const t = useTranslations('workflowBuilder.canvas');
   const { isRunMode } = useWorkflowMode();
   const queryClient = useQueryClient();
+  const shortcutCreation = useMutation({
+    mutationFn: async (shortcut: TriggerShortcutDefinition) => {
+      const catalog = await queryClient.fetchQuery({
+        queryKey: ['trigger-shortcut-tool', shortcut.apiName, shortcut.toolSlug],
+        queryFn: () => fetchCatalogTool(shortcut.apiName, shortcut.toolSlug),
+        staleTime: 5 * 60 * 1000,
+      });
+      return buildTriggerShortcutSelection(shortcut, {
+        description: t(`triggerShortcuts.${shortcut.id}.description`),
+        triggerLabel: t(`triggerShortcuts.${shortcut.id}.triggerLabel`),
+        actionLabel: t(`triggerShortcuts.${shortcut.id}.actionLabel`),
+      }, catalog);
+    },
+    onSuccess: (selection) => onSelectNode?.(selection),
+  });
   const [showCreateInterfaceModal, setShowCreateInterfaceModal] = React.useState(false);
   const [showCreateDataSourceModal, setShowCreateDataSourceModal] = React.useState(false);
   const [showCreateAgentModal, setShowCreateAgentModal] = React.useState(false);
@@ -1030,6 +1053,9 @@ export function NodeCreatorPanel({ isOpen, onClose, onSelectNode, currentWorkflo
           {/* Trigger Types */}
           {navigationLevel === 'types' && selectedType === 'triggers' && (
             <div className="py-2 pl-3 pr-3 space-y-1">
+              <div className="px-2 pb-1 pt-1 text-sm text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                {t('coreTriggers')}
+              </div>
               {TRIGGER_TYPES.filter(t => !searchQuery.trim() || t.name.toLowerCase().includes(searchQuery.toLowerCase())).map((trigger) => {
                 const isNavTrigger = trigger.id === 'tables-trigger' || trigger.id === 'workflows-trigger' || trigger.id === 'error-trigger';
                 const paletteData = getPaletteItemDataFromId(trigger.id, trigger.name, trigger.description);
@@ -1042,6 +1068,59 @@ export function NodeCreatorPanel({ isOpen, onClose, onSelectNode, currentWorkflo
                     showArrow={isNavTrigger} arrowType="arrow" nodeId={trigger.id} nodeKind="entry" iconSize="sm" />
                 );
               })}
+
+              {TRIGGER_SHORTCUTS.some((shortcut) => {
+                const query = searchQuery.trim().toLowerCase();
+                return !query
+                  || t(`triggerShortcuts.${shortcut.id}.label`).toLowerCase().includes(query)
+                  || t(`triggerShortcuts.${shortcut.id}.description`).toLowerCase().includes(query);
+              }) && (
+                <div className="mt-3 border-t border-gray-200 pt-3 dark:border-gray-700">
+                  <div className="px-2 pb-1 text-sm text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                    {t('appTriggerShortcuts')}
+                  </div>
+                  <p className="px-2 pb-2 text-xs text-gray-400 dark:text-gray-500">
+                    {t('appTriggerShortcutsDescription')}
+                  </p>
+                  <div className="space-y-1">
+                    {TRIGGER_SHORTCUTS.filter((shortcut) => {
+                      const query = searchQuery.trim().toLowerCase();
+                      return !query
+                        || t(`triggerShortcuts.${shortcut.id}.label`).toLowerCase().includes(query)
+                        || t(`triggerShortcuts.${shortcut.id}.description`).toLowerCase().includes(query);
+                    }).map((shortcut) => {
+                      const label = t(`triggerShortcuts.${shortcut.id}.label`);
+                      const description = t(`triggerShortcuts.${shortcut.id}.description`);
+                      const triggerNodeId = shortcut.mode === 'polling' ? 'schedule-trigger' : 'webhook-trigger';
+                      const lock = shortcut.mode === 'polling'
+                        ? lockFor([nodeFeatureKey(triggerNodeId), ...catalogFeatureKeys(shortcut.apiSlug, shortcut.toolSlug)])
+                        : nodeLock(triggerNodeId);
+                      return (
+                        <DraggableNodeItem
+                          key={shortcut.id}
+                          id={`trigger-shortcut-${shortcut.id}`}
+                          label={label}
+                          description={description}
+                          lockedPlan={lock.locked ? lock.requiredPlan : null}
+                          onClick={guardClick(lock, label, () => {
+                            if (!shortcutCreation.isPending) shortcutCreation.mutate(shortcut);
+                          })}
+                          disableDrag
+                          nodeId={triggerNodeId}
+                          nodeKind="entry"
+                          nodeFamily="trigger"
+                          iconSlug={shortcut.iconSlug}
+                          iconSize="sm"
+                        />
+                      );
+                    })}
+                    {shortcutCreation.isPending && <LoadingSpinner size="sm" />}
+                    {shortcutCreation.isError && (
+                      <p role="alert" className="px-2 text-sm text-red-600">{t('appTriggerLoadError')}</p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

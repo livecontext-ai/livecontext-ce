@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
@@ -154,7 +155,10 @@ public class RespondToWebhookNode extends BaseNode {
         // not see the headers they configured. The label registry already had an
         // entry for the key, waiting on a node that never sent it.
         if (headers != null && !headers.isEmpty()) {
-            inputData.put("headers", headers);
+            // Through the gate: an `Authorization` or a `Set-Cookie` an author configured
+            // here is a credential under a name the word rules read, and this map is
+            // persisted and published as `{{core:x.input.headers}}`.
+            inputData.put("headers", ReportedParams.reportValue(headers));
         }
         return inputData;
     }

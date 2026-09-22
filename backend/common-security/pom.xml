@@ -31,6 +31,22 @@
             <artifactId>spring-context</artifactId>
         </dependency>
 
+        <!-- Spring JDBC: the startup backfills that move plaintext rows to encrypted+hashed -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+        </dependency>
+        <!-- Jackson: the JSONB re-encryption sweep parses credential maps -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <!-- JPA API: EncryptedTokenConverter / HashedTokenListener (provided by the embedding service) -->
+        <dependency>
+            <groupId>jakarta.persistence</groupId>
+            <artifactId>jakarta.persistence-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
         <!-- SLF4J API (for logging) -->
         <dependency>
             <groupId>org.slf4j</groupId>
@@ -41,6 +57,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- In-memory database for the token backfill tests (plain SQL, no Postgres syntax) -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

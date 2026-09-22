@@ -144,10 +144,29 @@ public class LLMProviderFactory {
                                           String userId,
                                           String userRoles,
                                           boolean incrementUsage) {
+        enforceBridgeAccess(providerName, userId, userRoles, incrementUsage);
+        return getProvider(providerName);
+    }
+
+    /**
+     * Enforce the bridge policy WITHOUT fetching a provider.
+     *
+     * <p>Separate from {@link #getProviderForUser} so a caller that already has its own provider
+     * resolution (the agent loop, which may hand off to a cloud-relay resolver) can gate without
+     * changing how it obtains the provider. Folding the two together there would have forced
+     * every existing caller and test onto a different factory method for no behavioural reason.
+     *
+     * <p>No-op for non-bridge providers: {@code BridgeAccessGuard.enforce} short-circuits on them.
+     *
+     * @throws com.apimarketplace.agent.bridge.BridgeAccessDeniedException when the policy denies
+     */
+    public void enforceBridgeAccess(String providerName,
+                                    String userId,
+                                    String userRoles,
+                                    boolean incrementUsage) {
         if (bridgeAccessGuard != null) {
             bridgeAccessGuard.enforce(userId, userRoles, providerName, incrementUsage);
         }
-        return getProvider(providerName);
     }
 
     /**
@@ -207,10 +226,30 @@ public class LLMProviderFactory {
     public String getDefaultProviderName() {
         return providersByName.values().stream()
             .filter(LLMProvider::isConfigured)
+            .filter(LLMProviderFactory::canHoldAConversation)
             .sorted((a, b) -> Integer.compare(a.getDisplayOrder(), b.getDisplayOrder()))
             .map(LLMProvider::getProviderName)
             .findFirst()
             .orElse(null);
+    }
+
+    /**
+     * Whether this provider's models can serve a request that expects TEXT.
+     *
+     * <p>Every caller of a "default provider" is asking for a conversation: a chat turn
+     * with no model named, an agent loop resolving its own default. A decision provider
+     * answers with a typed choice and refuses {@code complete()} outright, so defaulting
+     * to one produces a turn that cannot succeed, only fail.
+     *
+     * <p>Display order alone very nearly hides this: a decision provider sits last and any
+     * chat provider outranks it. But "nearly" is a configuration away. An install with no
+     * chat key and no bridge, holding only a decision key, would default every chat turn
+     * onto a model that cannot hold one. Filtering on the mode states the rule instead of
+     * relying on an ordering that nothing enforces.
+     */
+    private static boolean canHoldAConversation(LLMProvider provider) {
+        String mode = provider.getModelMode();
+        return mode == null || "chat".equals(mode);
     }
 
     /**
@@ -244,6 +283,12 @@ public class LLMProviderFactory {
                 modelInfo.put("name", formatModelName(model));
                 modelInfo.put("provider", provider.getProviderName());
                 modelInfo.put("isDefault", model.equals(provider.getDefaultModel()));
+                // What KIND of thing this model returns. Null for every chat provider, which
+                // is exactly the value these rows carried implicitly before. It is read by
+                // ModelCatalogService.filterProvidersByCategoryMode, which until now found
+                // nothing here and therefore treated every YAML model as chat-eligible - so a
+                // non-chat provider declared in YAML survived every conversational filter.
+                modelInfo.put("mode", provider.getModelMode());
                 // Use global model ranking from config (ai.agent.rankings), fallback to 999
                 int displayOrder = pricingConfig != null ? pricingConfig.getRankingForModel(model) : 999;
                 modelInfo.put("displayOrder", displayOrder);
@@ -288,8 +333,13 @@ public class LLMProviderFactory {
 
         result.put("providers", providers);
 
-        // Default provider is the first sorted provider (lowest displayOrder)
-        LLMProvider defaultProvider = sortedProviders.isEmpty() ? null : sortedProviders.get(0);
+        // Default provider is the first sorted provider (lowest displayOrder) that can
+        // actually hold a conversation: a default is only ever read by a caller with no
+        // model of its own, which is always a text request. See canHoldAConversation.
+        LLMProvider defaultProvider = sortedProviders.stream()
+            .filter(LLMProviderFactory::canHoldAConversation)
+            .findFirst()
+            .orElse(null);
         result.put("defaultProvider", defaultProvider != null ? defaultProvider.getProviderName() : null);
         result.put("defaultModel", defaultProvider != null ? defaultProvider.getDefaultModel() : null);
 
@@ -321,6 +371,10 @@ public class LLMProviderFactory {
                 modelInfo.put("name", formatModelName(model));
                 modelInfo.put("provider", provider.getProviderName());
                 modelInfo.put("isDefault", model.equals(provider.getDefaultModel()));
+                // Same contract as the runtime view above: null for chat providers, the
+                // provider's own mode otherwise. The admin view feeds the category tabs, so
+                // omitting it here would put a decision model in the Chat tab.
+                modelInfo.put("mode", provider.getModelMode());
                 int displayOrder = pricingConfig != null ? pricingConfig.getRankingForModel(model) : 999;
                 modelInfo.put("displayOrder", displayOrder);
                 if (pricingConfig != null) {

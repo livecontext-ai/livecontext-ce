@@ -106,7 +106,7 @@ class CreditSystemIntegrationTest {
                     eq(AUTH_URL + "/api/credits/check"),
                     eq(HttpMethod.GET),
                     any(HttpEntity.class),
-                    eq(Map.class)))
+                    eq(Map.class), anyMap()))
                     .thenReturn(ResponseEntity.ok(Map.of("allowed", true)));
 
             assertThat(creditClient.checkCredits(USER_ID)).isTrue();
@@ -116,7 +116,7 @@ class CreditSystemIntegrationTest {
                     eq(AUTH_URL + "/api/credits/check"),
                     eq(HttpMethod.GET),
                     any(HttpEntity.class),
-                    eq(Map.class)))
+                    eq(Map.class), anyMap()))
                     .thenThrow(new ResourceAccessException("Connection refused"));
 
             assertThat(creditClient.checkCredits(USER_ID)).isTrue(); // cached result

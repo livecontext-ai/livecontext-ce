@@ -55,6 +55,7 @@ public class UserService {
     private final AgeValidator ageValidator;
     private final StorageService storageService;
     private final AccountDeactivationMailer deactivationMailer;
+    private final VerifiedAccountService verifiedAccountService;
 
     public UserService(UserRepository userRepository,
                        UserOnboardingRepository onboardingRepository,
@@ -62,7 +63,8 @@ public class UserService {
                        UsernameValidator usernameValidator,
                        AgeValidator ageValidator,
                        StorageService storageService,
-                       AccountDeactivationMailer deactivationMailer) {
+                       AccountDeactivationMailer deactivationMailer,
+                       VerifiedAccountService verifiedAccountService) {
         this.userRepository = userRepository;
         this.onboardingRepository = onboardingRepository;
         this.userProfileRepository = userProfileRepository;
@@ -70,6 +72,7 @@ public class UserService {
         this.ageValidator = ageValidator;
         this.storageService = storageService;
         this.deactivationMailer = deactivationMailer;
+        this.verifiedAccountService = verifiedAccountService;
     }
 
     /**
@@ -330,7 +333,10 @@ public class UserService {
                 storageBackedAvatarUrl(user),
                 p.getBio(),
                 user.getCreatedAt(),
-                p.isSearchIndexable()
+                p.isSearchIndexable(),
+                // The profile row is already in hand; the single-argument overload
+                // would re-read the row this method is standing on.
+                verifiedAccountService.isVerified(user, p)
         ));
     }
 

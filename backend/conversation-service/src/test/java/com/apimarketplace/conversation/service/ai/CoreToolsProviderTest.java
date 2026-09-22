@@ -535,4 +535,40 @@ class CoreToolsProviderTest {
             assertThat(coreToolsProvider.getToolCount()).isEqualTo(1);
         }
     }
+@org.junit.jupiter.api.Nested
+    @DisplayName("the set that decides which tools may enter the cache at all")
+    class ActiveToolNameParity {
+
+        /**
+         * The layer under the module list, and the one that silently drops a tool.
+         *
+         * <p>{@code fetchToolsFrom} only caches a tool whose name is in this set, so a tool
+         * present in {@code ALL_RESOURCE_MODULES}, resolved by {@code AgentModuleResolver} and
+         * routed by {@code ToolServiceTopology} is STILL invisible in the web chat if the set
+         * does not name it. Nothing errors: the tool is fetched from its service and thrown
+         * away. That is what happened to {@code mailbox}, which reached CLI and workflow agents
+         * (their cache derives the set from the modules) and not the main chat (this one held a
+         * hand-written copy).
+         */
+        @Test
+        @DisplayName("every module tool can enter the cache, so none is fetched and dropped")
+        void coversEveryModuleTool() {
+            assertThat(coreToolsProvider.activeCoreToolNames())
+                    .containsAll(com.apimarketplace.agent.prompt.DefaultSystemPrompts.getAllCoreToolNames());
+        }
+
+        @Test
+        @DisplayName("a tool the modules do not declare cannot enter the cache either")
+        void declaresNothingExtra() {
+            assertThat(com.apimarketplace.agent.prompt.DefaultSystemPrompts.getAllCoreToolNames())
+                    .as("an entry here that no module declares is a tool no prompt ever mentions")
+                    .containsAll(coreToolsProvider.activeCoreToolNames());
+        }
+
+        @Test
+        @DisplayName("mailbox is one of them: the chat surface can offer it")
+        void mailboxIsAmongThem() {
+            assertThat(coreToolsProvider.activeCoreToolNames()).contains("mailbox");
+        }
+    }
 }

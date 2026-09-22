@@ -95,7 +95,7 @@ interface UseMessageHandlersV2Options {
   setSendError: (error: { message: string; retryable: boolean; onRetry?: () => void } | null) => void;
   addMessageLocal: (conversationId: string, message: { role: string; content: string; model: string; timestamp: string; toolCalls?: string; attachments?: { storageId: string; type: string; fileName: string; mimeType: string }[]; pendingLocal?: boolean }) => void;
   setPendingUserMessage: (message: { id: string; conversationId: string; role: 'user'; content: string; model: string; timestamp: string; attachments?: { storageId: string; type: string; fileName: string; mimeType: string }[] } | null) => void;
-  loadMessages: (conversationId: string) => Promise<void>;
+  loadMessages: (conversationId: string, limit?: number, options?: { silent?: boolean }) => Promise<void>;
   agentId?: string | null;
   onCompactionDone?: (
     conversationId: string,
@@ -104,6 +104,17 @@ interface UseMessageHandlersV2Options {
     generatedAt: string,
   ) => void;
 }
+
+/**
+ * The routes a conversation can be STARTED from, i.e. the only ones whose URL ever needs
+ * syncing to /app/c/{id} once the reply is persisted.
+ *
+ * Read against the LIVE pathname at navigation time, never against the one captured when the
+ * message was sent: the reader is free to walk away while the reply finishes, and a sync that
+ * fires then would drag them back.
+ */
+const isNewChatUrl = (path: string | null | undefined): boolean =>
+  !!path && (path.endsWith('/app/chat') || path.endsWith('/app'));
 
 export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
   const {
@@ -135,6 +146,50 @@ export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
   const [isStartingStream, setIsStartingStream] = useState(false);
   const isStartingStreamRef = useRef(false);
   const stopRequestedBeforeConversationRef = useRef(false);
+  // Conversation whose URL still has to be synced to /app/c/{id}, requested once its
+  // end-of-stream reconciliation has settled. Requesting through an effect rather than
+  // navigating inline is what makes the hand-over ordered and the guards current - see the
+  // effect below. The request itself lives in a ref and the state is only a nonce, so the
+  // effect never has to write state back: no cascading render, and any later re-run of the
+  // effect (it depends on pathname and router, both of which change on navigation) finds the
+  // request already consumed instead of replaying it and yanking the reader back.
+  const pendingUrlSyncRef = useRef<string | null>(null);
+  const [urlSyncNonce, setUrlSyncNonce] = useState(0);
+  const requestUrlSync = useCallback((conversationId: string) => {
+    pendingUrlSyncRef.current = conversationId;
+    setUrlSyncNonce(nonce => nonce + 1);
+  }, []);
+
+  /**
+   * The end-of-stream reconciliation, with one retry.
+   *
+   * SILENT on purpose: this reloads the thread the user is already reading (it exists to pick
+   * up the persisted row with its tool calls / execution id), so it must not flip the loading
+   * flag, reset pagination, raise an error banner or clear the list on a transient failure.
+   * Combined with the identity-preserving merge in useMessages, an unchanged thread commits no
+   * state change at all: same array, same flags, so the tree reconciles to itself and the DOM
+   * is never touched. That, plus not blanking the list when the fetch fails, is what removes
+   * the end-of-stream flash.
+   *
+   * Silent does not mean optional, though. Until the persisted reply lands in messages[],
+   * ChatCore holds the queued-message drain back on it (priorReplyPendingCommit), and a silent
+   * failure leaves no banner to explain the wait. Hence the retry: it turns the common
+   * transient 5xx into a recovery. Past that we log and stop, leaving the live stream content
+   * on screen, which is still the full reply.
+   */
+  const reconcileAfterStream = useCallback(async (conversationId: string) => {
+    try {
+      await loadMessages(conversationId, undefined, { silent: true });
+      return;
+    } catch (err) {
+      conversationLogger.warn('Post-stream reconciliation failed, retrying once', { error: err });
+    }
+    try {
+      await loadMessages(conversationId, undefined, { silent: true });
+    } catch (err) {
+      conversationLogger.error('Failed to load messages after stream complete', { error: err });
+    }
+  }, [loadMessages]);
 
   const setStartingStream = useCallback((value: boolean) => {
     isStartingStreamRef.current = value;
@@ -148,6 +203,51 @@ export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
   useEffect(() => {
     conversationIdRef.current = currentConversationId;
   }, [currentConversationId]);
+
+  // Sync the URL to /app/c/{id} once the conversation created by this send is fully streamed,
+  // persisted AND reconciled. Deferred out of onConversationCreated because a cross-segment
+  // route change mid-stream remounts the app layout and drops the live subscription (see the
+  // note there). router.replace (not raw replaceState) updates the route params, so the page
+  // resolves this conversation on refresh / share / breadcrumb.
+  //
+  // Driven by an EFFECT rather than inline in the stream callback, for two reasons:
+  //  - ORDER. The route change swaps the chat page for a fresh instance that paints from the
+  //    snapshot the outgoing one hands over, so the reconciled thread has to be recorded first.
+  //    What guarantees that is enqueue order: the reconciliation's setMessages is queued before
+  //    this sync is even requested (the request is chained onto it), so the commit carrying the
+  //    new list is processed first, and the effect that records the snapshot runs in it. The
+  //    chat page also declares useChatPageStateV3 before this hook, which orders the two
+  //    effects within a shared commit - belt and braces on top, not the mechanism.
+  //  - CURRENT GUARDS. The callbacks object handed to StreamingContext is frozen at send time,
+  //    so a `pathname` read inside it describes where the user was when they pressed Enter, not
+  //    where they are when the reply lands. This effect re-reads both guards at navigation
+  //    time: still on the same conversation, and still on the new-chat URL. The user is free
+  //    to walk away while the reply finishes, and nothing yanks them back.
+  useEffect(() => {
+    if (urlSyncNonce === 0) return;
+    const conversationId = pendingUrlSyncRef.current;
+    pendingUrlSyncRef.current = null;
+    if (!conversationId) return;
+    if (conversationIdRef.current !== conversationId) return;
+    if (!isNewChatUrl(pathname)) return;
+    const localePrefix = pathname!.replace(/\/(app\/chat|app)$/, '');
+    // MEASURED, and left as it was on purpose. Moving from /app/chat to /app/c/{id} blanks the
+    // whole page for a beat: the App Router tears the current segment down and renders the next
+    // behind a Suspense boundary whose fallback is empty. On a live CE stack that is 100-400ms
+    // of an empty document, right as the answer lands - it reads as the page refreshing itself.
+    //
+    // Two fixes were tried against that e2e and BOTH were falsified, so neither shipped:
+    // deleting the segment's loading.tsx (the empty fallback) changed nothing, because the cost
+    // is the transition and not its fallback; and window.history.replaceState - the shallow
+    // update Next documents - blanked it for longer still, since Next patches the History API to
+    // drive the router and a cross-segment call re-renders the route tree anyway.
+    //
+    // What remains is a routing decision, not a message-state one: the flash goes away only by
+    // not changing segment (keeping the conversation on /app/chat, at the cost of an address
+    // that does not survive a refresh) or by making the two routes one segment. router.replace
+    // is kept because it is the only option here that leaves the router's own state correct.
+    router.replace(`${localePrefix}/app/c/${conversationId}`, { scroll: false });
+  }, [urlSyncNonce, pathname, router]);
 
   // Store pending message helper
   const storePendingMessage = useCallback((message: string, model: string) => {
@@ -201,10 +301,13 @@ export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
     setInputValue('');
     setSendError(null);
 
-    // CRITICAL: If this is an existing conversation, ensure previous messages are loaded
+    // CRITICAL: If this is an existing conversation, ensure previous messages are loaded.
+    // SILENT: the user is looking at this thread and just pressed Enter. A visible load here
+    // flashes the transcript on every send, and - worse - the explicit path clears the list
+    // when the fetch fails, so a network hiccup at send time used to wipe the conversation.
     if (convId) {
       try {
-        await loadMessages(convId);
+        await loadMessages(convId, undefined, { silent: true });
       } catch (err) {
         conversationLogger.warn('Failed to load messages before send, continuing anyway', { error: err });
       }
@@ -352,19 +455,24 @@ export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
             // clear it here too.
             setStartingStream(false);
 
-            loadMessages(completedConvId).catch(err => {
-              conversationLogger.error('Failed to load messages after stream complete', { error: err });
-            });
-
-            // Sync the URL to /app/c/{id} now that the reply is fully streamed AND persisted - deferred
-            // from onConversationCreated because a cross-segment route change mid-stream remounts the app
-            // layout and drops the live subscription (see the note there). router.replace (not raw
-            // replaceState) updates the route params so the page resolves this conversation on refresh /
-            // share / breadcrumb. Only when still on the new-chat URL (we created this conversation here).
-            if (pathname?.endsWith('/app/chat') || pathname?.endsWith('/app')) {
-              const localePrefix = pathname.replace(/\/(app\/chat|app)$/, '');
-              router.replace(`${localePrefix}/app/c/${completedConvId}`, { scroll: false });
-            }
+            // SILENT on purpose: this is a reconciliation of the thread the user is already
+            // reading (it exists to pick up the persisted row with its tool calls / execution id),
+            // so it must not flip the loading flag, reset pagination, raise an error banner or
+            // clear the list on a transient failure. Combined with the identity-preserving merge
+            // in useMessages, an unchanged thread commits no state change at all - no flash.
+            //
+            // Only THEN is the URL sync requested (see the effect below): changing the route
+            // segment swaps the chat page for a fresh instance, and that instance paints from the
+            // snapshot the outgoing one left behind. Requesting it first would hand over a thread
+            // still missing the persisted reply, and the answer would appear a second time.
+            // ONE retry on failure, because this reconciliation is not optional: until the
+            // persisted reply lands in messages[], ChatCore keeps the queued-message drain
+            // waiting on it (priorReplyPendingCommit), and a silent failure has no banner to
+            // explain the wait. A single retry turns the common transient 5xx into a recovery;
+            // past that we log and leave the live stream content on screen, which is still the
+            // full reply.
+            reconcileAfterStream(completedConvId)
+              .finally(() => requestUrlSync(completedConvId));
           },
 
           onTitleUpdated: (conversationId: string, title: string) => {
@@ -439,7 +547,8 @@ export function useMessageHandlersV2(options: UseMessageHandlersV2Options) {
     selectedModel,
     reasoningEffort,
     currentConversationId,
-    pathname,
+    reconcileAfterStream,
+    requestUrlSync,
     sendMessage,
     stopStream,
     setStartingStream,

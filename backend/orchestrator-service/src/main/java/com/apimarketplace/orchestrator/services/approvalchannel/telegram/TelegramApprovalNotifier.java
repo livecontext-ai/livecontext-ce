@@ -1,5 +1,7 @@
 package com.apimarketplace.orchestrator.services.approvalchannel.telegram;
 
+import com.apimarketplace.common.security.token.TokenAtRest;
+
 import com.apimarketplace.orchestrator.domain.ToolRef;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.execution.ApprovalChannelDeliveryEntity;
@@ -108,7 +110,7 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
         try {
             String token = generateToken();
             int inserted = deliveryRepository.insertPendingIfAbsent(
-                    signal.getId(), CHANNEL_ID, token,
+                    signal.getId(), CHANNEL_ID, TokenAtRest.encrypt(token), TokenAtRest.hash(token),
                     run.getTenantId(), run.getOrgId(), signal.getRunId(), signal.getNodeId(),
                     signal.getItemId() != null ? signal.getItemId() : "0", signal.getEpoch(),
                     config.credentialId(), config.chatId(),
@@ -117,7 +119,7 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
                 // Replay/replica race: another dispatch already owns this delivery.
                 return;
             }
-            Optional<ApprovalChannelDeliveryEntity> deliveryOpt = deliveryRepository.findByCallbackToken(token);
+            Optional<ApprovalChannelDeliveryEntity> deliveryOpt = deliveryRepository.findByCallbackTokenHash(TokenAtRest.hash(token));
             if (deliveryOpt.isEmpty()) {
                 return;
             }

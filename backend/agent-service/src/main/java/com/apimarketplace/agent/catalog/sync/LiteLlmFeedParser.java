@@ -62,6 +62,20 @@ import static com.apimarketplace.agent.catalog.sync.FeedParsingUtils.*;
  *       priced - see {@link #effectiveCost}.</li>
  * </ol>
  *
+ * <p>Two more CLASSES of row are dropped after the per-entry filters, because
+ * each needs the whole accepted set to decide. Both drop a redundant NAME rather than a
+ * model, and both record the id in {@code declinedIds} so the native discovery
+ * pass cannot offer it straight back:
+ * <ol>
+ *   <li>{@link #dedupDatedAliases} - a dated twin
+ *       ({@code claude-opus-4-7-20260416}) when its canonical alias
+ *       ({@code claude-opus-4-7}) survived.</li>
+ *   <li>{@link #dedupVersionedTwins} - a version-suffixed twin
+ *       ({@code deepseek-v4-flash}) when its version-free alias
+ *       ({@code deepseek-flash}) survived AND the feed describes the two
+ *       identically on every published field.</li>
+ * </ol>
+ *
  * <p>Output map shape - identical to
  * {@code CatalogBundlePayload.toCanonicalMap()} with V125 extensions, so
  * {@code CatalogMergeService.merge()} can ingest it unchanged:
@@ -142,6 +156,7 @@ public class LiteLlmFeedParser {
         }
 
         List<Map<String, Object>> accepted = new ArrayList<>();
+        Set<String> declinedIds = new HashSet<>();
         int rejectedProvider = 0, rejectedMode = 0, rejectedNoTools = 0, rejectedSlash = 0, rejectedSchema = 0, rejectedZeroPrice = 0;
         int rejectedFineTuneTemplate = 0;
 
@@ -181,10 +196,18 @@ public class LiteLlmFeedParser {
             if (nativeModelId.contains("/")) { rejectedSlash++; continue; }
 
             String mode = strOf(fields.get("mode"));
-            if (!"chat".equals(mode)) { rejectedMode++; continue; }
+            if (!"chat".equals(mode)) {
+                rejectedMode++;
+                declinedIds.add(NativeModelDiscoveryService.key(ourProvider, nativeModelId));
+                continue;
+            }
 
             Boolean tools = boolOf(fields.get("supports_function_calling"));
-            if (!Boolean.TRUE.equals(tools)) { rejectedNoTools++; continue; }
+            if (!Boolean.TRUE.equals(tools)) {
+                rejectedNoTools++;
+                declinedIds.add(NativeModelDiscoveryService.key(ourProvider, nativeModelId));
+                continue;
+            }
 
             // Reject fully unpriced entries - LiteLLM carries a handful of
             // "experimental" / preview rows with both prices at 0 (e.g.
@@ -197,7 +220,11 @@ public class LiteLlmFeedParser {
             Object outC = effectiveCost(fields, "output_cost_per_token");
             boolean hasInput  = isPositive(inC);
             boolean hasOutput = isPositive(outC);
-            if (!hasInput && !hasOutput) { rejectedZeroPrice++; continue; }
+            if (!hasInput && !hasOutput) {
+                rejectedZeroPrice++;
+                declinedIds.add(NativeModelDiscoveryService.key(ourProvider, nativeModelId));
+                continue;
+            }
 
             Map<String, Object> normalised = normalise(ourProvider, nativeModelId, fields, sourceSha, fetchedAtIso);
             accepted.add(normalised);
@@ -209,14 +236,29 @@ public class LiteLlmFeedParser {
         // exposing both in the picker is just noise. Drop the dated
         // variant if a canonical-same-base row already survived.
         int beforeDedup = accepted.size();
-        accepted = dedupDatedAliases(accepted);
+        // The dropped twins are declined ids like any other. Vendor listings
+        // return dated ids (Anthropic serves claude-sonnet-4-5-20250929,
+        // OpenAI returns both forms), so without recording them here,
+        // discovery re-emits a duplicate row for every dated alias on every
+        // single sync that has an Anthropic or OpenAI key. That is the
+        // highest-volume case of the whole class, and unlike the others it
+        // fires with certainty rather than on a particular vendor's catalogue.
+        accepted = dedupDatedAliases(accepted, declinedIds);
         int rejectedDatedDup = beforeDedup - accepted.size();
 
-        log.info("LiteLLM parse: total={}, accepted={}, rejected=[provider:{} mode:{} noTools:{} slash:{} schema:{} zeroPrice:{} datedDup:{} ftTemplate:{}]",
-                raw.size(), accepted.size(), rejectedProvider, rejectedMode, rejectedNoTools,
-                rejectedSlash, rejectedSchema, rejectedZeroPrice, rejectedDatedDup, rejectedFineTuneTemplate);
+        // Same idea, different suffix shape: a vendor that keeps a version
+        // token INSIDE the id publishes both forms of one model.
+        int beforeVersionDedup = accepted.size();
+        accepted = dedupVersionedTwins(accepted, declinedIds);
+        int rejectedVersionTwin = beforeVersionDedup - accepted.size();
 
-        return ParseResult.success(accepted, rejectedProvider, rejectedMode, rejectedNoTools, rejectedSlash, rejectedSchema);
+        log.info("LiteLLM parse: total={}, accepted={}, rejected=[provider:{} mode:{} noTools:{} slash:{} schema:{} zeroPrice:{} datedDup:{} versionTwin:{} ftTemplate:{}]",
+                raw.size(), accepted.size(), rejectedProvider, rejectedMode, rejectedNoTools,
+                rejectedSlash, rejectedSchema, rejectedZeroPrice, rejectedDatedDup,
+                rejectedVersionTwin, rejectedFineTuneTemplate);
+
+        return ParseResult.success(accepted, declinedIds, rejectedProvider, rejectedMode,
+                rejectedNoTools, rejectedSlash, rejectedSchema);
     }
 
     /**
@@ -229,7 +271,17 @@ public class LiteLlmFeedParser {
     private static java.util.regex.Pattern DATED_SUFFIX =
             java.util.regex.Pattern.compile("(.*)-(\\d{8}|\\d{4}-\\d{2}-\\d{2})$");
 
-    static List<Map<String, Object>> dedupDatedAliases(List<Map<String, Object>> models) {
+    /**
+     * @param declinedInto collects every dropped twin, so the ids this feed
+     *                     deliberately hides stay hidden when another source
+     *                     offers them again. Not optional, and there is no
+     *                     convenience overload that defaults it: a caller that
+     *                     forgets to collect the drops re-opens the duplicate
+     *                     hole silently, and an overload nobody calls is just
+     *                     the place that drift starts.
+     */
+    static List<Map<String, Object>> dedupDatedAliases(List<Map<String, Object>> models,
+                                                       java.util.Set<String> declinedInto) {
         // Index canonical (provider, id-without-date) keys → present?
         java.util.Set<String> canonicalKeys = new java.util.HashSet<>();
         for (Map<String, Object> m : models) {
@@ -248,12 +300,135 @@ public class LiteLlmFeedParser {
                 String canonicalId = mat.group(1);
                 String canonicalKey = m.get("provider") + ":" + canonicalId;
                 if (canonicalKeys.contains(canonicalKey)) {
-                    continue; // drop dated variant when canonical twin survived
+                    // Drop the dated variant when the canonical twin survived,
+                    // and record it so no other source can re-add it.
+                    declinedInto.add(NativeModelDiscoveryService.key(
+                            String.valueOf(m.get("provider")), id));
+                    continue;
                 }
             }
             kept.add(m);
         }
         return kept;
+    }
+
+    /**
+     * A hyphen-delimited version token sitting INSIDE an id: the {@code -v4} of
+     * {@code deepseek-v4-flash}, or the {@code -v4.1} of a future
+     * {@code deepseek-v4.1-flash}. Anchored on a following hyphen so a trailing
+     * {@code -v2} (the whole point of ids like {@code deepseek-prover-v2}) is
+     * never matched: removing it there would invent an alias that does not
+     * exist.
+     */
+    private static final java.util.regex.Pattern VERSION_TOKEN =
+            java.util.regex.Pattern.compile("-v\\d+(?:\\.\\d+)*(?=-)");
+
+    /**
+     * Fields excluded from the twin comparison because they restate the ID
+     * rather than describe the MODEL: two rows may differ on them and still be
+     * the same thing. Everything else is compared, and a key present on one
+     * side and absent on the other counts as different.
+     *
+     * <p>{@code releaseDate} is ALSO derived from the id and is deliberately
+     * NOT in this set. Removing a mid-string version token cannot change a
+     * trailing date, so in every reachable case the two twins derive the same
+     * value and the field is inert; leaving it compared means that if a vendor
+     * ever ships a shape where they differ, the rows stay apart. Excluding it
+     * would be the choice that fails open.
+     */
+    private static final java.util.Set<String> TWIN_IGNORED_FIELDS =
+            java.util.Set.of("modelId", "displayName", "feedMetadata");
+
+    /**
+     * Collapse a version-suffixed id onto its version-free alias when the feed
+     * describes the two identically.
+     *
+     * <p>The case this exists for: DeepSeek publishes {@code deepseek-flash}
+     * AND {@code deepseek-v4-flash}, and updates the weights behind BOTH in
+     * place. Measured against the live feed on 2026-09-15, the two carry the
+     * same price, context, output cap and every capability flag, while the
+     * versioned name still says "v4" for weights that are no longer v4. Keeping
+     * both puts two indistinguishable rows in the picker, one of which lies
+     * about what it serves - and a name that lies is worse than no name,
+     * because a user picks on it.
+     *
+     * <p>The alias is the survivor, deliberately. A version-free id cannot go
+     * stale: it says only "the current flash model", which stays true across
+     * every future release. This is the same call {@link #dedupDatedAliases}
+     * already makes for {@code claude-opus-4-7-20260416} against
+     * {@code claude-opus-4-7}; only the shape of the redundant suffix differs.
+     *
+     * <p><b>Why the equality has to be total.</b> A vendor CAN publish a
+     * version-free alias next to a genuinely different versioned model, and
+     * that pair must survive untouched. Requiring every published field to
+     * match (prices, context, output cap, all capability flags, dates) makes
+     * the collapse provable from the feed rather than inferred from the name:
+     * if the feed says they differ in any way we can observe, they are two
+     * models and both stay.
+     *
+     * <p>Blast radius, measured end to end against the live feed on 2026-09-15:
+     * ONE distinct model, {@code deepseek-v4-flash} onto {@code deepseek-flash}.
+     * The counter reads 2 rather than 1 because LiteLLM publishes that id in
+     * BOTH its bare and its namespaced form ({@code deepseek-v4-flash} and
+     * {@code deepseek/deepseek-v4-flash}), which {@code stripProviderPrefix}
+     * reduces to the same native id, so the pass sees the twin twice and
+     * collapses both copies. Nothing else in the feed matched.
+     *
+     * @param declinedInto collects the dropped twin, exactly as the dated-alias
+     *                     pass does, so the native discovery pass cannot offer
+     *                     the id straight back on the same sync.
+     */
+    static List<Map<String, Object>> dedupVersionedTwins(List<Map<String, Object>> models,
+                                                         java.util.Set<String> declinedInto) {
+        Map<String, Map<String, Object>> byKey = new java.util.HashMap<>();
+        for (Map<String, Object> m : models) {
+            String id = strOf(m.get("modelId"));
+            if (id == null) continue;
+            byKey.put(m.get("provider") + ":" + id, m);
+        }
+
+        List<Map<String, Object>> kept = new ArrayList<>(models.size());
+        for (Map<String, Object> m : models) {
+            String id = strOf(m.get("modelId"));
+            if (id == null) { kept.add(m); continue; }
+
+            boolean collapsed = false;
+            java.util.regex.Matcher mat = VERSION_TOKEN.matcher(id);
+            while (mat.find()) {
+                String aliasId = id.substring(0, mat.start()) + id.substring(mat.end());
+                Map<String, Object> alias = byKey.get(m.get("provider") + ":" + aliasId);
+                if (alias != null && publishedFieldsEqual(m, alias)) {
+                    declinedInto.add(NativeModelDiscoveryService.key(
+                            String.valueOf(m.get("provider")), id));
+                    // Name both ids, not just a count. This pass decides that
+                    // two rows are one model on evidence the feed only implies,
+                    // so if it ever collapses a model that was genuinely
+                    // distinct, the log line is the only place that will say
+                    // which id stopped existing.
+                    log.info("LiteLLM parse: collapsed versioned twin {}:{} onto alias {}",
+                            m.get("provider"), id, aliasId);
+                    collapsed = true;
+                    break;
+                }
+            }
+            if (!collapsed) kept.add(m);
+        }
+        return kept;
+    }
+
+    /**
+     * Do two normalised feed rows describe the same model? Compares the UNION
+     * of both key sets, so a field one row carries and the other omits is a
+     * difference, not a silent match.
+     */
+    static boolean publishedFieldsEqual(Map<String, Object> a, Map<String, Object> b) {
+        java.util.Set<String> keys = new java.util.HashSet<>(a.keySet());
+        keys.addAll(b.keySet());
+        keys.removeAll(TWIN_IGNORED_FIELDS);
+        for (String k : keys) {
+            if (!Objects.equals(a.get(k), b.get(k))) return false;
+        }
+        return true;
     }
 
     /**
@@ -330,6 +505,18 @@ public class LiteLlmFeedParser {
         out.put("priceCacheWrite",  costPerTokenToPricePerMillion(effectiveCost(lm, "cache_creation_input_token_cost")));
 
         // Derived floors - cheapest variant the caller can obtain.
+        // The floor folds the batch rate in BECAUSE on this feed batch is a
+        // tier of the SAME model id: a caller holding that id can obtain it,
+        // so it is genuinely the cheapest this model can cost.
+        //
+        // That is NOT true of the OpenRouter feed, and the two now disagree
+        // on purpose. There the batch tier is a separate id ("model:batch")
+        // which OpenRouterFeedParser drops, so no caller can reach the rate
+        // through the published model; its parser copies the rate onto
+        // priceInputBatch for information and deliberately leaves the floor
+        // at the interactive price. Anything reading price_floor_* has to
+        // know the rule is per-feed, which the V125 column COMMENT predates
+        // and does not say.
         out.put("priceFloorInput",
                 minNonNull(priceInput, priceInputBatch,
                         costPerTokenToPricePerMillion(lm.get("input_cost_per_token_flex"))));
@@ -459,17 +646,38 @@ public class LiteLlmFeedParser {
      * with a message. No exceptions escape - callers must check
      * {@link #isSuccess()}.
      */
+    /**
+     * @param declinedIds {@link NativeModelDiscoveryService#key} for every
+     *                    vendor id this feed SAW and refused to publish: the
+     *                    wrong mode (embedding / image / audio), no
+     *                    tool-calling, or no real price. These are not catalog
+     *                    rows, they are policy decisions already taken, and
+     *                    {@link NativeModelDiscoveryService} needs them because
+     *                    it reads vendor {@code /models} listings that state
+     *                    none of those three things. Without this, a model the
+     *                    feed rejected walks straight back in through the
+     *                    discovery door: {@code text-embedding-3-large} as a
+     *                    chat row, or a no-tools model on a platform whose
+     *                    whole premise is tool-calling.
+     *
+     *                    <p>Note this is only about ids the feed KNOWS. An id
+     *                    no source has ever heard of is still discovered, and
+     *                    lands unpriced and disabled.
+     */
     public record ParseResult(boolean isSuccess, String errorMessage,
                               List<Map<String, Object>> models,
+                              Set<String> declinedIds,
                               int rejectedProvider, int rejectedMode,
                               int rejectedNoTools, int rejectedSlash,
                               int rejectedSchema) {
-        public static ParseResult success(List<Map<String, Object>> models,
+        public static ParseResult success(List<Map<String, Object>> models, Set<String> declinedIds,
                                           int prov, int mode, int tools, int slash, int schema) {
-            return new ParseResult(true, null, models, prov, mode, tools, slash, schema);
+            return new ParseResult(true, null, models,
+                    declinedIds == null ? Set.of() : Set.copyOf(declinedIds),
+                    prov, mode, tools, slash, schema);
         }
         public static ParseResult failure(String err) {
-            return new ParseResult(false, err, List.of(), 0, 0, 0, 0, 0);
+            return new ParseResult(false, err, List.of(), Set.of(), 0, 0, 0, 0, 0);
         }
     }
 }

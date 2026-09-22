@@ -9,7 +9,7 @@
 # pinned to this release, so a clone always runs the matching version.
 #
 # Configuration (cloud connection, SMTP, ports): copy docker/.env.ce.example to
-# docker/.env.ce and pass it with `--env-file docker/.env.ce`. For agents to run, connect
+# .env in the repository root; Compose reads it automatically. For agents to run, connect
 # to LiveContext Cloud (recommended) or add your own OpenAI/Anthropic/Google key in the app.
 #
 # Ports (override via env or --env-file):
@@ -26,9 +26,9 @@
 #
 # Optional features (OPT-IN - a default `up` starts NEITHER, keeping the stack light):
 #   renderer       interface-node screenshot (PNG) + PDF rendering (~1 GB Playwright/Chromium)
-#                    docker compose --env-file docker/.env.ce.renderer up -d
+#                    set COMPOSE_PROFILES=renderer and SCREENSHOT_RENDERER_URL in .env
 #   browser-agent  agent_browse + web_search (heavy Chromium + SearXNG, ~2 GB; model picked per AI provider)
-#                    docker compose --env-file docker/.env.ce.browser-agent up -d
+#                    set COMPOSE_PROFILES=browser-agent and WEBSEARCH_ENABLED=true in .env
 # See README.md ("Optional features") and docker/README-CE.md for details.
 
 name: livecontext-ce
@@ -108,7 +108,7 @@ services:
     restart: "no"
 
   bridge:
-    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.2.15
+    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.3.0
     container_name: livecontext-bridge
     restart: unless-stopped
     depends_on:
@@ -136,7 +136,7 @@ services:
           memory: 512M
 
   livecontext:
-    image: ghcr.io/livecontext-ai/livecontext-ce:v0.2.15
+    image: ghcr.io/livecontext-ai/livecontext-ce:v0.3.0
     container_name: livecontext-app
     restart: unless-stopped
     depends_on:
@@ -234,6 +234,26 @@ services:
       # do not take a working realtime layer as proof the value is well formed.)
       OAUTH2_FRONTEND_URL: "${PUBLIC_BASE_URL:-http://localhost:${FRONTEND_PORT:-3000}}"
       OAUTH2_CALLBACK_URL: "${GATEWAY_PUBLIC_URL:-http://localhost:${BACKEND_PORT:-8080}}/api/credentials/oauth2/callback"
+      # SMTP. Nothing here is required to run, and everything that is an e-mail is
+      # simply lost without it: the password reset link above all, which is the
+      # only way back into an account whose password is forgotten (a locked-out
+      # sole admin has no other route). Set MAIL_HOST to your relay; add
+      # MAIL_USERNAME and MAIL_PASSWORD together if it requires credentials, which
+      # is all it takes for the client to authenticate.
+      #
+      # PUBLIC_BASE_URL above is also the host in the reset link, so if it is
+      # wrong the mail arrives with a link nobody outside this machine can open.
+      MAIL_HOST: "${MAIL_HOST:-localhost}"
+      MAIL_PORT: "${MAIL_PORT:-1025}"
+      MAIL_USERNAME: "${MAIL_USERNAME:-}"
+      MAIL_PASSWORD: "${MAIL_PASSWORD:-}"
+      MAIL_FROM: "${MAIL_FROM:-noreply@livecontext.local}"
+      # STARTTLS is opportunistic: a local relay that does not advertise it keeps
+      # working in plaintext, a real relay gets an encrypted session. Turn it off
+      # and a non-local host refuses to boot, on purpose. If your relay presents a
+      # certificate from a private CA, put that CA's PEM in ./extra-ca (mounted at
+      # /app/extra-ca) rather than turning TLS off.
+      MAIL_SMTP_STARTTLS: "${MAIL_SMTP_STARTTLS:-true}"
       # Catalog seed: import the bundled OpenAPI specs at first boot
       CATALOG_SEED_ENABLED: "true"
       CATALOG_SEED_PATH: /app/catalog-seeds
@@ -351,7 +371,7 @@ services:
   # secrets - HTML in, bytes out; reached only by the app over the compose network.
   screenshot-renderer:
     profiles: ["renderer"]
-    image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:v0.2.15
+    image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:v0.3.0
     container_name: livecontext-screenshot-renderer
     restart: unless-stopped
     environment:
@@ -375,7 +395,7 @@ services:
           memory: 1024M
 
   frontend:
-    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.2.15
+    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.3.0
     container_name: livecontext-frontend
     restart: unless-stopped
     depends_on:

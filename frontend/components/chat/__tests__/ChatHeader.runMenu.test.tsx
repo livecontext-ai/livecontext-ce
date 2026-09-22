@@ -12,6 +12,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const orgMutationGate = vi.hoisted(() => ({ canMutate: true }));
+const openWorkflowLogs = vi.hoisted(() => vi.fn());
 
 vi.mock('next-intl', () => ({ useTranslations: () => (k: string) => k }));
 vi.mock('next/navigation', () => ({
@@ -49,6 +50,9 @@ vi.mock('@/components/workflow/WorkflowVersionHistory', () => ({ WorkflowSaveWit
 vi.mock('@/components/marketplace/MarketplaceHeaderActions', () => ({ MarketplaceHeaderActions: () => null }));
 vi.mock('@/components/chat/NotificationBell', () => ({ NotificationBell: () => null }));
 vi.mock('@/components/applications/ApplicationActivationButton', () => ({ ApplicationActivationButton: () => null }));
+vi.mock('@/components/workflow/useWorkflowLogsSidePanel', () => ({
+  useWorkflowLogsSidePanel: () => ({ openWorkflowLogs, canOpenWorkflowLogs: true }),
+}));
 vi.mock('@/components/agents/AvatarPicker', () => ({
   AvatarDisplay: ({ name }: { name?: string }) => <div data-testid="slot-avatar">{name}</div>,
 }));
@@ -77,6 +81,8 @@ function openRunMenu() {
 
 beforeEach(() => {
   orgMutationGate.canMutate = true;
+  openWorkflowLogs.mockClear();
+  delete (window as typeof window & { __applicationWorkflow?: unknown }).__applicationWorkflow;
 });
 afterEach(cleanup);
 
@@ -140,5 +146,48 @@ describe('ChatHeader - Run split button menu (execution modes only)', () => {
 
     window.removeEventListener('workflowStartStepByStep', sbsListener);
     window.removeEventListener('workflowViewStart', autoListener);
+  });
+
+  it('opens application logs inside the application panel host', () => {
+    (window as typeof window & { __applicationWorkflow?: unknown }).__applicationWorkflow = {
+      workflowId: 'wf-app-1',
+      runId: 'run-app-1',
+    };
+    render(
+      <ChatHeader
+        {...baseProps}
+        isWorkflowPage={false}
+        isApplicationPage
+        workflowId="wf-app-1"
+      />,
+    );
+
+    fireEvent.click(screen.getAllByTitle('actions.logs')[0]);
+
+    expect(openWorkflowLogs).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: 'wf-app-1',
+      runId: 'run-app-1',
+      reuseActiveWorkflowTab: true,
+      hostTabId: 'application-panel',
+    }));
+  });
+
+  it('opens workflow logs inside the route workflow panel host', () => {
+    render(<ChatHeader {...baseProps} isRunMode />);
+    fireEvent(
+      window,
+      new CustomEvent('workflowRunStarted', {
+        detail: { workflowId: 'wf-1', runId: 'run-workflow-1' },
+      }),
+    );
+
+    fireEvent.click(screen.getAllByTitle('actions.logs')[0]);
+
+    expect(openWorkflowLogs).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: 'wf-1',
+      runId: 'run-workflow-1',
+      reuseActiveWorkflowTab: true,
+      hostTabId: 'workflow-panel',
+    }));
   });
 });

@@ -10,6 +10,7 @@ import com.apimarketplace.orchestrator.repository.SignalWaitRepository;
 import com.apimarketplace.orchestrator.services.events.SignalsCancelledEvent;
 import com.apimarketplace.orchestrator.services.events.WorkflowApprovalPendingEvent;
 import com.apimarketplace.orchestrator.services.state.StateSnapshotService;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import jakarta.annotation.PostConstruct;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
@@ -272,6 +273,53 @@ public class UnifiedSignalService {
             runId, nodeId, signalType, epoch, entity.getExpiresAt(), entity.getId());
 
         return entity;
+    }
+
+    /**
+     * Carries a parking node's {@code resolved_params} across the pause.
+     *
+     * <p>A node that yields AWAITING_SIGNAL never persists a step row: the engine emits an
+     * event and returns. The one row it ever gets is written when the signal resolves, and
+     * that row used to carry the SIGNAL's own fields alone - so an interface's
+     * variable_mapping, an approval's resolved delegation and a wait's duration under the
+     * plan's own key were reported nowhere, at any moment of the run. Stored here, read by
+     * {@code SignalResumeService} when it writes that row.
+     *
+     * <p>Separate from {@link #registerSignal} on purpose: registration is a contract several
+     * callers and a dozen tests pin exactly, and what a node chooses to REPORT has no
+     * business widening it. Null or empty params are a no-op, and so is a signal that
+     * already carries some, which keeps a re-traversal from rewriting the row.
+     */
+    @Transactional
+    public void recordReportedParams(SignalWaitEntity signal, Map<String, Object> reportedParams) {
+        if (signal == null || reportedParams == null || reportedParams.isEmpty()
+                || signal.getReportedParams() != null) {
+            return;
+        }
+        // Through ReportedParams like any other persisted parameter map: a parking node's
+        // configuration is no less credential-bearing or unbounded for having been captured
+        // here rather than on a step row, and it ends up on one.
+        //
+        // Never throws OUT of here. The signal row is ALREADY inserted and the node is about
+        // to yield AWAITING_SIGNAL; a caller catches and fails the node, so a throw on this
+        // line would leave a node both FAILED and parked on a live pending signal that still
+        // resolves later. The report is a diagnosis, and a diagnosis that breaks the run it
+        // explains is worse than no diagnosis.
+        //
+        // Two limits, stated rather than implied. It covers a throw from the gate and from
+        // the write, which is what a caller sees synchronously. It does NOT cover a value
+        // that only fails at flush-time JSON conversion, nor a write that marks an enclosing
+        // transaction rollback-only before this catch runs: propagation here is REQUIRED, so
+        // such a failure still surfaces at the caller's commit. REQUIRES_NEW would isolate
+        // it, at the price of running before the signal row this updates is committed when
+        // the caller holds the transaction - a worse trade for a reporting write.
+        try {
+            signal.setReportedParams(ReportedParams.forReport(reportedParams));
+            signalWaitRepository.save(signal);
+        } catch (Exception e) {
+            logger.warn("Could not record reported params on signal: signalId={}, nodeId={}, error={}",
+                signal.getId(), signal.getNodeId(), e.toString());
+        }
     }
 
     /**

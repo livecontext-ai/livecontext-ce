@@ -30,16 +30,20 @@ public class InterfaceEntity implements OrgScopedEntity {
     @Column(name = "description")
     private String description;
 
-    @Lob
-    @Column(name = "html_template", nullable = true)
+    // Plain text columns (NOT @Lob): V7 declares all three as TEXT, so @Lob was only a
+    // mapping artefact - but it made Hibernate extract them through ClobJdbcType, i.e. a PG
+    // large object readable only inside a transaction. Any non-transactional read of this
+    // entity then died with "Large Objects may not be used in auto-commit mode"; that is
+    // exactly what took down /api/internal/interfaces/recent-activity on 2026-09-18, the one
+    // reader that hits the repository outside InterfaceService's @Transactional. Mirrors the
+    // same removal on AgentEntity#systemPrompt and SkillEntity (audit 2026-06-14).
+    @Column(name = "html_template", nullable = true, columnDefinition = "TEXT")
     private String htmlTemplate;
 
-    @Lob
-    @Column(name = "css_template")
+    @Column(name = "css_template", columnDefinition = "TEXT")
     private String cssTemplate;
 
-    @Lob
-    @Column(name = "js_template")
+    @Column(name = "js_template", columnDefinition = "TEXT")
     private String jsTemplate;
 
     @Column(name = "workflow_run_id")

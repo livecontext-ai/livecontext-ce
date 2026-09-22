@@ -4,8 +4,8 @@ import com.fasterxml.jackson.core.JsonEncoding;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
@@ -19,7 +19,8 @@ import java.io.OutputStream;
  * buffer. Three CE installs polling on the same cron tick were measured adding
  * ~339 MiB to the heap in a single minute, which G1 then kept committed. Here
  * {@link JsonGenerator#writeBinary(java.io.InputStream, int)} emits base64 in
- * fixed-size chunks, so peak cost is the GZIP array plus a small buffer.
+ * fixed-size chunks, and the stream it reads is fed one database slice at a
+ * time, so nothing here holds the payload.
  *
  * <p><b>The wire format is unchanged.</b> Field names and order match the record
  * components of {@link ApiCatalogSignedBundle}, and Jackson's default base64
@@ -54,8 +55,11 @@ final class ApiCatalogBundleJsonWriter {
             gen.writeNumberField("toolCount", bundle.toolCount());
             gen.writeNumberField("rawBytesSize", bundle.rawBytesSize());
             gen.writeFieldName("payloadBase64");
-            byte[] gz = bundle.payloadGz();
-            gen.writeBinary(new ByteArrayInputStream(gz), gz.length);
+            // The stream is fed one slice at a time, so this encodes a payload
+            // of any size without ever holding it.
+            try (InputStream payload = bundle.payload().get()) {
+                gen.writeBinary(payload, (int) bundle.payloadLength());
+            }
             gen.writeEndObject();
         }
     }

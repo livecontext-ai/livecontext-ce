@@ -64,6 +64,9 @@ class UserServiceTest {
     @Mock
     private AccountDeactivationMailer deactivationMailer;
 
+    @Mock
+    private VerifiedAccountService verifiedAccountService;
+
     @Captor
     private ArgumentCaptor<User> userCaptor;
 
@@ -71,7 +74,7 @@ class UserServiceTest {
 
     @BeforeEach
     void setUp() {
-        userService = new UserService(userRepository, onboardingRepository, userProfileRepository, usernameValidator, ageValidator, storageService, deactivationMailer);
+        userService = new UserService(userRepository, onboardingRepository, userProfileRepository, usernameValidator, ageValidator, storageService, deactivationMailer, verifiedAccountService);
     }
 
     @Nested
@@ -1258,6 +1261,44 @@ class UserServiceTest {
             assertThat(dto.bio()).isEqualTo("Builder");
             assertThat(dto.joinedAt()).isEqualTo(LocalDateTime.of(2024, 3, 1, 0, 0));
             verify(userProfileRepository).save(profile); // generated handle is persisted
+        }
+
+        @Test
+        @DisplayName("carries the verified badge, resolved from the row already in hand")
+        void carriesTheVerifiedBadgeWithoutARedundantRead() {
+            User user = createUser(7L, "alice");
+            UserOnboarding onboarding = new UserOnboarding(user, "Alice A.");
+            UserProfileEntity profile = new UserProfileEntity(7L);
+            profile.setProfileVisibility("PUBLIC");
+            when(userProfileRepository.findByUserId(7L)).thenReturn(Optional.of(profile));
+            when(onboardingRepository.findByUserId(7L)).thenReturn(Optional.of(onboarding));
+            when(usernameValidator.normalize("Alice A.")).thenReturn("alice_a");
+            when(verifiedAccountService.isVerified(user, profile)).thenReturn(true);
+
+            Optional<PublicProfileDto> result = userService.getPublicProfile(user);
+
+            assertThat(result).isPresent();
+            assertThat(result.get().verified()).isTrue();
+            // The two-argument overload, NOT the single-argument one: this method already
+            // holds the profile row, and the single-arg form re-reads it - one extra SELECT
+            // on every /by-handle and /by-id hit. Reverting that would leave the assertion
+            // above green, so the negative verify is the part that guards it.
+            verify(verifiedAccountService, never()).isVerified(any(User.class));
+        }
+
+        @Test
+        @DisplayName("an unverified account reports false rather than omitting the field")
+        void unverifiedAccountReportsFalse() {
+            User user = createUser(7L, "alice");
+            UserOnboarding onboarding = new UserOnboarding(user, "Alice A.");
+            UserProfileEntity profile = new UserProfileEntity(7L);
+            profile.setProfileVisibility("PUBLIC");
+            when(userProfileRepository.findByUserId(7L)).thenReturn(Optional.of(profile));
+            when(onboardingRepository.findByUserId(7L)).thenReturn(Optional.of(onboarding));
+            when(usernameValidator.normalize("Alice A.")).thenReturn("alice_a");
+            when(verifiedAccountService.isVerified(user, profile)).thenReturn(false);
+
+            assertThat(userService.getPublicProfile(user).orElseThrow().verified()).isFalse();
         }
 
         @Test

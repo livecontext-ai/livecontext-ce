@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,6 +47,10 @@ public class SortNode extends BaseNode {
 
         // Build resolved_params early so it's available in all result paths
         Map<String, Object> earlyInputData = new LinkedHashMap<>();
+        // `input` keeps the plan's name and the shape V167 documents for the `config`
+        // output field, which shares this map. A FAILED row needs no companion key saying the
+        // expression was never evaluated: the row is already FAILED and carries its error, so
+        // the key would be a constant string on every failure of five node types.
         earlyInputData.put("input", inputExpression);
         earlyInputData.put("fields", fields.stream()
             .map(sf -> Map.of("field", sf.field(), "direction", sf.direction()))
@@ -58,7 +63,7 @@ public class SortNode extends BaseNode {
             failureOutput.put("item_index", context.itemIndex());
             failureOutput.put("itemIndex", context.itemIndex());
             failureOutput.put("item_id", context.itemId());
-            failureOutput.put("resolved_params", earlyInputData);
+            failureOutput.put("resolved_params", ReportedParams.forReport(earlyInputData));
             return NodeExecutionResult.failureWithOutput(nodeId,
                 "Input expression is required. Configure the 'input' field with a reference like {{core:step.output.items}}",
                 failureOutput, System.currentTimeMillis() - startTime);
@@ -74,7 +79,7 @@ public class SortNode extends BaseNode {
                 failureOutput.put("item_index", context.itemIndex());
                 failureOutput.put("itemIndex", context.itemIndex());
                 failureOutput.put("item_id", context.itemId());
-                failureOutput.put("resolved_params", earlyInputData);
+                failureOutput.put("resolved_params", ReportedParams.forReport(earlyInputData));
                 return NodeExecutionResult.failureWithOutput(nodeId, "Template adapter not available",
                     failureOutput, System.currentTimeMillis() - startTime);
             }
@@ -110,7 +115,7 @@ public class SortNode extends BaseNode {
 
             // Persist sort configuration as resolved_params for inspector visibility
             Map<String, Object> resolvedParams = new LinkedHashMap<>();
-            resolvedParams.put("input", items != null ? items : List.of());
+            resolvedParams.put("input", ReportedParams.reportValue(items != null ? items : List.of()));
             resolvedParams.put("input_count", items != null ? items.size() : 0);
             resolvedParams.put("fields", fields.stream()
                 .map(sf -> Map.of("field", sf.field(), "direction", sf.direction()))
@@ -128,7 +133,7 @@ public class SortNode extends BaseNode {
             failureOutput.put("item_index", context.itemIndex());
             failureOutput.put("itemIndex", context.itemIndex());
             failureOutput.put("item_id", context.itemId());
-            failureOutput.put("resolved_params", earlyInputData);
+            failureOutput.put("resolved_params", ReportedParams.forReport(earlyInputData));
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failureOutput, duration);
         }
     }

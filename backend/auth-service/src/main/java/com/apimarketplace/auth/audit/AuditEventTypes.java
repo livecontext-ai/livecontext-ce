@@ -22,6 +22,12 @@ public final class AuditEventTypes {
     // ----- credentials -----
     public static final String PASSWORD_CHANGED = "password.changed";
     public static final String PASSWORD_CHANGE_FAILED = "password.change_failed";
+    /** A reset was ASKED FOR. Written for every request, including unknown addresses. */
+    public static final String PASSWORD_RESET_REQUESTED = "password.reset_requested";
+    /** A reset token was redeemed and the password actually changed. */
+    public static final String PASSWORD_RESET_COMPLETED = "password.reset_completed";
+    /** A redemption was refused: unknown, spent or expired token. */
+    public static final String PASSWORD_RESET_FAILED = "password.reset_failed";
     public static final String MFA_ENABLED = "mfa.enabled";
     public static final String MFA_DISABLED = "mfa.disabled";
 
@@ -41,6 +47,12 @@ public final class AuditEventTypes {
     /** Admin granted/changed a user's comp subscription plan tier (FREE/STARTER/PRO/TEAM). */
     public static final String PLAN_GRANTED = "plan.granted";
     public static final String DATA_EXPORTED = "data.exported";
+    /**
+     * Admin granted or revoked a user's verified badge (the blue check next to a public
+     * name). One event type for both directions - the {@code verified} detail says which,
+     * so the grant and the revoke stay on one searchable trail.
+     */
+    public static final String ACCOUNT_VERIFIED = "account.verified";
 
     // ----- CE install lifecycle -----
     /** Public {@code /api/auth/register} door has been re-opened by admin (or fresh install). */

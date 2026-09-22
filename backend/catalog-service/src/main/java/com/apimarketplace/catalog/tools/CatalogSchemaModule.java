@@ -5,8 +5,10 @@ import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.agent.tools.common.ToolModule;
+import com.apimarketplace.catalog.service.credential.EndpointCredentialCapabilityService;
 import com.apimarketplace.catalog.util.CredentialTypeNormalizer;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
@@ -33,6 +35,19 @@ public class CatalogSchemaModule implements ToolModule {
     private int serverPort;
 
     private static final Set<String> HANDLED_ACTIONS = Set.of("response_schema");
+
+    /**
+     * Says which of the caller's accounts could run this endpoint. Setter-injected so the
+     * hand-built module in the unit tests keeps compiling, and so a slice without the
+     * bean answers exactly what it answered before: the capability is an enrichment,
+     * never a precondition.
+     */
+    private EndpointCredentialCapabilityService credentialCapability;
+
+    @Autowired(required = false)
+    public void setCredentialCapability(EndpointCredentialCapabilityService credentialCapability) {
+        this.credentialCapability = credentialCapability;
+    }
 
     public CatalogSchemaModule() {
         this.restTemplate = new RestTemplate();
@@ -142,7 +157,11 @@ public class CatalogSchemaModule implements ToolModule {
                     // bearer_token, basic_auth, none) - and which OAuth scopes a connect would
                     // request. Without this the type lived only in the DB and the agent could
                     // not tell the user what request_credential will trigger.
-                    result.put("credential", CredentialTypeNormalizer.buildRequirement(info));
+                    // Then WHICH of the caller's accounts could actually run it. The contract
+                    // alone says a scope is needed, not that the connected account was never
+                    // granted it, and that gap is where a caller burns a call to find out
+                    // from a refusal what it could have read here.
+                    result.put("credential", describeCredential(info, tenantId));
                 }
 
                 return ToolExecutionResult.success(result);
@@ -156,6 +175,28 @@ public class CatalogSchemaModule implements ToolModule {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
                 "Failed to fetch schema: " + e.getMessage());
         }
+    }
+
+    /**
+     * The credential block: what the endpoint requires, plus which of this caller
+     * accounts can satisfy it.
+     *
+     * <p>The requirement half is unchanged and is built first, so the block keeps its
+     * {@code type} and {@code requiredScopes} even when nothing else can be resolved.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> describeCredential(Map<String, Object> info, String tenantId) {
+        Map<String, Object> requirement = CredentialTypeNormalizer.buildRequirement(info);
+        if (credentialCapability == null) {
+            return requirement;
+        }
+        Object integration = info.get("integrationName");
+        Object scopes = info.get("requiredScopes");
+        List<String> requiredScopes = scopes instanceof List<?> list
+                ? list.stream().filter(String.class::isInstance).map(String.class::cast).toList()
+                : List.of();
+        return credentialCapability.describe(requirement,
+                integration == null ? null : integration.toString(), requiredScopes, tenantId);
     }
 
     /**

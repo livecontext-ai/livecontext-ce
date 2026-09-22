@@ -16,6 +16,7 @@ import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 import { orchestratorApi } from '@/lib/api';
 import { conversationApi, type Message } from '@/lib/api/conversationApi';
+import { reconcileMessageIdentity } from '@/lib/utils/messageUtils';
 import { fileService, type PendingFileUpload } from '@/lib/api/orchestrator/file.service';
 
 /**
@@ -806,11 +807,13 @@ export function TriggerPanel({
         readySteps = response.readySteps;
       }
 
-      // Reload messages from server to get the response node's assistant message
+      // Reload messages from server to get the response node's assistant message.
+      // Identity-preserving so the reload does not repaint the whole panel, and a malformed
+      // response leaves the transcript alone instead of clearing it.
       if (convId) {
         try {
           const msgs = await conversationApi.getRecentMessagesAsc(convId);
-          setChatMessages(Array.isArray(msgs) ? msgs : []);
+          if (Array.isArray(msgs)) setChatMessages(prev => reconcileMessageIdentity(prev, msgs));
         } catch (err) {
           console.error('Failed to reload messages:', err);
         }

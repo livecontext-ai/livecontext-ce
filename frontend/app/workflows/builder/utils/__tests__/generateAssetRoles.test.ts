@@ -41,12 +41,34 @@ describe('generate asset roles', () => {
     ).toEqual([]);
   });
 
-  it('names the four the backend enum declares', () => {
+  it('names the five the backend enum declares', () => {
     // GenerationSpec.AssetRole. Listed rather than derived: this file is the
-    // record of what the two sides agreed on, and a fifth role must be a
+    // record of what the two sides agreed on, and a sixth role must be a
     // deliberate edit here, in the locale files and in the enum together.
     expect([...GENERATE_ASSET_ROLES].sort())
-      .toEqual(['first_frame', 'mask', 'reference', 'source']);
+      .toEqual(['first_frame', 'last_frame', 'mask', 'reference', 'source']);
+  });
+
+  it('says what each role DOES, in all six locales', () => {
+    // The name of a slot says which file goes in it; only the hint says what
+    // happens to the file. "First frame" and "Last frame" are two images of the
+    // same scene and two different videos, and on a model that takes both, this
+    // sentence is the entire difference the reader can see.
+    for (const [name, messages] of Object.entries(locales)) {
+      expect(
+        GENERATE_ASSET_ROLES.filter((role) => !(messages.generation.assetRoleHints || {})[role]),
+        `${name} is missing what a role does`,
+      ).toEqual([]);
+    }
+  });
+
+  it('translates each hint rather than copying the English one', () => {
+    for (const role of GENERATE_ASSET_ROLES) {
+      expect(
+        (fr as any).generation.assetRoleHints[role],
+        `fr.${role} hint was left as the English string`,
+      ).not.toBe((en as any).generation.assetRoleHints[role]);
+    }
   });
 
   it('has the role translated in ALL SIX locales, not only the reference one', () => {

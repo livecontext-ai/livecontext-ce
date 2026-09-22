@@ -77,7 +77,19 @@ public class AgentConfigProvider {
                               // blocks save/delete, which is what keeps a narrowly-scoped agent from writing
                               // into every other agent's system prompt. Appended last so positional
                               // constructors stay append-only.
-                              String memoryAccessMode) {
+                              String memoryAccessMode,
+                              // Mailbox opt-IN grant, carried RAW like {@code generation} (Boolean or
+                              // {enabled,...} Map) so AgentModuleResolver.isMailboxEnabled owns the single
+                              // definition of "granted". null = absent = NOT granted, which is the whole
+                              // point of an opt-in: a connected IMAP credential does not hand an agent
+                              // someone's mail, somebody has to turn it on for that agent.
+                              Object mailbox,
+                              // Mailbox read/write axis. null ⇒ "write" (full access), matching every other
+                              // family. 'read' keeps listing, folders and mark_read and blocks send, delete,
+                              // move and flag. Dropping this field is not a smaller bug than dropping the
+                              // grant: the tool then sees a caller with no stated permissions, which
+                              // ToolAccessControl reads as ALLOWED, so a read-only agent sends mail.
+                              String mailboxAccessMode) {
         /** Back-compat constructor (pre-files); files defaults to null = unrestricted, grants to null ⇒ "none" (deny). */
         public ToolsConfig(String mode, List<String> tools, List<String> workflows, List<String> applications,
                            List<String> tables, List<String> interfaces, List<String> agents, Boolean webSearch,
@@ -130,7 +142,26 @@ public class AgentConfigProvider {
             this(mode, tools, workflows, applications, tables, interfaces, agents, webSearch,
                  tableAccessMode, workflowAccessMode, interfaceAccessMode, agentAccessMode,
                  applicationAccessMode, skillAccessMode, files, workflowsGrant, tablesGrant,
-                 interfacesGrant, agentsGrant, applicationsGrant, fileAccessMode, generation, null);
+                 interfacesGrant, agentsGrant, applicationsGrant, fileAccessMode, generation, null, null, null);
+        }
+
+        /**
+         * Back-compat constructor (pre-mailbox); the mailbox grant and its read/write axis
+         * both default to null. For the grant that means NOT granted, so no agent stored
+         * before this field existed suddenly gains a mailbox.
+         */
+        public ToolsConfig(String mode, List<String> tools, List<String> workflows, List<String> applications,
+                           List<String> tables, List<String> interfaces, List<String> agents, Boolean webSearch,
+                           String tableAccessMode, String workflowAccessMode, String interfaceAccessMode,
+                           String agentAccessMode, String applicationAccessMode, String skillAccessMode,
+                           List<String> files, String workflowsGrant, String tablesGrant, String interfacesGrant,
+                           String agentsGrant, String applicationsGrant, String fileAccessMode,
+                           Object generation, String memoryAccessMode) {
+            this(mode, tools, workflows, applications, tables, interfaces, agents, webSearch,
+                 tableAccessMode, workflowAccessMode, interfaceAccessMode, agentAccessMode,
+                 applicationAccessMode, skillAccessMode, files, workflowsGrant, tablesGrant,
+                 interfacesGrant, agentsGrant, applicationsGrant, fileAccessMode, generation,
+                 memoryAccessMode, null, null);
         }
 
         /** Files are opt-in: only a non-empty allow-list scopes the agent. */
@@ -258,6 +289,9 @@ public class AgentConfigProvider {
             // Omitted when absent ⇒ the resolver reads no key ⇒ NOT granted. Emitting it
             // is what makes the persisted switch decide in chat, in both directions.
             if (generation != null) map.put("generation", generation);
+            // Same contract as generation, and the same failure if omitted: the resolver reads
+            // no key, so an agent whose owner switched the mailbox ON never receives the tool.
+            if (mailbox != null) map.put("mailbox", mailbox);
             return map;
         }
     }
@@ -667,11 +701,15 @@ public class AgentConfigProvider {
             // Credit-spending opt-IN grant. Read RAW (Boolean or {enabled,...} object) and
             // handed to AgentModuleResolver unchanged - see readOptInGrant.
             Object generation = readOptInGrant(node, "generation");
+            // Mailbox opt-IN grant, read the same way and for the same reason.
+            Object mailbox = readOptInGrant(node, "mailbox");
+            // Mailbox read/write axis (no grant). null implies "write" (default).
+            String mailboxAccessMode = getTextOrNull(node, "mailboxAccessMode");
 
             return new ToolsConfig(mode, tools, workflows, applications, tables, interfaces, agents, webSearch,
                     tableAccessMode, workflowAccessMode, interfaceAccessMode, agentAccessMode, applicationAccessMode, skillAccessMode,
                     files, workflowsGrant, tablesGrant, interfacesGrant, agentsGrant, applicationsGrant, fileAccessMode,
-                    generation, memoryAccessMode);
+                    generation, memoryAccessMode, mailbox, mailboxAccessMode);
         } catch (Exception e) {
             log.warn("Failed to parse toolsConfig: {}", e.getMessage());
             return null;

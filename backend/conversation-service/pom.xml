@@ -82,6 +82,11 @@
             <artifactId>common-lib</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>com.apimarketplace</groupId>
+            <artifactId>common-security</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <!-- Purge follower (auth.purge_log consumer); the AuthClient is built from services.auth-service.url -->
         <dependency>
             <groupId>com.apimarketplace</groupId>

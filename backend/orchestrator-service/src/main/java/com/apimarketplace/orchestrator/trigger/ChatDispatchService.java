@@ -12,6 +12,7 @@ import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import com.apimarketplace.orchestrator.services.context.RunContextService;
 import com.apimarketplace.orchestrator.utils.LabelNormalizer;
 import com.apimarketplace.common.web.OrgContextHeaderForwarder;
+import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.trigger.client.TriggerClient;
 import com.apimarketplace.trigger.client.dto.StandaloneChatEndpointDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -203,7 +204,8 @@ public class ChatDispatchService {
                 session.conversationId(), "message_sent", session.ipAddress());
 
         // Persist user message to the conversation so history/context is complete
-        persistMessage(endpoint.getTenantId(), session.conversationId(), "user", message);
+        persistMessage(endpoint.getTenantId(), endpoint.getOrganizationId(),
+                session.conversationId(), "user", message);
 
         // Dispatch to workflow and collect response
         Map<String, Object> result = dispatchToWorkflow(endpoint, message);
@@ -211,13 +213,68 @@ public class ChatDispatchService {
         // Persist assistant reply (if any) so history reflects the exchange
         Object content = result.get("content");
         if (content instanceof String reply && !reply.isBlank()) {
-            persistMessage(endpoint.getTenantId(), session.conversationId(), "assistant", reply);
+            persistMessage(endpoint.getTenantId(), endpoint.getOrganizationId(),
+                    session.conversationId(), "assistant", reply);
         }
 
         return result;
     }
 
-    private void persistMessage(String tenantId, String conversationId, String role, String content) {
+    /**
+     * Headers for a conversation-service hop made on behalf of a chat endpoint.
+     *
+     * <p>Every such hop is reachable by an ANONYMOUS visitor, and that is what makes this
+     * shared: an unauthenticated request carries no {@code X-Organization-ID}, so
+     * {@link OrgContextHeaderForwarder#forward} has nothing to copy, and conversation-service
+     * rejects an org-less call outright ({@code TenantResolver.requireOrgId} ->
+     * "organizationId required after V261"). The endpoint's own workspace is the only
+     * workspace that makes sense here anyway - the conversation belongs to the published
+     * endpoint, not to whoever happens to be looking at it - so it is set explicitly.
+     *
+     * <p>The two org calls below commute and the order carries no meaning: {@code setIfPresent}
+     * sets unconditionally when the org is non-blank, and {@code forward} skips any header
+     * already present. Either way the endpoint's org wins whenever it has one, and an endpoint
+     * with no org falls back to the caller's inbound header.
+     *
+     * <p>The role, however, does NOT commute, and that is why the drop below exists.
+     * {@code forward} also copies {@code X-Organization-Role} from the inbound request with no
+     * override hook. Before this helper, org and role were inherited together and were therefore
+     * always consistent. Overriding only the org would pair the endpoint's workspace with the
+     * CALLER's role in a DIFFERENT workspace - a privilege claim nobody ever granted. When the
+     * two disagree the inherited role is dropped, so downstream falls back to least privilege
+     * rather than to a role imported from elsewhere. Scope of that drop: the ORG role only.
+     * {@code X-User-Roles} (platform roles) still rides along from {@code forward}; it is not
+     * workspace-scoped, so it cannot become inconsistent with the org the way the org role can.
+     *
+     * <p><b>Known migration edge.</b> Before this helper, an AUTHENTICATED caller previewing an
+     * endpoint from a different active workspace created the conversation under THEIR org. Those
+     * rows are now addressed under the endpoint's org instead, so conversation-service's strict
+     * scope check no longer finds them: their history reads empty and further writes are
+     * swallowed by persistMessage below. The new placement is the correct one (the conversation
+     * belongs to the published endpoint), and anonymous sessions - the overwhelming majority -
+     * were failing outright before, so nothing regresses for them.
+     */
+    private HttpHeaders endpointScopedHeaders(String tenantId, String organizationId) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-User-ID", tenantId);
+        OrgContextHeaderForwarder.setIfPresent(headers, organizationId);
+        OrgContextHeaderForwarder.forward(headers);
+
+        // No "inboundOrg != null" clause on purpose: an inherited role with NO inbound org is
+        // still a role from somewhere other than the org being sent, which is exactly what this
+        // drops. The gateway never emits that pair, so the clause would only make the code
+        // narrower than the rule above it - and a guard that depends on an upstream invariant
+        // it cannot see is the kind that stops holding quietly.
+        String sentOrg = headers.getFirst("X-Organization-ID");
+        if (sentOrg != null && !sentOrg.equals(TenantResolver.currentRequestOrganizationId())) {
+            headers.remove("X-Organization-Role");
+        }
+        return headers;
+    }
+
+    private void persistMessage(String tenantId, String organizationId, String conversationId,
+                                String role, String content) {
         if (conversationId == null || content == null) return;
         try {
             String url = conversationServiceUrl + "/api/conversations/" + conversationId + "/messages";
@@ -225,14 +282,13 @@ public class ChatDispatchService {
             body.put("role", role);
             body.put("content", content);
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.set("X-User-ID", tenantId);
-            OrgContextHeaderForwarder.forward(headers);
-
-            HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+            HttpEntity<Map<String, Object>> request =
+                    new HttpEntity<>(body, endpointScopedHeaders(tenantId, organizationId));
             restTemplate.postForEntity(url, request, Map.class);
         } catch (Exception e) {
+            // Deliberately swallowed so a history write never breaks the visitor's reply.
+            // That also means an org-less call here fails INVISIBLY: the session works and
+            // every message silently vanishes from history. Hence the org above, not here.
             logger.warn("Failed to persist {} message to conversation {}: {}",
                     role, conversationId, e.getMessage());
         }
@@ -256,12 +312,8 @@ public class ChatDispatchService {
 
         String url = conversationServiceUrl + "/api/conversations/" + session.conversationId() + "/messages";
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("X-User-ID", endpoint.getTenantId());
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        OrgContextHeaderForwarder.forward(headers);
-
-        HttpEntity<Void> request = new HttpEntity<>(headers);
+        HttpEntity<Void> request = new HttpEntity<>(
+                endpointScopedHeaders(endpoint.getTenantId(), endpoint.getOrganizationId()));
 
         try {
             return restTemplate.exchange(url, HttpMethod.GET, request, String.class);
@@ -324,12 +376,8 @@ public class ChatDispatchService {
             }
             body.put("active", true);
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.set("X-User-ID", endpoint.getTenantId());
-            OrgContextHeaderForwarder.forward(headers);
-
-            HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+            HttpEntity<Map<String, Object>> request = new HttpEntity<>(body,
+                    endpointScopedHeaders(endpoint.getTenantId(), endpoint.getOrganizationId()));
             ResponseEntity<Map> response = restTemplate.postForEntity(url, request, Map.class);
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {

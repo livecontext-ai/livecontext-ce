@@ -150,7 +150,7 @@ export default function DocsOverviewPage() {
           S3-compatible object storage such as MinIO for files. See{' '}
           <a href="/self-host">Self-hosting</a> for how to run it, including the{' '}
           <a href={SELF_HOSTED_GITHUB_URL} target="_blank" rel="noopener noreferrer">
-            open-source repository
+            public source repository
           </a>
           .
         </p>

@@ -161,6 +161,25 @@ public class TriggerClient {
     }
 
     /**
+     * Find active webhook trigger identities for a workflow batch.
+     * The returned map is exact at trigger granularity and avoids an N+1 lookup.
+     */
+    public Map<UUID, Set<String>> findActiveTriggerIdsByWorkflow(Collection<UUID> workflowIds) {
+        if (workflowIds == null || workflowIds.isEmpty()) return Collections.emptyMap();
+        String url = baseUrl + "/api/internal/trigger/tokens/active-trigger-ids-by-workflow";
+        HttpEntity<Collection<UUID>> entity = new HttpEntity<>(workflowIds, buildHeaders(null));
+        try {
+            ResponseEntity<Map<UUID, Set<String>>> response = restTemplate.exchange(
+                    url, HttpMethod.POST, entity,
+                    new ParameterizedTypeReference<>() {});
+            return response.getBody() != null ? response.getBody() : Collections.emptyMap();
+        } catch (Exception e) {
+            log.error("Failed to find active webhook trigger IDs: {}", e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
+    /**
      * Get webhook URL for a token.
      */
     public String getWebhookUrl(String baseAppUrl, String token) {

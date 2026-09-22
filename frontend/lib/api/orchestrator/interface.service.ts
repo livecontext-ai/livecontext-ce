@@ -8,6 +8,7 @@
 import { apiClient } from '../api-client';
 import type { ResourceFolder, ResourceFolderTile } from './resource-folder.service';
 import type { Interface, InterfaceRenderResult, InterfaceSnapshot } from './types';
+import { notifyResourceDeleted } from '@/lib/resources/resourceDeleted';
 
 export class InterfaceService {
   // ========================================
@@ -34,6 +35,8 @@ export class InterfaceService {
     size?: number;
     q?: string;
     type?: 'html' | 'web_search';
+    /** Exclude one internal interface family while keeping every other type. */
+    excludeType?: string;
     excludeTableAttached?: boolean;
     includeTemplates?: boolean;
     sort?: string;
@@ -60,6 +63,7 @@ export class InterfaceService {
     if (options.size != null) params.size = String(options.size);
     if (options.q && options.q.trim().length > 0) params.q = options.q.trim();
     if (options.type) params.type = options.type;
+    if (options.excludeType) params.excludeType = options.excludeType;
     if (options.excludeTableAttached) params.excludeTableAttached = 'true';
     params.includeTemplates = String(options.includeTemplates ?? false);
     if (options.sort) params.sort = options.sort;
@@ -104,7 +108,8 @@ export class InterfaceService {
    * Delete an interface
    */
   async deleteInterface(id: string): Promise<void> {
-    return apiClient.delete<void>(`/interfaces/${id}`);
+    await apiClient.delete<void>(`/interfaces/${id}`);
+    notifyResourceDeleted('interface', id);
   }
 
   /**

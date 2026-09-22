@@ -3,6 +3,10 @@
  * near-black brand color (e.g. GitHub `#161614`, OpenAI `#000000`, Anthropic
  * monochrome). Without help they vanish against a dark background.
  *
+ * <p>"Near-black" includes artwork that declares NO fill at all: SVG defaults to
+ * black, so `linear`, `dropbox` and `zendesk` are as invisible as an explicit
+ * `#000`. Judge a candidate by what it RENDERS, not by what it declares.
+ *
  * Both the credentials UI (`ServiceIcon`) and the landing trust strip read
  * from the same set so a brand only needs to be added once. Slugs use the
  * canonical form stored in `apis.icon_slug` - lowercase alphanumeric, no
@@ -20,6 +24,9 @@ export const MONO_DARK_ICON_SLUGS: ReadonlySet<string> = new Set([
   "linear",
   "dropbox",
   "twitter",
+  "tiktok",
+  "threads",
+  "zendesk",
 ]);
 
 export function isMonoDarkIconSlug(slug: string | null | undefined): boolean {

@@ -584,4 +584,45 @@ class ColdSummarizerServiceTest {
             });
         }
     }
+    // -------------------------------------------------------------------------
+    // Gate-refusal telemetry
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("A refusal below the credit floor is attributed to the floor, not to pacing")
+    void gateRefusalBelowFloorIsAttributedToTheFloor() {
+        // The floor is ANDed in front of every mode, so a zone below it never
+        // reaches the trigger and reporting it as a pacing decision would send
+        // an operator to tune the wrong knob.
+        SummarizeRequest req = new SummarizeRequest("c1", 4000, /*coldTokens*/ 100,
+                /*turnsSince*/ 999, /*cadence*/ 5, false, List.of(), List.of(),
+                "anthropic", "claude-haiku-4-5");
+
+        assertThat(service.summarize(req, (p, m, sys, usr) -> null))
+                .isInstanceOf(SummarizeOutcome.SkippedGate.class);
+        assertThat(refusals("floor")).isEqualTo(1.0);
+        assertThat(refusals("trigger")).isZero();
+    }
+
+    @Test
+    @DisplayName("A refusal above the floor is attributed to the trigger, so the size blind spot is observable")
+    void gateRefusalAboveFloorIsAttributedToTheTrigger() {
+        // This is the series that makes the documented SIZE blind spot visible:
+        // without it, "no envelope is ever written" produces no signal at all.
+        SummarizeRequest req = new SummarizeRequest("c1", 4000, /*coldTokens*/ 50_000,
+                /*turnsSince*/ 1, /*cadence*/ 5, false, List.of(), List.of(),
+                "anthropic", "claude-haiku-4-5");
+
+        assertThat(service.summarize(req, (p, m, sys, usr) -> null))
+                .isInstanceOf(SummarizeOutcome.SkippedGate.class);
+        assertThat(refusals("trigger")).isEqualTo(1.0);
+        assertThat(refusals("floor")).isZero();
+    }
+
+    private double refusals(String gate) {
+        io.micrometer.core.instrument.Counter c = meterRegistry
+                .find("cold_summary_gate_refused_total").tag("gate", gate).counter();
+        return c == null ? 0.0 : c.count();
+    }
+
 }

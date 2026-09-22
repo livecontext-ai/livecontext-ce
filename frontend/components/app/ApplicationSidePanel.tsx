@@ -9,6 +9,7 @@ import { getActivePublicPreview, usePublicationSnapshot } from '@/contexts/Publi
 import { type ApplicationConfig, type ApplicationTemplateSource } from '@/components/chat/ApplicationTabContent';
 import { normalizeLabel } from '@/app/workflows/builder/utils/labelNormalizer';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { applicationPanelTabId } from '@/lib/sidePanel/tabResource';
 
 // Behind React.lazy: this pulls in the whole workflow builder, and the surfaces
 // that merely OFFER an application (a chat card, the tab picker, a project page)
@@ -309,6 +310,7 @@ export function ApplicationPanelContent({ publicationId, runId: runIdOverride }:
       <WorkflowBuilderPanelContent
         workflowId={panelData.workflowId}
         runId={panelData.runId}
+        hostTabId={applicationPanelTabId(publicationId, runIdOverride)}
         readOnly={previewActive}
         /* False for the two workflows a save cannot reach: an INSTALLED
            application (a frozen APPLICATION clone the backend refuses to write)

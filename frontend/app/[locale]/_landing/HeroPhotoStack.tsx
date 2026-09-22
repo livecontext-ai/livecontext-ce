@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 
@@ -177,7 +178,7 @@ export default function HeroPhotoStack({ photos }: { photos: HeroPhoto[] }) {
   const [isPaused, setIsPaused] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [cycleKey, setCycleKey] = useState(0);
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const prefersReducedMotion = usePrefersReducedMotion();
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startedAtRef = useRef(0);
   const elapsedRef = useRef(0);
@@ -227,15 +228,6 @@ export default function HeroPhotoStack({ photos }: { photos: HeroPhoto[] }) {
 
     setIsPaused(false);
   }, [isPaused]);
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches);
-
-    updatePreference();
-    mediaQuery.addEventListener('change', updatePreference);
-    return () => mediaQuery.removeEventListener('change', updatePreference);
-  }, []);
 
   useEffect(() => {
     clearTimer();

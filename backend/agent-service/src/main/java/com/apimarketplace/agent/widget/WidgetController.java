@@ -207,6 +207,29 @@ public class WidgetController {
             return ResponseEntity.status(404).body(WidgetResponse.error("Agent not found"));
         }
 
+        // The agent's own cap, on the most exposed surface it has: this endpoint is public and
+        // the visitor is anonymous, so the only thing between a stranger with a script and the
+        // owner's wallet is what the owner capped this agent at. The in-run guard does stop the
+        // spend, but only after a conversation has been opened and a run started, once per
+        // attempt. Refusing here costs nothing and says the same thing every other surface says.
+        //
+        // 402, not 500: this is a payment condition, not a fault, and the embedded widget can
+        // tell the two apart.
+        AgentEntity widgetAgent = agentOpt.get();
+        if (widgetAgent.isBudgetBlocked()) {
+            logger.warn("Widget agent {} refused by its own budget (cap={}, consumed={}, reserved={}, until={})",
+                    widgetAgent.getId(), widgetAgent.getCreditBudget(), widgetAgent.getCreditsConsumed(),
+                    widgetAgent.getCreditsReserved(), widgetAgent.getBudgetBlockedUntil());
+            // Deliberately NOT the detailed sentence the schedule and the webhook return.
+            // Those reach the owner; this reaches whoever loaded the page. The cap, what has
+            // been spent against it and the date it lifts are the workspace business, and the
+            // advice that goes with them ("raise the budget") is addressed to someone who is
+            // not reading. Every other refusal on this controller is generic for the same
+            // reason. The detail is in the log line above, where the owner can reach it.
+            return ResponseEntity.status(402).body(WidgetResponse.error(
+                    "This assistant is unavailable right now. Please try again later."));
+        }
+
         // Send message
         String message = body.get("message") != null ? body.get("message").toString() : "";
         if (message.isBlank()) {

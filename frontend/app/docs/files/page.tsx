@@ -264,14 +264,14 @@ export default function FilesPage() {
         </p>
         <p>
           A published marketplace or share preview needs to render for anonymous, logged-out visitors, so
-          it uses a second, short-lived form instead: an HMAC-signed URL, valid for 15 minutes, where the
-          signature itself is the authorization (no session or workspace header involved).
+          it uses a second, expiring form instead: an HMAC-signed URL, valid for 4 hours by default, where
+          the signature itself is the authorization (no session or workspace header involved).
         </p>
         <DocsTable
           head={['Link form', "Who it's for", 'Lifetime']}
           rows={[
             [<code key="1">/api/proxy/files/by-id/{'{id}'}/raw</code>, "Signed-in members of the file's workspace", 'Does not expire'],
-            [<code key="2">/api/files/proxy-signed?...&amp;sig=...</code>, 'Anonymous marketplace/share previews', '15 minutes'],
+            [<code key="2">/api/files/proxy-signed?...&amp;sig=...</code>, 'Anonymous marketplace/share previews', '4 hours by default'],
           ]}
         />
         <Callout variant="info">

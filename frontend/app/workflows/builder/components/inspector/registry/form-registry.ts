@@ -217,6 +217,11 @@ export const formRegistry: Record<InspectorNodeType, FormDefinition> = {
     displayName: 'Wait',
     hasExpressions: true,
   },
+  'user_approval': {
+    component: () => null, // Approval config is rendered by ParameterColumn
+    displayName: 'User Approval',
+    hasExpressions: false,
+  },
   'fork': {
     component: ForkFormAdapter,
     displayName: 'Fork',

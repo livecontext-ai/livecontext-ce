@@ -43,7 +43,7 @@ class AbstractLLMProviderTimeoutTest {
         @Override protected String getApiUrl() { return "https://api.test.com/v1/chat"; }
         @Override protected Map<String, Object> buildRequestBody(CompletionRequest request) { return Map.of(); }
         @Override protected CompletionResponse parseResponse(Map<String, Object> response) { return CompletionResponse.text("ok"); }
-        @Override protected HttpHeaders buildHeaders() { return new HttpHeaders(); }
+        @Override protected HttpHeaders buildHeaders(CompletionRequest request) { return new HttpHeaders(); }
         @Override protected String processStreamingLine(String line) { return null; }
         @Override public String getProviderName() { return "test"; }
         @Override public String getDefaultModel() { return "test-model"; }

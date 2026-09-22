@@ -156,6 +156,7 @@ function activeInstall(overrides: Partial<ActiveMarketplaceInstall> = {}): Activ
   return {
     publication: APP_PUB as never,
     ceMode: false,
+    demo: false,
     inline: true,
     status: 'installing',
     progress: 37,
@@ -265,6 +266,25 @@ describe('ExploreTab - inline install wiring', () => {
     expect(modal).toHaveAttribute('data-publication-id', 'pub-app-1');
   });
 
+
+  it('a DEMO success never marks the card installed: nothing was acquired', async () => {
+    // The optimistic "just installed" set outlives the demo toggle, so recording a
+    // rehearsal there would make the card claim an install that never happened the
+    // moment the mode is switched off.
+    useMarketplaceInstallStore.setState({
+      active: activeInstall({ demo: true, status: 'success', progress: 100, acquiredId: null }),
+    });
+
+    render(<MarketplacePage />);
+    await screen.findByText('Wired App');
+
+    // The success is still consumed, so the card leaves its progress state.
+    await waitFor(() => {
+      expect(useMarketplaceInstallStore.getState().active).toBeNull();
+    });
+    expect(card('pub-app-1')).toHaveAttribute('data-is-acquired', 'false');
+    expect(card('pub-app-1')).toHaveAttribute('data-open-href', '');
+  });
   it('ignores NON-inline installs entirely (ChatCore owns them): no card progress, no error modal, no consumption', async () => {
     useMarketplaceInstallStore.setState({
       active: activeInstall({ inline: false, status: 'error', error: 'chat flow error' }),

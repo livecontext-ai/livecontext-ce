@@ -70,6 +70,40 @@ public class AgentDto {
     private String budgetResetMode;
     private Instant budgetLastReset;
 
+    /**
+     * Whether this agent's own cap refuses the next run, resolved by agent-service.
+     *
+     * <p>The four fields above are not enough to work this out, and that is the point.
+     * Deciding it needs {@code creditsReserved}, which is deliberately not on this DTO, and
+     * it needs the LAZY reset applied without writing - so a consumer that computed it from
+     * the raw columns would answer "blocked" for a whole month after a monthly cap was
+     * reached. agent-service resolves it once, through the rule the enforcement path uses
+     * ({@code AgentBudgetRule}), and every consumer reads this instead of re-deriving.
+     *
+     * <p>Null on a caller old enough not to send it, which every reader must treat as "not
+     * blocked": a gate that cannot read the verdict must never be the reason a run stops.
+     */
+    private Boolean budgetBlocked;
+
+    /**
+     * What this agent has COMMITTED against its cap: the post-reset accumulator plus the
+     * credits an in-flight sub-agent is holding.
+     *
+     * <p>Here because {@code creditsReserved} deliberately is not: a consumer that printed
+     * {@code creditsConsumed} alone said "6 of 10 credits" while refusing, and the missing 4
+     * were the reason. Resolved by agent-service, where both inputs live.
+     */
+    private BigDecimal budgetCommitted;
+
+    /**
+     * When {@link #budgetBlocked} lifts by itself, or null when it never does.
+     *
+     * <p>Null is meaningful on a blocked agent: the cap is cumulative, so the whole
+     * projected future is refused rather than a window of it. Same contract as the workflow
+     * cap's {@code budgetBlockedUntil}, so the agenda can consume both the same way.
+     */
+    private Instant budgetBlockedUntil;
+
     // Observability counters
     private int totalExecutions;
     private long totalTokensUsed;
@@ -214,4 +248,23 @@ public class AgentDto {
 
     public Instant getBudgetLastReset() { return budgetLastReset; }
     public void setBudgetLastReset(Instant budgetLastReset) { this.budgetLastReset = budgetLastReset; }
+
+    public Boolean getBudgetBlocked() { return budgetBlocked; }
+    public void setBudgetBlocked(Boolean budgetBlocked) { this.budgetBlocked = budgetBlocked; }
+
+    /**
+     * Null-safe read: an absent verdict is "not blocked", so an old payload fails open.
+     *
+     * <p>Deliberately NOT named {@code isBudgetBlocked}: Jackson would then see two getters
+     * for one property and refuse to serialize the whole DTO ("conflicting getter
+     * definitions"), which would break every endpoint that returns an agent, not just this
+     * field.
+     */
+    public boolean budgetBlockedOrFalse() { return Boolean.TRUE.equals(budgetBlocked); }
+
+    public BigDecimal getBudgetCommitted() { return budgetCommitted; }
+    public void setBudgetCommitted(BigDecimal budgetCommitted) { this.budgetCommitted = budgetCommitted; }
+
+    public Instant getBudgetBlockedUntil() { return budgetBlockedUntil; }
+    public void setBudgetBlockedUntil(Instant budgetBlockedUntil) { this.budgetBlockedUntil = budgetBlockedUntil; }
 }

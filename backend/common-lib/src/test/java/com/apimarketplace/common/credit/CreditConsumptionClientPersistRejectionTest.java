@@ -49,8 +49,9 @@ class CreditConsumptionClientPersistRejectionTest {
 
         // Phase 6 MIGRATION_ORG_ID_NOT_NULL (CC-2): client routes the 8-arg
         // call through the 9-arg internal overload. With no RequestContextHolder
-        // bound in this unit test, the captured orgId is null - handler still
-        // receives the 9-arg form.
+        // bound in this unit test, the captured orgId is null, and so is the key route:
+        // a rejection recorded without one is a PLATFORM-route rejection, which is what
+        // every caller written before the route sends.
         verify(handler).persistFailedConsumption(
                 eq("tenant-1"),
                 eq("CHAT_CONVERSATION"),
@@ -60,6 +61,7 @@ class CreditConsumptionClientPersistRejectionTest {
                 eq(2_000_000),
                 eq(10_000),
                 eq("402 Insufficient credits"),
+                isNull(),
                 isNull());
     }
 
@@ -81,7 +83,8 @@ class CreditConsumptionClientPersistRejectionTest {
                 eq(500),
                 eq(100),
                 eq("402 Insufficient credits"),
-                eq("org-uuid-7"));
+                eq("org-uuid-7"),
+                isNull());
     }
 
     @Test
@@ -93,7 +96,7 @@ class CreditConsumptionClientPersistRejectionTest {
                 "claude-code", "claude-opus-4-6", 1, 1, "402");
 
         verify(handler, never()).persistFailedConsumption(
-                any(), any(), any(), any(), any(), anyInt(), anyInt(), any(), any());
+                any(), any(), any(), any(), any(), anyInt(), anyInt(), any(), any(), any());
     }
 
     @Test
@@ -113,7 +116,7 @@ class CreditConsumptionClientPersistRejectionTest {
         CreditConsumptionClient client = buildClient(true, true);
         doThrow(new RuntimeException("DB connection lost"))
                 .when(handler).persistFailedConsumption(
-                        any(), any(), any(), any(), any(), anyInt(), anyInt(), any(), any());
+                        any(), any(), any(), any(), any(), anyInt(), anyInt(), any(), any(), any());
 
         // Must not throw - the caller is in the post-flight billing pipeline; a
         // dead-letter write failure should not mask the primary execution outcome.
@@ -121,6 +124,6 @@ class CreditConsumptionClientPersistRejectionTest {
                 "openai", "gpt-4o", 1, 1, "402");
 
         verify(handler).persistFailedConsumption(
-                any(), any(), any(), any(), any(), anyInt(), anyInt(), any(), any());
+                any(), any(), any(), any(), any(), anyInt(), anyInt(), any(), any(), any());
     }
 }

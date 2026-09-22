@@ -51,21 +51,23 @@ public class CoreToolsProvider {
      * - application: browse, acquire, publish, help
      * - web_search: search, fetch
      */
-    private static final Set<String> BASE_CORE_TOOL_NAMES = Set.of(
-        "catalog",          // Unified facade: search, execute, response_schema, help
-        "workflow",          // Unified facade: builder + management (init, load, save, ..., get, list, delete, runs, help)
-        "table",             // Unified facade: CRUD
-        "interface",         // Unified facade: CRUD
-        "agent",             // Unified facade: CRUD
-        "skill",             // Unified facade: CRUD
-        "memory",            // Unified facade: save, get, list, search, delete, help (long-term facts)
-        "application",       // Unified facade: marketplace
-        "web_search",        // Unified facade: search, fetch
-        "generation",        // Unified facade: create, models, help (gated by catalog-service's generation.enabled flag)
-        "files",             // Unified facade: browse & open workspace files (list, get, view, help)
-        "wait",              // Unified facade: sleep, help (blocking pause primitive)
-        "ask_user"           // Unified facade: ask, help (question card to the person in the chat)
-    );
+    /**
+     * Derived from the prompt modules, not listed again here.
+     *
+     * <p>It WAS a literal of the same thirteen names, and the copy is what made it dangerous:
+     * this set gates what may enter {@link #coreToolsCache} at all, so a tool absent from it is
+     * fetched from its service and then dropped on the floor, with no error and no log line.
+     * A tool added to {@code ALL_RESOURCE_MODULES}, correctly resolved by
+     * {@code AgentModuleResolver} and correctly routed by {@code ToolServiceTopology} would
+     * still be invisible in the web chat, and every layer above would look right.
+     *
+     * <p>That is not hypothetical: it happened to {@code mailbox} between two reviews of the
+     * same change. The sibling cache in agent-service already derived its set this way, which
+     * is why CLI, bridge, sub-agent and workflow-agent sessions saw the tool while the main
+     * chat did not. One source now, so the two surfaces cannot disagree about which tools exist.
+     */
+    private static final Set<String> BASE_CORE_TOOL_NAMES =
+        com.apimarketplace.agent.prompt.DefaultSystemPrompts.getAllCoreToolNames();
 
     @Value("${websearch.enabled:true}")
     private boolean webSearchEnabled = true;

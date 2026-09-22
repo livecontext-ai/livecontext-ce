@@ -1217,4 +1217,96 @@ class UnifiedSignalServiceTest {
         }
     }
 
+    /**
+     * What a PARKED node gets to say about itself.
+     *
+     * <p>It yields, and a yield persists no step row: the engine emits an event and returns.
+     * The only row such a node ever gets is written when its signal resolves, from the
+     * signal - so an interface's variable mapping, an approval's resolved delegation and a
+     * wait's duration were reported nowhere, at any moment of the run. These carry across
+     * the pause on the signal itself.
+     */
+    @Nested
+    @DisplayName("recordReportedParams()")
+    class RecordReportedParamsTests {
+
+        private SignalWaitEntity pendingSignal() {
+            SignalWaitEntity signal = new SignalWaitEntity();
+            signal.setId(7L);
+            signal.setRunId("run-1");
+            signal.setNodeId("interface:form");
+            signal.setStatus(SignalWaitStatus.PENDING);
+            return signal;
+        }
+
+        @Test
+        @DisplayName("stores the node's parameters on the signal, so the resume row can report them")
+        void storesTheParams() {
+            SignalWaitEntity signal = pendingSignal();
+
+            service.recordReportedParams(signal, Map.of(
+                "interfaceId", "iface-1",
+                "variableMapping", Map.of("rows", Map.of("status", "resolved"))));
+
+            assertNotNull(signal.getReportedParams());
+            assertEquals("iface-1", signal.getReportedParams().get("interfaceId"));
+            assertNotNull(signal.getReportedParams().get("variableMapping"));
+            verify(signalWaitRepository).save(signal);
+        }
+
+        @Test
+        @DisplayName("masks a credential among them: they end up on a persisted step row like any other")
+        void redactsTheParams() {
+            SignalWaitEntity signal = pendingSignal();
+
+            service.recordReportedParams(signal, Map.of("duration", 60_000, "apiKey", "s3cr3t"));
+
+            assertEquals(60_000, signal.getReportedParams().get("duration"));
+            assertEquals("<withheld: credential>", signal.getReportedParams().get("apiKey"));
+        }
+
+        @Test
+        @DisplayName("a failed write never escapes: the node is about to park, and a diagnosis must not break the run it explains")
+        void aFailedWriteDoesNotEscape() {
+            // The signal row is ALREADY inserted when this runs, and the caller is a node on
+            // its way to AWAITING_SIGNAL whose catch turns any throw into FAILED. So a throw
+            // from here would leave a node both failed AND parked on a live pending signal
+            // that still resolves later - a worse outcome than reporting nothing. Every
+            // other reporting path in this work is defended this way; this was the one that
+            // writes to the database and the one without the guard.
+            SignalWaitEntity signal = pendingSignal();
+            doThrow(new RuntimeException("jsonb write failed"))
+                .when(signalWaitRepository).save(signal);
+
+            assertDoesNotThrow(() ->
+                service.recordReportedParams(signal, Map.of("duration", 60_000)));
+        }
+
+        @Test
+        @DisplayName("a re-traversal does not rewrite a signal that already carries them")
+        void doesNotOverwriteExistingParams() {
+            SignalWaitEntity signal = pendingSignal();
+            service.recordReportedParams(signal, Map.of("duration", 60_000));
+            org.mockito.Mockito.clearInvocations(signalWaitRepository);
+
+            service.recordReportedParams(signal, Map.of("duration", 1));
+
+            assertEquals(60_000, signal.getReportedParams().get("duration"));
+            verify(signalWaitRepository, org.mockito.Mockito.never()).save(any(SignalWaitEntity.class));
+        }
+
+        @Test
+        @DisplayName("nothing to record, nothing written: a node with no parameters costs no update")
+        void writesNothingWhenThereIsNothingToRecord() {
+            SignalWaitEntity signal = pendingSignal();
+
+            service.recordReportedParams(signal, Map.of());
+            service.recordReportedParams(signal, null);
+            service.recordReportedParams(null, Map.of("duration", 1));
+
+            assertNull(signal.getReportedParams());
+            verify(signalWaitRepository, org.mockito.Mockito.never()).save(any(SignalWaitEntity.class));
+        }
+    }
+
 }

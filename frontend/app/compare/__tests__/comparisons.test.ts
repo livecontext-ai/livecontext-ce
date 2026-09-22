@@ -12,10 +12,17 @@ describe('comparisons content source', () => {
     }
   });
 
-  it('covers the three competitors the landing page links to', () => {
+  it('covers every competitor linked from the landing page', () => {
     expect(getComparison('n8n-alternative')?.competitor).toBe('n8n');
     expect(getComparison('zapier-alternative')?.competitor).toBe('Zapier');
     expect(getComparison('make-alternative')?.competitor).toBe('Make');
+    expect(getComparison('openclaw-alternative')?.competitor).toBe('OpenClaw');
+    expect(getComparison('hermes-agent-alternative')?.competitor).toBe('Hermes Agent');
+    expect(getComparison('muse-alternative')?.competitor).toBe('Muse');
+    expect(getComparison('grok-bot-alternative')?.competitor).toBe('Grok Bot');
+    expect(getComparison('agent-zero-alternative')?.competitor).toBe('Agent Zero');
+    expect(getComparison('autogpt-alternative')?.competitor).toBe('AutoGPT Platform');
+    expect(getComparison('manus-alternative')?.competitor).toBe('Manus');
     expect(getComparison('unknown')).toBeUndefined();
   });
 
@@ -28,6 +35,22 @@ describe('comparisons content source', () => {
       expect(c.faq.length).toBeGreaterThanOrEqual(4);
       expect(c.lastUpdated).toBeTruthy();
       expect(c.metaDescription.length).toBeLessThanOrEqual(160);
+    }
+  });
+
+  it('new autonomous-agent comparisons include official sources and current review dates', () => {
+    for (const slug of [
+      'openclaw-alternative',
+      'hermes-agent-alternative',
+      'muse-alternative',
+      'grok-bot-alternative',
+      'agent-zero-alternative',
+      'autogpt-alternative',
+      'manus-alternative',
+    ]) {
+      const comparison = getComparison(slug);
+      expect(comparison?.sources?.length).toBeGreaterThanOrEqual(4);
+      expect(comparison?.lastUpdated).toBe('September 2026');
     }
   });
 

@@ -233,6 +233,46 @@ describe('RunHistoryList - the run you came back from is highlighted', () => {
     expect(scrollSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('appends the next page when the infinite-scroll sentinel is reached', async () => {
+    const observed: Array<() => void> = [];
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = class {
+      constructor(private cb: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        observed.push(() => this.cb([{ isIntersecting: true }]));
+      }
+      observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
+    };
+    const firstPage = Array.from({ length: 15 }, (_, index) => ({
+      id: `first-${index}`,
+      runId: `first-${index}`,
+      status: 'COMPLETED',
+      planVersion: 1,
+      startedAt: '2026-01-01T00:00:00Z',
+    }));
+    const secondPage = [{
+      id: 'second-1',
+      runId: 'second-1',
+      status: 'RUNNING',
+      planVersion: 2,
+      startedAt: '2026-01-02T00:00:00Z',
+    }];
+    getWorkflowRuns
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage);
+
+    try {
+      render(<RunHistoryList workflowId="wf-1" onSelectRun={vi.fn()} />);
+      await waitFor(() => expect(rows()).toHaveLength(15));
+
+      await act(async () => { observed[observed.length - 1]?.(); });
+
+      await waitFor(() => expect(rows()).toHaveLength(16));
+      expect(getWorkflowRuns).toHaveBeenNthCalledWith(1, 'wf-1', 15, 0);
+      expect(getWorkflowRuns).toHaveBeenNthCalledWith(2, 'wf-1', 15, 15);
+    } finally {
+      (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = NoopObserver;
+    }
+  });
+
   it('discards a load-more that belonged to the previous list', async () => {
     // The observer fires page 2 for wf-1, the panel switches to wf-2, and wf-1's
     // page then lands: appending it would put one workflow's rows under

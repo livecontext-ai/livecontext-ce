@@ -564,6 +564,30 @@ class AgentContextBuilderTest {
             assertThat(credentialsFor(tc)).doesNotContainKey("__memoryAccessMode__");
         }
 
+        /**
+         * The chat path's ONLY emit point for the mailbox axis. Deleting the line that writes it
+         * leaves every other test in this repository green while a read-only mail agent regains
+         * the ability to send from the account's address, because the gate at the far end reads
+         * an absent mode as full access.
+         */
+        @Test
+        @DisplayName("emits __mailboxAccessMode__ when the agent is read-only on the mailbox")
+        void emitsMailboxAccessModeCredential() {
+            ToolsConfig tc = new ToolsConfig("all", List.of(), null, null, null, null, null, null,
+                    null, null, null, null, null, null, null,
+                    null, null, null, null, null, null, null, null, true, "read");
+            assertThat(credentialsFor(tc)).containsEntry("__mailboxAccessMode__", "read");
+        }
+
+        @Test
+        @DisplayName("omits __mailboxAccessMode__ when unset, leaving the full access every family defaults to")
+        void omitsMailboxAccessModeWhenAbsent() {
+            ToolsConfig tc = new ToolsConfig("all", List.of(), null, null, null, null, null, null,
+                    null, null, null, null, null, null, null,
+                    null, null, null, null, null, null, null, null, true, null);
+            assertThat(credentialsFor(tc)).doesNotContainKey("__mailboxAccessMode__");
+        }
+
         @Test
         @DisplayName("emits __<family>AccessMode__ for EVERY grant family's read mode (chat-path per-resource read/write enforcement)")
         void emitsAccessModeForEachGrantFamily() {

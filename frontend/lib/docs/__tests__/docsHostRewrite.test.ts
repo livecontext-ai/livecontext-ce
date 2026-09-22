@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveDocsRoute, docsHref, DOCS_HOST } from '../docsHostRewrite';
+import { resolveDocsRoute, docsHref, isDocsHost, DOCS_HOST } from '../docsHostRewrite';
 
 describe('resolveDocsRoute', () => {
   it('rewrites clean paths on the docs host onto the /docs routes', () => {
@@ -33,6 +33,24 @@ describe('resolveDocsRoute', () => {
   it('does not treat a host that merely contains "docs" as the docs subdomain', () => {
     // 'mydocs.' does not start with 'docs.', so a clean path there is a no-op.
     expect(resolveDocsRoute('mydocs.livecontext.ai', '/agents')).toBeNull();
+  });
+});
+
+describe('isDocsHost', () => {
+  // Exported for the proxy, which asks it before claiming a path name for the
+  // main site: on the docs subdomain that name may belong to a docs page.
+  it('is true for the docs subdomain, whatever the port or casing', () => {
+    expect(isDocsHost('docs.livecontext.ai')).toBe(true);
+    expect(isDocsHost('docs.livecontext.ai:3000')).toBe(true);
+    expect(isDocsHost('DOCS.LiveContext.ai')).toBe(true);
+  });
+
+  it('is false for every other host, and for a missing one', () => {
+    expect(isDocsHost('livecontext.ai')).toBe(false);
+    expect(isDocsHost('app.livecontext.ai')).toBe(false);
+    expect(isDocsHost('mydocs.livecontext.ai')).toBe(false);
+    expect(isDocsHost(null)).toBe(false);
+    expect(isDocsHost(undefined)).toBe(false);
   });
 });
 

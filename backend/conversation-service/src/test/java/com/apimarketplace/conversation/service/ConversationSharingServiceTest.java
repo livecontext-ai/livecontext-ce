@@ -1,5 +1,8 @@
 package com.apimarketplace.conversation.service;
 
+import com.apimarketplace.common.security.token.TokenAtRest;
+import com.apimarketplace.common.security.CredentialEncryptionService;
+
 import com.apimarketplace.conversation.dto.ConversationDto;
 import com.apimarketplace.conversation.entity.Conversation;
 import com.apimarketplace.conversation.mapper.ConversationMapper;
@@ -23,6 +26,12 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ConversationSharingService")
 class ConversationSharingServiceTest {
+
+    /** Token columns are hashed through TokenAtRest; a unit test must install the material itself. */
+    @org.junit.jupiter.api.BeforeAll
+    static void installTokenAtRest() {
+        TokenAtRest.install(new CredentialEncryptionService("test-password-123", "0123456789abcdef"));
+    }
 
     @Mock
     private ConversationRepository conversationRepository;
@@ -231,7 +240,7 @@ class ConversationSharingServiceTest {
         void returnsConversation() {
             Conversation conv = buildConversation(CONV_ID, USER_ID);
             conv.setShareToken("cs_test");
-            when(conversationRepository.findByShareToken("cs_test")).thenReturn(Optional.of(conv));
+            when(conversationRepository.findByShareTokenHash(TokenAtRest.hash("cs_test"))).thenReturn(Optional.of(conv));
 
             Optional<Conversation> result = service.findByShareToken("cs_test");
 
@@ -242,7 +251,7 @@ class ConversationSharingServiceTest {
         @Test
         @DisplayName("returns empty when token not found")
         void returnsEmpty() {
-            when(conversationRepository.findByShareToken("cs_nonexistent")).thenReturn(Optional.empty());
+            when(conversationRepository.findByShareTokenHash(TokenAtRest.hash("cs_nonexistent"))).thenReturn(Optional.empty());
 
             Optional<Conversation> result = service.findByShareToken("cs_nonexistent");
 

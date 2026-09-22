@@ -146,9 +146,15 @@ public class WaitNode extends BaseNode {
         // context can be rehydrated on resume/restart.
         Map<String, Object> splitItemData = SignalContextResolver.buildSplitItemData(context);
 
-        signalService.registerSignal(
-            runId, itemId, nodeId, effectiveDagTriggerId, effectiveEpoch,
-            SignalType.WAIT_TIMER, signalConfig, splitItemData);
+        // The node's own parameters travel with the signal: a wait above the inline
+        // threshold yields, and a yield persists no step row, so `duration` under the plan's
+        // own key would otherwise be reported nowhere - the resume row used to carry
+        // signal_config.durationMs instead, a different key for the same setting.
+        signalService.recordReportedParams(
+            signalService.registerSignal(
+                runId, itemId, nodeId, effectiveDagTriggerId, effectiveEpoch,
+                SignalType.WAIT_TIMER, signalConfig, splitItemData),
+            buildInputData());
 
         Instant startedAt = clk.instant();
         String startedAtStr = startedAt.toString();
@@ -167,7 +173,10 @@ public class WaitNode extends BaseNode {
     private Map<String, Object> buildInputData() {
         Map<String, Object> inputData = new java.util.LinkedHashMap<>();
         inputData.put("duration", durationMs);
-        return inputData;
+        // Through the gate like every other reported map. The content is a single number
+        // today, so this changes nothing a reader sees; it means the node cannot become an
+        // exception to "one gate" by someone adding a second key to it.
+        return com.apimarketplace.orchestrator.services.template.ReportedParams.forReport(inputData);
     }
 
     private Map<String, Object> buildOutput(ExecutionContext context, Instant startedAt, Instant completedAt) {

@@ -217,10 +217,50 @@ public class MarkupPolicy {
     public BigDecimal resolveEffectivePrice(PlatformCredentialPricingVersion version,
                                              Optional<PricingVersionEntry> perTool,
                                              BigDecimal quantity) {
+        return resolveEffectivePrice(version, perTool, quantity, null);
+    }
+
+    /**
+     * Resolve the effective price for one call, honouring both V428 unit
+     * pricing and what the call's own CHOICES do to it.
+     *
+     * <pre>
+     *   price = (base + unitCredits x billableQuantity) x multiplier,
+     *           clamped to [minCredits, maxCredits]
+     * </pre>
+     *
+     * <p><b>Why the factor multiplies the PRICE and not the quantity.</b> Two
+     * reasons, and the second one is the reason. A quantity is reported back to
+     * the customer as the size of what they bought, so scaling it would have a
+     * ten second clip billed and reported as twenty seconds of video that no
+     * player would show. And a flat {@code call} price has no quantity to
+     * scale at all: its billable quantity is 1 by definition and its unit rate
+     * is zero, so a factor folded in there would silently do nothing on exactly
+     * the models that sell a resolution or a quality tier at one price.
+     *
+     * <p><b>Why the clamps apply after.</b> {@code maxCredits} is the ceiling
+     * the platform owner put on what one call may cost. A factor is a reason to
+     * charge more, not a licence to pass the ceiling, so it is applied first and
+     * the clamp still binds.
+     *
+     * @param multiplier what the call's choices do to the published rate, or
+     *                   null for a call at that rate. Null, 1, and any
+     *                   non-positive value all leave the amount untouched: a
+     *                   price of zero can only be published, never derived, so
+     *                   a factor that would produce one is read as no factor at
+     *                   all rather than as a free generation.
+     */
+    public BigDecimal resolveEffectivePrice(PlatformCredentialPricingVersion version,
+                                             Optional<PricingVersionEntry> perTool,
+                                             BigDecimal quantity,
+                                             BigDecimal multiplier) {
         BigDecimal base = resolveEffectiveMarkup(version, perTool);
         if (perTool == null || perTool.isEmpty()) {
             // No per-tool row: the version default is a flat per-call amount by
-            // definition (a version carries no unit), so there is nothing to scale.
+            // definition (a version carries no unit), so there is nothing to
+            // scale. It is also never a generation price - the generation path
+            // refuses a call that resolved out of the credential-wide default -
+            // so there is nothing here for a factor to apply to either.
             return base;
         }
         PricingVersionEntry entry = perTool.get();
@@ -228,6 +268,10 @@ public class MarkupPolicy {
         BigDecimal price = base;
         if (unitRate != null && unitRate.signum() > 0) {
             price = price.add(unitRate.multiply(billableQuantity(perTool, quantity)));
+        }
+        if (multiplier != null && multiplier.signum() > 0
+                && multiplier.compareTo(BigDecimal.ONE) != 0) {
+            price = price.multiply(multiplier);
         }
         BigDecimal min = entry.getMinCredits();
         if (min != null && price.compareTo(min) < 0) {

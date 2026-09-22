@@ -126,7 +126,6 @@ public class AdminPlanService {
         if (userOpt.isEmpty()) {
             return AssignPlanResult.fail("user_not_found");
         }
-        User user = userOpt.get();
 
         // Take the most-recent active subscription under a write lock. If it is a real
         // Stripe subscription, refuse - comp is only for internal/free accounts and we
@@ -143,8 +142,12 @@ public class AdminPlanService {
         } else {
             // No active sub (e.g. a user that never resolved): bootstrap an internal one,
             // mirroring UserResolutionService.ensureFreeSubscription.
-            BillingCustomer billingCustomer = billingCustomerRepository.findByUserId(targetUserId)
-                    .orElseGet(() -> billingCustomerRepository.save(new BillingCustomer(user, INTERNAL_PROVIDER)));
+            // findOrCreate, not find-then-save: an admin assigning a plan while the user is
+            // signing in for the first time raced on billing_customer.user_id, and the loser of
+            // that race did not simply fail to create the row, it killed this whole transaction.
+            // See the repository method, which does the read itself.
+            BillingCustomer billingCustomer =
+                    billingCustomerRepository.findOrCreate(targetUserId, INTERNAL_PROVIDER);
             sub = new Subscription();
             sub.setBillingCustomer(billingCustomer);
         }

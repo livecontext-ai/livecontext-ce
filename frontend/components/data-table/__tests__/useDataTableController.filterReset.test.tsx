@@ -66,7 +66,6 @@ vi.mock('@/components/data-table/hooks', () => ({
     setRows: vi.fn(), setColumns: vi.fn(), setError: vi.fn(),
     fetchColumns: vi.fn(),
     fetchData: fetchDataMock,
-    setColumnOrder: vi.fn(),
   }),
   useRowOperations: () => ({
     showAddRowModal: false, newRowData: {}, newRowPriority: 1,

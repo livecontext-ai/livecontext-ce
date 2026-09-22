@@ -193,6 +193,10 @@ public class AgentExecutionEntity implements Persistable<UUID>, OrgScopedEntity 
     @Column(name = "credits_consumed", nullable = false, precision = 15, scale = 4)
     private BigDecimal creditsConsumed = BigDecimal.ZERO;
 
+    /** V506: whose key this execution ran on (PLATFORM / OWN_KEY); null = unpinned. */
+    @Column(name = "key_route", length = 16)
+    private String keyRoute;
+
     @Column(name = "source", nullable = false, length = 20)
     private String source = "WORKFLOW";
 
@@ -239,7 +243,13 @@ public class AgentExecutionEntity implements Persistable<UUID>, OrgScopedEntity 
             this.createdAt = now;
         }
         if (this.startedAt == null) {
-            this.startedAt = now;
+            // Never let the default land AFTER a known end. Today the row is written
+            // once, at the end of the execution, so `endedAt` is already set here and
+            // stamping `now` produced `ended_at < started_at` on every row the table
+            // ever held. Falling back to `endedAt` keeps the pair coherent for any
+            // future writer that forgets to derive a start, and is still `now` for a
+            // writer that creates the row while the execution is still running.
+            this.startedAt = this.endedAt != null ? this.endedAt : now;
         }
     }
 
@@ -633,6 +643,14 @@ public class AgentExecutionEntity implements Persistable<UUID>, OrgScopedEntity 
 
     public void setCreditsConsumed(BigDecimal creditsConsumed) {
         this.creditsConsumed = creditsConsumed;
+    }
+
+    public String getKeyRoute() {
+        return keyRoute;
+    }
+
+    public void setKeyRoute(String keyRoute) {
+        this.keyRoute = keyRoute;
     }
 
     public String getSource() {

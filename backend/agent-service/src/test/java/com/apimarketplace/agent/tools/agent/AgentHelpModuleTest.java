@@ -62,6 +62,41 @@ class AgentHelpModuleTest {
         return (List<String>) data.get("pairs");
     }
 
+
+    /**
+     * The agent layer of the three-layer contract, which had no test at all.
+     *
+     * <p>Every refusal an agent can hit belongs in the help it reads first, or it discovers
+     * the rule by burning a turn. Both escalation refusals were added late and the wording was
+     * corrected twice: once because it was silent about generation, once because it stated a
+     * rule unconditionally that only applies to an agent, which would make a chat-bound
+     * assistant refuse a person pre-emptively. Nothing stopped either regression returning.
+     */
+    @Test
+    @DisplayName("the help names both escalation refusals, and says they only bind an agent")
+    void helpDocumentsTheEscalationRefusals() {
+        Map<String, Object> params = paramsOf(module.execute("help", Map.of(), "u1",
+                contextWithRoles("u1", null)));
+
+        assertThat(String.valueOf(params.get("mailbox")))
+                .as("an agent that cannot pass the mailbox on must learn it here, not from a refusal")
+                .contains("If YOU are an agent")
+                .contains("ask the user");
+        assertThat(String.valueOf(params.get("generation")))
+                .as("gated identically, and silent about it until an audit said so")
+                .contains("If YOU are an agent");
+        assertThat(String.valueOf(params.get("mailbox_access_mode")))
+                .as("the omission rule is the one an agent breaks by saying nothing")
+                .contains("read-only")
+                .contains("no mode means FULL access");
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> paramsOf(Optional<ToolExecutionResult> result) {
+        Map<String, Object> data = (Map<String, Object>) result.orElseThrow().data();
+        Object params = data.get("parameters");
+        return params instanceof Map ? (Map<String, Object>) params : Map.of();
+    }
     @Test
     @DisplayName("canHandle accepts 'help' and 'help_models', rejects everything else")
     void canHandle() {
@@ -433,6 +468,7 @@ class AgentHelpModuleTest {
     @DisplayName("Non-admin caller: bridge models are removed, direct-API models stay")
     void nonAdminCallerSeesNoBridgeModels() {
         module.setBridgeAccessGuard(bridgeAccessGuard);
+        module.setAuthMode("embedded"); // self-hosted: the per-caller access check decides for every role
         when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
                 new AvailableModel("openai", "gpt-5.4", "high", 1),
                 new AvailableModel("claude-code", "claude-opus-4-7", "high", 2),
@@ -450,9 +486,98 @@ class AgentHelpModuleTest {
     }
 
     @Test
+    @DisplayName("Cloud: a non-admin agent is shown no bridge model, and the policy is not asked")
+    void cloudHidesBridgesFromAUserWithoutAskingThePolicy() {
+        module.setBridgeAccessGuard(bridgeAccessGuard);
+        module.setAuthMode(""); // cloud
+        when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
+                new AvailableModel("openai", "gpt-5.4", "high", 1),
+                new AvailableModel("claude-code", "claude-opus-4-7", "high", 2)
+        ));
+
+        List<String> pairs = pairsOf(module.execute("help_models", Map.of(), "user-1",
+                contextWithRoles("user-1", "USER")));
+
+        // This is the path the production agents came in through: an LLM asked for the catalogue,
+        // was offered claude-code, and stored it. BridgeProviderSaveGuard refuses that save in
+        // cloud for a non-admin, so listing the pair would only describe a choice the next call
+        // rejects.
+        assertThat(pairs).noneMatch(p -> p.startsWith("claude-code/"));
+        assertThat(pairs).anyMatch(p -> p.startsWith("openai/gpt-5.4"));
+        // The access policy is not even asked: in cloud the answer for a user cannot depend on
+        // it, or an admin widening the policy to all_users would silently put the shared
+        // subscription back in front of every user.
+        verifyNoInteractions(bridgeAccessGuard);
+    }
+
+    @Test
+    @DisplayName("Cloud: an ADMIN is still hidden a bridge the policy denies - admitted to the check, not exempt from it")
+    void cloudStillHidesAPolicyDeniedBridgeFromAnAdmin() {
+        module.setBridgeAccessGuard(bridgeAccessGuard);
+        module.setAuthMode(""); // cloud
+        when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
+                new AvailableModel("openai", "gpt-5.4", "high", 1),
+                new AvailableModel("claude-code", "claude-opus-4-7", "high", 2)
+        ));
+        when(bridgeAccessGuard.check(eq("admin-1"), eq("ADMIN,USER"), eq("claude-code")))
+                .thenReturn(BridgeAccessDecision.deny("claude-code", BridgeAccessDecision.REASON_DISABLED));
+
+        List<String> pairs = pairsOf(module.execute("help_models", Map.of(), "admin-1",
+                contextWithRoles("admin-1", "ADMIN,USER")));
+
+        // A disabled bridge is refused at dispatch for everyone; listing it to an admin would
+        // advertise a model that answers 403 on the very next run.
+        assertThat(pairs).noneMatch(p -> p.startsWith("claude-code/"));
+        assertThat(pairs).anyMatch(p -> p.startsWith("openai/gpt-5.4"));
+    }
+
+    @Test
+    @DisplayName("Cloud: absent roles are a non-admin - hidden, and the policy is not asked")
+    void cloudHidesBridgesWhenRolesAreAbsent() {
+        module.setBridgeAccessGuard(bridgeAccessGuard);
+        module.setAuthMode(""); // cloud
+        when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
+                new AvailableModel("openai", "gpt-5.4", "high", 1),
+                new AvailableModel("claude-code", "claude-opus-4-7", "high", 2)
+        ));
+
+        // A scheduled or webhook run carries no roles. Fail-closed by design: in cloud the
+        // decision is taken on the forwarded roles alone, so an admin's role-less run is hidden
+        // the bridges too, and nobody's role-less run is opened by a widened policy.
+        List<String> pairs = pairsOf(module.execute("help_models", Map.of(), "admin-1",
+                contextWithRoles("admin-1", null)));
+
+        assertThat(pairs).noneMatch(p -> p.startsWith("claude-code/"));
+        verifyNoInteractions(bridgeAccessGuard);
+    }
+
+    @Test
+    @DisplayName("Cloud: an ADMIN agent is shown the bridges the policy allows - the same check as self-hosted")
+    void cloudShowsBridgesToAnAdminThroughThePolicy() {
+        module.setBridgeAccessGuard(bridgeAccessGuard);
+        module.setAuthMode(""); // cloud
+        when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
+                new AvailableModel("openai", "gpt-5.4", "high", 1),
+                new AvailableModel("claude-code", "claude-opus-4-7", "high", 2)
+        ));
+        when(bridgeAccessGuard.check(eq("admin-1"), eq("ADMIN,USER"), eq("claude-code")))
+                .thenReturn(BridgeAccessDecision.allow("claude-code", 100));
+
+        List<String> pairs = pairsOf(module.execute("help_models", Map.of(), "admin-1",
+                contextWithRoles("admin-1", "ADMIN,USER")));
+
+        // The regression this pins: hiding the bridges from hosted admins too made the CLI models
+        // vanish for the accounts that administer them. An admin is admitted to the same
+        // per-caller decision the dispatch path enforces, not exempted from it.
+        assertThat(pairs).anyMatch(p -> p.startsWith("claude-code/claude-opus-4-7"));
+        verify(bridgeAccessGuard, times(1)).check(eq("admin-1"), eq("ADMIN,USER"), eq("claude-code"));
+    }
+
+    @Test
     @DisplayName("Admin caller: bridge models remain visible")
     void adminCallerSeesBridgeModels() {
         module.setBridgeAccessGuard(bridgeAccessGuard);
+        module.setAuthMode("embedded"); // self-hosted: the per-caller access check decides for every role
         when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
                 new AvailableModel("openai", "gpt-5.4", "high", 1),
                 new AvailableModel("claude-code", "claude-opus-4-7", "high", 2)
@@ -471,6 +596,7 @@ class AgentHelpModuleTest {
     @DisplayName("Catalog without bridges never consults the access guard")
     void nonBridgeCatalogNeverConsultsGuard() {
         module.setBridgeAccessGuard(bridgeAccessGuard);
+        module.setAuthMode("embedded"); // self-hosted: the per-caller access check decides for every role
         when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
                 new AvailableModel("openai", "gpt-5.4", "high", 1),
                 new AvailableModel("anthropic", "claude-opus-4-6", "high", 2)
@@ -487,6 +613,7 @@ class AgentHelpModuleTest {
     @DisplayName("The per-provider decision is cached: two claude-code models = one guard round-trip")
     void decisionIsCachedPerProvider() {
         module.setBridgeAccessGuard(bridgeAccessGuard);
+        module.setAuthMode("embedded"); // self-hosted: the per-caller access check decides for every role
         when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
                 new AvailableModel("claude-code", "claude-opus-4-7", "high", 1),
                 new AvailableModel("claude-code", "claude-sonnet-4-6", "mid", 2)
@@ -503,6 +630,8 @@ class AgentHelpModuleTest {
     @DisplayName("Guard bean absent: falls back to admin-role check (non-admin hidden, admin shown)")
     void fallsBackToAdminRoleWhenGuardAbsent() {
         // module is constructed in setUp() WITHOUT a guard (bean unwired) - exercise the fallback.
+        // CE: the role fallback, like the guard it stands in for, only decides anything here.
+        module.setAuthMode("embedded");
         when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
                 new AvailableModel("openai", "gpt-5.4", "high", 1),
                 new AvailableModel("codex", "gpt-5.4-codex", "high", 2)
@@ -521,6 +650,7 @@ class AgentHelpModuleTest {
     @DisplayName("Unknown roles (null credentials) hide bridges - safe default")
     void unknownRolesHideBridges() {
         module.setBridgeAccessGuard(bridgeAccessGuard);
+        module.setAuthMode("embedded"); // self-hosted: the per-caller access check decides for every role
         when(modelCatalogService.listAvailableModels()).thenReturn(List.of(
                 new AvailableModel("openai", "gpt-5.4", "high", 1),
                 new AvailableModel("gemini-cli", "gemini-3.1-pro-preview", "high", 2)
@@ -534,5 +664,32 @@ class AgentHelpModuleTest {
 
         assertThat(pairs).noneMatch(p -> p.startsWith("gemini-cli/"));
         assertThat(pairs).anyMatch(p -> p.startsWith("openai/gpt-5.4"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("the schedule authorization notice exists, and the actions that point at it are not dangling")
+    void scheduleAuthorizationNoticeIsReachable() {
+        // Two action entries say "see interactive_chat_authorization below". If that key is
+        // ever renamed, the pointers keep reading fine and lead nowhere, and an agent whose
+        // call is being held for minutes has nothing telling it not to re-call or not to
+        // report the agent as scheduled. A dangling cross-reference in a help payload breaks
+        // nothing and is visible to no one.
+        Optional<ToolExecutionResult> result = module.execute("help", Map.of(), "tenant-x", null);
+
+        assertThat(result).isPresent();
+        Map<String, Object> data = (Map<String, Object>) result.get().data();
+
+        assertThat(data).containsKey("interactive_chat_authorization");
+        String notice = String.valueOf(data.get("interactive_chat_authorization"));
+        // The three things the agent has to be able to act on: what triggers the gate, what
+        // does NOT, and how to read the answer.
+        assertThat(notice).contains("schedule_cron");
+        assertThat(notice).contains("never gated");
+        assertThat(notice).contains("executed:false");
+
+        Map<String, String> actions = (Map<String, String>) data.get("actions");
+        assertThat(actions.get("create")).contains("interactive_chat_authorization");
+        assertThat(actions.get("update")).contains("interactive_chat_authorization");
     }
 }

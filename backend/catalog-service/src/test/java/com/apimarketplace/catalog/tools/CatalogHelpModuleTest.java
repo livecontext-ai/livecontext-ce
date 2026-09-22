@@ -22,6 +22,35 @@ class CatalogHelpModuleTest {
         module = new CatalogHelpModule();
     }
 
+    @Test
+    @DisplayName("the register help documents auth placement, and points at itself the way the tool is actually called")
+    @SuppressWarnings("unchecked")
+    void registerHelpDocumentsAuthPlacement() {
+        // The section exists so an agent can find out where a credential goes. It was added with
+        // no test, which is how a pointer written `topic='register'` survived: execute() reads
+        // `topics`, so that spelling returns the GENERAL help and routes the agent away from the
+        // very section it advertises.
+        Optional<ToolExecutionResult> result =
+                module.execute("help", Map.of("topics", List.of("register")), "tenant-1", null);
+        assertThat(result).isPresent();
+        Map<String, Object> data = (Map<String, Object>) result.get().data();
+        Map<String, Object> register = (Map<String, Object>) data.get("register");
+        assertThat(register).as("topics=['register'] must return the register topic").isNotNull();
+
+        Map<String, Object> placement = (Map<String, Object>) register.get("auth_placement");
+        assertThat(placement).as("where the credential goes must be documented").isNotNull();
+        assertThat(placement.get("oauth2")).as("oauth2 has required fields and needs its own block").isNotNull();
+        assertThat(placement.get("after_registering")).as("the next step must be stated").isNotNull();
+
+        String rendered = register.toString();
+        assertThat(rendered)
+                .as("help must reference itself as topics=[...], which is what execute reads")
+                .doesNotContain("topic='register'");
+        assertThat(rendered)
+                .as("oauth2 is supported; help that denies it sends the agent away from the feature")
+                .doesNotContain("oauth2' is rejected");
+    }
+
     @Nested
     @DisplayName("canHandle")
     class CanHandle {
@@ -102,6 +131,30 @@ class CatalogHelpModuleTest {
     @Nested
     @DisplayName("Topic: shaping")
     class ShapingTopic {
+
+        @Test
+        @DisplayName("names the two metadata fields a caller reads back about a charge, and says "
+                + "that an absent amount is not a charge of zero")
+        @SuppressWarnings("unchecked")
+        void documentsWhatACallCost() {
+            // Every billed platform-key call now answers with `metadata.billedCredits`. A field an
+            // agent can read and no help names is a field it will either ignore or, worse, total up
+            // as a zero for the calls that carry none - which is most of them.
+            Optional<ToolExecutionResult> result = module.execute("help",
+                Map.of("topics", List.of("shaping")), null, null);
+            assertThat(result).isPresent();
+
+            Map<String, Object> shaping = (Map<String, Object>)
+                ((Map<String, Object>) result.get().data()).get("shaping");
+            Map<String, Object> fields = (Map<String, Object>) shaping.get("response_metadata_to_read");
+
+            assertThat(fields).containsKeys("metadata.billedCredits", "metadata.credentialSource");
+            assertThat(String.valueOf(fields.get("metadata.billedCredits")))
+                .contains("ABSENT MEANS NOT CHARGED HERE, never zero");
+            // The other half a caller gets wrong: what it ASKED for is not what answered.
+            assertThat(String.valueOf(fields.get("metadata.credentialSource")))
+                .contains("what HAPPENED");
+        }
 
         @Test
         @SuppressWarnings("unchecked")

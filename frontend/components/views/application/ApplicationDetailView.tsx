@@ -25,6 +25,7 @@ import { isNavigateRef, navigateTargetLabel } from '@/app/workflows/builder/util
 import { PublicationInfoPanel } from '@/components/marketplace/PublicationInfoPanel';
 import { ApplicationSettingsMenu } from '@/components/marketplace/ApplicationSettingsMenu';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
+import { VerifiedBadge } from '@/components/profile/VerifiedBadge';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 
 import { WorkflowLoadingState } from '../workflow/WorkflowLoadingState';
@@ -362,6 +363,8 @@ export function ApplicationDetailView({ workflowId, runId, title, publisherName,
           <WorkflowPanelContent
             workflowId={workflowId}
             runId={runId}
+            hostTabId={APPLICATION_PANEL_TAB_ID}
+            runSurfaceId={instanceId}
             isPreviewOnly={isPreviewOnly}
             /* The same answer the canvas below uses for its edit toggle. An
                acquired application resolves to a workflow the caller may not
@@ -374,6 +377,7 @@ export function ApplicationDetailView({ workflowId, runId, title, publisherName,
                   <WorkflowRunCanvas
                     workflowId={workflowId}
                     runId={runId}
+                    surfaceId={instanceId}
                     planOverride={planOverride}
                     hideToggle={!canEdit}
                     onWorkflowLoaded={handleWorkflowLoaded}
@@ -603,6 +607,7 @@ export function ApplicationDetailView({ workflowId, runId, title, publisherName,
                     <div className="flex items-center gap-1.5">
                       <PublisherAvatar userId={publisherId} name={publisherName} size={16} variant="neutral" />
                       <span className="text-xs text-gray-600 dark:text-gray-400">{publisherName}</span>
+                      <VerifiedBadge userId={publisherId} size="xs" />
                     </div>
                   )}
                 </div>
@@ -655,6 +660,7 @@ export function ApplicationDetailView({ workflowId, runId, title, publisherName,
               configs={applicationConfigs}
               runId={runId}
               workflowId={workflowId}
+              runSurfaceId={instanceId}
               onAction={handleApplicationAction}
               previewMode={publicPreviewMode}
               // Here the application IS the page: its visitors want the latest

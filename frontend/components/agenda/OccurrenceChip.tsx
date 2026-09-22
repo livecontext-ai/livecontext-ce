@@ -5,6 +5,8 @@ import { MoveRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import type { AgendaOccurrence } from '@/lib/api/orchestrator/agenda.service';
 import { formatTimeInZone } from '@/lib/utils/agendaTime';
+import { AgendaKindIcon } from './AgendaKindIcon';
+import { occurrenceKind } from './agendaLaunchKinds';
 import { isMovable, occurrenceAccent, resourceIcon } from './agendaVisuals';
 
 interface OccurrenceChipProps {
@@ -64,7 +66,8 @@ export function OccurrenceChip({
   });
 
   const accent = occurrenceAccent(occurrence);
-  const Icon = resourceIcon(occurrence.resourceType);
+  const ResourceIcon = resourceIcon(occurrence.resourceType);
+  const kind = occurrenceKind(occurrence);
   const time = formatTimeInZone(new Date(occurrence.startAt), timezone);
   const isPast = occurrence.kind === 'PAST';
 
@@ -75,6 +78,15 @@ export function OccurrenceChip({
   // is merely resting.
   const willNotFire = occurrence.kind === 'PLANNED' && occurrence.armed === false;
 
+  // The launch kind is drawn as a GLYPH, which is aria-hidden and therefore says nothing
+  // to a screen reader. On a past chip it is the one fact that distinguishes two runs of
+  // the same agent at the same hour, so it belongs in the accessible name too - where it
+  // also survives every width the glyph is hidden at.
+  const suffixes: string[] = [];
+  if (isPast && kind) suffixes.push(t(`kind.${kind.toLowerCase()}`));
+  if (willNotFire) suffixes.push(t('status.budgetBlocked'));
+  const label = [`${time} ${occurrence.name}`, ...suffixes].join(' - ');
+
   return (
     <button
       ref={setNodeRef}
@@ -82,10 +94,8 @@ export function OccurrenceChip({
       {...listeners}
       {...attributes}
       onClick={(event) => onSelect(occurrence, event)}
-      title={willNotFire ? `${time} ${occurrence.name} - ${t('status.budgetBlocked')}` : `${time} ${occurrence.name}`}
-      aria-label={willNotFire
-        ? `${time} ${occurrence.name} - ${t('status.budgetBlocked')}`
-        : `${time} ${occurrence.name}`}
+      title={label}
+      aria-label={label}
       // `touch-manipulation` is what dnd-kit asks for beside a hold-to-drag touch sensor:
       // it takes the double-tap gesture away from the browser, so the quarter-second hold
       // is not competing with a zoom the browser might still claim.
@@ -120,7 +130,16 @@ export function OccurrenceChip({
       <span className="shrink-0 text-xs tabular-nums opacity-80">{time}</span>
 
       <span className="hidden min-w-0 flex-1 truncate text-xs @[6.5rem]:block">{occurrence.name}</span>
-      <Icon className="hidden h-3 w-3 shrink-0 opacity-70 @[8rem]:block" aria-hidden="true" />
+      <span className="hidden shrink-0 opacity-70 @[8rem]:block" aria-hidden="true">
+        {/* How it started, in one glyph: the trigger node's icon for a workflow, the
+            launch kind for an agent run. Both come through one component because the two
+            vocabularies overlap and the chip must not care which one answered. Unknown
+            falls back to the RESOURCE icon, which says what ran without claiming to know
+            what started it. */}
+        {kind
+          ? <AgendaKindIcon kind={kind} />
+          : <ResourceIcon className="h-3 w-3" />}
+      </span>
       {occurrence.overridden && (
         // This one run was moved off its schedule; without a mark the calendar looks
         // simply wrong to anyone who knows the cron. Width-gated like the name: unguarded

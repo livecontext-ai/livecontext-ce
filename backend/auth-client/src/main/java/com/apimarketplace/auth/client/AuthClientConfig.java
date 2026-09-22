@@ -5,6 +5,7 @@ import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.auth.client.access.OrgAccessGuardImpl;
 import com.apimarketplace.auth.client.entitlement.EntitlementGuard;
 import com.apimarketplace.auth.client.entitlement.LimitExceededExceptionHandler;
+import com.apimarketplace.auth.client.entitlement.OwnKeyFeatureGate;
 import com.apimarketplace.auth.client.entitlement.PlanFeatureGate;
 import com.apimarketplace.common.event.EventBus;
 import com.apimarketplace.common.web.AppEditionProvider;
@@ -57,6 +58,18 @@ public class AuthClientConfig {
             AuthClient authClient,
             AppEditionProvider editionProvider) {
         return new PlanFeatureGate(authClient, editionProvider.isCloud());
+    }
+
+    /**
+     * Whether a tenant may run agents on its OWN provider key (seeded at PRO on shared
+     * cloud, never gated on self-hosted or dedicated cloud). Consulted wherever a key
+     * route is pinned: agent-service for every LLM execution kind, the orchestrator for
+     * the browser agent whose runner is handed a key directly.
+     */
+    @Bean
+    public OwnKeyFeatureGate ownKeyFeatureGate(PlanFeatureGate planFeatureGate,
+                                               AppEditionProvider editionProvider) {
+        return new OwnKeyFeatureGate(editionProvider, planFeatureGate);
     }
 
     /**

@@ -625,11 +625,32 @@ public class InterfaceService {
                                               String visibility,
                                               String folderId,
                                               boolean includeFolders) {
+        return listInterfacesPaged(tenantId, interfaceType, excludeTableAttached, q, orgId, orgRole,
+                page, size, sort, visibility, folderId, includeFolders, null);
+    }
+
+    /**
+     * Extended paged-list entry point used by compact resource pickers that must omit one internal
+     * interface family while preserving an exact {@code totalCount} before pagination.
+     */
+    public InterfacePage listInterfacesPaged(String tenantId,
+                                              String interfaceType,
+                                              Boolean excludeTableAttached,
+                                              String q,
+                                              String orgId,
+                                              String orgRole,
+                                              int page,
+                                              int size,
+                                              String sort,
+                                              String visibility,
+                                              String folderId,
+                                              boolean includeFolders,
+                                              String excludedInterfaceType) {
         String decodedTenantId = tenantId != null ? tenantId.replace("%7C", "|") : tenantId;
 
-        // 1. Load the WHOLE tenant/org set as a LIGHTWEIGHT projection (no @Lob templates / data
+        // 1. Load the WHOLE tenant/org set as a LIGHTWEIGHT projection (no template columns / data
         //    JSONB) - we only need it to filter, sort and slice. The page's full entities are
-        //    fetched by id in step 5, so the heavy blobs are read for at most `size` rows, never the
+        //    fetched by id in step 5, so the heavy columns are read for at most `size` rows, never the
         //    whole set. Search is applied at DB level when q is non-blank.
         List<InterfaceListView> all;
         boolean hasSearch = q != null && !q.isBlank();
@@ -653,6 +674,11 @@ public class InterfaceService {
         if (interfaceType != null && !interfaceType.isBlank()) {
             all = all.stream()
                     .filter(v -> interfaceType.equalsIgnoreCase(v.getInterfaceType()))
+                    .collect(Collectors.toList());
+        }
+        if (excludedInterfaceType != null && !excludedInterfaceType.isBlank()) {
+            all = all.stream()
+                    .filter(v -> !excludedInterfaceType.equalsIgnoreCase(v.getInterfaceType()))
                     .collect(Collectors.toList());
         }
         if (Boolean.TRUE.equals(excludeTableAttached)) {
@@ -708,7 +734,7 @@ public class InterfaceService {
         int to = Math.min(from + safeSize, totalCount);
         List<InterfaceListView> pageViews = all.subList(from, to);
 
-        // 5. Materialize the page's FULL entities by id (<= size rows, so the @Lob templates load for
+        // 5. Materialize the page's FULL entities by id (<= size rows, so the templates load for
         //    the page only) and reorder them to the sliced order (findAllById gives no order guarantee).
         List<UUID> pageIds = pageViews.stream().map(InterfaceListView::getId).collect(Collectors.toList());
         Map<UUID, InterfaceEntity> byId = interfaceRepository.findAllById(pageIds).stream()
@@ -1033,8 +1059,8 @@ public class InterfaceService {
     }
 
     /**
-     * Carry the provenance the chat card reads back: who produced the asset,
-     * with which model, from which prompt, and what the call was billed on.
+     * Carry the provenance stored beside a chat generation: who produced the asset, with which
+     * model, from which prompt, what the call was billed on, and what it cost.
      */
     private static void copyProvenance(Map<String, Object> result, String prompt,
                                         Map<String, Object> data) {
@@ -1043,6 +1069,14 @@ public class InterfaceService {
             putIfPresent(data, "kind", result.get("kind"));
             putIfPresent(data, "billed_quantity", result.get("billed_quantity"));
             putIfPresent(data, "billed_unit", result.get("billed_unit"));
+            // What it cost, beside the size it was charged on. Carried on the row rather than
+            // rendered today: the card shows the provider, the model and the prompt, and its
+            // billing fields are stored for whatever reads the row next. Kept in step with its
+            // siblings deliberately - a row written now and read after the card learns to show a
+            // price would otherwise be the only one that cannot answer. Absent when the platform
+            // charged nothing (a key the reader configured themselves, an install that does not
+            // meter), and putIfPresent is what keeps absent from becoming a zero.
+            putIfPresent(data, "billed_credits", result.get("billed_credits"));
             // One model id under two keys, deliberately. `model` is what the
             // generation output calls it and is the name that survives; the
             // already-stored rows and the card that renders them call it

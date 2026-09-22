@@ -6,6 +6,7 @@ import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
 import com.apimarketplace.orchestrator.execution.v2.services.UnifiedSignalService;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -96,6 +97,16 @@ public class UserApprovalNode extends BaseNode {
         resolvedParams.put("requiredApprovals", requiredApprovals);
         resolvedParams.put("timeoutMs", timeoutMs);
         resolvedParams.put("contextTemplate", contextTemplate);
+        // Delegation decides WHO may approve, and continuationMode decides what the
+        // run does once approved. An approval that sat unanswered, or was answered by
+        // an unexpected person, or continued in an unexpected way, cannot be explained
+        // from the other four keys alone.
+        // The RESOLVED delegation: its chatId and templates are template-capable, and
+        // the node computes exactly this a few lines below to decide where to send.
+        if (delegation != null) {
+            resolvedParams.put("delegation", buildResolvedDelegation(context));
+        }
+        resolvedParams.put("continuationMode", continuationMode);
 
         try {
             if (signalService == null) {
@@ -142,9 +153,13 @@ public class UserApprovalNode extends BaseNode {
             String approvalContext = SignalContextResolver.resolveApprovalContext(
                 contextTemplate, context, templateAdapter);
 
-            signalService.registerSignal(
-                runId, itemId, nodeId, effectiveDagTriggerId, effectiveEpoch,
-                SignalType.USER_APPROVAL, signalConfig, splitItemData, approvalContext);
+            // The resolved delegation, the timeout, the approver roles: an approval yields,
+            // and a yield persists no step row, so these were reported nowhere until now.
+            signalService.recordReportedParams(
+                signalService.registerSignal(
+                    runId, itemId, nodeId, effectiveDagTriggerId, effectiveEpoch,
+                    SignalType.USER_APPROVAL, signalConfig, splitItemData, approvalContext),
+                resolvedParams);
 
             Clock clk = clock != null ? clock : Clock.systemUTC();
             String expiresAt = clk.instant().plusMillis(timeoutMs > 0 ? timeoutMs : 86400000L).toString();
@@ -152,7 +167,10 @@ public class UserApprovalNode extends BaseNode {
             logger.info("Approval signal registered (yield): nodeId={}, expiresAt={}", nodeId, expiresAt);
 
             Map<String, Object> output = new HashMap<>();
-            output.put("resolved_params", resolvedParams);
+            // Same gate the signal path applies a few lines above, so a parked approval and
+            // a failed one report the same thing. InterfaceNode calls this asymmetry a defect
+            // in its own comment; this node had it too.
+            output.put("resolved_params", ReportedParams.forReport(resolvedParams));
             output.put("approver_roles", approverRoles);
             output.put("required_approvals", requiredApprovals);
             output.put("expires_at", expiresAt);
@@ -240,7 +258,7 @@ public class UserApprovalNode extends BaseNode {
 
     private Map<String, Object> buildFailureOutput(Map<String, Object> resolvedParams, String error) {
         Map<String, Object> failOutput = new HashMap<>();
-        failOutput.put("resolved_params", resolvedParams);
+        failOutput.put("resolved_params", ReportedParams.forReport(resolvedParams));
         failOutput.put("approver_roles", approverRoles);
         failOutput.put("required_approvals", requiredApprovals);
         failOutput.put("timeout_ms", timeoutMs);

@@ -44,13 +44,14 @@ public class StorageService implements StorageOperations {
 
     private static final Logger logger = LoggerFactory.getLogger(StorageService.class);
 
-    // NOTE: intentionally NOT including STEP_OUTPUT / INTERFACE_SCREENSHOT here. This set drives the
-    // FILES-vs-STEP_OUTPUTS breakdown category for saveJson/update/delete; a JSON step output also
-    // carries sourceType=STEP_OUTPUT and must stay in the STEP_OUTPUTS rollup. The S3 file-index path
-    // always books "FILES" directly in trackUsageBestEffort, so file-typed STEP_OUTPUT/screenshot rows
-    // are already counted correctly on save.
-    private static final java.util.Set<String> FILE_SOURCE_TYPES =
-            java.util.Set.of(StorageSourceTypes.S3_FILE, StorageSourceTypes.CHAT_ATTACHMENT);
+    // The FILES-vs-STEP_OUTPUTS rule lives in StorageRowCategories, and every path that books a
+    // byte asks it: save, update and delete here, the nightly reconciliation SQL, and the
+    // retention purger through ExecutionLogRowClasses.breakdownCategoryFor. It used to be spelled
+    // out here as a source-type set, which is why the save path and the delete path disagreed
+    // about S3-backed rows: save booked "FILES" directly, delete read the source type
+    // (STEP_OUTPUT, INTERFACE_VIDEO, ...) and debited STEP_OUTPUTS. The credit then stood forever
+    // on a billed dimension. Classifying from the row itself, through the shared helper, is what
+    // keeps them symmetrical.
 
     /** Sentinel content/storage/source type for a V313 manual folder row (no real payload). */
     private static final String FOLDER_CONTENT_TYPE = "application/x-directory";
@@ -158,7 +159,7 @@ public class StorageService implements StorageOperations {
         applyMappingIfNeeded(storage, toolId, contentType);
 
         StorageEntity saved = storageRepository.save(storage);
-        String breakdownCategory = isFileSourceType(sourceType) ? "FILES" : "STEP_OUTPUTS";
+        String breakdownCategory = categoryOf(saved);
         trackUsageBestEffort(tenantId, breakdownCategory, sizeBytes, organizationId, saved.getId());
 
         logger.info("JSON sauvegarde ID: {} pour tenant: {}, taille: {} bytes, runId: {}, stepKey: {}, spawn: {}",
@@ -202,7 +203,7 @@ public class StorageService implements StorageOperations {
         }
 
         StorageEntity saved = storageRepository.save(storage);
-        trackUsageBestEffort(tenantId, "FILES", sizeBytes, organizationId, saved.getId());
+        trackUsageBestEffort(tenantId, categoryOf(saved), sizeBytes, organizationId, saved.getId());
 
         logger.info("Binaire sauvegarde ID: {} pour tenant: {}, taille: {} bytes",
             saved.getId(), tenantId, sizeBytes);
@@ -281,7 +282,7 @@ public class StorageService implements StorageOperations {
         storage.setParentFolderId(resolvedParentFolderId);
 
         StorageEntity saved = storageRepository.save(storage);
-        trackUsageBestEffort(tenantId, "FILES", sizeBytes, organizationId, saved.getId());
+        trackUsageBestEffort(tenantId, categoryOf(saved), sizeBytes, organizationId, saved.getId());
 
         logger.info("S3 file indexed ID: {} for tenant: {}, s3Key: {}, sourceType: {}, epoch: {}, spawn: {}, parentFolderId: {}",
                 saved.getId(), tenantId, s3Key, resolvedSourceType, epoch, spawn, resolvedParentFolderId);
@@ -339,11 +340,15 @@ public class StorageService implements StorageOperations {
             storage.setSpawn(spawn);
             // sourceType is deliberately NOT rewritten. It is tempting to re-type the row
             // STEP_OUTPUT, and it would change nothing that matters: the workflow folders group on
-            // the run coordinates alone, so the badge is all that moves. It would however break the
-            // usage ledger, which books bytes under a hard-coded FILES bucket at insert but derives
-            // the bucket from the CURRENT sourceType on delete - the row would be saved as FILES and
-            // deleted as STEP_OUTPUTS, permanently skewing the tenant's breakdown. This is a filing
+            // the run coordinates alone, so the badge is all that moves. This is a filing
             // correction; it rewrites the run coordinates and nothing else.
+            //
+            // It used to be worse than pointless: the usage ledger booked a hard-coded FILES bucket
+            // at insert and derived the bucket from the CURRENT sourceType on delete, so re-typing
+            // a row made it credit FILES and debit STEP_OUTPUTS for good. Both sides now classify
+            // the row through StorageRowCategories, which reads the STORAGE type first, so an
+            // object-storage row is FILES whatever its source type says. The ledger is no longer
+            // the reason to leave the column alone; there simply is no reason to touch it.
             storageRepository.save(storage);
             adopted++;
         }
@@ -468,7 +473,7 @@ public class StorageService implements StorageOperations {
         storage.setOrganizationId(organizationId);
 
         StorageEntity saved = storageRepository.save(storage);
-        trackUsageBestEffort(tenantId, "FILES", sizeBytes, organizationId, saved.getId());
+        trackUsageBestEffort(tenantId, categoryOf(saved), sizeBytes, organizationId, saved.getId());
 
         logger.info("Texte sauvegarde ID: {} pour tenant: {}, taille: {} bytes",
             saved.getId(), tenantId, sizeBytes);
@@ -688,7 +693,7 @@ public class StorageService implements StorageOperations {
         return storageRepository.findByIdAndTenantId(id, tenantId)
             .map(entity -> {
                 storageRepository.updateStatus(id, StorageStatus.DELETED);
-                String breakdownCategory = isFileSourceType(entity.getSourceType()) ? "FILES" : "STEP_OUTPUTS";
+                String breakdownCategory = categoryOf(entity);
                 int entitySize = entity.getSizeBytes() != null ? entity.getSizeBytes() : 0;
                 breakdownService.trackDelete(tenantId, breakdownCategory, entitySize);
                 quotaService.updateUsage(tenantId);
@@ -729,7 +734,7 @@ public class StorageService implements StorageOperations {
                         }
                     }
                     storageRepository.updateStatus(id, StorageStatus.DELETED);
-                    String breakdownCategory = isFileSourceType(entity.getSourceType()) ? "FILES" : "STEP_OUTPUTS";
+                    String breakdownCategory = categoryOf(entity);
                     int entitySize = entity.getSizeBytes() != null ? entity.getSizeBytes() : 0;
                     breakdownService.trackDelete(tenantId, breakdownCategory, entitySize, organizationId);
                     quotaService.updateOrganizationUsage(organizationId);
@@ -1007,7 +1012,7 @@ public class StorageService implements StorageOperations {
                 updateAccessTime(entity);
 
                 storageRepository.save(entity);
-                String breakdownCategory = isFileSourceType(entity.getSourceType()) ? "FILES" : "STEP_OUTPUTS";
+                String breakdownCategory = categoryOf(entity);
                 breakdownService.trackSizeChange(tenantId, breakdownCategory, sizeBytes - oldSize);
                 quotaService.updateUsage(tenantId);
 
@@ -1046,7 +1051,7 @@ public class StorageService implements StorageOperations {
                 updateAccessTime(entity);
 
                 storageRepository.save(entity);
-                String breakdownCategory = isFileSourceType(entity.getSourceType()) ? "FILES" : "STEP_OUTPUTS";
+                String breakdownCategory = categoryOf(entity);
                 breakdownService.trackSizeChange(tenantId, breakdownCategory, deltaBytes, organizationId);
                 quotaService.updateOrganizationUsage(organizationId);
 
@@ -1138,8 +1143,16 @@ public class StorageService implements StorageOperations {
         return contentType != null && contentType.toLowerCase().contains("json");
     }
 
-    private boolean isFileSourceType(String sourceType) {
-        return sourceType != null && FILE_SOURCE_TYPES.contains(sourceType);
+    /**
+     * The breakdown category a row belongs to, read from the row itself.
+     *
+     * <p>Used on save AND on delete, so a row is always debited from the bucket it was credited
+     * to. Both call sites classify the PERSISTED entity rather than the arguments they were
+     * handed: the storage type is decided by which constructor ran, and guessing it at the call
+     * site is how the two paths drifted apart in the first place.
+     */
+    private String categoryOf(StorageEntity entity) {
+        return StorageRowCategories.categoryFor(entity.getStorageType(), entity.getSourceType());
     }
 
     private boolean isAccessible(StorageEntity entity) {

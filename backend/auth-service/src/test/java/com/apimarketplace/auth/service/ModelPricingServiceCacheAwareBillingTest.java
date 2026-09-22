@@ -50,11 +50,19 @@ class ModelPricingServiceCacheAwareBillingTest {
     }
 
     private void mockPricing(String provider, String model, String inputRate, String outputRate) {
+        mockPricing(provider, model, inputRate, outputRate, null, null);
+    }
+
+    /** Pricing row carrying the model's OWN cache prices (V491); null = not known. */
+    private void mockPricing(String provider, String model, String inputRate, String outputRate,
+                             String cacheReadRate, String cacheWriteRate) {
         ModelPricing pricing = new ModelPricing();
         pricing.setProvider(provider);
         pricing.setModel(model);
         pricing.setInputRate(new BigDecimal(inputRate));
         pricing.setOutputRate(new BigDecimal(outputRate));
+        pricing.setCacheReadRate(cacheReadRate != null ? new BigDecimal(cacheReadRate) : null);
+        pricing.setCacheWriteRate(cacheWriteRate != null ? new BigDecimal(cacheWriteRate) : null);
         pricing.setFixedCost(BigDecimal.ZERO);
         when(pricingRepository.findCurrentPricing(provider, model)).thenReturn(Optional.of(pricing));
     }
@@ -297,6 +305,237 @@ class ModelPricingServiceCacheAwareBillingTest {
                     breakdown(20000, 1000, 8000, 10000, 0, 0));
 
             assertThat(cost).isEqualByComparingTo(new BigDecimal(expected));
+        }
+    }
+
+    /**
+     * V491: a cache token is billed at the MODEL's own price, not at a per-family
+     * constant. The five constants were a 2024-era approximation; measured against the
+     * production catalog, 195 of the 239 models carrying a feed cache price were billed
+     * at the wrong one. The family multiplier survives only as the fallback for a model
+     * whose cache price is unknown.
+     */
+    @Nested
+    @DisplayName("Per-model cache rates (V491)")
+    class PerModelCacheRates {
+
+        @Test
+        @DisplayName("anthropic: a model whose cache read is cheaper than the family constant is billed at ITS price, not 0.1x input")
+        void anthropicModelCacheReadRateWinsOverTheFamilyMultiplier() {
+            // claude-fable-5-1 real prices: input 10, cache read 0.25 (= 0.025x, not 0.1x).
+            mockPricing("anthropic", "claude-fable-5-1", "10.0", "50.0", "0.25", "12.5");
+
+            BigDecimal cost = zeroMarginService.calculateCost("anthropic", "claude-fable-5-1",
+                    breakdown(2_000, 5_000, 20_000, 2_000_000, 0, 0));
+
+            // 2000*10 + 20000*12.5 + 2000000*0.25 + 5000*50
+            // = 20k + 250k + 500k + 250k = 1,020,000 / 1000 = 1020 credits.
+            assertThat(cost).isEqualByComparingTo(new BigDecimal("1020"));
+        }
+
+        @Test
+        @DisplayName("anthropic: the same turn on the family multiplier costs 2520 - the fix is a 2.47x cut, not a rounding difference")
+        void anthropicFamilyMultiplierOverBilledTheSameTurn() {
+            mockPricing("anthropic", "claude-fable-5-1", "10.0", "50.0");
+
+            BigDecimal legacy = zeroMarginService.calculateCost("anthropic", "claude-fable-5-1",
+                    breakdown(2_000, 5_000, 20_000, 2_000_000, 0, 0));
+
+            // 2000*10 + 20000*(10*1.25) + 2000000*(10*0.1) + 5000*50 = 2,520,000 / 1000.
+            assertThat(legacy).isEqualByComparingTo(new BigDecimal("2520"));
+        }
+
+        @Test
+        @DisplayName("openai: cached prompt subset billed at the model's own cache price instead of the 0.5x family constant")
+        void openAiCachedSubsetUsesTheModelRate() {
+            // gpt-5.6-sol real prices: input 4.0, cached 0.4 (= 0.1x, not the 0.5x constant).
+            mockPricing("openai", "gpt-5.6-sol", "4.0", "20.0", "0.4", null);
+
+            BigDecimal cost = zeroMarginService.calculateCost("openai", "gpt-5.6-sol",
+                    breakdown(1_000_000, 10_000, 0, 0, 900_000, 0));
+
+            // 100000*4 + 900000*0.4 + 10000*20 = 400k + 360k + 200k = 960,000 / 1000.
+            assertThat(cost).isEqualByComparingTo(new BigDecimal("960"));
+        }
+
+        // These two used qwen/moonshot/minimax as the example of a family this service
+        // does not know. They stopped being that on 2026-09-17: they report the OpenAI
+        // usage shape, so they were moved into the OPENAI family and their cached subset
+        // is now discounted 0.5x rather than billed at full input rate. That membership is
+        // pinned in ModelPricingServiceTest.OpenAICompatibleCacheBilling.
+        //
+        // The property below is unchanged and still worth holding, so it keeps its shape
+        // and takes a vendor that really has no family: whatever the platform adds next,
+        // before anyone has classified it.
+        @Test
+        @DisplayName("a family this service does not know still honours a cache price the catalogue publishes")
+        void unknownFamilyHonoursAKnownCacheRate() {
+            mockPricing("some-new-vendor", "its-model", "0.6", "2.5", "0.06", null);
+
+            BigDecimal cost = zeroMarginService.calculateCost("some-new-vendor", "its-model",
+                    breakdown(1_000_000, 10_000, 0, 0, 900_000, 0));
+
+            // 100000*0.6 + 900000*0.06 + 10000*2.5 = 60k + 54k + 25k = 139,000 / 1000.
+            assertThat(cost).isEqualByComparingTo(new BigDecimal("139"));
+        }
+
+        @Test
+        @DisplayName("a family this service does not know, with NO cache price, keeps billing its cached subset at full input rate (pre-V491 behaviour)")
+        void unknownFamilyWithoutARateIsUnchanged() {
+            // No family means no discount to guess with. Guessing one would hand a
+            // reduction to a vendor nobody has checked reports a cached subset at all.
+            mockPricing("some-new-vendor", "its-model", "0.6", "2.5");
+
+            BigDecimal cost = zeroMarginService.calculateCost("some-new-vendor", "its-model",
+                    breakdown(1_000_000, 10_000, 0, 0, 900_000, 0));
+
+            // 1000000*0.6 + 10000*2.5 = 600k + 25k = 625,000 / 1000.
+            assertThat(cost).isEqualByComparingTo(new BigDecimal("625"));
+        }
+
+        @Test
+        @DisplayName("moonshot is no longer that example: it reads as OpenAI, so its cached subset is discounted")
+        void moonshotNowReadsAsAnOpenAiFamily() {
+            // The regression this pins is the one that actually broke: a test using
+            // moonshot to mean "unknown" changed meaning the day moonshot got a family,
+            // and said so only in CI. Naming the membership here makes the next such move
+            // fail on the sentence that is wrong rather than on an unrelated figure.
+            mockPricing("moonshot", "kimi-k2.6", "0.6", "2.5");
+
+            BigDecimal cost = zeroMarginService.calculateCost("moonshot", "kimi-k2.6",
+                    breakdown(1_000_000, 10_000, 0, 0, 900_000, 0));
+
+            // 100000*0.6 + 900000*(0.5*0.6) + 10000*2.5 = 60k + 270k + 25k = 355,000 / 1000.
+            assertThat(cost).isEqualByComparingTo(new BigDecimal("355"));
+        }
+
+        @Test
+        @DisplayName("gemini: cached content billed at the model rate, whichever of the two fields the reporter used")
+        void geminiCachedContentUsesTheModelRate() {
+            mockPricing("google", "gemini-3-pro-preview", "2.0", "12.0", "0.2", null);
+
+            BigDecimal viaCached = zeroMarginService.calculateCost("google", "gemini-3-pro-preview",
+                    breakdown(1_000_000, 1_000, 0, 0, 800_000, 0));
+            BigDecimal viaCacheRead = zeroMarginService.calculateCost("google", "gemini-3-pro-preview",
+                    breakdown(1_000_000, 1_000, 0, 800_000, 0, 0));
+
+            // 200000*2 + 800000*0.2 + 1000*12 = 400k + 160k + 12k = 572,000 / 1000.
+            assertThat(viaCached).isEqualByComparingTo(new BigDecimal("572"));
+            assertThat(viaCacheRead).isEqualByComparingTo(viaCached);
+        }
+
+        @Test
+        @DisplayName("claude-code: the bridge's inclusive prompt total is still stripped before the model rates apply")
+        void anthropicCliStillStripsTheInclusivePrompt() {
+            mockPricing("claude-code", "claude-fable-5-1", "10.0", "50.0", "0.25", "12.5");
+
+            BigDecimal cost = zeroMarginService.calculateCost("claude-code", "claude-fable-5-1",
+                    breakdown(2_022_000, 5_000, 20_000, 2_000_000, 0, 0));
+
+            // The same turn as the anthropic case, reported inclusively: identical bill.
+            assertThat(cost).isEqualByComparingTo(new BigDecimal("1020"));
+        }
+
+        @Test
+        @DisplayName("a zero stored cache rate means UNKNOWN, never free - it falls back to the family multiplier")
+        void nonPositiveStoredRateFallsBackInsteadOfBillingNothing() {
+            mockPricing("anthropic", "claude-fable-5-1", "10.0", "50.0", "0", "0");
+
+            BigDecimal cost = zeroMarginService.calculateCost("anthropic", "claude-fable-5-1",
+                    breakdown(2_000, 5_000, 20_000, 2_000_000, 0, 0));
+
+            // Falls back to 1.25x / 0.1x - the pre-V491 figure, not a free cache.
+            assertThat(cost).isEqualByComparingTo(new BigDecimal("2520"));
+        }
+
+        @Test
+        @DisplayName("deepseek: the model's own cache price wins over the 0.1x family constant, like every other family")
+        void deepSeekCachedSubsetUsesTheModelRate() {
+            // deepseek-v4-pro really reads cache at 0.044 / 1.32 = 0.033x, a third of the
+            // family constant. Listing this family explicitly because it is the one whose
+            // fallback happens to be closest to the truth, which is how it stays untested.
+            mockPricing("deepseek", "deepseek-v4-pro", "1.32", "3.96", "0.044", null);
+
+            BigDecimal cost = zeroMarginService.calculateCost("deepseek", "deepseek-v4-pro",
+                    breakdown(1_000_000, 10_000, 0, 0, 900_000, 0));
+
+            // 100000*1.32 + 900000*0.044 + 10000*3.96 = 132k + 39.6k + 39.6k = 211,200 / 1000.
+            assertThat(cost).isEqualByComparingTo(new BigDecimal("211.2"));
+        }
+
+        @Test
+        @DisplayName("the code default is 1.333333 = 25% per request - the one margin copy that no config file pins")
+        void codeDefaultMultiplierIsTheDeclaredMargin() {
+            // application.yml and values-prod.yaml are both pinned by EconomicsConfigPinTest.
+            // The Java constant is the third copy and the one that decides the bill if a
+            // deployment ever loses its configuration, so it is pinned here rather than
+            // nowhere. Read through the public accessor, not by reflection: what matters is
+            // the value the service would actually bill with.
+            ModelPricingService defaulted = new ModelPricingService(pricingRepository, null);
+
+            assertThat(defaulted.getCloudLlmBillingMultiplier()).isEqualByComparingTo("1.333333");
+        }
+
+        @Test
+        @DisplayName("the @Value default and the Java constant are ONE spelling, so a margin change cannot move only one")
+        void propertyDefaultAndCodeDefaultCannotDiverge() {
+            // The defect this closes, found by a sweep and not by a test. The margin had
+            // TWO defaults in this file: the constant above, and a separate literal inside
+            // the constructor's @Value. The test above resolves the constant by passing
+            // null, so it never reads the annotation - which means moving the margin could
+            // (and did) update the constant while the PROPERTY default went on charging the
+            // old rate wherever configuration was absent.
+            //
+            // Reading the annotation is the only way to see it: a Spring context test would
+            // bind application.yml and never exercise the default at all.
+            // Selected by @Autowired, not by parameter count: the service carries several
+            // convenience overloads for tests, and counting parameters picked whichever one
+            // happened to have that arity. Adding an unannotated 7-arg overload was enough
+            // to make this test read the wrong constructor and report a lost @Value.
+            java.lang.reflect.Constructor<?> injected = java.util.Arrays
+                    .stream(ModelPricingService.class.getDeclaredConstructors())
+                    .filter(c -> c.isAnnotationPresent(
+                            org.springframework.beans.factory.annotation.Autowired.class))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("the injected constructor has moved"));
+
+            String expression = java.util.Arrays.stream(injected.getParameterAnnotations()[1])
+                    .filter(a -> a instanceof org.springframework.beans.factory.annotation.Value)
+                    .map(a -> ((org.springframework.beans.factory.annotation.Value) a).value())
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("the margin parameter lost its @Value"));
+
+            assertThat(expression)
+                    .as("the property default must be the same spelling as the code default")
+                    .isEqualTo("${billing.llm.cloud-multiplier:"
+                            + ModelPricingService.DEFAULT_CLOUD_LLM_BILLING_MULTIPLIER_VALUE + "}");
+
+            // Same contract for the per-provider overrides, which are a margin decision
+            // too. Found by scanning rather than by parameter index: counting positions is
+            // what made this test read the wrong constructor when an overload was added,
+            // and it would silently stop checking anything if a parameter moved again.
+            java.util.List<String> valueExpressions = java.util.Arrays.stream(injected.getParameterAnnotations())
+                    .flatMap(java.util.Arrays::stream)
+                    .filter(a -> a instanceof org.springframework.beans.factory.annotation.Value)
+                    .map(a -> ((org.springframework.beans.factory.annotation.Value) a).value())
+                    .toList();
+
+            assertThat(valueExpressions)
+                    .as("the per-provider override must bind with the shared code default, not a blank one")
+                    .contains("${billing.llm.provider-multipliers:"
+                            + ModelPricingService.DEFAULT_PROVIDER_MULTIPLIERS_VALUE + "}");
+        }
+
+        @Test
+        @DisplayName("the cloud multiplier still applies exactly once, on top of the model-rate cost")
+        void cloudMultiplierStillAppliesOnceOnTop() {
+            mockPricing("anthropic", "claude-fable-5-1", "10.0", "50.0", "0.25", "12.5");
+            ModelPricingService margined = new ModelPricingService(pricingRepository, new BigDecimal("1.11"));
+
+            BigDecimal cost = margined.calculateCost("anthropic", "claude-fable-5-1",
+                    breakdown(2_000, 5_000, 20_000, 2_000_000, 0, 0));
+
+            assertThat(cost).isEqualByComparingTo(new BigDecimal("1132.200000"));
         }
     }
 }

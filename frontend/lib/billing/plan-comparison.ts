@@ -36,8 +36,11 @@ export type ComparisonPlanId = (typeof COMPARISON_PLAN_IDS)[number];
  * A dimension every plan scales along. The key lists are ordered cheapest-first
  * for readability only; membership is what selects a plan's cell.
  */
-const DIMENSIONS: ReadonlyArray<{ id: string; keys: readonly string[] }> = [
+const DIMENSIONS: ReadonlyArray<{ id: string; keys: readonly string[]; fallback?: string }> = [
   { id: 'credits', keys: ['creditsFree', 'creditsDynamic', 'creditsCustom'] },
+  // Paid plans hold no separate pot because their credits already fund agents;
+  // the fallback says so instead of rendering a "not included" cross.
+  { id: 'aiCredits', keys: ['aiCreditsFree'], fallback: 'aiCreditsIncluded' },
   { id: 'nodes', keys: ['nodesCore', 'nodesPublishing', 'nodesAll'] },
   { id: 'concurrent', keys: ['concurrent1', 'concurrent5', 'concurrent20', 'concurrent50', 'concurrentUnlimited'] },
   { id: 'storage', keys: ['storage100mb', 'storage1gb', 'storage10gb', 'storage100gb', 'storage1tb'] },
@@ -58,7 +61,7 @@ const DIMENSIONS: ReadonlyArray<{ id: string; keys: readonly string[] }> = [
 const SECTIONS: ReadonlyArray<{ id: string; dimensions: readonly string[]; flags: readonly string[] }> = [
   {
     id: 'usage',
-    dimensions: ['credits', 'nodes', 'concurrent', 'storage', 'logs'],
+    dimensions: ['credits', 'aiCredits', 'nodes', 'concurrent', 'storage', 'logs'],
     flags: ['priorityExecution', 'overageProtection'],
   },
   {
@@ -90,6 +93,18 @@ export interface ScaleRow {
   id: string;
   /** planId -> the feature key this plan carries for the dimension, or null. */
   cells: Record<ComparisonPlanId, string | null>;
+  /**
+   * What a plan with NO key for this dimension should read, as
+   * `pricing.compare.values.<fallbackValueKey>`. Absent = the cell keeps the
+   * default "not included" cross.
+   *
+   * <p>Exists because a missing cell does not always mean "you don't get this".
+   * The AI allowance is the case: only Free has a separate pot, and the paid plans
+   * have none precisely because their normal credits already fund agents. A cross
+   * there would tell a paying visitor they cannot run an agent, which is the
+   * opposite of the truth.
+   */
+  fallbackValueKey?: string;
 }
 
 /** A capability: each cell says whether the plan includes it. */
@@ -112,13 +127,13 @@ function keysOf(planId: ComparisonPlanId): string[] {
   return PLAN_FEATURE_KEYS[planId] ?? [];
 }
 
-function scaleRow(dimensionId: string, keys: readonly string[]): ScaleRow {
+function scaleRow(dimensionId: string, keys: readonly string[], fallbackValueKey?: string): ScaleRow {
   const cells = {} as Record<ComparisonPlanId, string | null>;
   for (const planId of COMPARISON_PLAN_IDS) {
     const owned = keysOf(planId);
     cells[planId] = keys.find((key) => owned.includes(key)) ?? null;
   }
-  return { kind: 'scale', id: dimensionId, cells };
+  return { kind: 'scale', id: dimensionId, cells, fallbackValueKey };
 }
 
 function flagRow(featureKey: string): FlagRow {
@@ -162,7 +177,7 @@ export function buildPlanComparison(): ComparisonSection[] {
       const dimension = DIMENSIONS.find((d) => d.id === dimensionId);
       // A section naming a dimension that no longer exists renders one row fewer
       // rather than throwing inside a dialog the reader opened to compare prices.
-      if (dimension) rows.push(scaleRow(dimension.id, dimension.keys));
+      if (dimension) rows.push(scaleRow(dimension.id, dimension.keys, dimension.fallback));
     }
     for (const key of section.flags) rows.push(flagRow(key));
     return { id: section.id, rows };

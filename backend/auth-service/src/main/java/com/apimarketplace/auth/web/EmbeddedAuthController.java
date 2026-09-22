@@ -30,6 +30,8 @@ import java.util.Set;
  *   POST /api/auth/login     - Authenticate and get tokens
  *   POST /api/auth/refresh   - Refresh access token
  *   POST /api/auth/logout    - Revoke refresh token
+ *   POST /api/auth/forgot-password - Ask for a reset link (PUBLIC, uniform answer)
+ *   POST /api/auth/reset-password  - Redeem a reset token (PUBLIC, the token IS the auth)
  *   GET  /api/auth/openid-configuration - OIDC discovery (minimal)
  */
 @RestController
@@ -43,6 +45,27 @@ public class EmbeddedAuthController {
     private final PasswordAuthService passwordAuthService;
     private final CeInstallStateService installStateService;
     private final OrganizationMemberService organizationMemberService;
+    /**
+     * Required, and an earlier version of this field was {@code @Nullable} on a
+     * belief worth recording because it is wrong.
+     *
+     * <p>The reasoning was that an install with no {@code JavaMailSender} would
+     * otherwise fail to create this controller and take {@code register},
+     * {@code login}, {@code refresh} and {@code logout} down with it. Measured
+     * with an {@code ApplicationContextRunner}: the context dies one bean
+     * EARLIER, on {@code passwordResetMailer}, because that is an eagerly
+     * instantiated {@code @Service} whose {@code JavaMailSender} is itself
+     * required. Making this parameter optional therefore protected nothing, and
+     * the 503 branch it fed was unreachable in every deployment: this controller
+     * and {@link PasswordResetService} carry the SAME
+     * {@code @ConditionalOnProperty(auth.mode=embedded)}, so if one exists the
+     * other does.
+     *
+     * <p>Which is the same unreachable-503-that-reads-as-a-safeguard this change
+     * removed once already. Protecting sign-in from a missing mail sender is a
+     * real goal, and it would have to start at the mailer.
+     */
+    private final com.apimarketplace.auth.service.PasswordResetService passwordResetService;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.auth.audit.AuditLogger auditLogger;
@@ -55,10 +78,12 @@ public class EmbeddedAuthController {
 
     public EmbeddedAuthController(PasswordAuthService passwordAuthService,
                                   CeInstallStateService installStateService,
-                                  OrganizationMemberService organizationMemberService) {
+                                  OrganizationMemberService organizationMemberService,
+                                  com.apimarketplace.auth.service.PasswordResetService passwordResetService) {
         this.passwordAuthService = passwordAuthService;
         this.installStateService = installStateService;
         this.organizationMemberService = organizationMemberService;
+        this.passwordResetService = passwordResetService;
     }
 
     /**
@@ -342,6 +367,105 @@ public class EmbeddedAuthController {
         error.put("error", true);
         error.put("message", message);
         return ResponseEntity.status(status).body(error);
+    }
+
+    /**
+     * POST /api/auth/forgot-password
+     * Body: { "email": "..." }
+     *
+     * <p>PUBLIC: someone who has forgotten their password cannot authenticate.
+     *
+     * <p>Answers the SAME body whether or not the address is known, whether or
+     * not it has a local password, whether the rate limit bit, and whether the
+     * SMTP handoff failed. Any difference between those cases turns this form
+     * into an account enumeration oracle, which is why the service returns void
+     * and there is nothing here to branch on. That includes an install with no
+     * working mail server: it cannot be detected here without lying (see
+     * PasswordResetService), and the operator learns about it from the ERROR log
+     * that the failed delivery writes.
+     */
+    @PostMapping("/forgot-password")
+    public ResponseEntity<Map<String, Object>> forgotPassword(
+            @RequestBody Map<String, String> body,
+            HttpServletRequest request) {
+
+        String email = body.get("email");
+        boolean failed = false;
+        try {
+            passwordResetService.requestReset(email, getClientIp(request));
+        } catch (RuntimeException e) {
+            // Never leak which address caused a failure. Logged, then folded into
+            // the same answer as every other outcome.
+            logger.error("Password reset request failed", e);
+            failed = true;
+        }
+
+        if (auditLogger != null) {
+            // The audit RESULT is honest even though the response cannot be: an
+            // operator reading these rows must not see a request that died on a
+            // dead database recorded as a success. It names no address, so it
+            // discloses nothing the response does not.
+            var event = auditLogger.eventFromRequest(
+                    com.apimarketplace.auth.audit.AuditEventTypes.PASSWORD_RESET_REQUESTED, request);
+            if (failed) {
+                event.warn().failure("reset_request_failed").write();
+            } else {
+                event.success().write();
+            }
+        }
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", true);
+        response.put("message", "If that address has an account, a reset link is on its way. "
+                + "The link works once and expires in an hour.");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * POST /api/auth/reset-password
+     * Body: { "token": "...", "newPassword": "..." }
+     *
+     * <p>PUBLIC, for the same reason. The token IS the authorisation.
+     *
+     * <p>A rejected token and a too-short password are told apart on purpose:
+     * both are the requester's own input, neither reveals anything about another
+     * account, and a user who typed a 6-character password needs to know that
+     * rather than be told their link is broken.
+     */
+    @PostMapping("/reset-password")
+    public ResponseEntity<Map<String, Object>> resetPassword(
+            @RequestBody Map<String, String> body,
+            HttpServletRequest request) {
+        try {
+            Long userId = passwordResetService.resetPassword(body.get("token"), body.get("newPassword"));
+
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("success", true);
+            response.put("message", "Password updated. Please sign in with your new password.");
+            if (auditLogger != null) {
+                auditLogger.eventFromRequest(
+                                com.apimarketplace.auth.audit.AuditEventTypes.PASSWORD_RESET_COMPLETED, request)
+                        .user(userId).success().write();
+            }
+            return ResponseEntity.ok(response);
+
+        } catch (com.apimarketplace.auth.service.PasswordResetService.InvalidTokenException e) {
+            if (auditLogger != null) {
+                auditLogger.eventFromRequest(
+                                com.apimarketplace.auth.audit.AuditEventTypes.PASSWORD_RESET_FAILED, request)
+                        .warn().failure("invalid_or_expired_token").write();
+            }
+            return errorResponse(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (IllegalArgumentException e) {
+            // The password rule, and only that: a missing or suspended account is
+            // converted to InvalidTokenException inside PasswordResetService, so
+            // it lands in the branch above with the uniform message rather than
+            // here. That is what keeps this 400 about the requester's own input.
+            return errorResponse(HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (Exception e) {
+            logger.error("Password reset failed", e);
+            return errorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Password reset failed");
+        }
     }
 
     private String getClientIp(HttpServletRequest request) {

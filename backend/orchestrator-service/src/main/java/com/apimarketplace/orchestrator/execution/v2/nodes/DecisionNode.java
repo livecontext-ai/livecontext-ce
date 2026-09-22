@@ -59,14 +59,12 @@ public class DecisionNode extends BaseNode {
         // NOTE: Do NOT cache evaluation in instance field - race condition with parallel items!
         // Instead, store result in output for getNextNodes() to extract.
 
-        // Build resolved_params snapshot for inspector visibility (resolved values)
-        Map<String, Object> resolvedParams = new LinkedHashMap<>();
-        for (int i = 0; i < branches.size(); i++) {
-            ConditionalBranch branch = branches.get(i);
-            String key = branch.type() + (i > 0 && "elsif".equals(branch.type()) ? "_" + (i - 1) : "");
-            String condition = branch.condition() != null ? branch.condition() : "";
-            resolvedParams.put(key, resolveTemplateString(condition, context));
-        }
+        // Built from the evaluation that just decided, never from a second resolution
+        // pass. resolveTemplateString renders an absent value as an empty string while
+        // the evaluator renders it as null, so the old code showed " == null" in Params
+        // beside "null == null" in Output for one expression in one execution.
+        Map<String, Object> resolvedParams =
+            BranchEvaluationReport.resolvedParams(evaluation.evaluationDetails);
         resolvedParams.put("branches", branches.size());
 
         // Build output with evaluation details
@@ -83,6 +81,9 @@ public class DecisionNode extends BaseNode {
         // Add condition info for the selected branch (for persistence)
         if (evaluation.selectedBranch != null) {
             output.put("condition_expression", evaluation.selectedBranch.condition());
+            // Read by StepDataPersistenceService into the inspector's "Resolved" column.
+            // No node ever wrote it, so that column was empty for every decision ever run.
+            output.put("condition_resolved", evaluation.selectedResolvedCondition);
             output.put("condition_result", true); // Selected branch condition was true
         } else {
             output.put("condition_result", false); // No branch matched
@@ -103,34 +104,52 @@ public class DecisionNode extends BaseNode {
      * Evaluate all branches and return evaluation result.
      */
     private DecisionEvaluation evaluateBranches(Map<String, Object> evalContext) {
+        // Pass 1: evaluate EVERY branch, including the ones after the winner. That is
+        // deliberate and free: "elseif_0 was also true but if ran first" is the answer
+        // to the only question anyone opens this panel with.
+        List<BranchEvaluationResult> results = new ArrayList<>(branches.size());
         ConditionalBranch selectedBranch = null;
         int selectedIndex = -1;
-        List<String> skippedTypes = new ArrayList<>();
-        List<Map<String, Object>> evaluationDetails = new ArrayList<>();
 
         for (int i = 0; i < branches.size(); i++) {
             ConditionalBranch branch = branches.get(i);
-            BranchEvaluationResult evalResult = branch.evaluateConditionWithDetails(evalContext, templateEngine, templateAdapter);
+            BranchEvaluationResult evalResult =
+                branch.evaluateConditionWithDetails(evalContext, templateEngine, templateAdapter);
+            results.add(evalResult);
 
-            logger.debug("Branch[{}] '{}': condition='{}' resolved='{}' → {}",
+            logger.debug("Branch[{}] '{}': condition='{}' resolved='{}' -> {}",
                 i, branch.type(), branch.condition(), evalResult.resolvedExpression(), evalResult.result());
 
-            // Record evaluation with resolved expression for UI display
-            Map<String, Object> evalDetail = new HashMap<>();
-            evalDetail.put("branch_type", branch.type());
-            evalDetail.put("condition", branch.condition() != null ? branch.condition() : "");
-            evalDetail.put("resolved_condition", evalResult.resolvedExpression());
-            evalDetail.put("result", evalResult.result());
-            evalDetail.put("index", i);
-            if (evalResult.errorMessage() != null) {
-                evalDetail.put("error", evalResult.errorMessage());
-            }
-            evaluationDetails.add(evalDetail);
-
-            // First matching branch wins
             if (evalResult.result() && selectedBranch == null) {
                 selectedBranch = branch;
                 selectedIndex = i;
+            }
+        }
+
+        // Pass 2: report, now that the winner is known. Reporting inside pass 1 is why
+        // no entry could carry `selected`, which left a skipped else - result true by
+        // definition - indistinguishable from the matched if beside it.
+        List<String> skippedTypes = new ArrayList<>();
+        List<Map<String, Object>> evaluationDetails = new ArrayList<>(branches.size());
+        String selectedResolvedCondition = null;
+
+        for (int i = 0; i < branches.size(); i++) {
+            ConditionalBranch branch = branches.get(i);
+            BranchEvaluationResult evalResult = results.get(i);
+            boolean selected = i == selectedIndex;
+            String port = getPortForBranchIndex(i);
+
+            evaluationDetails.add(branch.hasCondition()
+                ? BranchEvaluationReport.evaluated(
+                    i, port, branch.condition(), evalResult.resolvedExpression(),
+                    evalResult.result(), selected, evalResult.errorMessage(),
+                    evalResult.unresolvedReferences())
+                : BranchEvaluationReport.fallback(i, port, selected));
+
+            if (selected) {
+                selectedResolvedCondition = branch.hasCondition()
+                    ? evalResult.resolvedExpression()
+                    : "(no condition)";
             } else {
                 skippedTypes.add(branch.type());
             }
@@ -141,7 +160,8 @@ public class DecisionNode extends BaseNode {
             selectedIndex,
             selectedBranch != null ? selectedBranch.type() : null,
             skippedTypes,
-            evaluationDetails
+            evaluationDetails,
+            selectedResolvedCondition
         );
     }
 
@@ -151,8 +171,20 @@ public class DecisionNode extends BaseNode {
     public record BranchEvaluationResult(
         boolean result,
         String resolvedExpression,
-        String errorMessage
-    ) {}
+        String errorMessage,
+        List<TemplateEngine.UnresolvedReference> unresolvedReferences
+    ) {
+        public BranchEvaluationResult {
+            unresolvedReferences = unresolvedReferences == null
+                ? List.of()
+                : List.copyOf(unresolvedReferences);
+        }
+
+        /** Previous arity, for a result built without looking at references. */
+        public BranchEvaluationResult(boolean result, String resolvedExpression, String errorMessage) {
+            this(result, resolvedExpression, errorMessage, List.of());
+        }
+    }
 
     @Override
     public List<ExecutionNode> getNextNodes(NodeExecutionResult result) {
@@ -373,15 +405,18 @@ public class DecisionNode extends BaseNode {
         final String selectedBranchType;
         final List<String> skippedBranchTypes;
         final List<Map<String, Object>> evaluationDetails;
+        final String selectedResolvedCondition;
 
         DecisionEvaluation(ConditionalBranch selectedBranch, int selectedBranchIndex,
                           String selectedBranchType, List<String> skippedBranchTypes,
-                          List<Map<String, Object>> evaluationDetails) {
+                          List<Map<String, Object>> evaluationDetails,
+                          String selectedResolvedCondition) {
             this.selectedBranch = selectedBranch;
             this.selectedBranchIndex = selectedBranchIndex;
             this.selectedBranchType = selectedBranchType;
             this.skippedBranchTypes = skippedBranchTypes;
             this.evaluationDetails = evaluationDetails;
+            this.selectedResolvedCondition = selectedResolvedCondition;
         }
     }
 
@@ -443,7 +478,8 @@ public class DecisionNode extends BaseNode {
                 return new BranchEvaluationResult(
                     evalResult.result(),
                     evalResult.resolvedExpression(),
-                    evalResult.errorMessage()
+                    evalResult.errorMessage(),
+                    evalResult.unresolvedReferences()
                 );
             } catch (Exception e) {
                 logger.error("Condition evaluation failed: condition={}, error={}",
@@ -458,6 +494,15 @@ public class DecisionNode extends BaseNode {
 
         public String condition() {
             return condition;
+        }
+
+        /**
+         * Whether there is anything to evaluate. An else, or a branch left blank,
+         * always matches: reporting that as {@code result: true} made it look like a
+         * condition that had been tested and passed.
+         */
+        public boolean hasCondition() {
+            return !"else".equals(type) && condition != null && !condition.isBlank();
         }
 
         public List<ExecutionNode> nodes() {

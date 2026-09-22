@@ -65,6 +65,26 @@ public class User implements UserDetails {
     private LocalDateTime lastLoginAt;
 
     /**
+     * Instant of the most recent AUTHENTICATION, from the OIDC {@code auth_time} claim.
+     *
+     * <p>Distinct from {@link #lastLoginAt}, which in practice means "last seen": it is
+     * rewritten on gateway resolution whenever it is more than a few minutes old, so it
+     * moves while somebody simply keeps making requests. This one moves only when the
+     * person actually signs in again, because {@code auth_time} is constant across every
+     * refresh of the same session.
+     *
+     * <p>Monotonic on purpose. It is only ever advanced, so two live sessions for the
+     * same person (laptop and phone) cannot make it flap and count a login on every
+     * alternation the way comparing session ids would.
+     *
+     * <p>NULL means no token carrying {@code auth_time} has been seen for this account.
+     * Self-hosted embedded tokens and API keys never carry one and never count a login
+     * through this path; their real sign-in is recorded where it happens.
+     */
+    @Column(name = "last_authenticated_at")
+    private LocalDateTime lastAuthenticatedAt;
+
+    /**
      * PR11d-b - timestamp of the most-recent setDefaultOrganization flip.
      * Used by OrganizationController to rate-limit rapid workspace flips
      * that could bypass per-member quota caps (audit B 2026-05-12).
@@ -252,6 +272,14 @@ public class User implements UserDetails {
 
     public void setLastLoginAt(LocalDateTime lastLoginAt) {
         this.lastLoginAt = lastLoginAt;
+    }
+
+    public LocalDateTime getLastAuthenticatedAt() {
+        return lastAuthenticatedAt;
+    }
+
+    public void setLastAuthenticatedAt(LocalDateTime lastAuthenticatedAt) {
+        this.lastAuthenticatedAt = lastAuthenticatedAt;
     }
 
     public LocalDateTime getLastDefaultFlipAt() {

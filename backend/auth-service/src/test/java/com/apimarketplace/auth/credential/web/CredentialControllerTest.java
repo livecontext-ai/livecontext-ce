@@ -18,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -66,6 +67,74 @@ class CredentialControllerTest {
         assertThat(response.getStatusCode().value()).isEqualTo(409);
         verify(tenantResolver).validate("tenant-1");
         verify(credentialService).clearDefault("tenant-1", null, 42L);
+    }
+
+    @Test
+    @DisplayName("llm-mode: switches the route and returns the credential with its mode visible and its secrets stripped")
+    void llmModeSwitchesTheRoute() {
+        Map<String, Object> body = Map.of("mode", "proxy");
+        when(tenantResolver.resolveOrNull(request)).thenReturn("tenant-1");
+        when(tenantResolver.resolveOrgId(request)).thenReturn("org-1");
+        Credential switched = new Credential(
+                42L, "tenant-1", "org-1", "Anthropic", "llm_anthropic", CredentialType.API_Key,
+                CredentialEnvironment.Production, CredentialStatus.active, null,
+                Map.of("api_key", "sk-ant-secret", "mode", "proxy"),
+                List.of(), List.of(), "tenant-1", null, true, null,
+                Instant.parse("2026-09-17T10:00:00Z"), Instant.parse("2026-09-17T10:00:00Z"));
+        when(credentialService.setLlmKeyModeForScope(42L, "tenant-1", "org-1", "proxy"))
+                .thenReturn(Optional.of(switched));
+
+        ResponseEntity<?> response = controller.setLlmKeyMode(42L, request, body);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        Credential returned = (Credential) response.getBody();
+        // The switch is what the settings page reads back; the key never travels.
+        assertThat(returned.credentialData()).containsEntry("mode", "proxy");
+        assertThat(returned.credentialData()).doesNotContainKey("api_key");
+        verify(tenantResolver).validate("tenant-1");
+    }
+
+    @Test
+    @DisplayName("llm-mode: a mode outside no_proxy/proxy is 400, never written")
+    void llmModeRejectsUnknownMode() {
+        when(tenantResolver.resolveOrNull(request)).thenReturn("tenant-1");
+        when(tenantResolver.resolveOrgId(request)).thenReturn("org-1");
+
+        ResponseEntity<?> response = controller.setLlmKeyMode(42L, request, Map.of("mode", "sometimes"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        verify(credentialService, never()).setLlmKeyModeForScope(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("llm-mode: no active workspace is 400, and a non-string mode is 400 - nothing reaches the service")
+    void llmModeWorkspaceAndShapeGuards() {
+        when(tenantResolver.resolveOrNull(request)).thenReturn("tenant-1");
+        when(tenantResolver.resolveOrgId(request)).thenReturn(null);
+        assertThat(controller.setLlmKeyMode(42L, request, Map.of("mode", "proxy")).getStatusCode().value()).isEqualTo(400);
+
+        when(tenantResolver.resolveOrgId(request)).thenReturn("org-1");
+        Map<String, Object> shaped = new HashMap<>();
+        shaped.put("mode", Map.of("value", "proxy"));
+        assertThat(controller.setLlmKeyMode(42L, request, shaped).getStatusCode().value()).isEqualTo(400);
+        Map<String, Object> missing = new HashMap<>();
+        assertThat(controller.setLlmKeyMode(42L, request, missing).getStatusCode().value()).isEqualTo(400);
+
+        verify(credentialService, never()).setLlmKeyModeForScope(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("llm-mode: out of scope is 404, and a non-LLM credential is 400 (the service refuses it)")
+    void llmModeScopeAndKindGuards() {
+        when(tenantResolver.resolveOrNull(request)).thenReturn("tenant-1");
+        when(tenantResolver.resolveOrgId(request)).thenReturn("org-1");
+        when(credentialService.setLlmKeyModeForScope(42L, "tenant-1", "org-1", "no_proxy"))
+                .thenReturn(Optional.empty());
+        when(credentialService.setLlmKeyModeForScope(43L, "tenant-1", "org-1", "no_proxy"))
+                .thenThrow(new IllegalArgumentException("Only an LLM provider key has a route to switch"));
+
+        assertThat(controller.setLlmKeyMode(42L, request, Map.of("mode", "no_proxy")).getStatusCode().value()).isEqualTo(404);
+        assertThat(controller.setLlmKeyMode(43L, request, Map.of("mode", "no_proxy")).getStatusCode().value()).isEqualTo(400);
     }
 
     @Test

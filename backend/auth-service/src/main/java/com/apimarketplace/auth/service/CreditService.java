@@ -1,9 +1,11 @@
 package com.apimarketplace.auth.service;
 
 import com.apimarketplace.auth.domain.CreditLedgerEntry;
+import com.apimarketplace.auth.domain.Plan;
 import com.apimarketplace.auth.domain.Subscription;
 import com.apimarketplace.auth.repository.CreditLedgerRepository;
 import com.apimarketplace.auth.repository.SubscriptionRepository;
+import com.apimarketplace.common.credit.ModelTier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -20,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 @Service
 public class CreditService {
@@ -229,6 +232,26 @@ public class CreditService {
     private static final String WORKFLOW_CREDITS_ONLY_PLAN_CODE = "FREE";
 
     /**
+     * LLM source types the separate AI allowance may fund (V494) - "agents of every
+     * kind": the agent loop itself, a chat turn, and the auxiliary LLM calls a run
+     * makes on the user's behalf.
+     *
+     * <p>Deliberately excludes the flat-cost add-ons (web search/fetch, image
+     * generation, platform markup) and workflow nodes: the AI pot exists to let a
+     * visitor talk to an agent, and those keep their existing funding.
+     *
+     * <p>{@code CE_LLM_RELAY} is LLM work and is still excluded, which is the one
+     * omission worth stating: those tokens are forwarded on behalf of a SELF-HOSTED
+     * install through its cloud link, not typed by a visitor into this product. The
+     * allowance is an on-ramp for the hosted free tier, and letting a relay draw it
+     * would hand every linked install 100 credits a month of platform inference.
+     */
+    private static final java.util.Set<String> AI_ALLOWANCE_SOURCE_TYPES = java.util.Set.of(
+            "AGENT_EXECUTION", "CHAT_CONVERSATION", "CLASSIFY_EXECUTION",
+            "GUARDRAIL_EXECUTION", "COMPACTION_SUMMARY", "BROWSER_AGENT_EXECUTION",
+            "CLI_SESSION");
+
+    /**
      * True when the {@code sub} (monthly) bucket may fund a debit of
      * {@code sourceType}. Always true in unlimited mode (CE) and for non-FREE
      * plans, so this is a behavioural no-op everywhere except FREE-plan Cloud
@@ -255,13 +278,56 @@ public class CreditService {
     }
 
     /**
-     * Balance eligible to fund a debit of {@code sourceType}: the full two-bucket
-     * total when {@link #subBucketEligible} holds, otherwise the PAYG bucket alone.
+     * True when the separate AI allowance may fund this debit (V494). Three gates,
+     * all required:
+     * <ol>
+     *   <li>the source type is an LLM one ({@link #AI_ALLOWANCE_SOURCE_TYPES}),</li>
+     *   <li>the model is one a cloud admin opened to the free tier, and</li>
+     *   <li>the account actually holds an allowance.</li>
+     * </ol>
+     *
+     * <p>Gate 2 is what makes "only on the chosen models" real: the pot funds the
+     * curated list and nothing else, so a free account pointed at a frontier model
+     * still has to pay for it. It fails closed when the billing mirror has not caught
+     * up with a catalog edit.
+     *
+     * <p>No-op in unlimited mode (CE) and on any plan with no allowance configured,
+     * which is every paid plan - their agents keep drawing the normal wallet.
      */
-    private BigDecimal eligibleBalance(Subscription sub, String sourceType) {
-        return subBucketEligible(sub, sourceType)
+    private boolean aiAllowanceEligible(Subscription sub, String sourceType, String provider, String model) {
+        if (unlimited || sub == null) return false;
+        if (sourceType == null || !AI_ALLOWANCE_SOURCE_TYPES.contains(sourceType)) return false;
+        if (sub.getAiRemainingCredits().signum() <= 0) return false;
+        // Defence in depth: the pot is only spendable while the account's CURRENT plan
+        // grants one. Keeping the balance as the only condition made a single missed
+        // clear-on-plan-change route enough to fund a paying account's inference from a
+        // pot it should no longer hold - a money path resting entirely on every refill
+        // route firing. This check costs a field read and makes that class of bug inert.
+        Plan plan = sub.getPlan();
+        if (plan == null || plan.getIncludedAiCredits() == null || plan.getIncludedAiCredits() <= 0) {
+            return false;
+        }
+        return pricingService.isFreeTierModel(provider, model);
+    }
+
+    /**
+     * Balance eligible to fund a debit of {@code sourceType}: the full two-bucket total
+     * when {@link #subBucketEligible} holds, otherwise the PAYG bucket alone, PLUS the
+     * AI allowance when this debit is allowed to draw it (V494).
+     *
+     * <p>Gate and debit MUST both go through here, or a turn the pot would have paid for
+     * is refused up-front against a PAYG bucket that is empty. A model-blind overload
+     * used to exist beside this one for callers that did not know the model; it was
+     * removed once the last of them was threaded, precisely because "the caller that
+     * forgets the model gets the pre-V494 answer" is a silent wrong answer, not a default.
+     */
+    private BigDecimal eligibleBalance(Subscription sub, String sourceType, String provider, String model) {
+        BigDecimal base = subBucketEligible(sub, sourceType)
                 ? sub.getTotalBalance()
                 : sub.getPaygRemainingCredits();
+        return aiAllowanceEligible(sub, sourceType, provider, model)
+                ? base.add(sub.getAiRemainingCredits())
+                : base;
     }
 
     private static BigDecimal normalizeWebSearchCreditsPerSearch(BigDecimal configuredCost) {
@@ -295,6 +361,31 @@ public class CreditService {
                 markupEnabled, markupShadow, webSearchCreditsPerSearch, BigDecimal.ONE);
     }
 
+    /**
+     * Flat fee per turn on the tenant's own key (see {@link #consumeForOwnKeyTurn}).
+     * Field-injected and optional so the positional constructors the tests use stay
+     * unchanged; absent, an own-key turn is billed at the token cost (pre-V506).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private OwnKeyTurnPricing ownKeyTurnPricing;
+
+    /**
+     * Writes the rejected-consumption audit row in a transaction of its own, so a duplicate
+     * {@code source_id} (a retried turn on an empty wallet) cannot take the caller's transaction
+     * down with it.
+     *
+     * <p>Field-injected rather than added to the constructor because this class has four
+     * positional constructors that a few dozen test call-sites use, the same reason
+     * {@code ownKeyTurnPricing} above is field-injected. The constructor seeds a plain instance
+     * over the same ledger repository, and Spring's field injection then REPLACES it with the
+     * proxied bean, which is where {@code REQUIRES_NEW} actually comes from. So there is no null
+     * to guard and no second branch at the call site: under Spring the write is isolated, and in
+     * a unit test built through a positional constructor it goes straight to the mock the test
+     * already asserts against.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CreditRejectionAuditWriter rejectionAuditWriter;
+
     @org.springframework.beans.factory.annotation.Autowired
     public CreditService(SubscriptionRepository subscriptionRepository,
                          CreditLedgerRepository ledgerRepository,
@@ -311,6 +402,10 @@ public class CreditService {
         this.subscriptionRepository = subscriptionRepository;
         this.ledgerRepository = ledgerRepository;
         this.pricingService = pricingService;
+        // Replaced by the proxied bean under Spring (see the field). Seeded here so the class is
+        // never half-built: a positional constructor still writes its audit rows, to the same
+        // repository, just without the separate transaction that only a proxy can give it.
+        this.rejectionAuditWriter = new CreditRejectionAuditWriter(ledgerRepository);
         this.unlimited = unlimited;
         this.markupEnabled = markupEnabled;
         this.markupShadow = markupShadow;
@@ -366,6 +461,87 @@ public class CreditService {
                 usage.promptTokens(), usage.completionTokens(),
                 Math.max(usage.cachedTokens(), usage.cacheReadTokens()),
                 desc, /*allowNegative*/ false, /*executorUserId*/ userId);
+    }
+
+    /** Ledger {@code key_route} value for a turn that ran on the tenant's own provider key. */
+    public static final String KEY_ROUTE_OWN_KEY = "OWN_KEY";
+
+    /**
+     * Debit for ONE LLM turn that ran on the tenant's OWN provider key.
+     *
+     * <p>The provider bills the tokens to the user, so the platform charges a flat fee per
+     * turn keyed on the model's price band ({@link OwnKeyTurnPricing}) instead of the
+     * token rate: that is what closes the double charge a user on their own key used to
+     * pay. Three numbers are recorded, each with its own meaning:
+     * <ul>
+     *   <li>the ledger amount = the fee (what they owe the platform);</li>
+     *   <li>{@code provider_cost_credits} = the tokens at list price, the estimate of what
+     *       their provider bills them, shown next to the fee and never part of a balance;</li>
+     *   <li>the result's {@code consumptionCredits} = what the platform route would have
+     *       billed, so agent counters / budgets keep metering consumption on both routes.</li>
+     * </ul>
+     * Same idempotency as the platform route for a chat turn (one row per conversation).
+     * Without an {@link OwnKeyTurnPricing} bean (unit tests) the fee is the token cost,
+     * i.e. the pre-V506 behaviour.
+     */
+    @Transactional
+    public CreditConsumeResult consumeForOwnKeyTurn(Long userId, String sourceId,
+                                                     String provider, String model,
+                                                     LlmTokenBreakdown usage,
+                                                     String sourceType) {
+        boolean chat = "CHAT_CONVERSATION".equals(sourceType);
+        Long debitUserId = resolvePayer(userId);
+        if (chat && sourceId != null
+                && ledgerRepository.findFirstBySourceIdAndSourceType(sourceId, sourceType).isPresent()) {
+            log.debug("Own-key chat already debited for conversationId={}, skipping duplicate", sourceId);
+            return CreditConsumeResult.success(BigDecimal.ZERO, getBalance(debitUserId)).withConsumption(BigDecimal.ZERO);
+        }
+        BigDecimal consumption = pricingService.calculateCost(provider, model, usage);
+        BigDecimal providerCost = pricingService.providerCost(provider, model, usage);
+        ModelTier tier = pricingService.tierOf(provider, model);
+        // The flat fee prices a turn the provider billed the user for. A turn that reports no
+        // tokens at all (refused before the call, or a provider that returned nothing) had no
+        // such cost and is debited zero, which the token-rate path records as no row. In
+        // unlimited mode (CE, dedicated) nothing is priced: the row keeps the consumption
+        // figure, so the tracking column means the same thing on every row.
+        BigDecimal fee;
+        if (!hasUsage(usage)) {
+            fee = BigDecimal.ZERO;
+        } else if (unlimited || ownKeyTurnPricing == null) {
+            fee = consumption;
+        } else {
+            // Capped at what the platform route would have taken for the same turn. A flat
+            // fee prices the AVERAGE turn of its tier, and a quarter of the real turns on the
+            // two cheap tiers are shorter than their own fee (measured on the prod ledger,
+            // 2026-09-18, by scripts/billing/byok-fee-calibration.sql): without this, bringing
+            // your own key would cost MORE than not bringing it, on top of what the provider
+            // charges you. The cap costs almost nothing, since the turns it catches are the
+            // cheap ones by definition.
+            fee = ownKeyTurnPricing.creditsPerTurn(tier).min(consumption);
+        }
+        String desc = appendExecutorAudit(
+                String.format("%s/%s on the tenant's own key (%s tier): %d input + %d output tokens%s, flat %s credits",
+                        provider, model, tier.key(), usage.promptTokens(), usage.completionTokens(),
+                        cacheAuditSuffix(usage), fee.stripTrailingZeros().toPlainString()),
+                userId, debitUserId);
+        CreditConsumeResult result = deductCredits(debitUserId, fee, sourceType, sourceId, provider, model,
+                usage.promptTokens(), usage.completionTokens(),
+                Math.max(usage.cachedTokens(), usage.cacheReadTokens()),
+                desc, /*allowNegative*/ chat, /*executorUserId*/ userId,
+                // Stamped on the row this debit writes, whichever path writes it: the route
+                // it was billed under and the provider-side estimate shown next to the fee.
+                entry -> {
+                    entry.setKeyRoute(KEY_ROUTE_OWN_KEY);
+                    entry.setProviderCostCredits(providerCost);
+                });
+        return result.withConsumption(consumption);
+    }
+
+    /** Whether the turn moved any token at all, cache lines included. */
+    private static boolean hasUsage(LlmTokenBreakdown usage) {
+        return usage.promptTokens() > 0 || usage.completionTokens() > 0
+                || usage.cacheCreationTokens() > 0 || usage.cacheReadTokens() > 0
+                || usage.cachedTokens() > 0;
     }
 
     /**
@@ -788,18 +964,31 @@ public class CreditService {
      * frontend's "infinity" rendering does not need a special case.
      */
     @Transactional(readOnly = true)
+    /**
+     * Whether the monthly AI allowance may be spent on {@code (provider, model)} (V494).
+     *
+     * <p>Read by the balance endpoint so an LLM budget guard can be told what the pot is
+     * worth FOR THE MODEL IT IS RUNNING, rather than being handed the figure and left to
+     * assume. Mirrors the model half of {@link #aiAllowanceEligible}; the balance and
+     * source-type halves belong to the caller's own question.
+     */
+    public boolean isAiAllowanceSpendableOn(String provider, String model) {
+        if (unlimited) return false;
+        return pricingService.isFreeTierModel(provider, model);
+    }
+
     public BalanceBreakdown getBalanceBreakdown(Long userId) {
         if (unlimited) {
-            return new BalanceBreakdown(UNLIMITED_BALANCE, UNLIMITED_BALANCE, UNLIMITED_BALANCE, false, false);
+            return new BalanceBreakdown(UNLIMITED_BALANCE, UNLIMITED_BALANCE, UNLIMITED_BALANCE, BigDecimal.ZERO, false, false);
         }
         Long payerUserId = resolvePayer(userId);
         Subscription sub = resolveActiveSubscription(payerUserId);
         if (sub == null) {
-            return new BalanceBreakdown(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, false);
+            return new BalanceBreakdown(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, false);
         }
         BigDecimal subBal = sub.getRemainingCredits();
         BigDecimal paygBal = sub.getPaygRemainingCredits();
-        return new BalanceBreakdown(subBal.add(paygBal), subBal, paygBal,
+        return new BalanceBreakdown(subBal.add(paygBal), subBal, paygBal, sub.getAiRemainingCredits(),
                 Boolean.TRUE.equals(sub.getDelinquent()),
                 // The ANSWER, not the facts it is derived from. A surface that
                 // read the two balances and inferred the rule would be a second
@@ -822,10 +1011,17 @@ public class CreditService {
      *        the top-up bucket. False for every paid plan and for CE, where the
      *        monthly balance pays for everything.
      */
+    /**
+     * {@code aiBalance} (V494) is the monthly AI allowance left. It is NOT part of
+     * {@code balance}: it can only ever pay for agent/chat turns on models opened to
+     * the free tier, so folding it into the headline total would promise spending
+     * power the wallet does not have.
+     */
     public record BalanceBreakdown(
             BigDecimal balance,
             BigDecimal subBalance,
             BigDecimal paygBalance,
+            BigDecimal aiBalance,
             boolean delinquent,
             boolean monthlyCreditsAreWorkflowOnly) {}
 
@@ -883,15 +1079,39 @@ public class CreditService {
      * A {@code null} sourceType keeps the legacy total-balance check (workflow
      * launch gates, where the Free monthly bucket IS eligible). Unlimited (CE)
      * and paid plans are unaffected (eligible balance == total balance).
+     *
+     * <p><b>Model-blind, and no longer used in production (V494).</b> Every real caller
+     * moved to the 4-arg form, because without a model this answer EXCLUDES the Free
+     * plan's AI allowance and therefore refuses turns the pot would have paid for. It is
+     * kept because it still answers a real question (the account-level, model-independent
+     * one the workflow launch gates ask) and tests pin the FREE workflow scoping through
+     * it. Do not wire a chat or agent gate to it.
      */
     @Transactional(readOnly = true)
     public boolean hasSufficientCredits(Long userId, String sourceType) {
+        return hasSufficientCredits(userId, sourceType, null, null);
+    }
+
+    /**
+     * Model-aware variant (V494), for the same reason as
+     * {@link #canAfford(Long, BigDecimal, String, String, String)}: this gate and the
+     * debit must read the same buckets.
+     *
+     * <p>Without the model, a Free account holding a full AI allowance and an empty
+     * PAYG bucket is refused here BEFORE the model is ever consulted, while
+     * {@code deductCredits} would happily have paid the turn out of the pot. The two
+     * chat entry points differ in which gate they call, so leaving this one blind
+     * made the refusal path-dependent: the streaming chat worked and the scheduled
+     * one did not.
+     */
+    @Transactional(readOnly = true)
+    public boolean hasSufficientCredits(Long userId, String sourceType, String provider, String model) {
         if (unlimited) return true;
         Subscription sub = resolveActiveSubscription(userId);
         if (sub == null) return false;
         BigDecimal available = sourceType == null
                 ? sub.getTotalBalance()
-                : eligibleBalance(sub, sourceType);
+                : eligibleBalance(sub, sourceType, provider, model);
         return available.compareTo(BigDecimal.ONE) >= 0; // minimum 1 credit needed
     }
 
@@ -922,12 +1142,27 @@ public class CreditService {
      */
     @Transactional(readOnly = true)
     public boolean canAfford(Long userId, BigDecimal projectedCost, String sourceType) {
+        return canAfford(userId, projectedCost, sourceType, null, null);
+    }
+
+    /**
+     * Model-aware pre-flight (V494). Identical to the 3-arg form except the AI
+     * allowance counts as available when the turn runs on a model opened to the free
+     * tier, matching exactly what {@code deductCredits} will draw from.
+     *
+     * <p>Threading the model through is what keeps gate and debit in agreement: the
+     * 3-arg form would refuse a free-tier turn against an empty PAYG bucket while the
+     * debit would have paid it out of the AI pot.
+     */
+    @Transactional(readOnly = true)
+    public boolean canAfford(Long userId, BigDecimal projectedCost, String sourceType,
+                             String provider, String model) {
         if (unlimited) return true;
         Subscription sub = resolveActiveSubscription(userId);
         if (sub == null) return false;
         BigDecimal available = sourceType == null
                 ? sub.getTotalBalance()
-                : eligibleBalance(sub, sourceType);
+                : eligibleBalance(sub, sourceType, provider, model);
         if (projectedCost == null || projectedCost.signum() <= 0) {
             return available.compareTo(BigDecimal.ONE) >= 0; // minimum 1 credit needed
         }
@@ -1258,6 +1493,23 @@ public class CreditService {
                                                Integer cachedTokens,
                                                String description, boolean allowNegative,
                                                Long executorUserId) {
+        return deductCredits(userId, cost, sourceType, sourceId, provider, model, promptTokens,
+                completionTokens, cachedTokens, description, allowNegative, executorUserId, null);
+    }
+
+    /**
+     * @param rowTagger applied to the ledger row this debit writes, right before it is saved
+     *                  (zero-cost, unlimited, metered or rejected-audit row alike), so a caller can stamp the
+     *                  columns it owns (key route, provider-side estimate) on the very row
+     *                  instead of looking it up again afterwards. {@code null} = nothing.
+     */
+    private CreditConsumeResult deductCredits(Long userId, BigDecimal cost, String sourceType,
+                                               String sourceId, String provider, String model,
+                                               Integer promptTokens, Integer completionTokens,
+                                               Integer cachedTokens,
+                                               String description, boolean allowNegative,
+                                               Long executorUserId,
+                                               Consumer<CreditLedgerEntry> rowTagger) {
         Long effectiveExecutor = executorUserId != null ? executorUserId : userId;
         // V366 (ADR-0010): capture the active workspace once so every ledger row
         // this debit writes (zero-cost, unlimited, rejection, normal) carries the
@@ -1292,6 +1544,7 @@ public class CreditService {
                 entry.setCompletionTokens(completionTokens);
                 entry.setCachedTokens(cachedTokens);
                 entry.setDescription(truncateDescription(description));
+                if (rowTagger != null) rowTagger.accept(entry);
                 ledgerRepository.save(entry);
                 log.debug("Recorded zero-cost {} usage for user {} ({}/{}) - bridge/flat-rate row",
                         sourceType, userId, provider, model);
@@ -1316,6 +1569,7 @@ public class CreditService {
             entry.setCompletionTokens(completionTokens);
             entry.setCachedTokens(cachedTokens);
             entry.setDescription(truncateDescription(description));
+            if (rowTagger != null) rowTagger.accept(entry);
             ledgerRepository.save(entry);
 
             log.debug("Tracked {} credits for user {} ({}) [unlimited mode]", cost, userId, sourceType);
@@ -1346,19 +1600,34 @@ public class CreditService {
         // true under unlimited (CE) and for paid plans, so currentBalance ==
         // availableBalance there and this is a behavioural no-op.
         boolean subEligible = subBucketEligible(sub, sourceType);
+        // V494: an LLM turn on a model opened to the free tier may also draw the
+        // separate AI allowance, which applyDebit spends BEFORE sub/PAYG. It has to
+        // count as available here too, or the gate refuses a turn the debit would
+        // have funded.
+        boolean aiEligible = aiAllowanceEligible(sub, sourceType, provider, model);
         BigDecimal currentBalance = sub.getTotalBalance();
         BigDecimal availableBalance = subEligible ? currentBalance : sub.getPaygRemainingCredits();
+        if (aiEligible) {
+            availableBalance = availableBalance.add(sub.getAiRemainingCredits());
+        }
         if (availableBalance.compareTo(cost) < 0 && !allowNegative) {
-            log.warn("User {} has insufficient credits: available={} (sub={}, payg={}, subEligible={}), cost={}. Blocking deduction.",
-                    userId, availableBalance, sub.getRemainingCredits(), sub.getPaygRemainingCredits(), subEligible, cost);
+            log.warn("User {} has insufficient credits: available={} (sub={}, payg={}, ai={}, subEligible={}, aiEligible={}), cost={}. Blocking deduction.",
+                    userId, availableBalance, sub.getRemainingCredits(), sub.getPaygRemainingCredits(),
+                    sub.getAiRemainingCredits(), subEligible, aiEligible, cost);
             // Audit-trail row for the rejected consumption. amount=0 keeps the
             // ledger invariant (sum(ledger) == balance changes) intact - the debit never
             // happened - while preserving the provider/model/token-count context that
             // would otherwise vanish. The 'X_REJECTED' suffix lets Finance filter these
             // out of real consumption queries while still aggregating them for abuse
-            // detection and rejection analytics. Same tx as the balance check: if the
-            // save throws, the caller still receives insufficientCredits (best-effort
-            // audit, never hides the primary signal).
+            // detection and rejection analytics.
+            //
+            // Written in a transaction of ITS OWN (see CreditRejectionAuditWriter). It used to
+            // share this one, on the stated belief that "if the save throws, the caller still
+            // receives insufficientCredits". It did not. source_id is unique across the whole
+            // ledger, so a retried turn on an empty wallet writes the same key twice, the second
+            // write poisons this transaction, and the caller gets an UnexpectedRollbackException
+            // from the commit instead of the refusal it was promised: an HTTP 500 for a user
+            // whose only problem was being out of credits.
             try {
                 CreditLedgerEntry rejected = new CreditLedgerEntry();
                 rejected.setUserId(userId);
@@ -1376,8 +1645,16 @@ public class CreditService {
                 rejected.setDescription(truncateDescription(
                     "REJECTED: attempted " + cost + " credits, balance " + availableBalance
                     + (description != null ? " - " + description : "")));
-                ledgerRepository.save(rejected);
+                // The audit row of a refused own-key turn says which route it was refused on,
+                // like the dead-letter entry written for the same turn.
+                if (rowTagger != null) rowTagger.accept(rejected);
+                rejectionAuditWriter.write(rejected);
             } catch (Exception e) {
+                // This catch always ran; production logged it ten times on 2026-09-17. What was
+                // false was the promise beside it, that the caller would still receive
+                // insufficientCredits. Now that the write has its own transaction, the failure
+                // is contained there, this one is still healthy, and the refusal below really is
+                // what the caller gets.
                 log.warn("Failed to write rejection audit row for user {} source={}: {}",
                         userId, sourceType, e.getMessage());
             }
@@ -1389,7 +1666,18 @@ public class CreditService {
         // overshoot). When negative, drain sub fully then drain payg. When the
         // sub bucket is not eligible (FREE non-workflow), the whole debit routes
         // to PAYG so the monthly workflow grant stays untouched.
-        applyDebit(sub, cost, subEligible);
+        BucketSplit debitSplit = applyDebit(sub, cost, subEligible, aiEligible);
+        // What the buckets actually gave up. Equal to cost on every path except the
+        // allowance-funded tail applyDebit absorbs, and the ledger has to state the
+        // movement rather than the intent, or reconciliation reads the difference as
+        // drift. The absorbed part is platform cost on inference it was already granting.
+        BigDecimal debited = debitSplit.fromSub().add(debitSplit.fromPayg()).add(debitSplit.fromAi());
+        if (debited.compareTo(cost) < 0) {
+            log.info("User {} {}: {} of {} credits absorbed - the AI allowance covered the rest and "
+                            + "a free-tier turn may not create PAYG debt (pot={}, payg={})",
+                    userId, sourceType, cost.subtract(debited), cost,
+                    sub.getAiRemainingCredits(), sub.getPaygRemainingCredits());
+        }
         BigDecimal newBalance = sub.getTotalBalance();
         // Free workflow-credit scoping: a PAYG-routed overshoot (!subEligible,
         // allowNegative post-flight) drives the PAYG bucket negative while the
@@ -1398,6 +1686,11 @@ public class CreditService {
         // not eligible for this source type). Without this branch the delinquent
         // gate never fired for Free accounts: each chat turn's overshoot was
         // unbounded and repeatable as long as the monthly grant masked the total.
+        // V494 note: these rules are deliberately UNCHANGED. An allowance-funded turn
+        // cannot reach them holding a debt, because applyDebit absorbs the tail instead
+        // of pushing PAYG negative - so the pot's normal monthly exhaustion neither
+        // latches the flag nor leaves an unlatched negative PAYG behind to block a
+        // later clear.
         boolean paygOwed = !subEligible && sub.getPaygRemainingCredits().signum() < 0;
         if (newBalance.signum() < 0 || paygOwed) {
             log.warn("User {} {} debited despite insufficient credits: totalBalance went {} -> {} (cost={}, sub={}, payg={}, paygOwed={}). " +
@@ -1421,7 +1714,7 @@ public class CreditService {
         entry.setUserId(userId);
         entry.setExecutorUserId(effectiveExecutor);  // PR11 - quota enforcement key
         entry.setOrganizationId(ledgerOrgId);        // V366 - workspace reporting tag
-        entry.setAmount(cost.negate());
+        entry.setAmount(debited.negate());
         entry.setBalanceAfter(newBalance);
         entry.setSourceType(sourceType);
         entry.setSourceId(sourceId);
@@ -1430,10 +1723,23 @@ public class CreditService {
         entry.setPromptTokens(promptTokens);
         entry.setCompletionTokens(completionTokens);
         entry.setCachedTokens(cachedTokens);
+        // V494: what the AI allowance paid. The row's `amount` states what the buckets
+        // ACTUALLY gave up - the full cost on every path except the absorbed free-tier
+        // tail above - and the allowance part of that movement never touched the wallet
+        // the reconciliation compares against, so it is recorded here for
+        // CreditReconciliationService to add back. Without it every AI-funded turn grows
+        // an unexplained drift and pages ops.
+        entry.setAiPortion(debitSplit.fromAi());
         entry.setDescription(truncateDescription(description));
+        if (rowTagger != null) rowTagger.accept(entry);
         ledgerRepository.save(entry);
 
-        log.info("Deducted {} credits from user {} ({}). Balance: {} -> {}", cost, userId, sourceType, currentBalance, newBalance);
+        if (debitSplit.fromAi().signum() > 0) {
+            log.info("Deducted {} credits from user {} ({}), {} of it from the monthly AI allowance. Balance: {} -> {}, allowance left {}",
+                    cost, userId, sourceType, debitSplit.fromAi(), currentBalance, newBalance, sub.getAiRemainingCredits());
+        } else {
+            log.info("Deducted {} credits from user {} ({}). Balance: {} -> {}", cost, userId, sourceType, currentBalance, newBalance);
+        }
         return CreditConsumeResult.success(cost, newBalance);
     }
 
@@ -1495,10 +1801,17 @@ public class CreditService {
      *   <li>{@link #COMMITTED_FLOORED} - balance was already negative from a
      *       concurrent partial-charge; we charged {@code reserved} only (no
      *       further debit), set {@code delinquent=true}, PagerDuty.</li>
+     *   <li>{@link #BILLING_DISABLED} - this deployment does not resell, so no ledger row exists
+     *       and nothing was charged. Deliberately NOT reported as COMMITTED: a caller reads this
+     *       outcome to decide whether it may show an amount as charged (a generated asset carries
+     *       the price it cost), and a success word here would put a price on a purchase that never
+     *       touched a ledger. Harmless while the value was ignored; the moment it is read, it is
+     *       the difference between a fact and an invention.</li>
      * </ul>
      */
     public enum CommitOutcome {
-        COMMITTED, ALREADY_COMMITTED, RESERVATION_EXPIRED, COMMITTED_PARTIAL, COMMITTED_FLOORED
+        COMMITTED, ALREADY_COMMITTED, RESERVATION_EXPIRED, COMMITTED_PARTIAL, COMMITTED_FLOORED,
+        BILLING_DISABLED
     }
 
     /**
@@ -1733,7 +2046,7 @@ public class CreditService {
     @Transactional
     public CommitOutcome commitReservation(String sourceId, BigDecimal actualAmount,
                                             String provider, String model) {
-        if (!markupEnabled) return CommitOutcome.COMMITTED;
+        if (!markupEnabled) return CommitOutcome.BILLING_DISABLED;
         if (sourceId == null || actualAmount == null || actualAmount.signum() < 0) {
             log.warn("Invalid commitReservation params: sourceId={} actual={}", sourceId, actualAmount);
             return CommitOutcome.RESERVATION_EXPIRED;
@@ -2006,7 +2319,18 @@ public class CreditService {
      * Result of splitting a debit amount across the two buckets.
      * {@code fromSub + fromPayg == totalDebit} (always).
      */
-    private record BucketSplit(BigDecimal fromSub, BigDecimal fromPayg) {}
+    /**
+     * How one debit was funded. {@code fromAi} (V494) is the part the monthly AI
+     * allowance paid: it comes out of a pot that {@code getTotalBalance()} excludes,
+     * so it is the amount the reconciliation has to add back before comparing the
+     * ledger against the wallet.
+     */
+    private record BucketSplit(BigDecimal fromSub, BigDecimal fromPayg, BigDecimal fromAi) {
+        /** The two-bucket form every pre-V494 call site uses; nothing came from the pot. */
+        BucketSplit(BigDecimal fromSub, BigDecimal fromPayg) {
+            this(fromSub, fromPayg, BigDecimal.ZERO);
+        }
+    }
 
     /**
      * Compute how a positive {@code totalAmount} debit splits across the two
@@ -2072,12 +2396,68 @@ public class CreditService {
      * and silently destroy PAYG dollars at the next renewal.
      */
     private static BucketSplit applyDebit(Subscription sub, BigDecimal totalCost, boolean subEligible) {
+        return applyDebit(sub, totalCost, subEligible, false);
+    }
+
+    /**
+     * V494 variant: when {@code aiEligible}, the AI allowance pays FIRST, and only
+     * what it cannot cover falls through to the sub/PAYG split.
+     *
+     * <p>The pot is floored at zero - it can be emptied but never driven negative.
+     * Draining AI first (and not all-or-nothing) is what keeps a turn slightly larger
+     * than the remaining allowance from wasting it: the pot is spent to the last credit,
+     * and the rest is charged normally.
+     *
+     * <p><b>An allowance-funded turn can never drive PAYG below zero.</b> When the sub
+     * bucket is not eligible (a FREE chat/agent turn) the remainder is capped at what
+     * PAYG actually holds, and the uncovered tail is ABSORBED rather than booked as
+     * debt. Three things follow, and all three were wrong before:
+     * <ul>
+     *   <li>The account is not bricked. A negative PAYG on a workflow-credits-only plan
+     *       is unclearable by construction - {@code clearDelinquentIfPositive} refuses
+     *       while it is negative and no renewal resets PAYG - so the pot's NORMAL
+     *       monthly exhaustion used to latch {@code delinquent} for good, as soon as the
+     *       workflow bucket was smaller than the overshoot (i.e. any free account that
+     *       had also used its workflow credits).</li>
+     *   <li>The delinquency rules below need no exception, so the protection they give
+     *       every other path is untouched.</li>
+     *   <li>No unlatched negative PAYG is left on the row to poison a later clear.</li>
+     * </ul>
+     * The absorbed tail is bounded by one turn's estimate error, on inference the
+     * platform was already granting, and the caller records what was ACTUALLY taken so
+     * the ledger and the balances still agree exactly.
+     *
+     * <p>The returned split describes the REMAINDER only. Its {@code fromPayg} is
+     * what the reservation lifecycle refunds proportionally, and a reservation is
+     * never AI-eligible, so that contract is unchanged.
+     */
+    private static BucketSplit applyDebit(Subscription sub, BigDecimal totalCost,
+                                          boolean subEligible, boolean aiEligible) {
+        // Tracked explicitly rather than derived from the remainder: the remainder is
+        // capped below, and deriving the pot draw from it afterwards reported the
+        // ABSORBED tail as allowance-funded - which would have overstated ai_portion
+        // and, through the reconciliation add-back, invented credits out of a rounding
+        // error. The pot gave what it gave.
+        BigDecimal fromAi = BigDecimal.ZERO;
+        BigDecimal remainder = totalCost;
+        if (aiEligible && totalCost.signum() > 0) {
+            fromAi = sub.getAiRemainingCredits().min(totalCost).max(BigDecimal.ZERO);
+            if (fromAi.signum() > 0) {
+                sub.setAiRemainingCredits(sub.getAiRemainingCredits().subtract(fromAi));
+                remainder = totalCost.subtract(fromAi);
+            }
+        }
+        if (fromAi.signum() > 0 && !subEligible) {
+            // See the javadoc: the tail this turn cannot pay for is absorbed, never
+            // booked as PAYG debt, because that debt is unclearable on this plan shape.
+            remainder = remainder.min(sub.getPaygRemainingCredits().max(BigDecimal.ZERO));
+        }
         BucketSplit split = subEligible
-                ? splitBuckets(sub, totalCost)
-                : new BucketSplit(BigDecimal.ZERO, totalCost);
+                ? splitBuckets(sub, remainder)
+                : new BucketSplit(BigDecimal.ZERO, remainder);
         sub.setRemainingCredits(sub.getRemainingCredits().subtract(split.fromSub()));
         sub.setPaygRemainingCredits(sub.getPaygRemainingCredits().subtract(split.fromPayg()));
-        return split;
+        return new BucketSplit(split.fromSub(), split.fromPayg(), fromAi);
     }
 
     /**
@@ -2121,9 +2501,33 @@ public class CreditService {
 
     // ---- Result DTO ----
 
-    public record CreditConsumeResult(boolean success, String error, BigDecimal creditsUsed, BigDecimal remainingCredits, boolean delinquent) {
+    /**
+     * @param creditsUsed        what the ledger debited
+     * @param consumptionCredits what the turn CONSUMED, i.e. what the platform route would
+     *                           have billed for it. Equal to {@code creditsUsed} on the
+     *                           platform route; on the tenant's own key the ledger takes a
+     *                           flat fee while this keeps the token-rate value, so the agent
+     *                           counters, budgets and reservation settle keep metering
+     *                           consumption and a budget behaves the same on both routes.
+     *                           Null on results that predate the field (readers fall back
+     *                           to {@code creditsUsed}).
+     */
+    public record CreditConsumeResult(boolean success, String error, BigDecimal creditsUsed,
+                                      BigDecimal remainingCredits, boolean delinquent,
+                                      BigDecimal consumptionCredits) {
+        /** Pre-V506 shape: consumption equals the debit. */
+        public CreditConsumeResult(boolean success, String error, BigDecimal creditsUsed,
+                                   BigDecimal remainingCredits, boolean delinquent) {
+            this(success, error, creditsUsed, remainingCredits, delinquent, creditsUsed);
+        }
+
         public static CreditConsumeResult success(BigDecimal cost, BigDecimal remaining) {
             return new CreditConsumeResult(true, null, cost, remaining, false);
+        }
+
+        /** The same result with the consumption value an own-key debit reports next to its fee. */
+        public CreditConsumeResult withConsumption(BigDecimal consumption) {
+            return new CreditConsumeResult(success, error, creditsUsed, remainingCredits, delinquent, consumption);
         }
         public static CreditConsumeResult insufficientCredits(BigDecimal balance, BigDecimal required) {
             return new CreditConsumeResult(false, "Insufficient credits: balance=" + balance + ", required=" + required, BigDecimal.ZERO, balance, false);

@@ -113,6 +113,7 @@ export type {
   CustomApiEndpoint,
   CustomApiDefinition,
   CustomApiDetails,
+  CustomApiAuthEntry,
 } from './custom-api.service';
 export type { ResourceRestriction, SetRestrictionsRequest, RestrictRequest } from './org-access.service';
 export type {

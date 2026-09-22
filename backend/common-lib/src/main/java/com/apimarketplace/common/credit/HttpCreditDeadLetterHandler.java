@@ -39,8 +39,20 @@ public class HttpCreditDeadLetterHandler implements CreditDeadLetterHandler {
                                           String provider, String model,
                                           Integer promptTokens, Integer completionTokens,
                                           String errorReason, String organizationId) {
+        persistFailedConsumption(tenantId, sourceType, sourceId, provider, model,
+                promptTokens, completionTokens, errorReason, organizationId, null);
+    }
+
+    @Override
+    public void persistFailedConsumption(String tenantId, String sourceType, String sourceId,
+                                          String provider, String model,
+                                          Integer promptTokens, Integer completionTokens,
+                                          String errorReason, String organizationId, String keyRoute) {
         try {
             Map<String, Object> body = new HashMap<>();
+            if (keyRoute != null && !keyRoute.isBlank()) {
+                body.put("keyRoute", keyRoute);
+            }
             body.put("tenantId", tenantId);
             body.put("sourceType", sourceType);
             body.put("sourceId", sourceId);

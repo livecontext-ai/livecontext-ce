@@ -1,11 +1,13 @@
 package com.apimarketplace.agent.service.execution;
 
+import com.apimarketplace.agent.config.ToolAccessControl;
 import com.apimarketplace.agent.config.AgentModuleResolver;
 import com.apimarketplace.agent.domain.ToolCall;
 import com.apimarketplace.agent.domain.ToolDefinition;
 import com.apimarketplace.agent.domain.ToolResult;
 import com.apimarketplace.agent.prompt.ConversationToolDefinitions;
 import com.apimarketplace.agent.tool.ToolExecutionService;
+import com.apimarketplace.agent.tools.authz.AuthorizationSubject;
 import com.apimarketplace.agent.tools.authz.ToolAuthorizationGuard;
 import com.apimarketplace.agent.tools.authz.ToolAuthorizationPolicy;
 import com.apimarketplace.agent.tools.authz.ToolAuthorizationScope;
@@ -641,6 +643,14 @@ public class RemoteToolExecutionService implements ToolExecutionService {
         if ("application:acquire".equals(rule) && args != null && args.get("application_id") != null) {
             metadata.put("applicationId", String.valueOf(args.get("application_id")));
         }
+        // What the card is ABOUT, when the rule has something worth naming: which workflow
+        // and version is going live, which cron is being armed. Read off the call's own
+        // arguments, so it can only describe what would actually run. Null for every rule
+        // that names nothing, and the card falls back to its generic copy.
+        Map<String, Object> subject = AuthorizationSubject.of(rule, args);
+        if (subject != null) {
+            metadata.put(AuthorizationSubject.METADATA_KEY, subject);
+        }
 
         // POV-agent content: the user has been asked to authorize this action - do NOT retry/loop.
         // Written for the case where the agent actually RECEIVES this: nobody answered in time
@@ -665,7 +675,7 @@ public class RemoteToolExecutionService implements ToolExecutionService {
             structured.put("message", "The application has NOT been installed. Installing is done by "
                     + "the USER, not by you: an install card was surfaced, and the user installs the "
                     + "application themselves from the marketplace modal. The install does NOT happen in "
-                    + "this turn - after installing, the user will come back and ask again (a new turn). "
+                    + "this turn - after installing, the chat resumes with an installation confirmation. Resume the original task: inspect the app with get, then execute using its declared inputs and verify the result. "
                     + "Do NOT call this action again, do NOT claim or assume the app is installed/acquired, "
                     + "and do NOT use it as if it existed. Continue with other work or finish your turn.");
         } else {
@@ -932,14 +942,11 @@ public class RemoteToolExecutionService implements ToolExecutionService {
         copyCredential(request, credentials, "workflowNodeId", "__workflowNodeId__", "workflowNodeId");
 
         // Forward access modes (read/write per resource) - strip __ prefix/suffix
-        copyCredential(request, credentials, "tableAccessMode", "__tableAccessMode__", "tableAccessMode");
-        copyCredential(request, credentials, "workflowAccessMode", "__workflowAccessMode__", "workflowAccessMode");
-        copyCredential(request, credentials, "interfaceAccessMode", "__interfaceAccessMode__", "interfaceAccessMode");
-        copyCredential(request, credentials, "agentAccessMode", "__agentAccessMode__", "agentAccessMode");
-        copyCredential(request, credentials, "applicationAccessMode", "__applicationAccessMode__", "applicationAccessMode");
-        copyCredential(request, credentials, "skillAccessMode", "__skillAccessMode__", "skillAccessMode");
-        copyCredential(request, credentials, "fileAccessMode", "__fileAccessMode__", "fileAccessMode");
-        copyCredential(request, credentials, "memoryAccessMode", "__memoryAccessMode__", "memoryAccessMode");
+        // Derived, never re-listed: a hand-copied list here is how an axis goes inert (see
+        // ToolAccessControl.ENFORCED_ACCESS_MODE_CATEGORIES).
+        for (String key : ToolAccessControl.ACCESS_MODE_KEYS) {
+            copyCredential(request, credentials, key, "__" + key + "__", key);
+        }
     }
 
     private void copyCredential(Map<String, Object> request, Map<String, Object> credentials,

@@ -65,6 +65,27 @@ describe('run panel snapshots', () => {
     expect(getCachedRunPanelData('wf-other').runInfo).toBeNull();
   });
 
+  it('isolates two mounted surfaces of the same workflow', () => {
+    const surfaceA = vi.fn();
+    const surfaceB = vi.fn();
+    const unsubscribeA = subscribeRunPanelData('wf-1', surfaceA, 'surface-a');
+    const unsubscribeB = subscribeRunPanelData('wf-1', surfaceB, 'surface-b');
+
+    publishRunPanelData(snapshot('wf-1', { surfaceId: 'surface-a', runId: 'run-a' }));
+    publishRunPanelData(snapshot('wf-1', { surfaceId: 'surface-b', runId: 'run-b' }));
+
+    expect(surfaceA).toHaveBeenCalledTimes(1);
+    expect(surfaceA).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run-a' }));
+    expect(surfaceB).toHaveBeenCalledTimes(1);
+    expect(surfaceB).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run-b' }));
+    expect(getCachedRunPanelData('wf-1', 'surface-a').runId).toBe('run-a');
+    expect(getCachedRunPanelData('wf-1', 'surface-b').runId).toBe('run-b');
+    expect(getCachedRunPanelData('wf-1').runId).toBeNull();
+
+    unsubscribeA();
+    unsubscribeB();
+  });
+
   it('stops delivering after unsubscribe', () => {
     const onData = vi.fn();
     subscribeRunPanelData('wf-1', onData)();
@@ -95,6 +116,14 @@ describe('the run a canvas is bound to', () => {
     expect(boundRunId('wf-2')).toBeNull();
     expect(boundRunId(null, 'run-from-provider')).toBe('run-from-provider');
     expect(boundRunId(undefined)).toBeNull();
+  });
+
+  it('resolves the run within the requested surface', () => {
+    publishRunPanelData(snapshot('wf-1', { surfaceId: 'surface-a', runId: 'run-a' }));
+    publishRunPanelData(snapshot('wf-1', { surfaceId: 'surface-b', runId: 'run-b' }));
+
+    expect(boundRunId('wf-1', null, 'surface-a')).toBe('run-a');
+    expect(boundRunId('wf-1', null, 'surface-b')).toBe('run-b');
   });
 });
 

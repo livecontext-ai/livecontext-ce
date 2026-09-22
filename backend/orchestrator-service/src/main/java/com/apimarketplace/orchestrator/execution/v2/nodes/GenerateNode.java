@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
 import com.apimarketplace.orchestrator.services.generation.GenerationExecutionService;
 import com.apimarketplace.orchestrator.services.generation.GenerationExecutionService.GenerationResult;
@@ -99,6 +100,7 @@ public class GenerateNode extends BaseNode {
             // and whole-value templates keep their RAW type (a FileRef used as a
             // reference image stays a map, a duration stays a number).
             Map<String, Object> resolved = resolveParams(context);
+            Map<String, Object> resolvedParams = reportableParams(resolved);
 
             String model = stringValue(resolved.get("model"));
             model = model != null ? model.trim().toLowerCase(Locale.ROOT) : null;
@@ -193,12 +195,19 @@ public class GenerateNode extends BaseNode {
             }
 
             Map<String, Object> output = new LinkedHashMap<>();
+            // Same bounding as the failure path: small values verbatim, oversized described.
+            output.put("resolved_params", ReportedParams.forReport(resolvedParams));
             output.put("file", file);
             output.put("model", data.getOrDefault("model", model));
             output.put("kind", data.get("kind"));
             output.put("provider", data.get("provider"));
             output.put("billed_quantity", data.get("billed_quantity"));
             output.put("billed_unit", data.get("billed_unit"));
+            // What it actually cost, as the ledger committed it. Reported rather than left to be
+            // reconstructed from the size and today's published rate: a rate can be republished
+            // between the run and the reading, and the arithmetic needed a unit conversion that
+            // this node's own help had to explain in three sentences.
+            output.put("billed_credits", data.get("billed_credits"));
             // The provider payload stays under its own key rather than being
             // merged, so a provider field can never shadow `file` or `model`.
             output.put("provider_response", data.get("provider_response"));
@@ -275,7 +284,36 @@ public class GenerateNode extends BaseNode {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("file", null);
         out.put("model", stringValue(params.get("model")));
+        // Unresolved here on purpose: every failure that reaches this method does so
+        // BEFORE or DURING resolution, so the templates the author wrote are the only
+        // honest thing to show. A generation is billed, and a reader asking why it did
+        // not happen had, until now, an empty Params column to work from.
+        out.put("resolved_params", reportableParams(params));
         return NodeExecutionResult.failureWithOutput(nodeId, message,
             enrichWithMetadata(out, context), System.currentTimeMillis() - startTime);
+    }
+
+    /**
+     * Every configured parameter except the credential reference.
+     *
+     * `credential_id` names one of the AUTHOR's own provider keys, and
+     * PlanSecretRedactor already strips it from a shared plan for exactly that
+     * reason; `resolved_params` is read by the same people, so it stays out here too.
+     * Everything else - model, prompt, size, duration, the reference image - is what
+     * a reader needs to understand a generation they were charged for.
+     */
+    private static Map<String, Object> reportableParams(Map<String, Object> source) {
+        Map<String, Object> reportable = new LinkedHashMap<>();
+        if (source == null) return reportable;
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+            if ("credential_id".equals(entry.getKey())) continue;
+            if (entry.getValue() == null) continue;
+            reportable.put(entry.getKey(), entry.getValue());
+        }
+        // A prompt has no length limit and a reference image can arrive as a data URI, and
+        // this map lands on the step row of every item. Small values are untouched - the
+        // prompt IS what a reader came for - and only what exceeds the budget is described.
+        // The credential filter above stays first: masking by name is a separate rule.
+        return ReportedParams.forReport(reportable);
     }
 }

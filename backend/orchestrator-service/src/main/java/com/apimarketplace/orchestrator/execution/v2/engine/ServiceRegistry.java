@@ -81,6 +81,7 @@ public class ServiceRegistry {
     private final InterfaceRenderService interfaceRenderService;
     private final com.apimarketplace.orchestrator.tools.websearch.CloudBrowserAgentRelayClient cloudBrowserAgentRelayClient;
     private final com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess cloudLlmRuntimeAccess;
+    private final com.apimarketplace.orchestrator.services.mail.MailTimeouts mailTimeouts;
 
     private ServiceRegistry(Builder builder) {
         this.toolsGateway = builder.toolsGateway;
@@ -122,6 +123,9 @@ public class ServiceRegistry {
         this.interfaceRenderService = builder.interfaceRenderService;
         this.cloudBrowserAgentRelayClient = builder.cloudBrowserAgentRelayClient;
         this.cloudLlmRuntimeAccess = builder.cloudLlmRuntimeAccess;
+        this.mailTimeouts = builder.mailTimeouts != null
+                ? builder.mailTimeouts
+                : com.apimarketplace.orchestrator.services.mail.MailTimeouts.defaults();
     }
 
     public com.apimarketplace.orchestrator.services.triggers.TriggerUserResolver getTriggerUserResolver() {
@@ -282,6 +286,15 @@ public class ServiceRegistry {
         return cloudLlmRuntimeAccess;
     }
 
+    /**
+     * Socket timeouts for the IMAP/SMTP nodes. NEVER null: a caller that does not set them
+     * (every test-built registry) gets {@link com.apimarketplace.orchestrator.services.mail.MailTimeouts#defaults()},
+     * so a node reads a value rather than branching on absence.
+     */
+    public com.apimarketplace.orchestrator.services.mail.MailTimeouts getMailTimeouts() {
+        return mailTimeouts;
+    }
+
     /** F2.2 - used by SubWorkflowNode to register parent→child run links so a parent
      *  cancel cascades down to in-flight sub-runs. May be {@code null} in unit tests. */
     public com.apimarketplace.orchestrator.services.streaming.redis.WorkflowRedisPublisher getWorkflowRedisPublisher() {
@@ -347,6 +360,7 @@ public class ServiceRegistry {
         private InterfaceRenderService interfaceRenderService;
         private com.apimarketplace.orchestrator.tools.websearch.CloudBrowserAgentRelayClient cloudBrowserAgentRelayClient;
         private com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess cloudLlmRuntimeAccess;
+        private com.apimarketplace.orchestrator.services.mail.MailTimeouts mailTimeouts;
 
         public Builder toolsGateway(ToolsGateway toolsGateway) {
             this.toolsGateway = toolsGateway;
@@ -545,6 +559,12 @@ public class ServiceRegistry {
         public Builder cloudLlmRuntimeAccess(
                 com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess runtimeAccess) {
             this.cloudLlmRuntimeAccess = runtimeAccess;
+            return this;
+        }
+
+        public Builder mailTimeouts(
+                com.apimarketplace.orchestrator.services.mail.MailTimeouts timeouts) {
+            this.mailTimeouts = timeouts;
             return this;
         }
 

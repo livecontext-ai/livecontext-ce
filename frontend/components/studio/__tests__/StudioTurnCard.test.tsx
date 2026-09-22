@@ -149,9 +149,33 @@ describe('StudioTurnCard - what the card attributes and offers', () => {
     expect(screen.getByText(/files and settings/i)).toBeInTheDocument();
   });
 
-  it('hands the WHOLE request back for reuse, so a replay is the same turn', () => {
-    // Reuse exists to re-run a recipe. Passing anything less than the original envelope - dropping
-    // the params, say - silently replays a DIFFERENT and cheaper-looking generation.
+  it('states what the turn cost, in the same words as the history below it', () => {
+    // A turn that names the size it was billed on and not the amount sends the reader to look the
+    // price up elsewhere for the generation they just ran.
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages as Record<string, unknown>}>
+        <StudioTurnCard request={REQUEST} result={{ ...result(), billedCredits: 78 }} />
+      </NextIntlClientProvider>,
+    );
+
+    expect(screen.getByText('78 credits')).toBeInTheDocument();
+  });
+
+  it('states NO cost for a turn the platform did not charge for, rather than a zero', () => {
+    // The reader's own provider key paid. "0 credits" under it would be a claim about money.
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages as Record<string, unknown>}>
+        <StudioTurnCard request={REQUEST} result={{ ...result(), billedCredits: 0 }} />
+      </NextIntlClientProvider>,
+    );
+
+    expect(screen.queryByText(/credits?$/)).not.toBeInTheDocument();
+  });
+
+  it('hands the WHOLE request back to be modified, so a replay is the same turn', () => {
+    // The control loads a recipe back into the composer. Passing anything less than the original
+    // envelope - dropping the params, say - silently replays a DIFFERENT and cheaper-looking
+    // generation.
     const onReuse = vi.fn();
     const withParams: StudioRequestEnvelope = { ...REQUEST, params: { seed: 7 } };
     render(
@@ -160,7 +184,9 @@ describe('StudioTurnCard - what the card attributes and offers', () => {
       </NextIntlClientProvider>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /reuse/i }));
+    // Named as the reader sees it, in the real dictionary: one verb for this action on every
+    // surface that offers it, so a rename that split them again fails here.
+    fireEvent.click(screen.getByRole('button', { name: /^Modify$/i }));
 
     expect(onReuse).toHaveBeenCalledWith(withParams);
   });

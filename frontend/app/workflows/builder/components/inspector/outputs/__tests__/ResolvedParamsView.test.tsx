@@ -65,9 +65,43 @@ function waitNode(): Node<BuilderNodeData> {
   } as Node<BuilderNodeData>;
 }
 
-function renderView(node = setNode()) {
+/**
+ * A catalog tool step: the node that spends real time RUNNING, because it is
+ * waiting on a third party. `toolData` is what makes the generator emit it as a
+ * `plan.mcps` entry, and `paramExpressions` is where its arguments live.
+ */
+function toolNode(): Node<BuilderNodeData> {
+  return {
+    id: 'mcp-send-email',
+    type: 'toolNode',
+    position: { x: 0, y: 0 },
+    data: {
+      id: 'mcp-send-email',
+      label: 'Send Email',
+      kind: 'mcp',
+      toolData: { toolSlug: 'send_email' },
+      apiData: { apiSlug: 'gmail' },
+      paramExpressions: {
+        to: '{{trigger:hook.output.email}}',
+        subject: 'Your receipt',
+      },
+    } as unknown as BuilderNodeData,
+  } as Node<BuilderNodeData>;
+}
+
+
+function renderView(
+  node = setNode(),
+  toolParameters?: unknown[],
+) {
   return render(
-    <ResolvedParamsView workflowId="wf-1" runId="run-1" stepAlias="Prepare Payload" node={node} />,
+    <ResolvedParamsView
+      workflowId="wf-1"
+      runId="run-1"
+      stepAlias="Prepare Payload"
+      node={node}
+      toolParameters={toolParameters}
+    />,
   );
 }
 
@@ -141,46 +175,80 @@ describe('ResolvedParamsView', () => {
       expect(screen.queryByTestId('node-run-state-running')).toBeNull();
       expect(screen.getByText('noResolvedParams')).toBeTruthy();
     });
+
+    it('shows a CATALOG tool node what it was launched with, which is the node a reader waits on longest', () => {
+      // An mcp/catalog step is the node that spends real time RUNNING: it is waiting on a
+      // third party. It was the one node excluded from this fallback, so its Params column
+      // was empty for the whole call and then again on any path that leaves no row. The
+      // exclusion was written for the drift COMPARISON, which has nothing to say about
+      // names the catalog owns; it was never meant to remove the display.
+      liveState.value = { liveState: 'running', pendingSignals: [] };
+      renderView(toolNode(), [{ name: 'to', title: 'Recipient' }]);
+      expect(screen.getByTestId('node-run-state-running')).toBeTruthy();
+      expect(screen.getByText('configuredParamsTitle')).toBeTruthy();
+      // The tool's own argument, under the label the catalog gives it.
+      expect(screen.getByText('Recipient')).toBeTruthy();
+      expect(screen.getByText('{{trigger:hook.output.email}}')).toBeTruthy();
+    });
+
+    it('still shows the configuration when the run left NO row for the node', () => {
+      // The other half of "nothing is not an answer". A node the run skipped, or never
+      // reached, has no row and is not live, and the panel said only "no resolved
+      // parameters" - which does not say what the node would have run with, nor why there
+      // is no row. The heading keeps the two apart: configuration, not resolution.
+      liveState.value = { liveState: null, pendingSignals: [] };
+      renderView(toolNode(), [{ name: 'to', title: 'Recipient' }]);
+      expect(screen.getByText('noResolvedParams')).toBeTruthy();
+      expect(screen.getByText('configuredParamsTitle')).toBeTruthy();
+      expect(screen.getByText('Recipient')).toBeTruthy();
+    });
+
+    it('never renders a configured SECRET, in either branch of the fallback', () => {
+      // The fallback reads the plan entry straight off the canvas, so it bypasses the
+      // backend gate completely. `crypto_jwt` keeps its signing secret there and
+      // `http_request` its whole authConfig block, and this panel showed both verbatim -
+      // parked, running, or with no row. Not a disclosure to a new principal (the same
+      // reader can open the edit form), but the same key answering two ways in one panel:
+      // an approval parked for two days showed its secret, and the moment the signal
+      // resolved the same panel showed it masked.
+      const jwt = {
+        id: 'crypto_jwt-1',
+        type: 'cryptoJwtNode',
+        position: { x: 0, y: 0 },
+        data: {
+          id: 'crypto_jwt-1',
+          label: 'Sign',
+          kind: 'crypto_jwt',
+          paramExpressions: { operation: 'sign', secret: 'hunter2-the-hmac-secret' },
+        } as unknown as BuilderNodeData,
+      } as Node<BuilderNodeData>;
+
+      for (const state of ['running', null] as const) {
+        liveState.value = { liveState: state, pendingSignals: [] };
+        const { unmount } = renderView(jwt);
+        expect(
+          screen.queryByText('hunter2-the-hmac-secret'),
+          `the signing secret must not render while liveState=${state}`,
+        ).toBeNull();
+        unmount();
+      }
+    });
   });
 
-  describe('mismatch panel', () => {
-    it('warns when a configured parameter is absent from what the run reported', async () => {
-      // The wait node declares `duration`; this run reports something else.
-      runData.value = {
-        ...runData.value,
-        getObjectAtPath: vi.fn(async () => ({ resolved_params: { waited_ms: 5000 } })),
-      };
-      renderView(waitNode());
+  it('shows no developer-facing alignment warning: the reader is not the audience for it', async () => {
+    // The panel used to warn when a configured parameter was absent from what the
+    // run reported. That is a statement about the PRODUCT (a node under-reporting),
+    // not about the user's workflow, and it also fired on old runs whose rows carry
+    // pre-rename keys - a warning nobody could act on. The alignment check itself
+    // lives on in the e2e spec, where it belongs.
+    runData.value = {
+      ...runData.value,
+      getObjectAtPath: vi.fn(async () => ({ resolved_params: { waited_ms: 5000 } })),
+    };
+    renderView(waitNode());
 
-      const banner = await screen.findByTestId('param-alignment-mismatches');
-      expect(banner.textContent).toContain('mismatchTitle:1');
-
-      fireEvent.click(screen.getByRole('button', { expanded: false }));
-      expect(screen.getByText('mismatchNotReported')).toBeTruthy();
-    });
-
-    it('names the key the run used when the parameter came back renamed', async () => {
-      runData.value = {
-        ...runData.value,
-        getObjectAtPath: vi.fn(async () => ({ resolved_params: { Duration: 5000 } })),
-      };
-      renderView(waitNode());
-
-      await screen.findByTestId('param-alignment-mismatches');
-      fireEvent.click(screen.getByRole('button', { expanded: false }));
-      expect(screen.getByText('mismatchRenamed:Duration')).toBeTruthy();
-    });
-
-    it('stays quiet when everything configured came back', async () => {
-      runData.value = {
-        ...runData.value,
-        getObjectAtPath: vi.fn(async () => ({ resolved_params: { duration: 5000 } })),
-      };
-      renderView(waitNode());
-
-      await waitFor(() => expect(screen.getByText('Duration (ms)')).toBeTruthy());
-      expect(screen.queryByTestId('param-alignment-mismatches')).toBeNull();
-    });
+    await waitFor(() => expect(screen.getByTestId('resolved-params-view')).toBeTruthy());
+    expect(screen.queryByTestId('param-alignment-mismatches')).toBeNull();
   });
 
   it('offers the raw-JSON view of the reported parameters', async () => {
@@ -199,5 +267,63 @@ describe('ResolvedParamsView', () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       JSON.stringify({ keepOnlySet: true, label: 'x' }, null, 2),
     );
+  });
+
+  // An interface reports `variableMapping` as a map of maps - the first reported
+  // parameter whose value is not a scalar, a list or a flat object. The panel labels
+  // TOP-LEVEL keys only, so the variable names and their {expression, resolved,
+  // status} fields must read as themselves.
+  describe('an interface node reporting its variable mapping', () => {
+    function interfaceNode(): Node<BuilderNodeData> {
+      return {
+        id: 'interface-1',
+        type: 'interfaceNode',
+        position: { x: 0, y: 0 },
+        data: { id: 'interface-1', label: 'Listing Page', kind: 'interface' } as unknown as BuilderNodeData,
+      } as Node<BuilderNodeData>;
+    }
+
+    beforeEach(() => {
+      runData.value = {
+        ...runData.value,
+        totalItems: 1,
+        getObjectAtPath: vi.fn(async () => ({
+          resolved_params: {
+            interfaceId: 'uuid-123',
+            variableMapping: {
+              result: {
+                expression: '{{core:normalize.output}}',
+                resolved: 'Map(keys=[result])',
+                status: 'resolved',
+              },
+            },
+          },
+        })),
+      };
+    });
+
+    it('labels the block through the registry and keeps the variable name readable underneath', async () => {
+      renderView(interfaceNode());
+
+      await waitFor(() => expect(screen.getByText('Variables')).toBeTruthy());
+      fireEvent.click(screen.getByText('Variables'));
+      await waitFor(() => expect(screen.getByText('result')).toBeTruthy());
+    });
+
+    it('shows the expression and what it resolved to, which is the whole point of the block', async () => {
+      renderView(interfaceNode());
+
+      await waitFor(() => expect(screen.getByText('Variables')).toBeTruthy());
+      fireEvent.click(screen.getByText('Variables'));
+      await waitFor(() => expect(screen.getByText('result')).toBeTruthy());
+      fireEvent.click(screen.getByText('result'));
+
+      const showing = (needle: string) => (content: string) => content.includes(needle);
+      await waitFor(() =>
+        expect(screen.getAllByText(showing('{{core:normalize.output}}')).length).toBeGreaterThan(0),
+      );
+      // The double-`result` diagnosis, as the reader sees it.
+      expect(screen.getAllByText(showing('Map(keys=[result])')).length).toBeGreaterThan(0);
+    });
   });
 });

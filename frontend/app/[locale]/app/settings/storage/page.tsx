@@ -15,7 +15,7 @@ import { organizationApi } from '@/lib/api/organization-api';
 import { useQuery } from '@tanstack/react-query';
 import StorageBreakdownChart from './components/StorageBreakdownChart';
 import { WorkspaceScopeSelect, ALL_WORKSPACES_SCOPE } from '@/components/settings/WorkspaceScopeSelect';
-import { aggregateStorageQuotas, aggregateTenantStats, aggregateBreakdowns } from './storageAggregation';
+import { aggregateWorkspaces, workspacePartFromSettled } from './storageAggregation';
 
 // Plan storage limits in bytes - defense-in-depth fallback when the
 // /billing/plans response is unavailable. Values must mirror the seed in
@@ -87,8 +87,15 @@ export default function StoragePage() {
 
     // "All workspaces" view: aggregate every enterable workspace client-side.
     const isAll = scopeOrgId === ALL_WORKSPACES_SCOPE;
+    // Only workspaces this user OWNS. The allowance is per account, so the total has to be one
+    // account's: a workspace someone else owns draws on THEIR pool, and folding it in would add
+    // their bytes to this user's usage while dividing by this user's single allowance, which
+    // overstates the bar and can show 100% on an account that is nowhere near full.
     const enterableOrgIds = useMemo(
-        () => (workspaces ?? []).filter((w) => !w.paused && !w.pendingDeletion).map((w) => w.id),
+        () => (workspaces ?? [])
+            .filter((w) => !w.paused && !w.pendingDeletion)
+            .filter((w) => w.currentUserRole === 'OWNER')
+            .map((w) => w.id),
         [workspaces],
     );
     // Stable primitive for the fetch effect's dep list (the array ref changes each render).
@@ -100,6 +107,9 @@ export default function StoragePage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [recalculating, setRecalculating] = useState(false);
+    // "All workspaces" only: how many workspaces were dropped from the aggregate because they
+    // could not be read in full. Zero in single-workspace mode.
+    const [unreadableWorkspaces, setUnreadableWorkspaces] = useState(0);
     const requestSeqRef = useRef(0);
 
     // Get current plan code from subscription
@@ -175,33 +185,49 @@ export default function StoragePage() {
         }
     };
 
-    // "All workspaces": fetch each workspace's quota / stats / breakdown in
-    // parallel and sum them (a per-workspace failure degrades to that workspace
-    // contributing nothing rather than failing the whole view).
+    // "All workspaces": fetch each workspace's quota / stats / breakdown and sum them.
+    //
+    // ONE WORKSPACE IS ONE ATOMIC CONTRIBUTION. Previously the three calls were gathered
+    // independently, so a workspace whose quota answered but whose breakdown did not added its
+    // bytes to the gauge and nothing to the categories - reproducing, in the aggregate view, the
+    // exact gauge-vs-categories mismatch this page exists to report. A workspace that cannot be
+    // read in full is therefore excluded from BOTH sums, and the number excluded is shown rather
+    // than folded into a total that silently under-reports.
     const fetchAllWorkspaces = async (requestSeq: number, ids: string[]) => {
         if (ids.length === 0) {
-            if (isCurrentRequest(requestSeq)) { setQuota(null); setStats(null); setBreakdown([]); }
+            if (isCurrentRequest(requestSeq)) {
+                setQuota(null); setStats(null); setBreakdown([]); setUnreadableWorkspaces(0);
+            }
             return;
         }
         try {
             if (isCurrentRequest(requestSeq)) setError(null);
-            const [quotas, statsList, breakdowns] = await Promise.all([
-                Promise.all(ids.map((id) => storageApi.getQuota(id).catch(() => null))),
-                Promise.all(ids.map((id) => storageApi.getStats(id).catch(() => null))),
-                Promise.all(ids.map((id) => storageApi.getBreakdown(id).catch(() => [] as StorageBreakdown[]))),
-            ]);
+            const parts = await Promise.all(ids.map(async (id) => {
+                // allSettled, not all: the three calls fail independently and they are not equally
+                // load-bearing. workspacePartFromSettled holds the rule (bytes are atomic, stats
+                // are not) so the page and the aggregator cannot drift apart about it.
+                const [q, st, bd] = await Promise.allSettled([
+                    storageApi.getQuota(id),
+                    storageApi.getStats(id),
+                    storageApi.getBreakdown(id),
+                ]);
+                return workspacePartFromSettled(q, st, bd);
+            }));
             if (!isCurrentRequest(requestSeq)) return;
-            const okQuotas = quotas.filter((q): q is StorageQuota => !!q);
-            // Every workspace quota failed: surface an error rather than an empty
-            // aggregate (maxBytes 0 would otherwise read as "unlimited" -> a misleading ∞).
-            if (okQuotas.length === 0) {
+            const aggregate = aggregateWorkspaces(parts);
+            // Every workspace failed: surface an error rather than an empty aggregate
+            // (maxBytes 0 would otherwise read as "unlimited" -> a misleading infinity).
+            if (!aggregate.quota) {
                 setError('Failed to load storage information');
-                setQuota(null); setStats(null); setBreakdown([]);
+                setQuota(null); setStats(null); setBreakdown([]); setUnreadableWorkspaces(0);
                 return;
             }
-            setQuota(aggregateStorageQuotas(okQuotas));
-            setStats(aggregateTenantStats(statsList.filter((s): s is TenantStats => !!s)));
-            setBreakdown(aggregateBreakdowns(breakdowns.map((b) => (Array.isArray(b) ? b : []))));
+            // Note: the "n workspaces unavailable" line is only shown alongside a total. When there
+            // is no total at all the error above says so instead, which is why the count is reset.
+            setQuota(aggregate.quota);
+            setStats(aggregate.stats);
+            setBreakdown(aggregate.breakdown);
+            setUnreadableWorkspaces(aggregate.unreadable);
         } catch (err) {
             console.error('Failed to aggregate storage across workspaces:', err);
             if (isCurrentRequest(requestSeq)) setError('Failed to load storage information');
@@ -223,6 +249,7 @@ export default function StoragePage() {
             setLoading(true);
             setQuota(null);
             setBreakdown([]);
+            setUnreadableWorkspaces(0);
             const run = isAll
                 ? fetchAllWorkspaces(requestSeq, enterableOrgIds)
                 : Promise.all([fetchQuota(requestSeq), fetchStats(requestSeq), fetchBreakdown(requestSeq)]);
@@ -243,6 +270,9 @@ export default function StoragePage() {
         const requestSeq = ++requestSeqRef.current;
         setRecalculating(true);
         try {
+            // Never reached in "All" mode: the button is hidden there (the scope value is a
+            // sentinel, not a workspace id, and sending it would make the gateway fall back to
+            // the default workspace and repaint one workspace's numbers under an "All" label).
             const data = await storageApi.recalculateUsage(scopeOrgId);
             if (isCurrentRequest(requestSeq)) {
                 setQuota(data);
@@ -267,22 +297,62 @@ export default function StoragePage() {
         return `${(safe / (1024 * 1024 * 1024)).toFixed(2)} GB`;
     };
 
+    // The account's shared pool, when one applies to this view.
+    //
+    // The plan's allowance belongs to the ACCOUNT: every workspace it owns draws on the same
+    // pot and all of them are refused once it is full. Two consequences the page has to respect:
+    // the bar must track the ACCOUNT (a workspace at 3% of the allowance can be one upload away
+    // from a refusal), and the number is shown to the OWNER only, since inside a shared
+    // workspace it would reveal how much the owner stores in workspaces a member cannot see.
+    // Ownership of the workspace this page is SCOPED to, which is not necessarily the active
+    // one: the page has its own selector, so asking the store (which answers for the active
+    // workspace) would show the pool of the wrong account, or hide it from an owner who simply
+    // scoped the page elsewhere. The server is the real boundary and only returns the figure to
+    // the owning account; this just avoids rendering a line that will never have data.
+    const ownsScopedWorkspace = useMemo(() => {
+        if (!scopeOrgId || isAll) return false;
+        // Before memberships load, claim nothing. Falling back to the ACTIVE workspace's role
+        // would flash the pool line for an owner who has scoped the page to someone else's
+        // workspace. The server is the real gate (it sends the figure only to the owning
+        // account), so the worst this costs is the line appearing a moment later.
+        return (workspaces ?? []).find((w) => w.id === scopeOrgId)?.currentUserRole === 'OWNER';
+    }, [workspaces, scopeOrgId, isAll]);
+
+    const accountPool = useMemo(() => {
+        if (isAll || !ownsScopedWorkspace || isUnlimited) return null;
+        const used = quota?.accountUsedBytes;
+        if (used == null) return null; // unattributed workspace: no pool, pre-change behaviour
+        return { used };
+    }, [isAll, ownsScopedWorkspace, isUnlimited, quota?.accountUsedBytes]);
+
     // Calculate usage percentage based on plan limit
     const usagePercentage = useMemo(() => {
         if (!quota || isUnlimited) return 0;
         const limit = planStorageLimit || quota.maxBytes;
-        return Math.min(100, (quota.usedBytes / limit) * 100);
-    }, [quota, planStorageLimit, isUnlimited]);
+        const used = accountPool ? accountPool.used : quota.usedBytes;
+        return Math.min(100, (used / limit) * 100);
+    }, [quota, planStorageLimit, isUnlimited, accountPool]);
 
     // Determine status based on plan limit
     const effectiveStatus = useMemo(() => {
         if (!quota || isUnlimited) return 'OK';
         const limit = planStorageLimit || quota.maxBytes;
         const softLimit = limit * 0.8;
-        if (quota.usedBytes >= limit) return 'HARD_LIMIT_REACHED';
-        if (quota.usedBytes >= softLimit) return 'SOFT_LIMIT_REACHED';
+        // The SERVER's status wins when it is not OK. It is decided on the account's pool, which
+        // is what the write gate uses, and it is the only signal a member gets: they never see
+        // the account figure, so recomputing locally from their workspace's bytes would paint a
+        // green bar right up to the refusal. Believing a worse status than we can derive is
+        // always safe; the reverse is the lie.
+        if (quota.status === 'HARD_LIMIT_REACHED' || quota.status === 'SOFT_LIMIT_REACHED') {
+            return quota.status;
+        }
+        // Against the pool where one applies: the soft-limit warning would otherwise never fire,
+        // since no single workspace need approach the allowance for the account to be full.
+        const used = accountPool ? accountPool.used : quota.usedBytes;
+        if (used >= limit) return 'HARD_LIMIT_REACHED';
+        if (used >= softLimit) return 'SOFT_LIMIT_REACHED';
         return 'OK';
-    }, [quota, planStorageLimit, isUnlimited]);
+    }, [quota, planStorageLimit, isUnlimited, accountPool]);
 
     const getProgressColor = (status: string) => {
         switch (status) {
@@ -364,9 +434,15 @@ export default function StoragePage() {
                                 <h2 className="text-lg font-semibold text-theme-primary">{t('usage.title')}</h2>
                             </div>
                             <p className="text-sm text-theme-secondary">
-                                {quota
-                                    ? t('usage.usedOf', { used: formatBytes(quota.usedBytes), total: displayLimit })
-                                    : error || '-'
+                                {!quota
+                                    ? error || '-'
+                                    : accountPool
+                                        // No denominator on this line when a pool applies: "3 MB
+                                        // of 100 GB" would read as this workspace's own headroom,
+                                        // which is not a thing that exists. The allowance belongs
+                                        // to the account and is stated on the line below.
+                                        ? t('usage.thisWorkspace', { used: formatBytes(quota.usedBytes) })
+                                        : t('usage.usedOf', { used: formatBytes(quota.usedBytes), total: displayLimit })
                                 }
                             </p>
                             <p className="text-xs text-theme-tertiary mt-0.5">
@@ -374,6 +450,30 @@ export default function StoragePage() {
                                     ? t('scope.allWorkspaces')
                                     : isTeamWorkspace ? t('scope.teamPlanLabel') : `${currentPlanCode} ${t('plan')}`}
                             </p>
+                            {/* The pool line. The allowance belongs to the ACCOUNT and every
+                                workspace draws on it, so a workspace holding almost nothing can
+                                still be refused: showing only its own figure would promise room
+                                that is not there. Shown to the OWNER alone, because inside a
+                                shared workspace this number would tell an invited member how much
+                                the owner stores elsewhere, and that workspaces they cannot see
+                                exist at all. A member who gets blocked is told so at the moment
+                                of the refusal instead. */}
+                            {accountPool && (
+                                <p className="text-xs text-theme-tertiary mt-1">
+                                    {t('usage.accountPool', {
+                                        used: formatBytes(accountPool.used),
+                                        total: displayLimit,
+                                    })}
+                                </p>
+                            )}
+                            {/* An aggregate missing a workspace says so. Silently summing what
+                                loaded would under-report the total with nothing on screen to
+                                explain why. */}
+                            {isAll && unreadableWorkspaces > 0 && (
+                                <p className="text-xs text-amber-500 mt-0.5">
+                                    {t('scope.workspacesUnavailable', { count: unreadableWorkspaces })}
+                                </p>
+                            )}
                         </div>
                     </div>
                     <div className="flex items-center gap-3">

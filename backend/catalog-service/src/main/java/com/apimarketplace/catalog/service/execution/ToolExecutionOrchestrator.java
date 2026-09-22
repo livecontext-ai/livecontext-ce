@@ -35,21 +35,44 @@ public class ToolExecutionOrchestrator {
      * @return projected result
      */
     public Object projectResult(Object rawData, String outputSchemaJson, String executionMode) {
+        return projectResult(rawData, outputSchemaJson, executionMode, null);
+    }
+
+    /**
+     * Same, with the call's RESPONSE HEADERS available to the projection.
+     *
+     * <p>Only a field that declares {@code "source": "header"} reads from them, so passing headers
+     * changes nothing for any tool that does not. See {@link OutputProjector#project(Object,
+     * String, java.util.Map)} for why a provider would put a needed value there.
+     *
+     * <p>NOT every mode carries usable headers, and the difference is invisible at this layer.
+     * {@code sync} and {@code upload} pass the real response headers. {@code streaming} has none
+     * (HttpExecutionService puts an empty map: an aggregated SSE stream has no single response),
+     * and {@code async_poll} passes the SUBMIT call's headers, not those of the final poll that
+     * produced the data, because AsyncPollExecutor returns a converted body and discards them. A
+     * header-sourced field on either of those two would therefore resolve to nothing, silently,
+     * which is why validate_apis.py REFUSES that combination at import time rather than letting a
+     * seed author discover it at run time.
+     *
+     * @param responseHeaders response headers from the HTTP call, may be null
+     */
+    public Object projectResult(Object rawData, String outputSchemaJson, String executionMode,
+                                java.util.Map<String, String> responseHeaders) {
         String mode = normalizeMode(executionMode);
         switch (mode) {
             case "sync":
             case "upload":
                 // upload only changes the REQUEST encoding; the response is plain JSON.
-                return outputProjector.project(rawData, outputSchemaJson);
+                return outputProjector.project(rawData, outputSchemaJson, responseHeaders);
             case "async_poll":
                 // The async executor has already returned the resolved result body before this
                 // method is called, so we project it the same way as sync.
-                return outputProjector.project(rawData, outputSchemaJson);
+                return outputProjector.project(rawData, outputSchemaJson, responseHeaders);
             case "streaming":
                 // StreamingResponseHandler has already aggregated the SSE chunks into a
                 // {chunks, chunk_count, terminated, truncated, error?} envelope. Project
                 // it through OutputProjector so the tool's outputSchema can shape each chunk.
-                return outputProjector.project(rawData, outputSchemaJson);
+                return outputProjector.project(rawData, outputSchemaJson, responseHeaders);
             default:
                 // Unknown mode - fail-fast instead of silent passthrough.
                 log.error("ToolExecutionOrchestrator: unknown execution mode '{}'", mode);

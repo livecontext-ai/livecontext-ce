@@ -3,6 +3,8 @@ package com.apimarketplace.agent.controller;
 import com.apimarketplace.agent.domain.AgentEntity;
 import com.apimarketplace.agent.domain.AgentSkillEntity;
 import com.apimarketplace.agent.domain.SkillEntity;
+import com.apimarketplace.agent.repository.AgentExecutionRepository;
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.agent.repository.AgentRepository;
 import com.apimarketplace.agent.repository.AgentSkillRepository;
 import com.apimarketplace.agent.repository.AgentWebhookTokenRepository;
@@ -46,6 +48,8 @@ class InternalAgentControllerCloneFromSnapshotTest {
 
     @Mock private AgentService agentService;
     @Mock private AgentRepository agentRepository;
+    @Mock private AgentExecutionRepository agentExecutionRepository;
+    @Mock private OrgAccessGuard orgAccessService;
     @Mock private AgentSkillRepository agentSkillRepository;
     @Mock private AgentWebhookTokenRepository webhookTokenRepository;
     @Mock private SkillRepository skillRepository;
@@ -64,6 +68,8 @@ class InternalAgentControllerCloneFromSnapshotTest {
         controller = new InternalAgentController(
             agentService,
             agentRepository,
+            agentExecutionRepository,
+            orgAccessService,
             agentSkillRepository,
             webhookTokenRepository,
             skillRepository,

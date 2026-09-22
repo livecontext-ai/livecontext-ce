@@ -1385,6 +1385,83 @@ class SignalResumeServiceTest {
         }
     }
 
+    /**
+     * The row a parked node finally gets, and what it says.
+     *
+     * <p>This is the ONLY row an interface, an approval or a long wait ever produces: the
+     * yield persists nothing. It used to carry the signal's own fields alone, under the
+     * signal's own key names, so what the node resolved was reported nowhere at any moment
+     * of the run - which is also why the interface variable-mapping report could be correct
+     * in the node and invisible in the product.
+     */
+    @Nested
+    @DisplayName("buildSignalInputData - what a parked node reports")
+    class SignalInputDataTests {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> invokeBuild(SignalWaitEntity signal) throws Exception {
+            Method method = SignalResumeService.class.getDeclaredMethod(
+                "buildSignalInputData", SignalWaitEntity.class);
+            method.setAccessible(true);
+            return (Map<String, Object>) method.invoke(resumeService, signal);
+        }
+
+        private SignalWaitEntity signalWith(Map<String, Object> reportedParams) {
+            SignalWaitEntity signal = new SignalWaitEntity();
+            signal.setSignalType(SignalType.INTERFACE_SIGNAL);
+            signal.setSignalConfig(new java.util.HashMap<>(Map.of("interfaceId", "iface-1")));
+            signal.setItemId("0");
+            signal.setDagTriggerId("trigger:webhook");
+            signal.setEpoch(3);
+            signal.setReportedParams(reportedParams);
+            return signal;
+        }
+
+        @Test
+        @DisplayName("reports the node's own parameters, not only the signal's")
+        void reportsTheNodesParams() throws Exception {
+            Map<String, Object> input = invokeBuild(signalWith(new java.util.LinkedHashMap<>(Map.of(
+                "interfaceId", "iface-1",
+                "variableMapping", Map.of("rows", Map.of("status", "unresolved"))))));
+
+            assertThat(input.get("variableMapping"))
+                .as("the mapping is the reason a reader opens this row")
+                .isNotNull();
+            assertThat(input.get("signal_type"))
+                .as("and the signal's own bookkeeping is still there")
+                .isEqualTo("INTERFACE_SIGNAL");
+        }
+
+        @Test
+        @DisplayName("the node's key wins over the signal's: the plan's vocabulary is what the panel labels")
+        void theNodesKeysWin() throws Exception {
+            // DIFFERENT values on both sides, or this test cannot fail: the fixture's signal
+            // carries epoch 3, so a node also reporting 3 would pass whichever side won,
+            // pass on the pre-fix code, and pass if the node's map were dropped entirely.
+            SignalWaitEntity signal = signalWith(new java.util.LinkedHashMap<>(Map.of(
+                "epoch", 99, "trigger_id", "trigger:from_the_node")));
+
+            Map<String, Object> input = invokeBuild(signal);
+
+            assertThat(input.get("epoch"))
+                .as("the node's value, not the signal's 3")
+                .isEqualTo(99);
+            assertThat(input.get("trigger_id"))
+                .as("and on every key both of them write")
+                .isEqualTo("trigger:from_the_node");
+        }
+
+        @Test
+        @DisplayName("a signal from before the column falls back to signal bookkeeping, as it always did")
+        void fallsBackWhenTheSignalCarriesNone() throws Exception {
+            Map<String, Object> input = invokeBuild(signalWith(null));
+
+            assertThat(input.get("signal_type")).isEqualTo("INTERFACE_SIGNAL");
+            assertThat(input.get("signal_config")).isNotNull();
+            assertThat(input.get("trigger_id")).isEqualTo("trigger:webhook");
+        }
+    }
+
     @Nested
     @DisplayName("filterOutAwaitingSignalNodes - epoch scoping")
     class FilterOutAwaitingSignalNodesTests {
@@ -2622,10 +2699,20 @@ class SignalResumeServiceTest {
             @SuppressWarnings("unchecked")
             Map<String, Object> savedSignalConfig =
                 (Map<String, Object>) stepCaptor.getValue().getInputData().get("signal_config");
+            // MASKED, not removed. The denylist that used to sit here dropped the two keys
+            // it knew by name; the gate masks any credential-named key and keeps the NAME,
+            // which is the rule this work states everywhere else: a row that cannot say
+            // WHICH value was withheld says nothing. Knowing a webhookToken was configured
+            // is the diagnosis; its value never was.
             assertThat(savedSignalConfig)
                 .containsEntry("requiredApprovals", 1)
                 .containsEntry("timeoutMs", 86400000L)
-                .doesNotContainKeys("webhookToken", "cdpToken");
+                .containsEntry("webhookToken", "<withheld: credential>")
+                .containsEntry("cdpToken", "<withheld: credential>");
+            assertThat(savedSignalConfig.toString())
+                .as("and no denylist means no key nobody remembered to add")
+                .doesNotContain("secret-webhook-token")
+                .doesNotContain("secret-cdp-token");
         }
 
         @Test

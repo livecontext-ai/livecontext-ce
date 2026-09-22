@@ -8,8 +8,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -145,7 +147,10 @@ public abstract class AbstractLLMProvider implements LLMProvider {
     }
 
     /**
-     * Resolve the API key: checks DB-stored credentials first, falls back to @Value-injected key.
+     * Resolve the API key for a request-less context (catalog discovery, the admin
+     * "configured?" status): DB-stored credentials for the in-flight request's user,
+     * then the @Value-injected key. Completion calls must use
+     * {@link #resolveApiKey(CompletionRequest)} instead.
      */
     protected String resolveApiKey() {
         if (credentialResolver != null) {
@@ -155,6 +160,153 @@ public abstract class AbstractLLMProvider implements LLMProvider {
             }
         }
         return getApiKey();
+    }
+
+    /**
+     * Resolve the API key for ONE completion call from the request itself, never from
+     * the calling thread.
+     *
+     * <p>The pre-existing no-arg resolution read the user off the servlet request
+     * bound to the current thread. Agent executions dequeued by a queue worker, and
+     * every other async path, have no such request, so the same agent silently ran
+     * on the user's key over sync HTTP and on the platform key off the queue. The
+     * request already carries {@code tenantId} (the rate limiter reads it); this
+     * resolves the key from that, and honours the pinned {@link KeyRoute}:
+     * {@code PLATFORM} skips the user credential entirely (null userId), anything
+     * else resolves user-first for the request's tenant.
+     */
+    protected String resolveApiKey(CompletionRequest request) {
+        return resolveApiKey(request == null ? null : request.tenantId(),
+                request == null ? null : request.keyRoute());
+    }
+
+    /** The request-less "not configured" reason; kept verbatim for callers that match on it. */
+    public static final String NOT_CONFIGURED_MESSAGE = "Provider is not configured. API key is missing.";
+
+    /**
+     * Resolve the key for a (tenant, route) pair.
+     *
+     * <ul>
+     *   <li>{@code OWN_KEY}: the tenant's OWN saved key, and only that. The platform key must
+     *       never serve a call pinned to the user's key, whatever a stale cache or a removed
+     *       credential would otherwise offer: failing closed is what keeps "ran on the user's
+     *       key" and "billed as own-key" the same fact. Throws {@link LLMProviderException}
+     *       with a reason the user can act on.</li>
+     *   <li>{@code PLATFORM}: the platform credential (null user), then the env key.</li>
+     *   <li>unpinned: user-first for the tenant when the request names one, else the
+     *       pre-pin behaviour (the in-flight servlet user), then the env key.</li>
+     * </ul>
+     */
+    protected String resolveApiKey(String tenantId, KeyRoute keyRoute) {
+        boolean hasTenant = tenantId != null && !tenantId.isBlank();
+        if (keyRoute == KeyRoute.OWN_KEY) {
+            if (!hasTenant) {
+                throw new LLMProviderException(getProviderName(),
+                        "Execution is pinned to the tenant's own " + getProviderName()
+                                + " key, but the request names no tenant.");
+            }
+            if (credentialResolver == null) {
+                throw new LLMProviderException(getProviderName(),
+                        "Execution is pinned to your own " + getProviderName()
+                                + " key, but saved API keys cannot be read here. Switch the provider back to the platform key.");
+            }
+            return credentialResolver.resolveUserApiKey(tenantId, getProviderName())
+                    .orElseThrow(() -> new LLMProviderException(getProviderName(), ownKeyMissingMessage()));
+        }
+        if (credentialResolver != null) {
+            java.util.Optional<String> dbKey;
+            if (keyRoute == KeyRoute.PLATFORM) {
+                // Pinned to the platform key: a null user skips the user credential.
+                dbKey = credentialResolver.resolveApiKey(null, getProviderName());
+            } else if (hasTenant) {
+                // The request names its tenant: resolve for THAT user, whatever thread runs this.
+                dbKey = credentialResolver.resolveApiKey(tenantId, getProviderName());
+            } else {
+                // No tenant on the request: the pre-pin behaviour (in-flight servlet user).
+                dbKey = credentialResolver.resolveApiKey(getProviderName());
+            }
+            if (dbKey.isPresent()) {
+                return dbKey.get();
+            }
+        }
+        return getApiKey();
+    }
+
+    /**
+     * 401 and 403 both mean "this key is not accepted". Shared so the save-time check and the
+     * run-time classification cannot drift: {@link #validateApiKey} has always treated the two
+     * alike, while the run-time path used to recognise 401 only, so a provider that answers 403
+     * to a revoked key was refused in Settings and unexplained in a run.
+     */
+    static boolean isAuthRejection(int status) {
+        return status == 401 || status == 403;
+    }
+
+    /**
+     * Written for the user: their own key was accepted when they saved it and is being refused
+     * now. Revoked, expired, out of quota or region-locked all land here, and none of them is
+     * something the platform can fix for them.
+     */
+    String ownKeyRejectedMessage() {
+        // "API key" on purpose, exactly like ownKeyMissingMessage: the chat surface classifies
+        // key problems on that phrase and offers the way back to the settings.
+        return "Your own " + getProviderName() + " API key was rejected by " + getProviderName()
+                + ". It may have been revoked, expired or run out of quota. Save a working key, or"
+                + " switch the provider back to the platform key.";
+    }
+
+    /**
+     * The message an auth rejection should carry, or {@code null} when this call was not on the
+     * caller's own key.
+     *
+     * <p>The route check is the point of this: on the PLATFORM route the same 401 is an operator
+     * problem, and telling a user their key was rejected when the call ran on ours would send
+     * them to a settings page where there is nothing to fix.
+     */
+    protected String ownKeyRejection(CompletionRequest request, int status) {
+        if (request == null || !isAuthRejection(status) || request.keyRoute() != KeyRoute.OWN_KEY) {
+            return null;
+        }
+        return ownKeyRejectedMessage();
+    }
+
+    /** Written for the user: the one move available is to save a key or switch back to the platform key. */
+    String ownKeyMissingMessage() {
+        // "API key" on purpose: the chat surface classifies key problems on that phrase.
+        return "Execution is pinned to your own " + getProviderName()
+                + " key, but no usable " + getProviderName()
+                + " API key is saved for this account. Save a key, or switch the provider back to the platform key.";
+    }
+
+    /**
+     * Why a call for (tenant, route) cannot be served, or {@code null} when it can. The
+     * reason is user-facing: the loop gate, the sync/streaming entry points and the
+     * catalog all surface this same sentence instead of a generic "not configured".
+     */
+    public String configurationProblem(String tenantId, KeyRoute keyRoute) {
+        String key;
+        try {
+            key = resolveApiKey(tenantId, keyRoute);
+        } catch (LLMProviderException e) {
+            return e.getMessage();
+        }
+        return isUsableKey(key) ? null : NOT_CONFIGURED_MESSAGE;
+    }
+
+    /** {@link #configurationProblem(String, KeyRoute)} for a request; null request = request-less check. */
+    protected String configurationProblem(CompletionRequest request) {
+        return configurationProblem(request == null ? null : request.tenantId(),
+                request == null ? null : request.keyRoute());
+    }
+
+    /**
+     * Whether a call for (tenant, route) can be served. Unlike {@link #isConfigured()} this
+     * never reads the calling thread, so the loop's pre-flight gate answers the same for a
+     * queued execution and a sync one, and a provider the platform holds no key for is
+     * still configured for a tenant whose own key serves the call.
+     */
+    public boolean isConfiguredFor(String tenantId, KeyRoute keyRoute) {
+        return configurationProblem(tenantId, keyRoute) == null;
     }
 
     /**
@@ -201,7 +353,7 @@ public abstract class AbstractLLMProvider implements LLMProvider {
     /**
      * Build HTTP headers for this provider.
      */
-    protected abstract HttpHeaders buildHeaders();
+    protected abstract HttpHeaders buildHeaders(CompletionRequest request);
 
     /**
      * Process a streaming line and extract content.
@@ -244,9 +396,224 @@ public abstract class AbstractLLMProvider implements LLMProvider {
         return null;
     }
 
+    // ── Model discovery (GET <base>/models) ─────────────────────────────────
+
+    /** Discovery is a small JSON GET, not a completion - keep it short. */
+    protected static final int DISCOVERY_CONNECT_TIMEOUT_MS = 5_000;
+    protected static final int DISCOVERY_READ_TIMEOUT_MS = 10_000;
+
+    /** Lazily built, mirrors the webClient pattern in this class. */
+    private volatile RestTemplate discoveryRestTemplate;
+    private final Object discoveryRestTemplateLock = new Object();
+
+    /**
+     * Ask the vendor which models it serves. Lives here rather than on one
+     * subclass because "has an OpenAI-shaped {@code /models} endpoint" is a
+     * property of the VENDOR'S API, not of which Java class we happened to
+     * write for it. DeepSeek, Mistral and OpenAI all speak that dialect while
+     * having their own provider class, and gating discovery on the class
+     * instead of the capability silently excluded them from the catalog
+     * refresh - a model the vendor was already serving stayed invisible with
+     * no error anywhere.
+     *
+     * <p>Three hooks let a non-OpenAI-shaped vendor join instead of being
+     * excluded by default: {@link #modelsEndpoint()},
+     * {@link #discoveryHeaders()} and {@link #extractModelIds(Map)}. A
+     * provider that cannot answer returns null from {@code modelsEndpoint()}
+     * and degrades to "could not ask".
+     *
+     * <p>See {@link LLMProvider#listRemoteModelIds()} for the three-way
+     * contract of the return value.
+     */
+    @Override
+    public Optional<List<String>> listRemoteModelIds() {
+        // isConfigured() is inside the try as well, and deliberately: it is the
+        // FIRST call that reaches the credential resolver, so leaving it
+        // outside would have left the "a key resolver throws" case uncovered
+        // by the very guard written for it.
+        //
+        // What containment buys: the discovery pass asks each vendor in turn,
+        // so an escape here costs every vendor after this one. The enclosing
+        // catalog sync has its own catch and would survive, but it would
+        // survive with the whole pass lost rather than one provider.
+        String url = null;
+        try {
+            if (!isConfigured()) {
+                return Optional.empty();
+            }
+            url = modelsEndpoint();
+            if (url == null) {
+                return Optional.empty();
+            }
+            @SuppressWarnings("rawtypes")
+            ResponseEntity<Map> response = discoveryRestTemplate().exchange(
+                    url, HttpMethod.GET, new HttpEntity<>(discoveryHeaders()), Map.class);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = response.getBody();
+            return Optional.of(extractModelIds(body));
+        } catch (Exception e) {
+            log.warn("Model discovery failed for provider '{}' at {}: {}",
+                    getProviderName(), url, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * A separate, tightly-bounded {@link RestTemplate} for the {@code /models}
+     * call.
+     *
+     * <p>It must NOT reuse the completions {@code restTemplate}: that one is
+     * sized for LLM generation and carries a 1-hour read timeout
+     * ({@code ai.agent.llm.read-timeout-ms}), which is right for a long
+     * completion and catastrophic here. Discovery runs inside the catalog
+     * sync's transaction, once per configured provider, so a single vendor
+     * being unreachable would otherwise pin an open DB transaction for an hour
+     * and stall the whole refresh. A model list is a few KB of JSON; if it has
+     * not arrived in seconds it is not coming.
+     */
+    private RestTemplate discoveryRestTemplate() {
+        RestTemplate local = discoveryRestTemplate;
+        if (local == null) {
+            synchronized (discoveryRestTemplateLock) {
+                local = discoveryRestTemplate;
+                if (local == null) {
+                    SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+                    factory.setConnectTimeout(DISCOVERY_CONNECT_TIMEOUT_MS);
+                    factory.setReadTimeout(DISCOVERY_READ_TIMEOUT_MS);
+                    local = new RestTemplate(factory);
+                    discoveryRestTemplate = local;
+                }
+            }
+        }
+        return local;
+    }
+
+    /**
+     * Derive {@code <base>/models} from the configured chat-completions URL.
+     * Every OpenAI-shaped provider is configured with its full completions
+     * path (e.g. {@code https://api.deepseek.com/v1/chat/completions}), and
+     * the contract puts {@code /models} as a sibling of
+     * {@code /chat/completions}. Returns null when the configured URL does not
+     * follow that shape, so an exotic override degrades to "no discovery"
+     * rather than to a request against a wrong path.
+     *
+     * <p>Override to join discovery with a different URL shape.
+     */
+    protected String modelsEndpoint() {
+        String apiUrl = getApiUrl();
+        if (apiUrl == null || apiUrl.isBlank()) {
+            return null;
+        }
+        int idx = apiUrl.indexOf("/chat/completions");
+        if (idx < 0) {
+            return null;
+        }
+        return apiUrl.substring(0, idx) + "/models";
+    }
+
+    /**
+     * Auth headers for the discovery GET. Bearer by default, which every
+     * OpenAI-shaped vendor accepts. Override for a vendor that authenticates
+     * differently (Anthropic's {@code x-api-key}, Google's
+     * {@code x-goog-api-key}).
+     *
+     * <p>Keep the key in a HEADER, never in the query string: the failure path
+     * logs the URL.
+     */
+    protected HttpHeaders discoveryHeaders() {
+        return discoveryHeaders(resolveApiKey());
+    }
+
+    /**
+     * The discovery headers for an EXPLICIT key: what {@link #validateApiKey} sends before
+     * the key is saved anywhere. Bearer by default; a vendor with its own header overrides.
+     */
+    protected HttpHeaders discoveryHeaders(String apiKey) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(apiKey);
+        return headers;
+    }
+
+    /**
+     * Asks the vendor's model listing with the given key and nothing else: a 2xx accepts it,
+     * a 401/403 rejects it, anything else (no endpoint, network, a 5xx) is "could not ask"
+     * and never blocks saving. The key is not stored, logged or cached here.
+     */
+    @Override
+    public KeyCheck validateApiKey(String apiKey) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return KeyCheck.rejected("empty key");
+        }
+        String url = modelsEndpoint();
+        if (url == null) {
+            return KeyCheck.unverified(getProviderName() + " has no listing endpoint to ask");
+        }
+        try {
+            discoveryRestTemplate().exchange(url, HttpMethod.GET,
+                    new HttpEntity<>(discoveryHeaders(apiKey.trim())), Map.class);
+            return KeyCheck.accepted();
+        } catch (HttpStatusCodeException e) {
+            int status = e.getStatusCode().value();
+            if (isAuthRejection(status)) {
+                return KeyCheck.rejected("rejected by " + getProviderName() + " (HTTP " + status + ")");
+            }
+            return KeyCheck.unverified(getProviderName() + " answered HTTP " + status);
+        } catch (Exception e) {
+            log.warn("Key check could not reach provider '{}' at {}: {}", getProviderName(), url, e.getMessage());
+            return KeyCheck.unverified("could not reach " + getProviderName());
+        }
+    }
+
+    /**
+     * Pull the ids out of an OpenAI {@code /models} body: {@code {"data":[{"id":…}]}}.
+     * Tolerates a bare list and entries that are plain strings - several
+     * OpenAI-compatible vendors take liberties with the envelope. Unknown
+     * shapes yield an empty list rather than an error.
+     *
+     * <p>Override for a vendor with a different envelope, and use the override
+     * to drop ids that are not chat models: an unfiltered listing also carries
+     * embedding, speech and image endpoints, which have no business in a chat
+     * catalog.
+     */
+    @SuppressWarnings("unchecked")
+    protected List<String> extractModelIds(Map<String, Object> body) {
+        if (body == null) {
+            return List.of();
+        }
+        Object data = body.get("data");
+        if (!(data instanceof List<?> entries)) {
+            return List.of();
+        }
+        List<String> ids = new ArrayList<>(entries.size());
+        for (Object entry : entries) {
+            if (entry instanceof String s && !s.isBlank()) {
+                ids.add(s.trim());
+            } else if (entry instanceof Map<?, ?> map) {
+                Object id = ((Map<String, Object>) map).get("id");
+                if (id != null && !id.toString().isBlank()) {
+                    ids.add(id.toString().trim());
+                }
+            }
+        }
+        return ids;
+    }
+
     @Override
     public boolean isConfigured() {
-        String key = resolveApiKey();
+        return isUsableKey(resolveApiKey());
+    }
+
+    /**
+     * Same check as {@link #isConfigured()}, keyed on the request's tenant and pinned
+     * route (see {@link #resolveApiKey(CompletionRequest)}): a provider the platform
+     * holds no key for is still configured for a tenant whose own key serves the call.
+     */
+    protected boolean isConfigured(CompletionRequest request) {
+        return configurationProblem(request) == null;
+    }
+
+    /** Non-blank and not one of the placeholder values env templates ship by default. */
+    static boolean isUsableKey(String key) {
         if (key == null) return false;
         String trimmed = key.trim();
         if (trimmed.isEmpty()) return false;
@@ -276,9 +643,9 @@ public abstract class AbstractLLMProvider implements LLMProvider {
 
     @Override
     public CompletionResponse complete(CompletionRequest request) {
-        if (!isConfigured()) {
-            throw new LLMProviderException(getProviderName(),
-                "Provider is not configured. API key is missing.");
+        String problem = configurationProblem(request);
+        if (problem != null) {
+            throw new LLMProviderException(getProviderName(), problem);
         }
 
         // Check rate limit before making request
@@ -289,7 +656,7 @@ public abstract class AbstractLLMProvider implements LLMProvider {
 
         try {
             Map<String, Object> requestBody = buildRequestBody(request);
-            HttpHeaders headers = buildHeaders();
+            HttpHeaders headers = buildHeaders(request);
             HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
 
             log.debug("Sending request to {} with model {} (estimated tokens: {})",
@@ -322,7 +689,7 @@ public abstract class AbstractLLMProvider implements LLMProvider {
             }
 
         } catch (HttpClientErrorException e) {
-            return handleHttpError(e);
+            return handleHttpError(e, request);
         } catch (LLMProviderException e) {
             throw e;
         } catch (Exception e) {
@@ -334,15 +701,16 @@ public abstract class AbstractLLMProvider implements LLMProvider {
 
     @Override
     public void completeStreaming(CompletionRequest request, StreamingCallback callback) {
-        if (!isConfigured()) {
+        String problem = configurationProblem(request);
+        if (problem != null) {
             // Visibility: streaming silent-return paths used to die without any agent-service log.
             // Sync complete() throws LLMProviderException → propagated by AgentLoopService.execute
             // catch block. Streaming had no equivalent surface - the only visible signal was the
             // SSE channel onError, which the orchestrator's NodeExecutionResult never carried back
             // to the user. Now we log so future failures are debuggable from agent-service.log alone.
-            log.warn("[{}] completeStreaming aborted: provider not configured (tenant={}, model={}, cache miss + invalid env fallback)",
-                getProviderName(), request.tenantId(), request.model());
-            callback.onError("Provider is not configured. API key is missing.");
+            log.warn("[{}] completeStreaming aborted: {} (tenant={}, model={}, route={})",
+                getProviderName(), problem, request.tenantId(), request.model(), request.keyRoute());
+            callback.onError(problem);
             return;
         }
 
@@ -378,7 +746,7 @@ public abstract class AbstractLLMProvider implements LLMProvider {
             // Create connection
             URI uri = URI.create(getApiUrl());
             connection = (HttpURLConnection) uri.toURL().openConnection();
-            setupStreamingConnection(connection);
+            setupStreamingConnection(connection, request);
             // Inactivity watchdog: tighten the socket read timeout to a sub-window poll cadence so
             // shouldStop() is consulted even while the provider streams nothing (a fully-silent
             // stream is then broken at the inactivity window, not only at the larger read timeout).
@@ -398,7 +766,15 @@ public abstract class AbstractLLMProvider implements LLMProvider {
                 String errorMessage = readErrorStream(connection);
                 log.error("HTTP {} from {} streaming - body length was {} chars, error: {}",
                     responseCode, getProviderName(), requestJson.length(), errorMessage);
-                callback.onError("HTTP " + responseCode + ": " + errorMessage);
+                // THE place to classify this: the streaming transport flattens the status into a
+                // string here, so by the time the agent loop sees it there is nothing left to
+                // branch on, and the route is right here on the request. Until this, a key that
+                // worked when it was saved and was revoked later produced the vendor's raw text
+                // and nothing that named the key or said where to fix it.
+                String ownKeyProblem = ownKeyRejection(request, responseCode);
+                callback.onError(ownKeyProblem != null
+                    ? ownKeyProblem
+                    : "HTTP " + responseCode + ": " + errorMessage);
                 return;
             }
 
@@ -420,9 +796,9 @@ public abstract class AbstractLLMProvider implements LLMProvider {
 
     @Override
     public Flux<StreamingEvent> streamReactive(CompletionRequest request) {
-        if (!isConfigured()) {
-            return Flux.error(new LLMProviderException(getProviderName(),
-                    "Provider is not configured. API key is missing."));
+        String problem = configurationProblem(request);
+        if (problem != null) {
+            return Flux.error(new LLMProviderException(getProviderName(), problem));
         }
 
         // Check rate limit before making request.
@@ -446,7 +822,7 @@ public abstract class AbstractLLMProvider implements LLMProvider {
         requestBody.put("stream", true);
         addStreamingRequestOptions(requestBody);
 
-        HttpHeaders headers = buildHeaders();
+        HttpHeaders headers = buildHeaders(request);
         String requestJson;
         try {
             requestJson = objectMapper.writeValueAsString(requestBody);
@@ -599,14 +975,14 @@ public abstract class AbstractLLMProvider implements LLMProvider {
     /**
      * Setup HTTP connection for streaming.
      */
-    protected void setupStreamingConnection(HttpURLConnection connection) throws Exception {
+    protected void setupStreamingConnection(HttpURLConnection connection, CompletionRequest request) throws Exception {
         connection.setRequestMethod("POST");
         connection.setDoOutput(true);
         connection.setDoInput(true);
         connection.setConnectTimeout((int) llmConnectTimeoutMs);
         connection.setReadTimeout((int) llmReadTimeoutMs);
 
-        HttpHeaders headers = buildHeaders();
+        HttpHeaders headers = buildHeaders(request);
         headers.forEach((key, values) -> {
             if (values != null && !values.isEmpty()) {
                 connection.setRequestProperty(key, values.get(0));
@@ -827,12 +1203,35 @@ public abstract class AbstractLLMProvider implements LLMProvider {
      * Returns empty on parse failure (caller falls back to backoff). Never throws.
      */
     protected CompletionResponse handleHttpError(HttpClientErrorException e) {
+        return handleHttpError(e, null);
+    }
+
+    /**
+     * @param request the call this error answers, or {@code null} when the caller has none. Only
+     *                used to tell an auth rejection ON THE CALLER'S OWN KEY from the same status
+     *                on the platform key, which are the same HTTP code and two different things
+     *                to say.
+     */
+    protected CompletionResponse handleHttpError(HttpClientErrorException e, CompletionRequest request) {
         HttpStatusCode status = e.getStatusCode();
         String body = e.getResponseBodyAsString();
         Optional<Duration> retryAfter = parseRetryAfter(e.getResponseHeaders(), body);
 
         log.error("{} API error: {} - {}", getProviderName(), status, body);
 
+        String ownKeyProblem = ownKeyRejection(request, status.value());
+        if (ownKeyProblem != null) {
+            // Not retryable, like every other auth rejection: no amount of retrying fixes a key
+            // the provider refuses.
+            throw new LLMProviderException(getProviderName(), ownKeyProblem, "unauthorized", false);
+        }
+        // The widening to 403 stops at the own-key branch above, deliberately. On the PLATFORM
+        // route a 403 is usually NOT about the key: region locks, org/model entitlement and
+        // policy blocks all answer 403, and unauthorized() would replace the vendor's text with
+        // the fixed "Invalid API key" - which the chat surface classifies as a key problem and
+        // turns into "configure your API keys" for a user who has nothing to configure. So the
+        // platform route keeps 401 only, exactly as before, and a platform 403 falls through to
+        // the generic branch below that carries what the vendor actually said.
         if (status == HttpStatus.UNAUTHORIZED) {
             throw LLMProviderException.unauthorized(getProviderName());
         }

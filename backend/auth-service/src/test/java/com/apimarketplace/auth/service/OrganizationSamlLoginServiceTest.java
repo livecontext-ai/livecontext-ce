@@ -17,6 +17,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -26,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.when;
@@ -91,6 +93,34 @@ class OrganizationSamlLoginServiceTest {
         var ordered = inOrder(organizationRepository, memberService);
         ordered.verify(organizationRepository).findByIdForUpdate(ORG_ID);
         ordered.verify(memberService).getTeamStatus(ORG_ID);
+    }
+
+    @Test
+    @DisplayName("a rejected membership insert is refused outright, it does not re-read inside the dead transaction")
+    void aRejectedMembershipInsertIsRefusedWithoutReReading() {
+        OrganizationSamlConnection connection = activeConnection();
+        when(samlRepository.findByIdpAlias(ALIAS)).thenReturn(Optional.of(connection));
+        when(memberRepository.findActiveByOrganizationIdAndUserId(ORG_ID, 42L))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.empty());
+        when(organizationRepository.findByIdForUpdate(ORG_ID)).thenReturn(Optional.of(organization));
+        stubTeamStatus(true, 10, 1, 0);
+        when(memberRepository.findActiveDefaultByUserId(42L)).thenReturn(Optional.empty());
+        when(memberRepository.save(any(OrganizationMember.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_org_member"));
+
+        assertThatThrownBy(() -> service.ensureMembershipForIdentityProvider(user, ALIAS))
+                .isInstanceOf(SamlMembershipException.class)
+                .hasMessageContaining("Could not join SAML workspace");
+
+        // The insert is reached only after the organization row is locked and membership
+        // re-checked under that lock, so a duplicate here is not a lost race, it is a surprise.
+        // The recovery this used to attempt (a THIRD read, to return the winner's row) could
+        // never have run: the violation has already put the transaction in PostgreSQL's ERROR
+        // state, so that read comes back 25P02 and the caller sees that instead of the answer
+        // the catch promised. Exactly two reads, and a refusal.
+        verify(memberRepository, times(2)).findActiveByOrganizationIdAndUserId(ORG_ID, 42L);
+        verify(auditService, never()).record(any(), any(), any(), any());
     }
 
     @Test

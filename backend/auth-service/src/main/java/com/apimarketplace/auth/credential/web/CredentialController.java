@@ -218,6 +218,37 @@ public class CredentialController {
     }
 
     /**
+     * Switch whose key serves the caller's executions on one provider (body
+     * {@code {"mode": "no_proxy" | "proxy"}}). Same scoping as rename: the caller's
+     * active workspace, 404 for anything it cannot see.
+     */
+    @PatchMapping("/{id}/llm-mode")
+    public ResponseEntity<?> setLlmKeyMode(
+            @PathVariable("id") Long id,
+            HttpServletRequest httpRequest,
+            @RequestBody Map<String, Object> request) {
+
+        String tenantId = tenantResolver.resolveOrNull(httpRequest);
+        tenantResolver.validate(tenantId);
+        String organizationId = tenantResolver.resolveOrgId(httpRequest);
+        if (organizationId == null || organizationId.isBlank()) {
+            return badRequest("An active workspace is required", "workspace_required");
+        }
+        Object rawMode = request.get("mode");
+        if (!(rawMode instanceof String mode) || !CredentialService.LLM_KEY_MODES.contains(mode)) {
+            return badRequest("'mode' must be one of " + CredentialService.LLM_KEY_MODES, "invalid_mode");
+        }
+        try {
+            return credentialService
+                    .setLlmKeyModeForScope(id, tenantId, organizationId, mode)
+                    .<ResponseEntity<?>>map(cred -> ResponseEntity.ok(cred.withoutSecrets()))
+                    .orElseGet(() -> ResponseEntity.notFound().build());
+        } catch (IllegalArgumentException e) {
+            return badRequest(String.valueOf(e.getMessage()), "invalid_mode");
+        }
+    }
+
+    /**
      * DELETE /api/credentials/{id} - Strict-isolation delete. Returns 404 if
      * the credential exists in a different scope.
      */

@@ -35,7 +35,28 @@ class ApiCatalogBundleJsonWriterTest {
     private static ApiCatalogBundleService.RawBundle raw(byte[] payload) {
         return new ApiCatalogBundleService.RawBundle(
                 1788700000000L, 1, "d1e2f3", "sig==", "key-1", "cloud",
-                977, 32661, 128_000L, payload);
+                977, 32661, 128_000L, payload.length,
+                () -> new java.io.ByteArrayInputStream(payload));
+    }
+
+    @Test
+    @DisplayName("a stream that runs out early FAILS instead of emitting a short, well-formed payload")
+    void aStreamShorterThanItsDeclaredLengthFails() {
+        // The reads happen after the response is committed, so this is the last
+        // line of defence: writeBinary is given the length the row measured, and
+        // refuses to finish the field if the stream cannot deliver it. Drop that
+        // argument (the read-to-EOF form) and the endpoint would serve a
+        // truncated payload as a complete, correctly-framed, ETag-stamped 200.
+        byte[] declared = new byte[5_000];
+        new Random(31).nextBytes(declared);
+        ApiCatalogBundleService.RawBundle short_ = new ApiCatalogBundleService.RawBundle(
+                1788700000000L, 1, "d1e2f3", "sig==", "key-1", "cloud",
+                977, 32661, 128_000L, declared.length,
+                () -> new java.io.ByteArrayInputStream(java.util.Arrays.copyOf(declared, 100)));
+
+        assertThatThrownBy(() -> write(short_))
+                .as("a payload shorter than the row said must not reach a client as a valid bundle")
+                .hasMessageContaining("Too few bytes");
     }
 
     private static String write(ApiCatalogBundleService.RawBundle bundle) throws Exception {
@@ -135,5 +156,46 @@ class ApiCatalogBundleJsonWriterTest {
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("Broken pipe");
         assertThat(closed).isFalse();
+    }
+
+    @Test
+    @DisplayName("A stream that answers a few bytes at a time still produces byte-identical base64")
+    void shortReadingStreamProducesIdenticalBase64() throws Exception {
+        // Every other test here feeds a ByteArrayInputStream, which always fills
+        // the buffer. The real payload arrives from the database one slice at a
+        // time, so the stream Jackson reads DOES return short. If writeBinary
+        // mishandled that, the base64 would differ from what already-deployed CE
+        // readers expect, and the signature over it would stop verifying.
+        byte[] payload = new byte[5_000];
+        new Random(99).nextBytes(payload);
+
+        ApiCatalogBundleService.RawBundle bundle = new ApiCatalogBundleService.RawBundle(
+                1788700000000L, 1, "d1e2f3", "sig==", "key-1", "cloud",
+                977, 32661, 128_000L, payload.length,
+                () -> new java.io.InputStream() {
+                    private int pos;
+
+                    @Override public int read() {
+                        return pos < payload.length ? payload[pos++] & 0xFF : -1;
+                    }
+
+                    @Override public int read(byte[] b, int off, int len) {
+                        if (pos >= payload.length) return -1;
+                        // Never more than 7 bytes: the shape a sliced reader has,
+                        // exaggerated so a buffering bug cannot hide.
+                        int n = Math.min(Math.min(7, len), payload.length - pos);
+                        System.arraycopy(payload, pos, b, off, n);
+                        pos += n;
+                        return n;
+                    }
+                });
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ApiCatalogBundleJsonWriter.write(bundle, out);
+
+        String legacy = MAPPER.writeValueAsString(new ApiCatalogSignedBundle(
+                1788700000000L, 1, "d1e2f3", "sig==", "key-1", "cloud",
+                977, 32661, 128_000L, Base64.getEncoder().encodeToString(payload)));
+        assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo(legacy);
     }
 }

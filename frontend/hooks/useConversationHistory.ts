@@ -7,13 +7,28 @@ import {
   useConversationList,
   useMessages,
   useConversationMutations,
+  type LoadMessagesOptions,
 } from './conversation';
 import { useDeletedConversationsSync } from './conversation/useDeletedConversationsSync';
 import { onConversationMessagesCleared } from '@/lib/chat/conversationMessagesBus';
+import { forgetMessages } from '@/lib/chat/messageSnapshotCache';
 
 export interface UseConversationHistoryOptions {
   autoLoad?: boolean;
   pageSize?: number;
+  /**
+   * Conversation being opened. Forwarded to useMessages so a REMOUNT of the chat (the
+   * end-of-stream /app/c/{id} URL sync swaps the page component) paints the thread it was
+   * already showing on its first frame instead of a skeleton. Only consulted together with
+   * {@link UseConversationHistoryOptions.retainAcrossRemount}.
+   */
+  conversationId?: string;
+  /**
+   * Declares this instance the owner of the conversation's cross-remount snapshot. Exactly one
+   * caller per conversation may set it - the surface that renders the WHOLE thread. See
+   * UseMessagesOptions.retainAcrossRemount for why ownership is opt-in.
+   */
+  retainAcrossRemount?: boolean;
 }
 
 export interface UseConversationHistoryReturn {
@@ -38,8 +53,8 @@ export interface UseConversationHistoryReturn {
   searchConversations: (searchTerm: string, searchType?: 'title' | 'content') => Promise<void>;
   clearSearch: () => Promise<void>;
   selectConversation: (conversation: Conversation | null) => void;
-  loadMessages: (conversationId: string) => Promise<void>;
-  loadConversationAndMessages: (conversationId: string) => Promise<void>;
+  loadMessages: (conversationId: string, limit?: number, options?: LoadMessagesOptions) => Promise<void>;
+  loadConversationAndMessages: (conversationId: string, options?: LoadMessagesOptions) => Promise<void>;
   loadOlderMessages: (conversationId: string) => Promise<void>;
   createConversation: (title: string, model: string, provider: string) => Promise<Conversation | null>;
   updateConversation: (conversationId: string, updates: Partial<Conversation>) => Promise<void>;
@@ -69,7 +84,9 @@ export interface UseConversationHistoryReturn {
  */
 export function useConversationHistory({
   autoLoad = true,
-  pageSize = 50
+  pageSize = 50,
+  conversationId,
+  retainAcrossRemount,
 }: UseConversationHistoryOptions = {}): UseConversationHistoryReturn {
   // Get state from shared context for sync
   const { state: appState, removeConversation: removeSharedConversation } = useUnifiedApp();
@@ -81,7 +98,7 @@ export function useConversationHistory({
 
   // Use the split hooks
   const conversationList = useConversationList({ autoLoad, pageSize });
-  const messagesHook = useMessages();
+  const messagesHook = useMessages({ conversationId, retainAcrossRemount });
 
   // Refs for sub-hook functions to avoid unstable callback dependencies
   const loadConversationByIdRef = useRef(conversationList.loadConversationById);
@@ -112,6 +129,9 @@ export function useConversationHistory({
       conversationList.setConversations(prev =>
         prev.filter(c => c.id !== convId)
       );
+      // Drop the cross-remount snapshot too: a deleted conversation must not be able to paint
+      // its transcript again from memory.
+      forgetMessages(convId);
       if (currentConversation?.id === convId) {
         setCurrentConversation(null);
         messagesHook.clearMessages();
@@ -168,10 +188,27 @@ export function useConversationHistory({
     }
   }, []);
 
-  // Load conversation and its messages
-  const loadConversationAndMessages = useCallback(async (conversationId: string) => {
-    // If switching to a different conversation, clear old messages first
-    if (currentConversationRef.current && currentConversationRef.current.id !== conversationId) {
+  // Load conversation and its messages.
+  //
+  // `options.silent` forwards to loadMessages, and carries one extra rule here: a background
+  // reconciliation is only ever about the conversation on screen. If the reader has moved on,
+  // it does nothing at all - the alternative is the clear below, which would blank the
+  // conversation they moved TO and then repopulate it with the previous one's rows.
+  //
+  // It does still go through loadConversationById. That serves from the already-loaded list
+  // whenever the conversation is in it, which for a reader sitting in one of their own
+  // conversations is every time: a cache read that hands back the same object and commits
+  // nothing. Only a conversation the list does not know about is actually refetched.
+  const loadConversationAndMessages = useCallback(async (
+    conversationId: string,
+    options?: LoadMessagesOptions,
+  ) => {
+    const isSwitchingConversation =
+      !!currentConversationRef.current && currentConversationRef.current.id !== conversationId;
+
+    if (isSwitchingConversation) {
+      if (options?.silent) return;
+      // If switching to a different conversation, clear old messages first
       clearMessagesRef.current();
     }
 
@@ -182,7 +219,7 @@ export function useConversationHistory({
     }
 
     // Load messages
-    await loadMessagesRef.current(conversationId);
+    await loadMessagesRef.current(conversationId, undefined, options);
   }, []); // Stable - never recreated
 
   // Refresh current conversation

@@ -1172,4 +1172,56 @@ class GenericOutputSchemaMapperTest {
             assertFalse(result.containsKey("rendered_js"));
         }
     }
+
+    /**
+     * This mapper is an allowlist: a key the NodeSpec does not declare never reaches the persisted
+     * JSONB. So declaring the output on the two write specs is not documentation, it is the thing
+     * that makes the value exist for a downstream node at all - and deleting the declaration would
+     * leave every layer above still passing.
+     */
+    @Nested
+    @DisplayName("Table write warnings survive persistence")
+    class TableWriteWarnings {
+
+        private static final List<String> WARNINGS = List.of(
+            "video: File reference has no id and no URL - it cannot be displayed (storage key: 1/wf/run/clip.mp4)");
+
+        @Test
+        @DisplayName("INSERT_ROW keeps the warnings the step reported")
+        void insertRowKeepsWarnings() {
+            Map<String, Object> input = new HashMap<>();
+            input.put("row_id", "42");
+            input.put("inserted_count", 1);
+            input.put("warnings", WARNINGS);
+
+            Map<String, Object> result = genericMapper.transform("INSERT_ROW", input);
+
+            assertEquals(WARNINGS, result.get("warnings"));
+        }
+
+        @Test
+        @DisplayName("UPDATE_ROW keeps the warnings the step reported")
+        void updateRowKeepsWarnings() {
+            Map<String, Object> input = new HashMap<>();
+            input.put("updated_count", 3);
+            input.put("warnings", WARNINGS);
+
+            Map<String, Object> result = genericMapper.transform("UPDATE_ROW", input);
+
+            assertEquals(WARNINGS, result.get("warnings"));
+        }
+
+        @Test
+        @DisplayName("A clean write persists no warnings key - the field is conditional, not defaulted")
+        void cleanWritePersistsNoWarningsKey() {
+            Map<String, Object> input = new HashMap<>();
+            input.put("row_id", "42");
+            input.put("inserted_count", 1);
+
+            Map<String, Object> result = genericMapper.transform("INSERT_ROW", input);
+
+            assertFalse(result.containsKey("warnings"),
+                "an empty array on every clean write would train readers to ignore the field");
+        }
+    }
 }

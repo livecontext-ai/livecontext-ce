@@ -12,7 +12,7 @@
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ChatCore } from '../ChatCore';
 import { useMessageQueueStore } from '@/lib/stores/message-queue-store';
 
@@ -190,6 +190,78 @@ describe('ChatCore ask_user question cards', () => {
     await waitFor(() => expect(mocks.dismissAskUser).toHaveBeenCalledWith('conversation-1', 'call-7', 'call-7:ask'));
     expect(mocks.streaming.clearAskUserQuestion).toHaveBeenCalledWith('conversation-1', 'ask:call-7');
     expect(queued()).toHaveLength(0);
+  });
+
+  it.each([heldQuestion, unheldQuestion])('Skip resumes an expired or unheld question ($toolCallId)', async (question) => {
+    mocks.dismissAskUser.mockResolvedValue(false);
+    mockStream([question]);
+    renderChat();
+
+    fireEvent.click(screen.getByText(`skip-${question.toolCallId}`));
+
+    await waitFor(() => expect(queued()).toHaveLength(1));
+    expect(queued()[0].content).toBe('askUser.resumeSkipped');
+    expect(queued()[0].keepPendingActions).toBe(true);
+    expect(mocks.streaming.clearAskUserQuestion).toHaveBeenCalledWith('conversation-1', `ask:${question.toolCallId}`);
+  });
+
+  it('a failed Skip preserves the question and permits retry instead of silently losing it', async () => {
+    mocks.dismissAskUser.mockRejectedValueOnce(new Error('network'));
+    mockStream([heldQuestion]);
+    renderChat();
+
+    fireEvent.click(screen.getByText('skip-call-7'));
+
+    await waitFor(() => expect(mocks.dismissAskUser).toHaveBeenCalledTimes(1));
+    expect(mocks.streaming.clearAskUserQuestion).not.toHaveBeenCalled();
+    expect(screen.getByTestId('ask-card-call-7')).toBeInTheDocument();
+    expect(queued()).toHaveLength(0);
+
+    mocks.dismissAskUser.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByText('skip-call-7'));
+    await waitFor(() => expect(queued()).toHaveLength(1));
+  });
+
+  it.each(['skip', 'submit'])('Stop prevents a late %s response from restarting the task', async (action) => {
+    let finish!: (released: boolean) => void;
+    const response = new Promise<boolean>(resolve => { finish = resolve; });
+    (action === 'skip' ? mocks.dismissAskUser : mocks.answerAskUser).mockReturnValueOnce(response);
+    mockStream([heldQuestion]);
+    renderChat();
+
+    fireEvent.click(screen.getByText(`${action}-call-7`));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await act(async () => { finish(false); await response; });
+
+    expect(mocks.streaming.stopStream).toHaveBeenCalledWith('conversation-1');
+    expect(queued()).toHaveLength(0);
+  });
+
+  it('a fresh user message supersedes an in-flight Skip continuation', async () => {
+    let finish!: (released: boolean) => void;
+    const response = new Promise<boolean>(resolve => { finish = resolve; });
+    mocks.dismissAskUser.mockReturnValueOnce(response).mockResolvedValue(false);
+    mockStream([heldQuestion]);
+    renderChat();
+
+    fireEvent.click(screen.getByText('skip-call-7'));
+    fireEvent.click(screen.getByText('type-fresh-message'));
+    await act(async () => { finish(false); await response; });
+
+    expect(queued()).toHaveLength(0);
+  });
+
+  it('Stop removes queued question resumes but preserves the user message queue', async () => {
+    mocks.dismissAskUser.mockResolvedValue(false);
+    mockStream([heldQuestion]);
+    renderChat();
+    useMessageQueueStore.getState().enqueue('conversation-1', { content: 'User queued work', attachments: [] });
+
+    fireEvent.click(screen.getByText('skip-call-7'));
+    await waitFor(() => expect(queued()).toHaveLength(2));
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(queued().map(q => q.content)).toEqual(['User queued work']);
   });
 
   it('a failed submit keeps the card on screen (no clear, no resume) so the person can retry', async () => {

@@ -20,6 +20,7 @@ import { AddTabPicker } from '@/components/app/AddTabPicker';
 import { useSharedConversation } from '@/contexts/SharedConversationContext';
 import { orchestratorApi } from '@/lib/api';
 import { getTabResourceUrl, parseTabResource } from '@/lib/sidePanel/tabResource';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 
 /** Stable no-op for the render path outside a provider (shared conversations). */
 const noop = () => {};
@@ -353,10 +354,13 @@ export function SidePanel() {
   const [openMenuTabId, setOpenMenuTabId] = useState<string | null>(null);
 
   // ── Delete confirmation modal state ──
-  const [pendingDeleteTab, setPendingDeleteTab] = useState<{ id: string; label: string; handler: () => void } | null>(null);
+  const [pendingDeleteTab, setPendingDeleteTab] = useState<
+    { id: string; label: string; handler: () => void; failed?: boolean } | null
+  >(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const tSidePanel = useTranslations('sidePanel');
+  const canMutate = useCanMutateInCurrentOrg();
 
   /**
    * Keyboard placement for the detached window: arrows move it, Shift+arrows resize
@@ -682,6 +686,10 @@ export function SidePanel() {
 
   /** Build the actual API delete + tab cleanup function for a tab */
   const buildDeleteAction = (tab: typeof tabs[number]): (() => Promise<void>) | undefined => {
+    // A VIEWER in an org workspace cannot delete anything: the server refuses with
+    // a 403 whatever this offers. The entry was previously hidden on agent tabs
+    // only because they were pinned, which was never a permission check.
+    if (!canMutate) return undefined;
     const id = tab.id;
     const closeTabAfterDelete = () => { removeTab(id); if (tabs.length <= 1) close(); };
 
@@ -743,9 +751,15 @@ export function SidePanel() {
     setIsDeleting(true);
     try {
       await pendingDeleteTab.handler();
+      setPendingDeleteTab(null);
+    } catch (err) {
+      // The modal used to close on a refusal exactly as it closes on a success:
+      // no message, an unhandled rejection, and a user who reasonably concluded
+      // the resource was gone. Keep it open and say so instead.
+      console.error('[SidePanel] delete failed:', err);
+      setPendingDeleteTab(prev => (prev ? { ...prev, failed: true } : prev));
     } finally {
       setIsDeleting(false);
-      setPendingDeleteTab(null);
     }
   };
 
@@ -1417,7 +1431,15 @@ export function SidePanel() {
       <BulkDeleteModal
         isOpen={!!pendingDeleteTab}
         title={pendingDeleteTab ? getDeleteTitle(pendingDeleteTab.id) : ''}
-        message={pendingDeleteTab ? getDeleteMessage(pendingDeleteTab.id, pendingDeleteTab.label) : ''}
+        message={pendingDeleteTab
+          ? (pendingDeleteTab.failed
+            // One translated sentence naming what was NOT deleted, rather than a
+            // name concatenated to a generic string: the title still reads "Delete
+            // agent", so a bare "An error occurred" leaves the user unsure which
+            // resource it is about, and the separator would not be localized.
+            ? tSidePanel('deleteFailed', { name: pendingDeleteTab.label })
+            : getDeleteMessage(pendingDeleteTab.id, pendingDeleteTab.label))
+          : ''}
         confirmLabel={t('delete')}
         cancelLabel={t('cancel')}
         onConfirm={confirmDelete}

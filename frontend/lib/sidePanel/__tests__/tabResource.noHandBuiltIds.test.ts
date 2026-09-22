@@ -42,7 +42,7 @@ const NOT_TAB_IDS: Record<string, string> = {
   // Cache key for the workflow loader, keyed by run or by workflow.
   'app/workflows/builder/hooks/useWorkflowLoader.ts:230': 'loader cache key',
   // "Analyze" badge in the chat composer, keyed by resource and position.
-  'hooks/useChatPageStateV3.ts:253': 'chat analyze badge',
+  'hooks/useChatPageStateV3.ts:259': 'chat analyze badge',
 };
 
 /** The module that owns the format, and tests that deliberately spell ids out. */

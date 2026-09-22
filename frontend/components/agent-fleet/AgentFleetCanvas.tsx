@@ -51,6 +51,9 @@ import {
   isDisconnectableFleetResource,
   resolveFleetEdgeAction,
 } from '@/lib/agents/agentResourceMutations';
+import { orchestratorApi } from '@/lib/api';
+import { canDeleteAgentNode } from './fleetAgentDeletion';
+import { useResourceDeleted, type ResourceDeletedDetail } from '@/lib/resources/resourceDeleted';
 import { AgentPickerPanel } from './AgentPickerPanel';
 import { CreateAgentModal } from '@/components/chat/CreateAgentModal';
 import { useTranslations } from 'next-intl';
@@ -522,6 +525,10 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
 
   const sidePanel = useSidePanelSafe();
   const tEdit = useTranslations('fleetInspector');
+  // The agent-delete copy is the edit modal's, verbatim: same act, same warning,
+  // and no seventh locale key to keep in parity for a sentence that already exists.
+  const tAgentModal = useTranslations('modals.createAgent');
+  const tSidePanel = useTranslations('sidePanel');
 
   // Stable ref carrying the latest fleet data so the per-node/edge callbacks
   // injected into `data` keep stable identities (no layout-effect churn).
@@ -530,6 +537,15 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
 
   const [confirmState, setConfirmState] = useState<null | {
     title: string; description: string; confirmLabel: string; onConfirm: () => Promise<void>;
+    /** What the action is about, so a failure can name it. */
+    subject: string;
+    /**
+     * Skip the post-confirm refetch. Set when the confirmed act removes the thing
+     * the canvas is ABOUT: refetching a single-agent canvas for an agent that was
+     * just deleted only buys a 404 in the console, and the panel holding it is
+     * already being closed by the deletion broadcast.
+     */
+    skipRefetch?: boolean;
   }>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [toolsModal, setToolsModal] = useState<null | {
@@ -542,14 +558,21 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
     setConfirmBusy(true);
     try {
       await confirmState.onConfirm();
-      await editRef.current.refetch();
+      if (!confirmState.skipRefetch) await editRef.current.refetch();
       setConfirmState(null);
     } catch (err) {
+      // Say so in the dialog, not only in the console. This used to leave the
+      // original "Are you sure?" on screen with the button re-armed, which reads
+      // as "the click did not register" - tolerable for an unlink, wrong for a
+      // deletion the user is now likely to retry or assume succeeded.
       console.error('[Fleet] edit action failed:', err);
+      setConfirmState(prev => (prev
+        ? { ...prev, description: tSidePanel('deleteFailed', { name: prev.subject }) }
+        : prev));
     } finally {
       setConfirmBusy(false);
     }
-  }, [confirmState]);
+  }, [confirmState, tSidePanel]);
 
   // Build a per-type delete confirmation (description explains the update).
   const openDeleteConfirm = useCallback((agent: any, type: string | undefined, resourceId: string | undefined, name: string) => {
@@ -575,7 +598,7 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
       description = tEdit('confirmRemoveResourceDesc', { name, agent: agent.name });
       onConfirm = async () => { await disconnectFleetResource(agent.id, type, resourceId || ''); };
     }
-    setConfirmState({ title: tEdit('confirmRemoveTitle'), description, confirmLabel: tEdit('removeAction'), onConfirm });
+    setConfirmState({ title: tEdit('confirmRemoveTitle'), description, confirmLabel: tEdit('removeAction'), subject: name, onConfirm });
   }, [tEdit, openAgentEditor]);
 
   // Edit a node → node-type-specific modal/panel.
@@ -605,13 +628,70 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
     }
   }, [openAgentEditor]);
 
+  /**
+   * Delete the agent itself - the top-level `agent-<id>` node only.
+   *
+   * Kept apart from {@link openDeleteConfirm}, which unlinks a RESOURCE from an
+   * agent. A sub-agent reached through this canvas is a resource node
+   * (`res-<agentId>-...`), so it keeps meaning "disconnect"; only the node that
+   * IS the agent deletes it. Same copy as the agent edit modal, because it is the
+   * same irreversible act.
+   */
+  const openAgentDeleteConfirm = useCallback((agentId: string, name: string) => {
+    if (!agentId) return;
+    setConfirmState({
+      title: tAgentModal('deleteTitle'),
+      description: tAgentModal('deleteConfirmation', { name }),
+      confirmLabel: tAgentModal('deleteAgent'),
+      subject: name,
+      // The deletion broadcast owns the refetch for agents (see
+      // refetchOnAgentDeleted), so this path must not also ask for one: it would
+      // be two reads of the same list for one click. Unlink actions keep the
+      // default, because nothing broadcasts for them.
+      skipRefetch: true,
+      onConfirm: async () => { await orchestratorApi.deleteAgent(agentId); },
+    });
+  }, [tAgentModal]);
+
   const handleFleetDelete = useCallback((nodeId: string) => {
     const { agents, allNodesRaw } = editRef.current;
     const parsed = parseNodeId(nodeId);
     const data: any = allNodesRaw.find((n) => n.id === nodeId)?.data;
     const agent = agents.find((a) => a.id === parsed.agentId);
+    if (parsed.category === 'agent') {
+      // Second reading of the same rule that decided whether to draw the button:
+      // the flag travels through node `data`, which a stale layout could carry.
+      // Nothing destructive should depend on a value that took the long way round.
+      if (!canDeleteAgentNode(nodeId, { singleAgentId, snapshotMode: isSnapshotMode, canMutate })) return;
+      // `agents` normally has the row, but the id is already in the node id and it
+      // is the only part the delete needs: falling back beats a red button that
+      // does nothing and says nothing.
+      openAgentDeleteConfirm(parsed.agentId || '', agent?.name || data?.label || '');
+      return;
+    }
     openDeleteConfirm(agent, data?.fleetResourceType, parsed.resourceId, data?.label || '');
-  }, [openDeleteConfirm]);
+  }, [openDeleteConfirm, openAgentDeleteConfirm, singleAgentId, isSnapshotMode, canMutate]);
+
+  /**
+   * Re-read the fleet when an agent is deleted ANYWHERE.
+   *
+   * This canvas fetches imperatively, so it used to heal only when it had
+   * performed the delete itself. Unpinning the agents-list tab put a working
+   * Delete entry in that tab's menu for the first time, and using it from the
+   * fleet view left a node for an agent that was gone.
+   *
+   * It is also the single owner of that refetch now: the agent-delete confirm
+   * sets `skipRefetch`, so one deletion means one re-read whichever surface
+   * started it. A single-agent canvas whose SUBJECT was deleted is the one case
+   * that must not re-read: there is nothing left to read, and the side panel
+   * holding it is already closing on this same broadcast.
+   */
+  const refetchOnAgentDeleted = useCallback((detail: ResourceDeletedDetail) => {
+    if (detail.kind !== 'agent') return;
+    if (isSingleAgent && detail.id === singleAgentId) return;
+    void editRef.current.refetch();
+  }, [isSingleAgent, singleAgentId]);
+  useResourceDeleted(refetchOnAgentDeleted);
 
   const handleFleetEdgeDelete = useCallback((edgeId: string) => {
     const { agents, allEdgesRaw, allNodesRaw } = editRef.current;
@@ -627,6 +707,7 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
         title: tEdit('confirmRemoveTitle'),
         description: tEdit('confirmRemoveSubAgentDesc', { name: callee?.name || calleeId, agent: caller.name }),
         confirmLabel: tEdit('removeAction'),
+        subject: callee?.name || calleeId,
         onConfirm: async () => { await disconnectSubAgent(callerId, calleeId); },
       });
       return;
@@ -674,7 +755,7 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
     });
 
     // Inject collapse state + (in edit mode) per-node edit callbacks into visible nodes.
-    const editLabels = { edit: t('edit'), remove: tEdit('removeAction') };
+    const editLabels = { edit: t('edit'), remove: tEdit('removeAction'), deleteAgent: tAgentModal('deleteAgent') };
     const injected = filteredNodes.map(n => {
       const d = n.data as any;
       const isCollapsible = d.fleetCollapsible;
@@ -690,6 +771,7 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
                 onFleetEdit: handleFleetEdit,
                 onFleetDelete: handleFleetDelete,
                 fleetEditLabels: editLabels,
+                fleetCanDeleteAgent: canDeleteAgentNode(n.id, { singleAgentId, snapshotMode: isSnapshotMode, canMutate }),
               }
             : { fleetEditMode: false }),
         },

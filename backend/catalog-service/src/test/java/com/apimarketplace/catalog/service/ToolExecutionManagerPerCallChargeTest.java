@@ -158,7 +158,7 @@ class ToolExecutionManagerPerCallChargeTest {
         price.setPricingVersionId(1L);
         price.setEffectiveMarkup(VIDEO_PRICE);
         lenient().when(credentialClient.resolveScopeMarkupRate(anyString(), anyString(), anyLong(),
-                anyLong(), any(UUID.class), any(), any())).thenReturn(Optional.of(price));
+                anyLong(), any(UUID.class), any(), any(), any())).thenReturn(Optional.of(price));
 
         wireFakeLedger();
 

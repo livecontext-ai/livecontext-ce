@@ -125,7 +125,12 @@ public class StorageHistoryService {
     @Transactional
     public void snapshotAllTenants() {
         log.info("Starting daily storage history snapshot");
-        List<String> tenantIds = historyRepository.findDistinctTenantIds();
+        // Enumerated from the BREAKDOWN table, which is what a snapshot copies, not from the
+        // history table this method writes. Reading its own output meant a tenant with no history
+        // row was never snapshotted and so never got one: a scope had to already be in the trend
+        // chart to be added to it. Same self-limiting shape as the reconciliation enumeration
+        // fixed alongside this (see StorageReconciliationQueries.TENANTS_TO_RECONCILE).
+        List<String> tenantIds = breakdownRepository.findDistinctTenantIds();
         int tenantCount = 0;
         for (String tenantId : tenantIds) {
             try {
@@ -138,8 +143,8 @@ public class StorageHistoryService {
         }
 
         // Issue #149 - same pass for orgs with breakdown data.
-        List<String> orgIds = orgHistoryRepository != null
-                ? orgHistoryRepository.findDistinctOrganizationIds()
+        List<String> orgIds = orgBreakdownRepository != null
+                ? orgBreakdownRepository.findDistinctOrganizationIds()
                 : List.of();
         int orgCount = 0;
         for (String orgId : orgIds) {

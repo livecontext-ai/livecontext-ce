@@ -79,6 +79,17 @@ export interface CustomApiEndpoint {
   method: string;
   description: string;
   params: CustomApiEndpointParam[];
+  /**
+   * Constant headers sent on this endpoint, as { name: value }.
+   *
+   * Only CONSTANTS come back here. A header the caller fills per request comes back as an
+   * ordinary param declared `in: "header"`, which update_api accepts. The split is by the
+   * hidden flag, and it matters: projecting both as constants used to delete a declared
+   * header param that had no default, and freeze one that did. Anything that rebuilds an
+   * endpoint field by field must carry BOTH through, or they are dropped on the next save
+   * with no type error to warn about it.
+   */
+  headers?: Record<string, string>;
   // Advanced fields
   toolCategory?: string;
   nextHint?: string;
@@ -88,15 +99,36 @@ export interface CustomApiEndpoint {
   outputSchema?: CustomApiOutputField[];
 }
 
+/**
+ * Where the credential is placed on the wire, and, for OAuth2, the provider endpoints the
+ * connection needs. Declared by whoever registered the API; this form cannot author either block,
+ * so it carries them through untouched rather than dropping them on the next save.
+ */
+export interface CustomApiAuthEntry {
+  type?: string;
+  apiKeyConfig?: {
+    location?: string;
+    headerName?: string;
+    queryParamName?: string;
+    keyName?: string;
+    prefix?: string;
+  };
+  oauth2Config?: Record<string, unknown>;
+}
+
 export interface CustomApiDefinition {
   apiName: string;
   baseUrl: string;
   apiDescription?: string;
   authType?: string;
+  /** Preserved verbatim on edit - see CustomApiAuthEntry. */
+  auth?: CustomApiAuthEntry[];
   apiCategory?: string;
   iconUrl?: string;
   iconSlug?: string;
   endpoints: CustomApiEndpoint[];
+  /** Constant headers sent on EVERY endpoint, as { name: value } (an API version pin). */
+  requiredHeaders?: Record<string, string>;
   // Advanced fields
   apiVersion?: string;
   documentation?: string;
@@ -112,6 +144,8 @@ export interface CustomApiDetails {
   authType: string;
   categoryName: string;
   iconUrl?: string;
+  iconSlug?: string;
+  auth?: CustomApiAuthEntry[];
   endpoints: CustomApiEndpoint[];
   // Advanced fields
   apiVersion?: string;

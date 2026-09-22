@@ -27,6 +27,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -62,6 +63,13 @@ class ClassifyServiceTest {
     @Mock
     private ExecutionLinkRouter executionLinkRouter;
 
+    /**
+     * The decision engine. Every test in this class exercises the LLM path, so it is left
+     * unstubbed: {@code supports(...)} then answers false and the service routes as before.
+     */
+    @Mock
+    private TypeSafeSystemOneClient typeSafeClient;
+
     private ClassifyService service;
 
     private static final List<ClassifyRequestDto.CategoryDto> CATEGORIES = List.of(
@@ -72,7 +80,7 @@ class ClassifyServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ClassifyService(agentLoopService, guardChainFactory, new ObjectMapper(), bridgeDispatcher, modelCatalogService, executionLinkRouter);
+        service = new ClassifyService(agentLoopService, guardChainFactory, new ObjectMapper(), bridgeDispatcher, modelCatalogService, executionLinkRouter, typeSafeClient);
         when(guardChainFactory.forAgent(any(), any(), any(), any())).thenReturn(PreIterationGuard.ALWAYS_PROCEED);
         // Default: non-bridge provider routing (tests opt into bridge path explicitly)
         when(bridgeDispatcher.shouldDispatch(any())).thenReturn(false);
@@ -392,7 +400,7 @@ class ClassifyServiceTest {
         void claudeCodeRoutesToBridge() {
             when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
             String json = "{\"selected_category\":\"billing\",\"confidence\":0.9,\"reasoning\":\"via bridge\"}";
-            when(bridgeDispatcher.execute(any())).thenReturn(loopResult(json, 100, 60, 40));
+            when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(loopResult(json, 100, 60, 40));
 
             ClassifyRequestDto req = new ClassifyRequestDto(
                 "invoice", null, CATEGORIES, "claude-code", null, null, null, "tenant-1", "agent-1");
@@ -400,7 +408,7 @@ class ClassifyServiceTest {
 
             assertThat(result.success()).isTrue();
             assertThat(result.selectedCategory()).isEqualTo("billing");
-            verify(bridgeDispatcher).execute(any());
+            verify(bridgeDispatcher).execute(any(), anyBoolean());
             verify(agentLoopService, never()).execute(any(), any());
         }
 
@@ -415,14 +423,14 @@ class ClassifyServiceTest {
             String json = "{\"selected_category\":\"billing\",\"confidence\":0.9,\"reasoning\":\"via bridge\"}";
             org.mockito.ArgumentCaptor<com.apimarketplace.agent.loop.AgentLoopContext> ctx =
                 org.mockito.ArgumentCaptor.forClass(com.apimarketplace.agent.loop.AgentLoopContext.class);
-            when(bridgeDispatcher.execute(ctx.capture())).thenReturn(loopResult(json, 100, 60, 40));
+            when(bridgeDispatcher.execute(ctx.capture(), anyBoolean())).thenReturn(loopResult(json, 100, 60, 40));
 
             ClassifyRequestDto req = new ClassifyRequestDto(
                 "invoice", null, CATEGORIES, "anthropic", "claude-opus-4-7", null, null, "tenant-1", "agent-1");
             ClassifyResponseDto result = service.execute(req);
 
             assertThat(result.success()).isTrue();
-            verify(bridgeDispatcher).execute(any());
+            verify(bridgeDispatcher).execute(any(), anyBoolean());
             verify(agentLoopService, never()).execute(any(), any());
             // The corrected slug propagated into the dispatched context, and the
             // stale 'anthropic' slug was never asked about.
@@ -441,7 +449,7 @@ class ClassifyServiceTest {
             service.execute(request("test"));
 
             verify(agentLoopService).execute(any(), isNull());
-            verify(bridgeDispatcher, never()).execute(any());
+            verify(bridgeDispatcher, never()).execute(any(), anyBoolean());
         }
 
         @Test
@@ -451,7 +459,7 @@ class ClassifyServiceTest {
             AgentLoopResult failure = AgentLoopResult.failure(
                 "Bridge execution failed: no response from bridge server",
                 50, "claude-code", AgentStopReason.ERROR);
-            when(bridgeDispatcher.execute(any())).thenReturn(failure);
+            when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(failure);
 
             ClassifyRequestDto req = new ClassifyRequestDto(
                 "test", null, CATEGORIES, "claude-code", null, null, null, null, null);
@@ -459,6 +467,78 @@ class ClassifyServiceTest {
 
             assertThat(result.success()).isFalse();
             assertThat(result.error()).contains("Bridge execution failed");
+        }
+
+        @Test
+        @DisplayName("EXECUTION-LINK FALLBACK: a linked bridge failure silently retries on the billed pair's direct API and succeeds")
+        void linkedBridgeFailureFallsBackToDirectApi() {
+            when(executionLinkRouter.runnableRoute("openai", "gpt-4o", ClassifyService.ACTIVITY_SOURCE))
+                .thenReturn(new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute(
+                    "claude-code", "claude-opus-4-8"));
+            when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+            when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(
+                AgentLoopResult.failure("CLI crashed", 50, "claude-code", AgentStopReason.ERROR));
+            String json = "{\"selected_category\":\"billing\",\"confidence\":0.9,\"reasoning\":\"fallback ok\"}";
+            org.mockito.ArgumentCaptor<AgentLoopContext> ctx = org.mockito.ArgumentCaptor.forClass(AgentLoopContext.class);
+            when(agentLoopService.execute(ctx.capture(), isNull())).thenReturn(loopResult(json, 100, 60, 40));
+
+            ClassifyRequestDto req = new ClassifyRequestDto(
+                "invoice", null, CATEGORIES, "openai", "gpt-4o", null, null, "tenant-1", "agent-1");
+            ClassifyResponseDto result = service.execute(req);
+
+            // The fallback ran on the BILLED pair, never on claude-code.
+            assertThat(ctx.getValue().provider()).isEqualTo("openai");
+            assertThat(ctx.getValue().model()).isEqualTo("gpt-4o");
+            // No restricted-toolset marker travels into a direct-API call.
+            assertThat(ctx.getValue().credentials()).isNull();
+            // Invisible to the caller: the failed bridge attempt never surfaces.
+            assertThat(result.success()).isTrue();
+            assertThat(result.selectedCategory()).isEqualTo("billing");
+            assertThat(result.provider()).isEqualTo("openai");
+        }
+
+        @Test
+        @DisplayName("EXECUTION-LINK FALLBACK: when the direct-API retry ALSO fails, the error surfaces normally (a single retry, never a loop)")
+        void linkedBridgeFailureFallbackAlsoFailsSurfacesError() {
+            when(executionLinkRouter.runnableRoute("openai", "gpt-4o", ClassifyService.ACTIVITY_SOURCE))
+                .thenReturn(new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute(
+                    "claude-code", "claude-opus-4-8"));
+            when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+            when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(
+                AgentLoopResult.failure("CLI crashed", 50, "claude-code", AgentStopReason.ERROR));
+            when(agentLoopService.execute(any(), isNull())).thenReturn(
+                AgentLoopResult.failure("upstream 500", 10, "openai", AgentStopReason.ERROR));
+
+            ClassifyRequestDto req = new ClassifyRequestDto(
+                "invoice", null, CATEGORIES, "openai", "gpt-4o", null, null, "tenant-1", "agent-1");
+            ClassifyResponseDto result = service.execute(req);
+
+            verify(bridgeDispatcher, org.mockito.Mockito.times(1)).execute(any(), anyBoolean());
+            verify(agentLoopService, org.mockito.Mockito.times(1)).execute(any(), isNull());
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).contains("upstream 500");
+        }
+
+        @Test
+        @DisplayName("EXECUTION-LINK FALLBACK: records a Prometheus fallback counter for operators")
+        void linkedBridgeFailureRecordsPrometheusMetric() {
+            com.apimarketplace.agent.metrics.AgentPrometheusMetrics metrics =
+                org.mockito.Mockito.mock(com.apimarketplace.agent.metrics.AgentPrometheusMetrics.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "prometheusMetrics", metrics);
+            when(executionLinkRouter.runnableRoute("openai", "gpt-4o", ClassifyService.ACTIVITY_SOURCE))
+                .thenReturn(new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute(
+                    "claude-code", "claude-opus-4-8"));
+            when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+            when(bridgeDispatcher.execute(any(), anyBoolean())).thenReturn(
+                AgentLoopResult.failure("CLI crashed", 50, "claude-code", AgentStopReason.ERROR));
+            when(agentLoopService.execute(any(), isNull())).thenReturn(
+                loopResult("{\"selected_category\":\"billing\",\"confidence\":0.9,\"reasoning\":\"ok\"}", 100, 60, 40));
+
+            ClassifyRequestDto req = new ClassifyRequestDto(
+                "invoice", null, CATEGORIES, "openai", "gpt-4o", null, null, "tenant-1", "agent-1");
+            service.execute(req);
+
+            verify(metrics).recordExecutionLinkFallback("openai", "gpt-4o", "claude-code");
         }
     }
 
@@ -505,5 +585,151 @@ class ClassifyServiceTest {
             .durationMs(100)
             .stopReason(AgentStopReason.COMPLETED)
             .build();
+    }
+
+    /**
+     * A classify turn is billed from the response DTO alone, so whatever the DTO does not
+     * carry is not charged. It used to carry prompt and completion only: over a model
+     * execution link that meant the bridge's INCLUSIVE prompt total under the billed
+     * provider's label with no cache line, charging the whole context at full input rate
+     * (6.1x its cost, measured), and without a link it meant the cache was free. Both are
+     * the same missing transport, and these tests are what stops it going missing again.
+     */
+    @Nested
+    @DisplayName("The cache counters reach the bill")
+    class CacheCountersTravel {
+
+        @org.junit.jupiter.api.BeforeEach
+        void billedPairIsAnthropic() {
+            // The request names anthropic, and the catalog resolves it to itself. Without
+            // this the billed provider is null, which is subset-shaped, and the conversion
+            // under test would be the wrong one - exactly the kind of fixture that makes a
+            // convention test pass for a reason that has nothing to do with the code.
+            when(modelCatalogService.resolveProvider(any(), any()))
+                .thenAnswer(inv -> inv.getArgument(0));
+        }
+
+        private ClassifyRequestDto anthropicRequest() {
+            return new ClassifyRequestDto("My invoice is wrong", null, CATEGORIES,
+                "anthropic", "claude-fable-5", null, null, null, null);
+        }
+
+        /** The Claude Code bridge shape: the prompt total already contains the cache. */
+        private AgentLoopResult bridgeReported() {
+            return AgentLoopResult.builder()
+                .success(true)
+                .content("{\"selected_category\":\"billing\",\"confidence\":0.9}")
+                .model("claude-fable-5")
+                .usage(UsageInfo.builder()
+                    .promptTokens(6 + 18_945 + 79_368)
+                    .completionTokens(1_915)
+                    .totalTokens(6 + 18_945 + 79_368 + 1_915)
+                    .cacheCreationInputTokens(18_945)
+                    .cacheReadInputTokens(79_368)
+                    .build())
+                .build();
+        }
+
+        @Test
+        @DisplayName("an unlinked run carries its cache counters, so the cached part stops being free")
+        void unlinkedRunCarriesTheCache() {
+            when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(null);
+            when(agentLoopService.execute(any(), any())).thenReturn(
+                AgentLoopResult.builder()
+                    .success(true)
+                    .content("{\"selected_category\":\"billing\",\"confidence\":0.9}")
+                    .model("claude-fable-5")
+                    .usage(UsageInfo.builder()
+                        .promptTokens(6).completionTokens(1_915).totalTokens(1_921)
+                        .cacheCreationInputTokens(18_945).cacheReadInputTokens(79_368).build())
+                    .build());
+
+            ClassifyResponseDto response = service.execute(anthropicRequest());
+
+            assertThat(response.cacheUsage()).isNotNull();
+            assertThat(response.cacheUsage().cacheCreationInputTokens()).isEqualTo(18_945);
+            assertThat(response.cacheUsage().cacheReadInputTokens()).isEqualTo(79_368);
+            // Unlinked, nothing to convert: the API already reports plain input.
+            assertThat(response.promptTokens()).isEqualTo(6);
+        }
+
+        @Test
+        @DisplayName("a run moved onto a bridge by a link reports PLAIN input and its cache beside it, the convention the billed provider is read with")
+        void linkedRunIsConvertedAndCarried() {
+            when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("claude-code", "claude-fable-5"));
+            when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+            when(bridgeDispatcher.execute(any(), org.mockito.ArgumentMatchers.eq(true))).thenReturn(bridgeReported());
+
+            ClassifyResponseDto response = service.execute(anthropicRequest());
+
+            // 98,319 stripped back to the 6 tokens of plain input...
+            assertThat(response.promptTokens()).isEqualTo(6);
+            // ...and the cache carried on its own line, where the cache rate applies.
+            assertThat(response.cacheUsage()).isNotNull();
+            assertThat(response.cacheUsage().cacheReadInputTokens()).isEqualTo(79_368);
+            assertThat(response.cacheUsage().cacheCreationInputTokens()).isEqualTo(18_945);
+        }
+
+        @Test
+        @DisplayName("stripping without carrying would have been worse, and this is the assertion that says so")
+        void strippingAloneWouldHaveDeletedTheCache() {
+            // Pinned as a statement of the trade: the prompt IS reduced, so if cacheUsage
+            // were ever dropped from the DTO again the cache would leave the bill entirely
+            // rather than merely be over-charged. The two assertions must move together.
+            when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("claude-code", "claude-fable-5"));
+            when(bridgeDispatcher.shouldDispatch("claude-code")).thenReturn(true);
+            when(bridgeDispatcher.execute(any(), org.mockito.ArgumentMatchers.eq(true))).thenReturn(bridgeReported());
+
+            ClassifyResponseDto response = service.execute(anthropicRequest());
+
+            assertThat(response.promptTokens()).isLessThan(98_319);
+            assertThat(response.cacheUsage()).as("the cache must have somewhere to go").isNotNull();
+        }
+
+        @Test
+        @DisplayName("a turn that burned the context and then failed to classify still reports what it burned")
+        void aFailedClassificationStillCarriesWhatItSpent() {
+            // The tokens were spent whether or not a category came back, so the failure DTO
+            // carries the same counters as the success one. Only the ASYNC consumer spends
+            // them: the inline path builds ClassifyResult.failure(), which zeroes every
+            // count including this one. That asymmetry predates this change (it zeroes the
+            // prompt and completion too) and is left alone here rather than widened.
+            when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(null);
+            when(agentLoopService.execute(any(), any())).thenReturn(
+                AgentLoopResult.builder()
+                    .success(true)
+                    .content("I could not decide.")
+                    .model("claude-fable-5")
+                    .usage(UsageInfo.builder()
+                        .promptTokens(6).completionTokens(1_915).totalTokens(1_921)
+                        .cacheCreationInputTokens(18_945).cacheReadInputTokens(79_368).build())
+                    .build());
+
+            ClassifyResponseDto response = service.execute(request("My invoice is wrong"));
+
+            assertThat(response.success()).as("no category could be extracted").isFalse();
+            assertThat(response.cacheUsage()).isNotNull();
+            assertThat(response.cacheUsage().cacheReadInputTokens()).isEqualTo(79_368);
+            assertThat(response.cacheUsage().cacheCreationInputTokens()).isEqualTo(18_945);
+        }
+
+        @Test
+        @DisplayName("a provider that reports no counts yields no cache, and the classification still returns")
+        void noUsageIsNotAFailure() {
+            when(executionLinkRouter.runnableRoute(any(), any(), any())).thenReturn(null);
+            when(agentLoopService.execute(any(), any())).thenReturn(
+                AgentLoopResult.builder()
+                    .success(true)
+                    .content("{\"selected_category\":\"billing\",\"confidence\":0.9}")
+                    .model("claude-fable-5")
+                    .build());
+
+            ClassifyResponseDto response = service.execute(anthropicRequest());
+
+            assertThat(response.success()).isTrue();
+            assertThat(response.cacheUsage()).isNull();
+        }
     }
 }

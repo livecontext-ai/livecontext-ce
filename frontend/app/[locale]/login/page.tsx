@@ -134,9 +134,19 @@ export default function LoginPage() {
         </div>
 
         <div>
-          <label htmlFor="password" className="mb-1.5 block text-[13px] font-medium text-[var(--text-secondary)]">
-            {t('password')}
-          </label>
+          {/* The reset link belongs HERE, next to the field that failed, not in
+              the footer: someone who cannot get in is looking at this input. */}
+          <div className="mb-1.5 flex items-baseline justify-between gap-3">
+            <label htmlFor="password" className="block text-[13px] font-medium text-[var(--text-secondary)]">
+              {t('password')}
+            </label>
+            <Link
+              href={`/${locale}/forgot-password`}
+              className="text-[12px] font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+            >
+              {t('forgotPassword')}
+            </Link>
+          </div>
           <input
             id="password"
             type="password"

@@ -20,7 +20,8 @@ export default function PublicHeader({ title, children }: PublicHeaderProps) {
           href="/app"
           className="flex items-center gap-0.5 text-theme-primary hover:opacity-80 transition-opacity flex-shrink-0"
         >
-          <LogoAnimate size="sm" className="text-theme-primary" />
+          {/* Decorative: the brand name is the link's own text, right beside it. */}
+          <LogoAnimate size="sm" className="text-theme-primary" decorative />
           <span className="text-base font-light text-theme-primary livecontext-title">
             LiveContext
           </span>

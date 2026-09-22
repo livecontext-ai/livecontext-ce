@@ -18,6 +18,7 @@ import com.apimarketplace.orchestrator.repository.OffsetLimitPageable;
 import com.apimarketplace.orchestrator.repository.WorkflowPlanVersionRepository;
 import com.apimarketplace.orchestrator.repository.WorkflowRepository;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
+import com.apimarketplace.orchestrator.services.NodeTypeFilters;
 import com.apimarketplace.orchestrator.services.WorkflowPlanVersionService;
 import com.apimarketplace.orchestrator.tools.common.AgentResourceRequirements;
 import com.apimarketplace.orchestrator.tools.common.AgentTriggerSchema;
@@ -221,9 +222,10 @@ public class ApplicationCrudModule implements ToolModule {
         // hardRefuse auto=400). `query` (name/description substring) is the one
         // refinement filter, so the `refine` hint suggests it on large result sets.
         String query = getStringParam(parameters, "query");
+        Set<String> nodeTypes = NodeTypeFilters.parse(parameters.get("node_types"));
         AgentListEnvelope.Spec spec = AgentListEnvelope.Spec.of(
                         AgentListEnvelope.Caps.STANDARD, "applications", "applications", "applications")
-                .withSuggestedFilters(List.of("query"))
+                .withSuggestedFilters(List.of("query", "node_types"))
                 .withNext(Map.of(
                         "run", "application(action='execute', application_id='<id>') - owned apps run directly, no acquire needed",
                         "details_with_schema", "application(action='get', application_id='<id>') - returns data_inputs_schema (field names + select options) before execute",
@@ -235,7 +237,9 @@ public class ApplicationCrudModule implements ToolModule {
         try {
             // Active-filter set is server-derived from the request (never a caller
             // boolean) so the hard-refuse-without-filter guard uses the real truth.
-            Set<String> activeFilters = ToolParamUtils.hasQuery(query) ? Set.of("query") : Set.of();
+            Set<String> activeFilters = new LinkedHashSet<>();
+            if (ToolParamUtils.hasQuery(query)) activeFilters.add("query");
+            if (!nodeTypes.isEmpty()) activeFilters.add("node_types");
             bounds = AgentListEnvelope.readBounds(parameters, spec, activeFilters);
         } catch (AgentListEnvelope.InvalidParamsException e) {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, e.code + ": " + e.getMessage());
@@ -267,15 +271,44 @@ public class ApplicationCrudModule implements ToolModule {
                             .filter(w -> ToolParamUtils.matchesQuery(query, w.getName(), w.getDescription()))
                             .toList();
                 }
+                // Node types come off the acquired workflow row for the same reason the
+                // text search does: it is the local copy, so the filter costs nothing and
+                // runs BEFORE the per-publication fan-out below rather than after it.
+                if (!nodeTypes.isEmpty()) {
+                    acquired = acquired.stream()
+                            .filter(w -> NodeTypeFilters.matches(w.getNodeTypes(), nodeTypes))
+                            .toList();
+                }
                 List<UUID> pubIds = acquired.stream()
                         .map(WorkflowEntity::getSourcePublicationId)
                         .filter(java.util.Objects::nonNull)
                         .distinct()
                         .toList();
+                // The tokens of the LOCAL clone, keyed by the publication it came from.
+                // They replace the publication's own below so the node_types an item
+                // reports are the ones this branch filtered on. The two can genuinely
+                // differ - a clone's plan is frozen at acquire time while the source
+                // publication can be re-published since - and reporting one while
+                // filtering on the other breaks the discovery loop the help promises:
+                // the agent reads a token off an item and gets it filtered away.
+                Map<UUID, List<String>> localTokensByPublication = new HashMap<>();
+                for (WorkflowEntity clone : acquired) {
+                    if (clone.getSourcePublicationId() != null) {
+                        localTokensByPublication.putIfAbsent(
+                                clone.getSourcePublicationId(), clone.getNodeTypes());
+                    }
+                }
                 total = pubIds.size();
                 page = pubIds.stream()
                         .skip(bounds.offset()).limit(bounds.limit())
-                        .map(publicationClient::getPublicationById)
+                        .map(pubId -> {
+                            Map<String, Object> pub = publicationClient.getPublicationById(pubId);
+                            if (pub == null) return null;
+                            Map<String, Object> withLocalTokens = new HashMap<>(pub);
+                            withLocalTokens.put("nodeTypes",
+                                    localTokensByPublication.getOrDefault(pubId, List.of()));
+                            return withLocalTokens;
+                        })
                         .filter(java.util.Objects::nonNull)
                         .toList();
             } else {
@@ -288,6 +321,14 @@ public class ApplicationCrudModule implements ToolModule {
                     published = published.stream()
                             .filter(pub -> ToolParamUtils.matchesQuery(query,
                                     getStringParam(pub, "title"), getStringParam(pub, "description")))
+                            .toList();
+                }
+                // Here the publication maps are what we have, and each one carries
+                // its own nodeTypes (V483) - no workflow row to read instead.
+                if (!nodeTypes.isEmpty()) {
+                    published = published.stream()
+                            .filter(pub -> NodeTypeFilters.matches(
+                                    NodeTypeFilters.tokensOf(pub.get("nodeTypes")), nodeTypes))
                             .toList();
                 }
                 total = published.size();
@@ -402,6 +443,12 @@ public class ApplicationCrudModule implements ToolModule {
         // Keep category - it enables the agent to refine via
         // application(action='search', category='<slug>') for similar apps.
         if (pub.get("category") != null) out.put("category", pub.get("category"));
+        // The tokens this app can be filtered by. Emitted so the agent can read
+        // the exact spelling out of a plain 'my' call and pass it straight back
+        // as node_types, instead of guessing how an integration is named - which
+        // is precisely what the help tells it to do.
+        List<String> nodeTypeTokens = NodeTypeFilters.tokensOf(pub.get("nodeTypes"));
+        if (!nodeTypeTokens.isEmpty()) out.put("node_types", nodeTypeTokens);
         // The studio axis, when the app is on that shelf. Emitted only when true, the same economy
         // ceExclusive follows below: absent means "not a studio app", and spending a key per item on
         // saying so would bloat every page of a 50-app listing. Carried because the agent can SET it

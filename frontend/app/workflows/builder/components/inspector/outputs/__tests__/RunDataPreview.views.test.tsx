@@ -62,13 +62,36 @@ describe('RunDataPreview views', () => {
     };
   });
 
-  it('offers the table view when the payload has exactly one row-shaped field', async () => {
+  it('offers the table view when the payload has a row-shaped field, and NAMES the field', async () => {
     render(<RunDataPreview workflowId="wf" runId="run" stepAlias="Fetch" dataType="output" />);
     await waitFor(() => expect(screen.getByRole('tab', { name: 'viewTable' })).toBeTruthy());
 
     fireEvent.click(screen.getByRole('tab', { name: 'viewTable' }));
     // The rows of the field, not the envelope around them.
     expect(screen.getByTestId('run-data-table-view').textContent).toContain('a');
+    // ...and the table says WHICH field it is showing. This assertion is the one
+    // that pins the call site: the preview must hand JsonTableView the whole
+    // payload. Pre-unwrapping it here left the label and the selector unreachable
+    // while every direct-component test still passed.
+    expect(screen.getByTestId('run-data-table-field').textContent).toBe('items');
+  });
+
+  it('lets the reader choose which field to tabulate when several qualify', async () => {
+    runData.value = {
+      ...runData.value,
+      getObjectAtPath: vi.fn(async () => ({ items: [{ a: 1 }], errors: [{ code: 'X' }] })),
+    };
+    render(<RunDataPreview workflowId="wf" runId="run" stepAlias="Fetch" dataType="output" />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'viewTable' })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('tab', { name: 'viewTable' }));
+    // Two row-shaped fields used to REMOVE the table entirely, with nothing on
+    // screen explaining why.
+    const select = screen.getByTestId('run-data-table-field') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(['items', 'errors']);
+
+    fireEvent.change(select, { target: { value: 'errors' } });
+    expect(screen.getByTestId('run-data-table-view').textContent).toContain('code');
   });
 
   it('hides the table view for a payload with no rows in it', async () => {

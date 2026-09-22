@@ -9,7 +9,6 @@ import com.apimarketplace.auth.domain.User;
 import com.apimarketplace.auth.repository.OrganizationMemberRepository;
 import com.apimarketplace.auth.repository.OrganizationRepository;
 import com.apimarketplace.auth.repository.OrganizationSamlConnectionRepository;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -80,12 +79,15 @@ public class OrganizationSamlLoginService {
 
         try {
             memberRepository.save(membership);
-        } catch (DataIntegrityViolationException e) {
-            if (memberRepository.findActiveByOrganizationIdAndUserId(orgId, user.getId()).isPresent()) {
-                return Optional.of(orgId);
-            }
-            throw new SamlMembershipException("Could not join SAML workspace", e);
         } catch (RuntimeException e) {
+            // A duplicate membership used to be recovered here by re-reading the winner's row.
+            // That read can never run: the violation has already put this transaction in
+            // PostgreSQL's ERROR state, so the SELECT comes back as 25P02 and the caller sees
+            // that instead of the answer the catch promised. Nor is the recovery needed: the
+            // admission is serialised on the organization row by lockOrganizationForAdmission
+            // above, then re-checked under that lock, so a concurrent joiner is already
+            // accounted for by the time we get here. Reaching this line means something outside that reasoning
+            // went wrong, and refusing the join is the safe reading of a SAML admission.
             throw new SamlMembershipException("Could not join SAML workspace", e);
         }
 

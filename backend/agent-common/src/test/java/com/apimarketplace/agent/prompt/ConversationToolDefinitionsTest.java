@@ -89,14 +89,14 @@ class ConversationToolDefinitionsTest {
         }
 
         @Test
-        @DisplayName("exposes the require params (services/reason/force) and set_variable params (name/value/type/description/secret), all optional")
+        @DisplayName("exposes the require params (services/reason/scopes/force) and set_variable params (name/value/type/description/secret), all optional")
         void perActionParamsAreOptional() {
             ToolDefinition tool = find("credential", false);
             assertThat(tool.parameters()).extracting(ToolParameter::name)
                     .containsExactlyInAnyOrder(
-                            "action", "services", "reason", "force",
+                            "action", "services", "reason", "scopes", "force",
                             "name", "value", "type", "description", "secret");
-            for (String optional : List.of("services", "reason", "force",
+            for (String optional : List.of("services", "reason", "scopes", "force",
                     "name", "value", "type", "description", "secret")) {
                 assertThat(param(tool, optional).required())
                         .as("'%s' must stay optional - required is action-dependent, enforced at execution", optional)
@@ -125,7 +125,7 @@ class ConversationToolDefinitionsTest {
             assertThat(d)
                     // list - connected services, never secrets
                     .contains("never returns secret values")
-                    .contains("{connected:[{name,integration,status,isDefault,account}],count,defaultCount,hint}")
+                    .contains("{connected:[{name,integration,status,isDefault,account,scopes}],count,defaultCount,hint}")
                     .contains("needs_reauth")
                     // variables - the {{$vars.name}} reference form, secret in the row shape
                     .contains("{{$vars.name}}")

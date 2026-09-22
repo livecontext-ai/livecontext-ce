@@ -1,5 +1,6 @@
 package com.apimarketplace.common.storage.retention;
 
+import com.apimarketplace.common.storage.service.StorageRowCategories;
 import com.apimarketplace.common.storage.service.StorageSourceTypes;
 
 import java.util.Set;
@@ -32,16 +33,17 @@ import java.util.Set;
  * code rather than a promise in a comment.
  *
  * <p><b>Quota accounting is NOT uniform across these classes, and assuming it was
- * would inflate a billed number permanently.</b> The two JSON classes are written
- * by {@code StorageService.save}, which picks its breakdown category from the
- * source type and so books {@code STEP_OUTPUTS}. The TEXT class is written by
- * {@code StorageService.saveText}, which books {@code FILES} unconditionally,
- * whatever the row is. Debiting one flat category on delete would therefore leave
- * the FILES credit of every purged agent payload in place forever, and
- * {@code QuotaService.updateUsage} recomputes the tenant's {@code used_bytes} from
- * that breakdown, on a paid plan dimension. {@link #breakdownCategoryFor} is the
- * single place that mapping lives; it must keep mirroring what the WRITE path
- * chose, not what the row looks like.
+ * would inflate a billed number permanently.</b> A JSON payload books
+ * {@code STEP_OUTPUTS} and a TEXT row books {@code FILES}, so debiting one flat
+ * category on delete would leave the FILES credit of every purged agent payload in
+ * place forever, and {@code QuotaService.updateUsage} recomputes the tenant's
+ * {@code used_bytes} from that breakdown, on a paid plan dimension.
+ * {@link #breakdownCategoryFor} delegates to {@link StorageRowCategories}, which is
+ * where that rule lives for the save path, the delete path and the nightly
+ * reconciliation alike. It used to restate the rule here instead, and a second
+ * spelling of a rule is a second answer waiting to happen: that is precisely how
+ * the save path came to credit {@code FILES} for an object-storage row while the
+ * delete path debited {@code STEP_OUTPUTS}.
  */
 public final class ExecutionLogRowClasses {
 
@@ -58,29 +60,32 @@ public final class ExecutionLogRowClasses {
     private static final String JSON = "JSON";
     private static final String TEXT = "TEXT";
 
-    /** Breakdown bucket {@code StorageService.save} books a JSON step output to. */
-    public static final String CATEGORY_STEP_OUTPUTS = "STEP_OUTPUTS";
-    /** Breakdown bucket {@code StorageService.saveText} books EVERY text row to. */
-    public static final String CATEGORY_FILES = "FILES";
-
     /**
      * The breakdown category this row was CREDITED to when it was written, which
      * is the only category it may be debited from.
      *
-     * <p>Mirrors the write paths, not the row's appearance:
-     * {@code StorageService.save} chooses by source type (so the JSON classes here
-     * book STEP_OUTPUTS), while {@code StorageService.saveText} hardcodes FILES.
-     * Debiting the wrong bucket does not error, it leaves the original credit
-     * standing and inflates the tenant's billed {@code used_bytes} for good.
+     * <p>Answers with {@link StorageRowCategories#categoryFor}, the same call the save and delete
+     * paths make, so the purge can never debit a bucket the write path did not credit. Debiting
+     * the wrong one does not error: it leaves the original credit standing and inflates the
+     * tenant's billed {@code used_bytes} for good.
+     *
+     * <p>The allow-list still gates the answer. A row class this file does not permit returns
+     * null, so a future storage type cannot start being purged just because the classifier has an
+     * opinion about which bucket it would belong to.
+     *
+     * <p>Note the argument order: {@code (sourceType, storageType)} here, the reverse of
+     * {@link StorageRowCategories#categoryFor(String, String)}. Both take two Strings, so a swap
+     * compiles; {@code ExecutionLogRowClassesTest} is what catches it, because a swapped call
+     * answers null for every row this class allows.
      *
      * @return the category, or {@code null} for a row this class does not allow
      */
     public static String breakdownCategoryFor(String sourceType, String storageType) {
         if (TEXT.equals(storageType) && sourceType == null) {
-            return CATEGORY_FILES;
+            return StorageRowCategories.categoryFor(storageType, sourceType);
         }
         if (JSON.equals(storageType)) {
-            return CATEGORY_STEP_OUTPUTS;
+            return StorageRowCategories.categoryFor(storageType, sourceType);
         }
         return null;
     }

@@ -25,6 +25,15 @@ vi.mock('@/contexts/WorkflowModeContext', () => ({ useWorkflowMode: () => mockMo
 vi.mock('@/contexts/WorkflowRunContext', () => ({ useRun: () => [null, null] }));
 vi.mock('@/lib/api', () => ({ orchestratorApi: { listVersions: (...a: unknown[]) => mockListVersions(...a), pinVersion: vi.fn() } }));
 
+// This suite is about the request EVENT, and asserts nothing about the refresh - the ask made
+// after a pin is pinned in TriggerNodePinButton.toolbarVariant.test.tsx and in the call-site
+// guard. The stub is here because the real hook reaches for a QueryClient this suite has no
+// provider for, and without it the component cannot render at all.
+const refreshHomeStatusMock = vi.fn();
+vi.mock('@/hooks/useHomeStatus', () => ({
+  useRefreshHomeStatus: () => refreshHomeStatusMock,
+}));
+
 import { TriggerNodePinButton } from '../TriggerNodePinButton';
 import { TRIGGER_PIN_REQUEST_EVENT } from '../../../hooks/useTriggerPin';
 

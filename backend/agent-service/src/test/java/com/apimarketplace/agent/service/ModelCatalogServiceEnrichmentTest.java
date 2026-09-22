@@ -281,4 +281,85 @@ class ModelCatalogServiceEnrichmentTest {
                 .containsEntry("supportsReasoning", true)
                 .containsEntry("contextWindow", 256_000);
     }
+
+    /**
+     * V493 free-tier flag, asserted on the PAYLOAD rather than on the entity.
+     *
+     * <p>This is the seam the feature actually crosses, and the one that was broken:
+     * the flag was stamped only in the admin list ({@code getEffectiveModelList}),
+     * while the chat and agent pickers read {@code /api/v3/chat/models}, which is built
+     * through this helper. Nothing noticed, because every other test either mocked the
+     * wire or hand-built the model object on the far side of it - so the frontend's
+     * free-tier-first ordering matched nothing, every row kept its upgrade badge, and
+     * the "do not open on a model whose first turn is refused" guard never fired,
+     * with a fully green suite.
+     */
+    @Test
+    @DisplayName("V493: an opened model carries freeTierEnabled=true into the picker payload")
+    void freeTierFlagReachesTheRuntimePayload() throws Exception {
+        Map<String, Object> model = new HashMap<>();
+        ModelConfigOverrideEntity override = new ModelConfigOverrideEntity();
+        override.setFreeTierEnabled(true);
+
+        invokeEnrichment(model, override);
+
+        assertThat(model).containsEntry("freeTierEnabled", true);
+    }
+
+    @Test
+    @DisplayName("V493: a closed model carries the key explicitly as false, never absent")
+    void closedModelCarriesAnExplicitFalse() throws Exception {
+        // The client branches on `=== true`, so absent and false behave alike there -
+        // but the key must still be present on BOTH catalog paths, or the two payloads
+        // disagree in shape and a future reader cannot tell "closed" from "not answered".
+        Map<String, Object> model = new HashMap<>();
+        ModelConfigOverrideEntity override = new ModelConfigOverrideEntity();
+        override.setFreeTierEnabled(false);
+
+        invokeEnrichment(model, override);
+
+        assertThat(model).containsEntry("freeTierEnabled", false);
+    }
+    /**
+     * The category overlay hands the picker a COPY of the override row, and a field the
+     * copy forgets reads as "off" on that tab only. Both fields below were forgotten:
+     * {@code freeTierEnabled} since V493 (a category tab would render the chip off for a
+     * model whose column is true, while the default Chat/Agent tab, which takes the
+     * no-sidecar path and returns the original row, rendered it on), and
+     * {@code bundleEnabled} since V381, which decides what the CE bundle ships.
+     *
+     * <p>Asserted through the overlay rather than on the private copier, so the test
+     * exercises the path a reader actually takes.
+     */
+    @Test
+    @DisplayName("V493: the category overlay's copy keeps freeTierEnabled and bundleEnabled")
+    void categoryOverlayCopyKeepsTheFlags() throws Exception {
+        ModelConfigOverrideEntity row = new ModelConfigOverrideEntity();
+        row.setId(42L);
+        row.setProvider("anthropic");
+        row.setModelId("claude-haiku-4-5");
+        row.setFreeTierEnabled(true);
+        row.setBundleEnabled(Boolean.FALSE);
+
+        com.apimarketplace.agent.domain.ModelCategorySettingsEntity sidecar =
+                new com.apimarketplace.agent.domain.ModelCategorySettingsEntity();
+        sidecar.setModelConfigId(42L);
+        sidecar.setRank(1);
+        org.mockito.Mockito.when(categoryRepository.findByCategory("chat")).thenReturn(List.of(sidecar));
+
+        Method m = ModelCatalogService.class.getDeclaredMethod(
+                "applyCategoryOverlay", List.class, String.class);
+        m.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<ModelConfigOverrideEntity> out =
+                (List<ModelConfigOverrideEntity>) m.invoke(service, List.of(row), "chat");
+
+        assertThat(out).hasSize(1);
+        assertThat(out.get(0))
+                .as("the overlay returns a copy, so a dropped field silently disables the feature on that tab")
+                .isNotSameAs(row);
+        assertThat(out.get(0).isFreeTierEnabled()).isTrue();
+        assertThat(out.get(0).getBundleEnabled()).isFalse();
+        assertThat(out.get(0).getRanking()).as("and the overlay still applies its own rank").isEqualTo(1);
+    }
 }

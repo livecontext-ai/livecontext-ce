@@ -51,6 +51,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import com.apimarketplace.orchestrator.services.failure.UserActionableFailure;
 
 /**
  * Optimized daemon for scheduled workflow executions.
@@ -763,6 +764,41 @@ public class ScheduleExecutorService {
 
         // Phase 2: optimistic advance
         ScheduledExecutionDto recordedSchedule = advanceSchedule(schedule.getId());
+
+        // The agent's OWN cap, which until now was enforced only between two LLM iterations
+        // inside a run. That guard stops a runaway loop; it has no say over whether a NEW run
+        // starts, so a capped agent kept being fired by its cron: five round trips per tick,
+        // indefinitely, ending in a refusal at the far end of the chain.
+        //
+        // AFTER the advance, mirroring the workflow branch, so the schedule keeps its cadence
+        // and resumes by itself when a weekly or monthly cap rolls over. The advance is then
+        // partly undone right here, because both ways of undoing it belong in one place:
+        //
+        //   unattended - the fire time STAYS advanced (re-arming it would have the daemon
+        //     retry within the minute, forever) but the counters go back. Without that, a cap
+        //     that never lifts burns one execution_count per tick until hasReachedMaxExecutions
+        //     retires a bounded schedule that has never run once.
+        //   manual - nothing at all happened, so every marker goes back, the slot included.
+        if (agent.budgetBlockedOrFalse()) {
+            logger.warn("[Schedule] Agent {} refused by its own budget (schedule: {}, cap={}, consumed={}, until={})",
+                    agentEntityId, schedule.getId(), agent.getCreditBudget(), agent.getCreditsConsumed(),
+                    agent.getBudgetBlockedUntil());
+            if (unattended) {
+                restoreCountersAfterRefusedFire(schedule, recordedSchedule);
+            } else {
+                restoreDispatchAfterFailedManualRun(schedule, recordedSchedule);
+            }
+            // budgetCommitted, not creditsConsumed: the spend alone prints "6 of 10 credits"
+            // beside a refusal when what stopped the run is the 4 an in-flight sub-agent is
+            // holding. That counter never leaves agent-service, so the figure is resolved
+            // there and read here. Falls back to the spend on a payload that predates it.
+            return com.apimarketplace.common.credit.AgentBudgetRefusal.message(
+                    agent.getCreditBudget(),
+                    agent.getBudgetCommitted() != null
+                            ? agent.getBudgetCommitted() : agent.getCreditsConsumed(),
+                    agent.getBudgetBlockedUntil());
+        }
+
         String failure = runAgentAfterAdvance(schedule, agent, prompt, recordedSchedule);
         if (failure != null && !unattended) {
             // ONE restore covering every exit past the advance, rather than a call at each
@@ -779,7 +815,8 @@ public class ScheduleExecutorService {
      * <p>Split out so every way it can fail returns through a single point the caller can
      * undo. Its exits are: the schedule was disabled between the advance and the run, the
      * conversation could not be opened, conversation-service answered a failure, or the
-     * call threw.
+     * call threw. The budget refusal is NOT among them: it needs its own kind of undo, so
+     * it sits beside the advance it partially reverses.
      *
      * @return {@code null} when the agent ran, otherwise a short reason it did not.
      */
@@ -796,6 +833,7 @@ public class ScheduleExecutorService {
                     schedule.getId());
             return "The schedule was disabled before it could run.";
         }
+
 
         // Phase 3: create or reuse conversation, then send message via conversation-service
         try {
@@ -839,9 +877,9 @@ public class ScheduleExecutorService {
                         agentEntityId, schedule.getId(), conversationId);
                 return null;
             }
-            logger.error("[Schedule] Agent {} execution failed (schedule: {}): {}",
-                    agentEntityId, schedule.getId(), result.get("error"));
             Object error = result.get("error");
+            String agentError = error != null ? error.toString() : null;
+            logAgentOutcome(agentEntityId, schedule.getId(), agentError);
             return error != null ? error.toString() : "The agent run failed.";
         } catch (Exception e) {
             logger.error("[Schedule] Agent {} execution threw exception (schedule: {}): {}",
@@ -1019,6 +1057,39 @@ public class ScheduleExecutorService {
     }
 
     /**
+     * Give back the accounting of an unattended fire that was refused before it ran, while
+     * LEAVING the fire time advanced.
+     *
+     * <p>The daemon deliberately keeps the advance on a refused fire, so the cadence is the
+     * one thing that must not move: re-arming it would have the next tick fire the same
+     * schedule within the minute, forever. What must move is {@code execution_count}, because
+     * it feeds {@code hasReachedMaxExecutions()}. A cumulative cap never lifts, so a schedule
+     * bounded at 10 executions was retired permanently by ten refusals, having run zero times,
+     * and the calendar then greys it out for good.
+     *
+     * <p>Narrower than {@link #restoreDispatchAfterFailedManualRun} on purpose, and narrower
+     * than "every unattended refusal" too: this one repeats on EVERY tick for as long as the
+     * cap holds, which is what makes it able to exhaust a bound. A transient failure does not.
+     */
+    private void restoreCountersAfterRefusedFire(ScheduledExecutionDto previousSchedule,
+                                                 ScheduledExecutionDto recordedSchedule) {
+        if (recordedSchedule == null || previousSchedule == null) {
+            return;
+        }
+        // Passing the ADVANCED fire time as both the previous and the advanced value is what
+        // makes this counters-only: trigger-service CASes each marker against what was
+        // observed, so the fire time is written back to the value it already holds.
+        triggerClient.restoreScheduleDispatch(
+                recordedSchedule.getId(),
+                recordedSchedule.getNextExecutionAt(),
+                previousSchedule.getLastExecutionAt(),
+                recordedSchedule.getNextExecutionAt(),
+                recordedSchedule.getLastExecutionAt(),
+                previousSchedule.getExecutionCount(),
+                recordedSchedule.getExecutionCount());
+    }
+
+    /**
      * Undo the optimistic advance after a MANUAL run that did not start.
      *
      * <p>The daemon deliberately keeps the advance on a failed fire: the slot has had its
@@ -1072,12 +1143,32 @@ public class ScheduleExecutorService {
     }
 
     /**
-     * Log execution outcome (success or failure).
+     * An agent schedule fires on its own just like a workflow one, so a refused run writes one
+     * line per tick until someone acts. Same rule as {@link #logExecutionResult}; extracted so
+     * the branch can be tested without driving the whole agent dispatch.
+     */
+    private void logAgentOutcome(Object agentEntityId, Object scheduleId, String agentError) {
+        if (UserActionableFailure.isUserActionable(agentError)) {
+            logger.warn("[Schedule] Agent {} refused (schedule: {}): {}",
+                    agentEntityId, scheduleId, agentError);
+        } else {
+            logger.error("[Schedule] Agent {} execution failed (schedule: {}): {}",
+                    agentEntityId, scheduleId, agentError);
+        }
+    }
+
+    /**
+     * Log execution outcome (success, refusal or failure).
      */
     private void logExecutionResult(UUID workflowId, String runIdPublic, TriggerExecutionResult result) {
         if (result.success()) {
             logger.info("[Schedule] Workflow {} executed (run: {})",
                     workflowId, runIdPublic);
+        } else if (UserActionableFailure.isUserActionable(result.message())) {
+            // A schedule keeps its cadence when a run is refused, so a workspace out of credits
+            // writes one line per fire, forever. That is the loudest half of the incident this
+            // rule exists for: same relayed message as the webhook path, one frame up.
+            logger.warn("[Schedule] Workflow {} refused: {}", workflowId, result.message());
         } else {
             logger.error("[Schedule] Workflow {} execution failed: {}",
                     workflowId, result.message());

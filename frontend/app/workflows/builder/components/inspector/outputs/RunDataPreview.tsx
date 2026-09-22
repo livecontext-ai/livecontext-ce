@@ -27,7 +27,7 @@ import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { JsonValueTree } from './JsonDataTree';
 import { NodeRunStateNotice } from './NodeRunStateNotice';
 import { RunDataViewTabs, RawJsonView, JsonTableView, type RunDataViewMode } from './RunDataViews';
-import { hasTableView, pickTabularValue } from './runValueUtils';
+import { hasTableView } from './runValueUtils';
 
 
 interface RunDataPreviewProps {
@@ -287,7 +287,10 @@ export function RunDataPreview({
           {effectiveViewMode === 'json' ? (
             <RawJsonView data={data} />
           ) : effectiveViewMode === 'table' ? (
-            <JsonTableView data={pickTabularValue(data)} />
+            // The WHOLE payload, not the pre-picked rows: JsonTableView names the
+            // field it lays out and offers a selector when several qualify, and it
+            // can do neither once the caller has already thrown the other fields away.
+            <JsonTableView data={data} />
           ) : (
             <JsonValueTree
               data={data}

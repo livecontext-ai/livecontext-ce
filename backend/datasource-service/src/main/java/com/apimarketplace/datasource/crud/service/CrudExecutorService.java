@@ -201,7 +201,7 @@ public class CrudExecutorService {
         }
 
         // Coerce values per column type before insert (this converts vector values to float[])
-        List<String> warnings = coerceRowValues(request.getRows(), dataSource, tenantId);
+        List<String> warnings = summariseWarnings(coerceRowValues(request.getRows(), dataSource, tenantId));
 
         // After coercion, extract the float[] values and remove vector columns from JSONB data
         if (!vectorColumns.isEmpty()) {
@@ -585,7 +585,7 @@ public class CrudExecutorService {
         }
 
         // Coerce update values per column type
-        List<String> warnings = coerceUpdateValues(request.getSet(), dataSource, tenantId);
+        List<String> warnings = summariseWarnings(coerceUpdateValues(request.getSet(), dataSource, tenantId));
 
         // Extract vector columns from set map - they can't go into JSONB
         Map<String, float[]> vectorUpdates = new LinkedHashMap<>();
@@ -735,6 +735,86 @@ public class CrudExecutorService {
             }
         }
         return flat;
+    }
+
+    /**
+     * One line per DISTINCT thing the coercion had to say, with a count, instead of one line per
+     * cell.
+     *
+     * <p>A bulk write repeats itself: 500 rows with a non-ISO date column produce 500 identical
+     * "Converted date format to ISO" lines differing only in the value. Handing that list to a
+     * caller is unusable at best, and truncating it to the first N is worse than useless - the one
+     * line that matters ("it cannot be displayed") is written by whichever row happens to carry the
+     * bad cell, so a head-truncation drops exactly the warning the caller needed while reporting
+     * that the remainder is more of the same. Grouping keeps every distinct kind, whatever row it
+     * came from, and the count says how widespread each one is.
+     *
+     * <p>Two messages are the same finding when they differ only in the value they carry; see
+     * {@link #warningKind} for how that is decided.
+     */
+    static List<String> summariseWarnings(List<String> warnings) {
+        if (warnings == null || warnings.size() <= 1) {
+            return warnings;
+        }
+        Map<String, String> firstOfKind = new LinkedHashMap<>();
+        Map<String, Integer> countOfKind = new LinkedHashMap<>();
+        for (String warning : warnings) {
+            String key = warningKind(warning);
+            firstOfKind.putIfAbsent(key, warning);
+            countOfKind.merge(key, 1, Integer::sum);
+        }
+        if (firstOfKind.size() == warnings.size()) {
+            return warnings;
+        }
+        List<String> summarised = new ArrayList<>(firstOfKind.size());
+        for (Map.Entry<String, String> entry : firstOfKind.entrySet()) {
+            int count = countOfKind.get(entry.getKey());
+            summarised.add(count == 1
+                    ? entry.getValue()
+                    : entry.getValue() + " (and " + (count - 1) + " more like it)");
+        }
+        return summarised;
+    }
+
+    /**
+     * The part of a message that identifies WHAT was found, with the row-specific value removed.
+     *
+     * <p>Two steps, because the coercer embeds values in two ways. Most messages quote them
+     * ({@code Converted date format to ISO: '15/01/2024' -> ...}), so everything from the first
+     * quote or parenthesis is dropped. A few interpolate them bare ({@code Clamped number from 500
+     * to maximum 100}), which no cut can find, so digit runs are flattened as well - without that,
+     * five hundred clamped rows are five hundred lines again and the flood this exists to stop is
+     * back. The line the caller READS is the first whole message of its kind, so a concrete example
+     * survives either way.
+     *
+     * <p>The flattening is applied ONLY past the {@code "<column>: "} prefix the caller adds, never
+     * to the column name itself. Digits in a column name are ordinary ({@code photo_1} /
+     * {@code photo_2}, {@code revenue_2023} / {@code revenue_2024}) and flattening them folded two
+     * genuinely different broken columns into one line: the reader was told about one column and
+     * never learned the second was broken too, which is the exact "the finding you needed is
+     * missing" failure this method exists to prevent.
+     */
+    private static String warningKind(String warning) {
+        int cut = warning.length();
+        for (char marker : new char[]{'\'', '(', '"'}) {
+            int at = warning.indexOf(marker);
+            if (at >= 0 && at < cut) {
+                cut = at;
+            }
+        }
+        String head = warning.substring(0, cut).trim();
+        // The first ": " is taken as the boundary the caller inserted. That holds for every warning
+        // a caller can actually SEE: a column name containing ':' is rejected by
+        // SqlSanitizer.sanitizeColumnName, which CrudRepository applies to each column of the write.
+        // Coercion runs first, so such a name can reach this method - but its write then throws, and
+        // a failed write returns no warnings at all. Nothing downstream depends on more than that.
+        int prefixEnd = head.indexOf(": ");
+        String column = prefixEnd >= 0 ? head.substring(0, prefixEnd + 2) : "";
+        String body = prefixEnd >= 0 ? head.substring(prefixEnd + 2) : head;
+        String kind = column + body.replaceAll("\\d+", "#");
+        // A message that opens with a quote would key on the empty string and swallow every other
+        // one. Nothing the coercer writes does, but the fallback costs a line.
+        return kind.isBlank() ? warning : kind;
     }
 
     /**

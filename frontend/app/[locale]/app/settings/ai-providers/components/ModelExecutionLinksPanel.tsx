@@ -7,23 +7,12 @@ import { Button } from "@/components/ui/button";
 import { useModels } from "@/hooks/useModels";
 import { getProviderDisplayName } from "@/lib/ai-providers/providerIcons";
 import { modelConfigService, type ModelExecutionLink, type ModelExecutionLinkScope } from "@/lib/api/model-config.service";
-
-/**
- * The app surfaces a link can be scoped to (mirrors the backend
- * ModelExecutionLinkScope). ALL is the wildcard default; an exact surface overrides
- * ALL for just that surface.
- */
-const SCOPES: { value: ModelExecutionLinkScope; key: string }[] = [
-  { value: "ALL", key: "scopeAll" },
-  { value: "CHAT", key: "scopeChat" },
-  { value: "WORKFLOW", key: "scopeWorkflow" },
-  { value: "WEBHOOK", key: "scopeWebhook" },
-  { value: "WIDGET", key: "scopeWidget" },
-  { value: "SCHEDULE", key: "scopeSchedule" },
-  { value: "TASK", key: "scopeTask" },
-  { value: "TASK_REVIEW", key: "scopeTaskReview" },
-];
-const SCOPE_KEY: Record<string, string> = Object.fromEntries(SCOPES.map((s) => [s.value, s.key]));
+// The surface list is shared with the per-model badge in the Models panel, so
+// the two admin surfaces can never offer a different set.
+import {
+  EXECUTION_LINK_SCOPES,
+  EXECUTION_LINK_SCOPE_LABEL_KEY,
+} from "@/lib/ai-providers/executionLinkScopes";
 
 /**
  * CLOUD-only admin panel: map a billed (provider, model) to a different EXECUTION
@@ -72,7 +61,10 @@ export default function ModelExecutionLinksPanel() {
         .map((l) => l.scope ?? "ALL"),
     );
   }, [links, billedProvider, billedModel]);
-  const availableScopes = useMemo(() => SCOPES.filter((s) => !usedScopes.has(s.value)), [usedScopes]);
+  const availableScopes = useMemo(
+    () => EXECUTION_LINK_SCOPES.filter((s) => !usedScopes.has(s.value)),
+    [usedScopes],
+  );
   const allSurfacesUsed = Boolean(billedProvider && billedModel && availableScopes.length === 0);
 
   // When the billed pair changes, the chosen surface may now be taken: snap the
@@ -231,7 +223,7 @@ export default function ModelExecutionLinksPanel() {
             className={selectClass}
           >
             {availableScopes.map((s) => (
-              <option key={s.value} value={s.value}>{t(`executionLinks.${s.key}`)}</option>
+              <option key={s.value} value={s.value}>{t(`executionLinks.${s.labelKey}`)}</option>
             ))}
           </select>
         </div>
@@ -275,7 +267,7 @@ export default function ModelExecutionLinksPanel() {
                   {link.executionModel ? ` · ${link.executionModel}` : ""}
                 </span>
                 <span className="text-xs rounded-md bg-theme-secondary px-2 py-0.5 text-theme-muted shrink-0">
-                  {t(`executionLinks.${SCOPE_KEY[link.scope ?? "ALL"] ?? "scopeAll"}`)}
+                  {t(`executionLinks.${EXECUTION_LINK_SCOPE_LABEL_KEY[link.scope ?? "ALL"] ?? "scopeAll"}`)}
                 </span>
               </div>
               <button

@@ -1,5 +1,6 @@
 package com.apimarketplace.auth.util;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.slf4j.Logger;
@@ -31,6 +32,14 @@ public class NonceUtil {
     /** 16-byte AES-128 key material derived from the configured key. */
     private final byte[] keyBytes;
 
+    /**
+     * {@code @Autowired} is REQUIRED here, not decorative: with two constructors and no
+     * annotation, Spring instantiates a component through its no-arg constructor, so this
+     * bean silently ran on an ephemeral key in every deployment, even with the property set
+     * (2026-09-15: NONCE_ENCRYPTION_KEY was in the pod and the startup warning still fired).
+     * The no-arg constructor stays for tests only.
+     */
+    @Autowired
     public NonceUtil(@Value("${auth.nonce.encryption-key:}") String configuredKey) {
         if (configuredKey == null || configuredKey.isBlank()) {
             this.keyBytes = generateEphemeralKeyBytes();

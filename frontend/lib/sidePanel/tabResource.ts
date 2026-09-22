@@ -28,6 +28,9 @@ export const WORKFLOW_PANEL_TAB_ID = 'workflow-panel';
 /** Its application twin, reserved for the same reason. */
 export const APPLICATION_PANEL_TAB_ID = 'application-panel';
 
+/** The workspace agenda is a global panel surface, with a dedicated full-page counterpart. */
+export const AGENDA_PANEL_TAB_ID = 'agenda-panel';
+
 /**
  * Build the side-panel tab id for a workflow, optionally scoped to one run.
  *
@@ -57,7 +60,7 @@ export function applicationPanelTabId(publicationId: string, runId?: string | nu
 /** Anchored at the start: the resource id always comes first, decoration follows. */
 const UUID_PREFIX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
-export type TabResourceKind = 'workflow' | 'interface' | 'application' | 'datasource' | 'agent';
+export type TabResourceKind = 'workflow' | 'interface' | 'application' | 'datasource' | 'agent' | 'conversation';
 
 export interface TabResource {
   kind: TabResourceKind;
@@ -121,11 +124,15 @@ export function parseTabResource(tabId: string): TabResource | null {
   if (tabId.startsWith('agent-')) {
     return { kind: 'agent', id: tabId.slice('agent-'.length) };
   }
+  if (tabId.startsWith('conversation-')) {
+    return { kind: 'conversation', id: tabId.slice('conversation-'.length) };
+  }
   return null;
 }
 
 /** Derive a full-page URL from a tab id, or null if the resource has no dedicated page. */
 export function getTabResourceUrl(tabId: string): string | null {
+  if (tabId === AGENDA_PANEL_TAB_ID) return '/app/agenda';
   const resource = parseTabResource(tabId);
   if (!resource || !resource.id) return null;
   switch (resource.kind) {
@@ -140,8 +147,18 @@ export function getTabResourceUrl(tabId: string): string | null {
       return `/app/interface/${resource.id}`;
     case 'datasource':
       return `/app/data/${resource.id}`;
-    // The agents page is a single board, not one page per agent.
+    // The agents page is a single board, not one page per agent: the agent it carries is
+    // named in the query, and the board opens its panel on arrival. Dropping the id here sent
+    // the button to the bare list, which is the whole complaint it exists to answer.
     case 'agent':
-      return '/app/agent';
+      return `/app/agent?openAgent=${resource.id}`;
+    // A conversation lives on one of TWO surfaces and its `kind` decides which; a
+    // tab id carries an id and nothing else, so this cannot ask. Sending a studio
+    // thread to the chat route renders it blank and then feeds its generation
+    // envelopes to a chat model, so the answer is no page rather than a guess.
+    // The kind is here only so a deleted conversation's tab can be matched and
+    // closed, which needs no URL.
+    case 'conversation':
+      return null;
   }
 }

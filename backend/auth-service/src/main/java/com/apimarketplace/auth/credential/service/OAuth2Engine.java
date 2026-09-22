@@ -114,9 +114,17 @@ public class OAuth2Engine {
         appendParam(url, "redirect_uri", callbackUrl, true);
         appendParam(url, "state", state, true);
 
-        String scope = config.joinedScopes();
+        // Two scope families, one parameter each. For every provider but Slack the second family
+        // is empty, primaryScopes() == scopes() and this is the single "scope" param as before.
+        // Slack's "scope" accepts BOT scopes only: a user-token scope sent there fails the whole
+        // install with invalid_scope, so it has to leave through user_scope instead.
+        String scope = config.joinedPrimaryScopes();
         if (!scope.isEmpty()) {
             appendParam(url, "scope", scope, true);
+        }
+        String userScope = config.joinedUserScopes();
+        if (!userScope.isEmpty()) {
+            appendParam(url, config.userScopes().param(), userScope, true);
         }
 
         boolean hasLocale = uiLocale != null && !uiLocale.isBlank();

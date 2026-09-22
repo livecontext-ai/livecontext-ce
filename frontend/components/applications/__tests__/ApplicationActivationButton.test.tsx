@@ -35,6 +35,15 @@ vi.mock('@/lib/api/orchestrator/version.service', () => ({
   },
 }));
 
+// Activating or deactivating an app is a pin, and a pin is what puts it in the bell's Triggers
+// rows. The real hook reaches for a QueryClient this suite has no provider for; what it does
+// with the cache is pinned in useRefreshHomeStatus.freshness.test.tsx. A single shared spy,
+// returned by identity, so it is stable in the callbacks' dependency lists.
+const refreshHomeStatusMock = vi.fn();
+vi.mock('@/hooks/useHomeStatus', () => ({
+  useRefreshHomeStatus: () => refreshHomeStatusMock,
+}));
+
 // Import after mocks
 import { ApplicationActivationButton } from '../ApplicationActivationButton';
 
@@ -48,6 +57,7 @@ afterEach(() => {
 beforeEach(() => {
   mockListVersions.mockReset();
   mockPinVersion.mockReset();
+  refreshHomeStatusMock.mockReset();
 });
 
 // ---------------------------------------------------------------------------
@@ -137,6 +147,58 @@ describe('ApplicationActivationButton', () => {
       const sw = screen.getByRole('switch', { name: 'Activate' });
       expect(sw).toHaveAttribute('aria-checked', 'false');
     });
+  });
+
+  it('asks for the bell automation rows again after activating (regression: the Triggers tab read one step behind)', async () => {
+    // Activation pins the latest version, which is exactly what makes this app appear in the
+    // bell's Triggers rows and in the imminent-fire ring. Nothing else invalidates that
+    // payload, so without this ask the user activates and then reads pre-activation state.
+    mockListVersions.mockResolvedValue({ currentVersion: 4, pinnedVersion: null, versions: [] });
+    // Production shape: the endpoint answers `success` too, and the refresh is gated on it.
+    mockPinVersion.mockResolvedValue({ success: true, pinnedVersion: 4, productionRunIdPublic: null });
+
+    render(<ApplicationActivationButton workflowId={WORKFLOW_ID} initialPinnedVersion={null} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Activate' }));
+
+    await waitFor(() => expect(refreshHomeStatusMock).toHaveBeenCalledTimes(1));
+    // No bound: the caller just changed the data, so how fresh the copy is says nothing.
+    expect(refreshHomeStatusMock).toHaveBeenCalledWith();
+  });
+
+  it('asks for the bell automation rows again after deactivating', async () => {
+    // Unpinning REMOVES the row, which is just as wrong to show for another poll interval.
+    mockPinVersion.mockResolvedValue({ success: true, pinnedVersion: null, productionRunIdPublic: null });
+
+    render(<ApplicationActivationButton workflowId={WORKFLOW_ID} initialPinnedVersion={3} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Deactivate' }));
+
+    await waitFor(() => expect(refreshHomeStatusMock).toHaveBeenCalledTimes(1));
+    expect(refreshHomeStatusMock).toHaveBeenCalledWith();
+  });
+
+  it('does not ask when the server declines the pin without throwing', async () => {
+    // A resolved `{ success: false }` changed no row. Asking anyway would also stamp "asked
+    // just now", which silences the visit-ask the user makes seconds later.
+    mockListVersions.mockResolvedValue({ currentVersion: 4, pinnedVersion: null, versions: [] });
+    mockPinVersion.mockResolvedValue({ success: false, pinnedVersion: null, productionRunIdPublic: null });
+
+    render(<ApplicationActivationButton workflowId={WORKFLOW_ID} initialPinnedVersion={null} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Activate' }));
+
+    await waitFor(() => expect(mockPinVersion).toHaveBeenCalledTimes(1));
+    expect(refreshHomeStatusMock).not.toHaveBeenCalled();
+  });
+
+  it('does not ask when the pin call fails', async () => {
+    // The rows did not change, so asking would only spend a request.
+    mockListVersions.mockResolvedValue({ currentVersion: 1, pinnedVersion: null, versions: [] });
+    mockPinVersion.mockRejectedValue(new Error('boom'));
+
+    render(<ApplicationActivationButton workflowId={WORKFLOW_ID} initialPinnedVersion={null} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Activate' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('boom'));
+    expect(refreshHomeStatusMock).not.toHaveBeenCalled();
   });
 
   it('shows error when pin call fails', async () => {

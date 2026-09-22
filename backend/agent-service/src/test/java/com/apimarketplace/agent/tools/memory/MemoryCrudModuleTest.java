@@ -123,6 +123,28 @@ class MemoryCrudModuleTest {
     @DisplayName("save")
     class Save {
 
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.ValueSource(strings = {"private", "user", "", "   "})
+        @DisplayName("refuses an invalid scope instead of silently sharing the fact with the workspace")
+        void invalidScopeDoesNotBecomeWorkspaceMemory(String scope) {
+            ToolExecutionResult result = run("save", Map.of("title", "Preference", "summary", "Sam prefers short answers.",
+                "scope", scope), ctxWithCallerAgent());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.errorCode()).isEqualTo(ToolErrorCode.INVALID_ENUM_VALUE);
+            verify(memoryService, never()).save(any(), any());
+        }
+
+        @Test
+        @DisplayName("refuses a non-string scope instead of treating it as an omitted parameter")
+        void nonStringScopeDoesNotBecomeWorkspaceMemory() {
+            ToolExecutionResult result = run("save", Map.of("title", "Preference", "summary", "Sam prefers short answers.",
+                "scope", List.of("agent")), ctxWithCallerAgent());
+
+            assertThat(result.errorCode()).isEqualTo(ToolErrorCode.INVALID_ENUM_VALUE);
+            verify(memoryService, never()).save(any(), any());
+        }
+
         @Test
         @DisplayName("requires a title, and shows a complete call the agent can copy")
         void requiresTitle() {
@@ -615,6 +637,7 @@ class MemoryCrudModuleTest {
 
             assertThat(result.success()).isFalse();
             assertThat(result.error()).contains("scope='agent'");
+            assertThat(result.error()).contains("Do not broaden the scope");
             verify(memoryService, never()).save(any(), anyString());
         }
     }
@@ -729,6 +752,7 @@ class MemoryCrudModuleTest {
             Map<String, Object> data = (Map<String, Object>) result.data();
             assertThat(data).containsEntry("status", "REPLACED");
             assertThat(data).containsEntry("replaced_title", "Deploy cadence");
+            assertThat(data.get("note").toString()).contains("omitted fields were kept");
             assertThat(data).containsEntry("replaced_source", "agent");
             assertThat(data.get("note").toString())
                 .as("its own earlier note, so this reads as the correction it is")

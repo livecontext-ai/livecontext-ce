@@ -34,10 +34,26 @@ import java.util.*;
  *   <li>{@code ?mode=dry-run} - fetches, runs guards, computes the diff, writes a
  *       {@link ModelCatalogSyncLogEntity} row, returns the plan. No row in
  *       {@code model_config_overrides} is touched.</li>
- *   <li>{@code ?mode=apply} - same as dry-run, then (if guards pass or are
- *       explicitly overridden) calls {@link CatalogMergeService#merge} with
+ *   <li>{@code ?mode=apply} - same as dry-run, then (if no BLOCKING guard
+ *       fired, or it was explicitly overridden) calls
+ *       {@link CatalogMergeService#merge} with
  *       {@link MergeOptions#forSync()} and stamps the sync-log row.</li>
  * </ul>
+ *
+ * <p><b>The two guards do not have the same power, and that is the point.</b>
+ * {@code count-floor} judges the FEED: a response that lost a fifth of its rows
+ * is not trustworthy as a whole, so it aborts the apply. {@code price-sanity}
+ * judges ONE ROW against its own baseline, so it holds that row back and lets
+ * every other row land.
+ *
+ * <p>Price-sanity used to abort as well, which quietly made a refresh
+ * all-or-nothing: a single moved price cancelled the whole run, so the stored
+ * baseline never advanced and the identical rows flagged again on every
+ * subsequent run. The operator's only way out was the blanket override, which
+ * pushes every flagged price through unread. Holding back just the flagged rows
+ * turns the flag into a review queue: the refresh still lands, and an operator
+ * who has read the rows re-runs with {@code overrideGuards=price-sanity} to
+ * accept them.
  *
  * <p>Transactionality: {@link #sync} is {@code @Transactional} as the
  * outer scope. The merge step runs in a dedicated {@link
@@ -78,8 +94,35 @@ public class ModelCatalogSyncService {
     /** 0.8 - feed is rejected if it drops below 80% of the last successful snapshot. */
     private static final BigDecimal COUNT_FLOOR_RATIO = new BigDecimal("0.8");
 
-    /** Price sanity threshold - Δ > 50% triggers a flag. */
+    /**
+     * First half of the price-sanity test: the move must be more than 50% of
+     * the old price. On its own it flags nothing - see
+     * {@link #PRICE_SANITY_MIN_ABSOLUTE_DELTA}, which the move must clear as
+     * well - so this constant does not describe a threshold a reader can act
+     * on by itself.
+     */
     private static final BigDecimal PRICE_SANITY_RATIO = new BigDecimal("0.5");
+
+    /**
+     * Second half of the price-sanity test: the move must ALSO be worth at
+     * least this many dollars per million tokens.
+     *
+     * <p>A ratio alone cannot tell a repricing from a rounding wobble, because
+     * the cheapest rows are where a large percentage is worth nothing. Measured
+     * on a real refresh, {@code tencent/hy3} moved 0.0825 to 0.1320: a 60%
+     * jump, and five cents per million tokens. Flagging that says "a human must
+     * look at this" about a number no human decision depends on, and the cost
+     * of a noisy flag is not zero: it trains the reader to wave the list
+     * through, which is exactly when the one real anomaly gets waved through
+     * with it.
+     *
+     * <p>Deliberately conservative. At 0.10 the rule drops only what is too
+     * small to act on: on the five rows of the refresh that prompted this, one
+     * is silenced and four still flag. A bigger floor would start hiding real
+     * repricings of cheap models, which are precisely the ones a budget is
+     * built on.
+     */
+    private static final BigDecimal PRICE_SANITY_MIN_ABSOLUTE_DELTA = new BigDecimal("0.10");
 
     private final LiteLlmFeedParser liteLlmParser;
     private final OpenRouterFeedParser openRouterParser;
@@ -228,7 +271,8 @@ public class ModelCatalogSyncService {
         try {
             discovery = discoveryService.discover(
                     allFeedModels, existing.keySet(),
-                    orouter != null ? orouter.models() : List.of());
+                    orouter != null ? orouter.models() : List.of(),
+                    litellm != null ? litellm.declinedIds() : Set.of());
         } catch (Exception e) {
             // A vendor endpoint misbehaving must never fail a catalog refresh:
             // the feeds' contribution is already computed and still valid.
@@ -243,9 +287,11 @@ public class ModelCatalogSyncService {
         // 4a. Count-floor per feed.
         runCountFloorGuard(litellm, orouter, req.overrideGuards(), guardFailures);
 
-        // 4b. Price-sanity per incoming row vs existing.
+        // 4b. Price-sanity per incoming row vs existing. Unlike count-floor
+        // this is a PER-ROW guard and never blocks the run: it collects the
+        // rows to hold back, and step 7 applies everything else.
         List<FlaggedRow> flagged = new ArrayList<>();
-        runPriceSanityGuard(allFeedModels, existing, req.overrideGuards(), flagged, guardFailures);
+        runPriceSanityGuard(allFeedModels, existing, flagged);
 
         // 5. Build the diff buckets.
         List<Map<String, Object>> added = new ArrayList<>();
@@ -253,6 +299,14 @@ public class ModelCatalogSyncService {
         int unchanged = 0;
 
         // Pre-compute flagged keys to drop from apply when sanity not overridden.
+        // Withholding the row is the only EFFECT a price-sanity flag has on
+        // the apply; the flag itself also travels in the plan and in the
+        // sync-log row, which is how an operator gets to review it. It used to be
+        // dead code: an aggregate GuardFailure made step 6 return before step 7
+        // could ever read this set, so one flagged row cancelled the entire
+        // refresh and the DB baseline never moved. The same rows then flagged
+        // again on the next run, and the next, until an operator ticked the
+        // override and pushed every flagged row through at once.
         Set<String> flaggedKeys = new HashSet<>();
         if (!req.overrideGuards().contains(GUARD_PRICE_SANITY)) {
             for (FlaggedRow f : flagged) flaggedKeys.add(key(f.provider(), f.modelId()));
@@ -306,7 +360,7 @@ public class ModelCatalogSyncService {
                     allFeedModels.size(), liteLlmFeed.checksum(), outcome,
                     outcome == ModelCatalogSyncLogEntity.Outcome.ABORTED_GUARD
                             ? describeGuards(guardFailures) : null,
-                    guardFailuresToJson(guardFailures, flagged),
+                    guardFailuresToJson(guardFailures, flagged, flaggedKeys.size()),
                     0, 0, 0, flagged.size(),
                     liteLlmCount, openRouterCount);
             return new SyncResult(plan, false, 0, 0, 0, logged.getId());
@@ -333,7 +387,7 @@ public class ModelCatalogSyncService {
             ModelCatalogSyncLogEntity logged = writeLog(req, fetchedAt, sourceTag,
                     allFeedModels.size(), liteLlmFeed.checksum(),
                     ModelCatalogSyncLogEntity.Outcome.APPLY_ERROR,
-                    e.getMessage(), guardFailuresToJson(List.of(), flagged),
+                    e.getMessage(), guardFailuresToJson(List.of(), flagged, flaggedKeys.size()),
                     0, 0, 0, flagged.size(),
                     liteLlmCount, openRouterCount);
             return new SyncResult(plan, false, 0, 0, 0, logged.getId());
@@ -343,12 +397,16 @@ public class ModelCatalogSyncService {
         ModelCatalogSyncLogEntity logged = writeLog(req, fetchedAt, sourceTag,
                 allFeedModels.size(), liteLlmFeed.checksum(),
                 ModelCatalogSyncLogEntity.Outcome.OK, null,
-                guardFailuresToJson(List.of(), flagged),
+                guardFailuresToJson(List.of(), flagged, flaggedKeys.size()),
                 merge.inserted(), merge.updated(), merge.deprecated(), flagged.size(),
                 liteLlmCount, openRouterCount);
 
-        log.info("catalog-sync applied: inserted={}, updated={}, deprecated={}, flaggedSkipped={}, syncLogId={}",
-                merge.inserted(), merge.updated(), merge.deprecated(), flagged.size(), logged.getId());
+        // flaggedKeys, not flagged: with overrideGuards=price-sanity the flagged
+        // rows went THROUGH, and reporting them as skipped there described the
+        // opposite of what the run did.
+        log.info("catalog-sync applied: inserted={}, updated={}, deprecated={}, flagged={}, flaggedWithheld={}, syncLogId={}",
+                merge.inserted(), merge.updated(), merge.deprecated(),
+                flagged.size(), flaggedKeys.size(), logged.getId());
 
         return new SyncResult(plan, true,
                 merge.inserted(), merge.updated(), merge.deprecated(), logged.getId());
@@ -471,13 +529,26 @@ public class ModelCatalogSyncService {
         }
     }
 
+    /**
+     * Flag rows whose price moved enough to want a human decision.
+     *
+     * <p>Collects, and does not block. A flagged row is held back from the
+     * apply (see {@code flaggedKeys}); every other row lands. The operator
+     * pushes the held rows through on a later run with
+     * {@code overrideGuards=price-sanity}.
+     *
+     * <p>That split matters because the two guards answer different questions.
+     * {@code count-floor} asks "is this feed response trustworthy at all",
+     * which is about the WHOLE payload, so it aborts. Price-sanity asks "did
+     * this one model rate move in a way worth reading", which is about ONE row
+     * and says nothing about the other three hundred. Letting the second abort
+     * the run made a refresh all-or-nothing: the operator could apply nothing,
+     * or tick the override and accept every flagged price unread. Neither is a
+     * review.
+     */
     private void runPriceSanityGuard(List<Map<String, Object>> incoming,
                                      Map<String, ModelConfigOverrideEntity> existing,
-                                     Set<String> overrides,
-                                     List<FlaggedRow> flagged,
-                                     List<GuardFailure> failures) {
-        boolean overridden = overrides.contains(GUARD_PRICE_SANITY);
-
+                                     List<FlaggedRow> flagged) {
         for (Map<String, Object> m : incoming) {
             String prov = strOf(m.get("provider"));
             String mid  = strOf(m.get("modelId"));
@@ -498,9 +569,9 @@ public class ModelCatalogSyncService {
             } else if (newOut != null && newOut.signum() == 0 && oldOut != null && oldOut.signum() > 0) {
                 reason = "priceOutput dropped to 0 (was " + oldOut + ")";
             } else if (driftTooLarge(oldIn, newIn)) {
-                reason = "priceInput changed >50% (" + oldIn + " → " + newIn + ")";
+                reason = "priceInput " + driftLabel() + " (" + oldIn + " → " + newIn + ")";
             } else if (driftTooLarge(oldOut, newOut)) {
-                reason = "priceOutput changed >50% (" + oldOut + " → " + newOut + ")";
+                reason = "priceOutput " + driftLabel() + " (" + oldOut + " → " + newOut + ")";
             }
 
             if (reason != null) {
@@ -508,21 +579,57 @@ public class ModelCatalogSyncService {
             }
         }
 
-        // One aggregate GuardFailure when flags exist and not overridden -
-        // the REST controller maps this to a 412 Precondition Failed.
-        if (!flagged.isEmpty() && !overridden) {
-            failures.add(new GuardFailure(GUARD_PRICE_SANITY,
-                    flagged.size() + " row(s) flagged - override with overrideGuards=price-sanity",
-                    Map.of("flaggedCount", flagged.size())));
-        }
+        // No aggregate GuardFailure is emitted, on purpose. guardFailures now
+        // means exactly "this run must not apply", which is the condition the
+        // REST layer turns into a 412, so price-sanity has no business in that
+        // list: it holds back rows, not the run. The flagged rows travel in the
+        // plan and in the sync-log row instead, where they are a review queue
+        // rather than a stop sign.
     }
 
+    /**
+     * Has this price moved enough, BOTH in proportion and in money, to want a
+     * human decision?
+     *
+     * <p>Both tests must pass, which is a deliberate trade and not a free one.
+     * The ratio catches the SHAPE of an anomaly; the absolute floor rules out
+     * the rows where that shape costs nothing. Keeping only the ratio flags
+     * five-cent moves on budget models, and a list nobody can finish reading
+     * is how the one real anomaly gets waved through.
+     *
+     * <p>What it gives up, stated plainly: a huge proportional jump on a very
+     * cheap model goes unflagged when the money is small. {@code 0.01 → 0.10}
+     * is +900% and passes silently, because the delta is one cent under the
+     * floor. That is accepted because the flag exists to provoke a human
+     * decision, and there is no decision to take about a cent. A model whose
+     * rate matters will cross the floor long before it matters.
+     */
     private static boolean driftTooLarge(BigDecimal oldV, BigDecimal newV) {
         if (oldV == null || newV == null) return false;
         if (oldV.signum() == 0) return false;
         BigDecimal delta = newV.subtract(oldV).abs();
+        if (delta.compareTo(PRICE_SANITY_MIN_ABSOLUTE_DELTA) < 0) return false;
         BigDecimal ratio = delta.divide(oldV, 4, RoundingMode.HALF_UP);
         return ratio.compareTo(PRICE_SANITY_RATIO) > 0;
+    }
+
+    /**
+     * The whole rule as a label for the flag text, BOTH halves of it, derived
+     * from the constants rather than written out.
+     *
+     * <p>Naming only the ratio was worse than imprecise: two rows can move by
+     * the same percentage with only one of them flagged, and an operator
+     * reading "changed >50%" on one and nothing on the other has no way to see
+     * why. The message has to state the test the row actually failed.
+     */
+    private static String driftLabel() {
+        return "changed >" + percent(PRICE_SANITY_RATIO)
+                + "% and >=" + PRICE_SANITY_MIN_ABSOLUTE_DELTA.stripTrailingZeros().toPlainString()
+                + "/M";
+    }
+
+    private static String percent(BigDecimal ratio) {
+        return ratio.multiply(new BigDecimal("100")).stripTrailingZeros().toPlainString();
     }
 
     // ── Diff helpers ────────────────────────────────────────────────────────
@@ -673,8 +780,28 @@ public class ModelCatalogSyncService {
 
     // ── Formatters ──────────────────────────────────────────────────────────
 
+    /**
+     * Build the {@code guard_failures} JSONB payload for the sync-log row.
+     *
+     * @param withheld how many of {@code flagged} were actually kept OUT of the
+     *        apply. Persisted because the two price-sanity outcomes are
+     *        otherwise indistinguishable after the fact: a withheld run and an
+     *        overridden run both write {@code OK} with the same
+     *        {@code flagged_count} and the same rows. While price-sanity still
+     *        aborted, {@code OK} plus flags could only mean "overridden", so the
+     *        row was unambiguous by accident; making the guard non-blocking
+     *        removed that accident, and the log is what is left once the
+     *        response is gone.
+     *        <p>Written on every row that carries flags, including dry-run,
+     *        {@code ABORTED_GUARD} and {@code APPLY_ERROR} rows where no apply
+     *        happened at all - and it reads most misleadingly on the last of
+     *        those, where the run got past the guards and then failed anyway.
+     *        There it reads as "would have been withheld"; the {@code dry_run}
+     *        and {@code outcome} columns are what say whether anything ran.
+     */
     private static Map<String, Object> guardFailuresToJson(List<GuardFailure> failures,
-                                                           List<FlaggedRow> flagged) {
+                                                           List<FlaggedRow> flagged,
+                                                           int withheld) {
         Map<String, Object> out = new LinkedHashMap<>();
         if (!failures.isEmpty()) {
             List<Map<String, Object>> failList = new ArrayList<>();
@@ -697,6 +824,10 @@ public class ModelCatalogSyncService {
                 flagList.add(rm);
             }
             out.put("flaggedRows", flagList);
+            // Always written alongside the rows, never conditionally: a reader
+            // has to be able to tell 0-withheld from "this build did not record
+            // it", and an absent key answers neither.
+            out.put("flaggedWithheld", withheld);
         }
         return out;
     }
@@ -718,8 +849,15 @@ public class ModelCatalogSyncService {
         return "none";
     }
 
+    /**
+     * The keys this service builds are handed to
+     * {@link NativeModelDiscoveryService#discover} as {@code existingKeys}, so
+     * both sides MUST agree on the separator. Delegating rather than repeating
+     * the format is what makes that structural instead of a convention two
+     * classes are trusted to remember.
+     */
     private static String key(String provider, String modelId) {
-        return provider + '\0' + modelId;
+        return NativeModelDiscoveryService.key(provider, modelId);
     }
 
     /**

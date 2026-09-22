@@ -4,6 +4,7 @@ import com.apimarketplace.agent.summary.ColdSummarizerPromptBuilder;
 import com.apimarketplace.agent.summary.ColdSummarizerPromptBuilder.Turn;
 import com.apimarketplace.agent.summary.ColdSummaryEnvelope;
 import com.apimarketplace.agent.summary.ColdSummaryGate;
+import com.apimarketplace.agent.summary.CompactionTrigger;
 import com.apimarketplace.conversation.repository.ConversationRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,9 +27,9 @@ import java.util.Optional;
  *
  * <p><b>What it does, end-to-end.</b>
  * <ol>
- *   <li>Checks {@link ColdSummaryGate#shouldRegenerate} - size + cadence/keyword
- *       gates must both pass. Bypassing the gate is not supported; that would
- *       waste the summariser budget on conversations that don't need a pass.</li>
+ *   <li>Checks {@link ColdSummaryGate#shouldRegenerate} - size + trigger
+ *       gates must both pass. Only the gate decides whether to spend: it is
+ *       the only brake, so no caller may skip it.</li>
  *   <li>Acquires a per-conversation distributed lock via ShedLock keyed on
  *       {@code cold-summary-{conversationId}} so only one pod spends credits
  *       per conversation; if another pod already holds the lock this call
@@ -93,6 +94,8 @@ public class ColdSummarizerService {
     private final Counter lockAcquired;
     private final Counter lockContended;
     private final Counter staleWriteSkipped;
+    private final Counter gateRefusedFloor;
+    private final Counter gateRefusedTrigger;
     private final MeterRegistry meterRegistry;
 
     public ColdSummarizerService(ConversationRepository conversationRepository,
@@ -111,6 +114,19 @@ public class ColdSummarizerService {
                 .description("COLD-summary dedup lock outcomes across pods")
                 .tag("result", "skipped")
                 .register(meterRegistry);
+        // Which half of the decision refused. Without this the only documented
+        // failure mode of the size modes ("a conversation of small turns may
+        // never be summarised") produces no series at all, so an operator who
+        // switches to size and sees nothing cannot tell "working, nothing
+        // qualified" from "misconfigured" from "never reached".
+        this.gateRefusedFloor = Counter.builder("cold_summary_gate_refused_total")
+                .description("Summariser passes the gate declined, by which half declined")
+                .tag("gate", "floor")
+                .register(meterRegistry);
+        this.gateRefusedTrigger = Counter.builder("cold_summary_gate_refused_total")
+                .description("Summariser passes the gate declined, by which half declined")
+                .tag("gate", "trigger")
+                .register(meterRegistry);
         this.staleWriteSkipped = Counter.builder("cold_summary_stale_write_skipped_total")
                 .description("Envelope writes rejected by the monotone-recall guard "
                         + "(a racing writer already persisted broader coverage)")
@@ -120,7 +136,7 @@ public class ColdSummarizerService {
     /**
      * Run one summariser pass for {@code conversationId}. Returns the persisted
      * envelope on success; {@link SummarizeOutcome.SkippedGate} when either the
-     * size/cadence gate refused <i>or</i> another pod held the dedup lock (use
+     * size or trigger gate refused <i>or</i> another pod held the dedup lock (use
      * the {@code cold_summary_lock_contended_total} counter to distinguish);
      * {@link SummarizeOutcome.Failed} when the LLM returned garbage or the DB
      * write failed.
@@ -142,13 +158,28 @@ public class ColdSummarizerService {
                 req.modelColdCapTokens(),
                 req.turnsSinceLastSummary(),
                 req.cadenceTurns(),
-                req.keywordHit()
+                req.keywordHit(),
+                req.trigger(),
+                req.newColdTokensSinceLastSummary(),
+                req.sizeTriggerColdTokens(),
+                req.envelopeInvalidated()
         );
         if (!shouldRun) {
+            // Attributed to the half that actually declined: the floor is ANDed
+            // in front of every mode, so a zone below it never reaches the
+            // trigger and must not be reported as a pacing decision.
+            if (ColdSummaryGate.passesSizeGate(req.currentColdTokens(), req.modelColdCapTokens())) {
+                gateRefusedTrigger.increment();
+            } else {
+                gateRefusedFloor.increment();
+            }
             log.debug("COLD summary skipped by gate: conv={}, coldTok={}, coldCap={}, " +
-                    "turnsSince={}, cadence={}, kwHit={}",
+                    "turnsSince={}, cadence={}, kwHit={}, invalidated={}, trigger={}, "
+                    + "newColdTok={}, sizeTrigger={}",
                     req.conversationId(), req.currentColdTokens(), req.modelColdCapTokens(),
-                    req.turnsSinceLastSummary(), req.cadenceTurns(), req.keywordHit());
+                    req.turnsSinceLastSummary(), req.cadenceTurns(), req.keywordHit(),
+                    req.envelopeInvalidated(), req.trigger(),
+                    req.newColdTokensSinceLastSummary(), req.sizeTriggerColdTokens());
             return new SummarizeOutcome.SkippedGate();
         }
 
@@ -281,12 +312,16 @@ public class ColdSummarizerService {
      * missing, has no envelope, or is already stale - only an actual
      * transition returns {@code true} and bumps the (reason-tagged) counter.
      *
-     * <p><b>Known trade-off:</b> regeneration is still subject to the
+     * <p><b>Known trade-offs.</b> Regeneration is still subject to the
      * {@link ColdSummaryGate} size floor (2k tokens), so a COLD zone that
-     * shrank below it can stay stale-caveated indefinitely - there is
-     * nothing big enough to summarise. That is intentional: a permanently
-     * cautious header over a small zone beats an authoritative claim about
-     * turns that no longer exist.
+     * shrank below it can stay stale-caveated indefinitely: there is nothing
+     * big enough to summarise. That is intentional, a permanently cautious
+     * header over a small zone beats an authoritative claim about turns that
+     * no longer exist. In the size modes the trigger gate adds a second,
+     * BOUNDED obstacle: a stale envelope substitutes for the growth condition
+     * only once the cadence has elapsed, so a zone holding fewer messages than
+     * the cadence waits those few turns rather than regenerating at once. That
+     * delay is what stops a failing provider being retried on every message.
      */
     public boolean markStale(String conversationId, String reason) {
         Objects.requireNonNull(conversationId, "conversationId required");
@@ -326,7 +361,39 @@ public class ColdSummarizerService {
             List<Turn> coldTurns,
             List<Integer> turnsCovered,
             String providerName,
-            String modelName
+            String modelName,
+            /**
+             * Which condition may fire the summariser. {@code null} is read as
+             * {@link CompactionTrigger#TURNS} so a caller predating the feature
+             * keeps the historical cadence-only behaviour.
+             *
+             * <p>APPEND-ONLY: new components go LAST and the previous arity is
+             * kept below, so an out-of-tree caller keeps compiling.
+             */
+            CompactionTrigger trigger,
+            /**
+             * COLD tokens appended SINCE the stored envelope's coverage. Not the
+             * absolute COLD size: the messages survive summarisation, so an
+             * absolute comparison would stay true for ever and fire on every
+             * later turn. Ignored in {@link CompactionTrigger#TURNS}.
+             */
+            int newColdTokensSinceLastSummary,
+            /** Growth threshold; &lt;=0 → {@link ColdSummaryGate#DEFAULT_SIZE_TRIGGER_COLD_TOKENS}. */
+            int sizeTriggerColdTokens,
+            /**
+             * The stored envelope is known to be untrustworthy: its coverage no
+             * longer describes the current COLD zone, so the caller has marked
+             * it stale and the growth tally was computed against a coverage that
+             * no longer applies. It therefore substitutes for the SIZE condition
+             * and for nothing else. Without it {@link CompactionTrigger#SIZE}
+             * would mark an envelope stale and then refuse to regenerate it,
+             * turn after turn, whenever the COLD zone sits between the credit
+             * floor and the growth threshold. It deliberately does NOT act as an
+             * invalidation keyword: doing so fired the summariser in
+             * {@link CompactionTrigger#TURNS} where the cadence had always
+             * refused, changing the behaviour of deployments that never opted in.
+             */
+            boolean envelopeInvalidated
     ) {
         public SummarizeRequest {
             Objects.requireNonNull(conversationId, "conversationId");
@@ -334,13 +401,30 @@ public class ColdSummarizerService {
             Objects.requireNonNull(turnsCovered, "turnsCovered");
             Objects.requireNonNull(providerName, "providerName");
             Objects.requireNonNull(modelName, "modelName");
+            if (trigger == null) {
+                trigger = CompactionTrigger.TURNS;
+            }
+        }
+
+        /**
+         * Previous-arity constructor: cadence-only compaction, matching the
+         * behaviour before the trigger modes existed.
+         */
+        public SummarizeRequest(String conversationId, int modelColdCapTokens,
+                                int currentColdTokens, int turnsSinceLastSummary,
+                                int cadenceTurns, boolean keywordHit,
+                                List<Turn> coldTurns, List<Integer> turnsCovered,
+                                String providerName, String modelName) {
+            this(conversationId, modelColdCapTokens, currentColdTokens, turnsSinceLastSummary,
+                    cadenceTurns, keywordHit, coldTurns, turnsCovered, providerName, modelName,
+                    CompactionTrigger.TURNS, 0, 0, false);
         }
     }
 
     /** Result of a summariser pass. */
     public sealed interface SummarizeOutcome {
         /**
-         * Nothing was written by this call. Either the size/cadence gate
+         * Nothing was written by this call. Either the size or trigger gate
          * refused, or another pod already held the per-conversation
          * dedup lock; inspect {@code cold_summary_lock_contended_total}
          * to distinguish.

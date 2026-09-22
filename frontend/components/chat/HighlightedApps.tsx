@@ -10,10 +10,12 @@ import type { WorkflowPublication, AcquiredApplication } from '@/lib/api/orchest
 import { favoriteService } from '@/lib/api/orchestrator/favorite.service';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
+import { VerifiedBadge } from '@/components/profile/VerifiedBadge';
 import { CeExclusiveBadge } from '@/components/marketplace/CeExclusiveBadge';
 import { ShowcasePreview } from '@/components/marketplace/ShowcasePreview';
 import { InterfacePreview, type InterfaceSnapshotLike } from '@/components/marketplace/InterfacePreview';
 import { publicationService } from '@/lib/api/orchestrator/publication.service';
+import { highlightGridColumns } from '@/components/chat/highlightGridColumns';
 import { WorkflowNodeIcons } from '@/components/WorkflowNodeIcons';
 import { AvatarDisplay } from '@/components/agents';
 import { isCeMode } from '@/lib/format-cost';
@@ -21,6 +23,7 @@ import { IS_CE } from '@/lib/edition';
 import { useCeCloudLinkStatus } from '@/hooks/useCeCloudLinkStatus';
 import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
 import AcquirePublicationModal from '@/components/marketplace/AcquirePublicationModal';
+import { useMarketplaceDemoInstall } from '@/lib/marketplace/demoInstallMode';
 
 /**
  * Highlighted-this-week row rendered in the chat welcome view.
@@ -260,6 +263,7 @@ function HighlightCard({ pub, remote, target = 'marketplace', onAcquire, isAcqui
           <span className="text-xs text-theme-secondary truncate">
             {pub.publisherName || t('anonymous')}
           </span>
+          <VerifiedBadge userId={pub.publisherId} size="xs" />
           {pub.real.nodeIcons && pub.real.nodeIcons.length > 0 && (
             <WorkflowNodeIcons
               nodeIcons={pub.real.nodeIcons}
@@ -299,6 +303,12 @@ function toDisplayPub(p: WorkflowPublication): DisplayPub {
     real: p,
   };
 }
+
+// How many skeletons the row shows while loading. The grid sizes its columns for
+// this count too, so the placeholder matches the layout of a full 4-card row. A
+// row that lands on a different count (favorites go up to 8) re-tiers when the
+// cards arrive - the count is not known before the fetch resolves.
+const SKELETON_COUNT = 4;
 
 // Skeleton mirrors the live card layout: 16:10 thumbnail + footer rows below.
 function HighlightCardSkeleton() {
@@ -343,8 +353,12 @@ function HighlightRow({
   acquiredIds?: Set<string>;
   currentUserId?: string;
 }) {
+  // Admin demo mode: the discovery row offers Install on every card, including
+  // the admin's own publications and the ones already installed.
+  const demoInstall = useMarketplaceDemoInstall();
+  const columns = highlightGridColumns(isLoading ? SKELETON_COUNT : items.length);
   return (
-    <div>
+    <div className="@container">
       <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
         <div className="flex items-center gap-3 min-w-0">
           <h2 className="text-sm font-semibold tracking-tight text-theme-primary">{heading}</h2>
@@ -358,9 +372,9 @@ function HighlightRow({
           <ArrowRight className="h-3 w-3" />
         </Link>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      <div data-testid="highlight-grid" className={`grid ${columns} gap-4`}>
         {isLoading
-          ? Array.from({ length: 4 }, (_, i) => <HighlightCardSkeleton key={i} />)
+          ? Array.from({ length: SKELETON_COUNT }, (_, i) => <HighlightCardSkeleton key={i} />)
           : items.map(p => {
               // Favorites already live in the viewer's library and the whole card
               // links to the app, so the Install/Open slot only applies to the
@@ -368,16 +382,27 @@ function HighlightRow({
               const isDiscovery = target !== 'application';
               const installed = !!acquiredIds?.has(p.id);
               const isOwn = !!currentUserId && p.publisherId === currentUserId;
+              // Demo mode can only replace this card's slot when there IS an
+              // acquire handler to route the click to; anonymous rows keep Open.
+              const demoCta = isDiscovery && !!onAcquire && demoInstall;
               return (
                 <HighlightCard
                   key={p.id}
                   pub={p}
                   remote={p.real.remote ?? remote}
                   target={target}
-                  isAcquired={isDiscovery && (installed || isOwn)}
-                  onAcquire={isDiscovery && onAcquire && !installed && !isOwn ? onAcquire : undefined}
+                  isAcquired={isDiscovery && (installed || isOwn) && !demoInstall}
+                  // Demo mode has to lift all THREE gates, not just the badge: the
+                  // handler is withheld for an own/installed card, and an Open link
+                  // outranks the Install button in the card's slot, so leaving either
+                  // in place would keep the CTA hidden.
+                  onAcquire={
+                    isDiscovery && onAcquire && (demoCta || (!installed && !isOwn))
+                      ? onAcquire
+                      : undefined
+                  }
                   openHref={
-                    isDiscovery && installed && (p.displayMode || 'WORKFLOW') === 'APPLICATION'
+                    isDiscovery && installed && !demoCta && (p.displayMode || 'WORKFLOW') === 'APPLICATION'
                       ? `/app/applications/${p.id}`
                       : undefined
                   }
@@ -733,6 +758,7 @@ export function HighlightedApps({ studioOnly, heading, favoritesHeading }: Highl
           has no card-level progress surface, unlike the marketplace grid. */}
       {acquireTarget && (
         <AcquirePublicationModal
+          demoEligible
           isOpen
           onClose={() => setAcquireTarget(null)}
           publication={acquireTarget}

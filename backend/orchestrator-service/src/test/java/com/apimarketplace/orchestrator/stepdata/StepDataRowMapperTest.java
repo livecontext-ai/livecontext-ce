@@ -266,6 +266,21 @@ class StepDataRowMapperTest {
         }
 
         @Test
+        @DisplayName("Cases come from `evaluations`, the key SwitchNode emits")
+        void casesComeFromEvaluations() {
+            // This read metadata.cases, which SwitchNode has never written, so the Cases
+            // column was empty on every switch row ever produced.
+            WorkflowStepDataEntity entity = createEntity(NodeType.SWITCH);
+            entity.setMetadata(Map.of(
+                "evaluations", List.of(Map.of("branch", "case_1", "case_label", "Active", "selected", true))
+            ));
+
+            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+
+            assertThat(row).containsKey("cases");
+        }
+
+        @Test
         @DisplayName("Should include output when outputData is present")
         void shouldIncludeOutputWhenPresent() {
             WorkflowStepDataEntity entity = createEntity(NodeType.SWITCH);
@@ -282,8 +297,53 @@ class StepDataRowMapperTest {
     }
 
     @Nested
+    @DisplayName("Option fields")
+    class OptionFieldTests {
+
+        @Test
+        @DisplayName("An option's evaluations reach its row, which they never did before")
+        void shouldIncludeOptionEvaluations() {
+            // OPTION fell through to addGenericFields, so a node that reported a full set
+            // of choice evaluations had none of them on its row and drew an empty table.
+            WorkflowStepDataEntity entity = createEntity(NodeType.OPTION);
+            entity.setSelectedBranch("choice_0");
+            entity.setMetadata(Map.of(
+                "evaluations", List.of(Map.of("branch", "choice_0", "selected", true)),
+                "skipped_branches", List.of("Low")
+            ));
+
+            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+
+            assertThat(row).containsEntry("selectedBranch", "choice_0");
+            assertThat(row).containsKey("evaluations");
+            assertThat(row).containsKey("skippedBranches");
+        }
+    }
+
+    @Nested
     @DisplayName("LOOP_CONTROLLER fields")
     class LoopFieldTests {
+
+        @Test
+        @DisplayName("A loop's resolved condition and evaluations reach its row")
+        void shouldIncludeLoopConditionFields() {
+            // The persistence switch carried `case LOOP_CONTROLLER -> {}` with the comment
+            // "Loop nodes no longer used", so these reached metadata from nowhere and the
+            // Resolved column and the evaluations table were empty on every loop.
+            WorkflowStepDataEntity entity = createEntity(NodeType.LOOP_CONTROLLER);
+            entity.setMetadata(Map.of(
+                "condition_resolved", "15 > 10",
+                "evaluations", List.of(Map.of("branch", "body", "selected", true)),
+                "loop_condition", "{{value}} > 10",
+                "max_iterations", 5
+            ));
+
+            Map<String, Object> row = mapper.mapToRow(entity, null, 1);
+
+            assertThat(row).containsEntry("conditionResolved", "15 > 10");
+            assertThat(row).containsKey("evaluations");
+            assertThat(row).containsEntry("loopCondition", "{{value}} > 10");
+        }
 
         @Test
         @DisplayName("Should include loop fields with progress")

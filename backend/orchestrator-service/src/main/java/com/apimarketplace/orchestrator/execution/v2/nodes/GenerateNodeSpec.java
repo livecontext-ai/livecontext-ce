@@ -82,6 +82,16 @@ public class GenerateNodeSpec implements NodeSpec {
                         + "minute), then multiply")
                     .build(),
                 OutputFieldDef.builder()
+                    .key("billed_credits")
+                    .type("number")
+                    .description("What the platform charged for this run, in credits, as it was "
+                        + "committed. Read this rather than working the cost out from "
+                        + "billed_quantity and a rate: the rate can be republished between the run "
+                        + "and the reading. ABSENT means the platform charged nothing - "
+                        + "credential_source='user' pays the provider directly - and absent is not "
+                        + "a charge of zero")
+                    .build(),
+                OutputFieldDef.builder()
                     .key("provider_response")
                     .type("object")
                     .description("The provider's own payload, kept under its own key so a provider field "

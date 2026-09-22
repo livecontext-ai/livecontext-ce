@@ -8,7 +8,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Plan v4 §1.6 - pin the CAS SQL composer output shape. The runtime
- * Postgres execution lives in {@code JsonbPatchPostgresIT}; this test
+ * Postgres execution lives in {@code JsonbPatchPostgresTest}; this test
  * pins the string form so unit tests catch silent drift before the
  * integration test runs (Docker-gated, slow).
  */

@@ -7,7 +7,10 @@ const read = (rel: string) => readFileSync(path.resolve(__dirname, '../../../', 
 // The docs used to mount a SECOND theme toggle in the shared header, on top of the
 // footer one that every public page already carries. It was the only header control
 // of its kind on the whole public site, so the docs navbar read differently from
-// /blog, /about, /changelog and the landing. It is gone; these assertions keep it gone.
+// /about, /changelog and the landing. It is gone; these assertions keep it gone.
+//
+// The DocsThemeToggle component itself has since been deleted too: the blog
+// pages were its last consumers and the blog was removed.
 describe('docs header carries no theme toggle', () => {
   const layoutSrc = read('app/docs/layout.tsx');
 
@@ -25,21 +28,4 @@ describe('docs header carries no theme toggle', () => {
     expect(layoutSrc).toMatch(/themeStorageKey="docs-theme"/);
     expect(layoutSrc).toMatch(/themeRespectStored/);
   });
-});
-
-// The toggle component itself stays: the blog surfaces still mount it in their header.
-// If those ever drop it too, DocsThemeToggle becomes dead code and should be deleted.
-describe('DocsThemeToggle still has blog consumers', () => {
-  const blogPages = [
-    'app/blog/page.tsx',
-    'app/blog/[slug]/page.tsx',
-    'app/[locale]/blog/page.tsx',
-    'app/[locale]/blog/[slug]/page.tsx',
-  ];
-
-  for (const rel of blogPages) {
-    it(`${rel} keeps its header toggle`, () => {
-      expect(read(rel)).toMatch(/headerExtra=\{<DocsThemeToggle \/>\}/);
-    });
-  }
 });
